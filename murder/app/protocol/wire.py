@@ -21,11 +21,11 @@ from murder.app.protocol.terminal import (
     TerminalTarget,
 )
 
-SubscriptionKind = Literal["projections", "notifications", "facts"]
+SubscriptionKind = Literal["projections", "facts"]
 
 
 def _subscription_kinds() -> list[SubscriptionKind]:
-    return ["projections", "notifications", "facts"]
+    return ["projections", "facts"]
 
 
 class ClientHello(ApplicationModel):

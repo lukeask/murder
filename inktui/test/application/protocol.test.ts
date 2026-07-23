@@ -51,7 +51,7 @@ function serverOp(message: ServerMessage): string {
 
 describe('protocol', () => {
   it('pins the generated application protocol version', () => {
-    expect(APPLICATION_PROTOCOL_VERSION).toBe(1);
+    expect(APPLICATION_PROTOCOL_VERSION).toBe(2);
   });
 
   it('models projection invalidations as the only subscription event payload', () => {

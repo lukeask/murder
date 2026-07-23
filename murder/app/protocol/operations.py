@@ -95,9 +95,8 @@ class Operation(Generic[Name, Params, Result]):
     legacy: bool = False
 
 
-# These registrations intentionally remain exhaustive.  The assertion below
-# turns a newly added enum member into a failing import/test until its protocol
-# contract is selected here.
+# Typed contracts.  A newly added enum member must land here with a named DTO
+# or in the matching LEGACY_* set below; silent JsonObject fallback is forbidden.
 _QUERY_MODELS: dict[QueryName, tuple[type[BaseModel], type[BaseModel], bool]] = {
     QueryName.SESSION_WRITER_GET: (GetWriterLeaseParams, GetWriterLeaseResult, False),
     QueryName.APPROVALS_LIST: (ListApprovalsParams, ListApprovalsResult, False),
@@ -109,21 +108,6 @@ _QUERY_MODELS: dict[QueryName, tuple[type[BaseModel], type[BaseModel], bool]] = 
     QueryName.WORKFLOW_RUNS_GET: (GetWorkflowRunParams, GetWorkflowRunResult, False),
 }
 _COMMAND_MODELS: dict[CommandName, tuple[type[BaseModel], type[BaseModel], bool]] = {
-    CommandName.AGENT_INTERRUPT: (JsonObject, JsonObject, True),
-    CommandName.AGENT_MESSAGE: (JsonObject, JsonObject, True),
-    CommandName.AGENT_RESUME_FROM_HISTORY: (JsonObject, JsonObject, True),
-    CommandName.AGENT_SEND_KEY: (JsonObject, JsonObject, True),
-    CommandName.AGENT_STOP: (JsonObject, JsonObject, True),
-    CommandName.CROW_RENAME_ROGUE: (JsonObject, JsonObject, True),
-    CommandName.CROW_RESET: (JsonObject, JsonObject, True),
-    CommandName.CROW_SPAWN_ROGUE: (JsonObject, JsonObject, True),
-    CommandName.HISTORY_DISMISS: (JsonObject, JsonObject, True),
-    CommandName.NOTETAKER_CAPTURE_SUBMIT: (JsonObject, JsonObject, True),
-    CommandName.PLAN_RENAME: (JsonObject, JsonObject, True),
-    CommandName.PLANNER_SPAWN: (JsonObject, JsonObject, True),
-    CommandName.SCHEDULER_SET_STEERING: (JsonObject, JsonObject, True),
-    CommandName.HARNESS_USAGE_SAMPLE: (JsonObject, JsonObject, True),
-    CommandName.TICKET_QUICK_CREATE: (JsonObject, JsonObject, True),
     CommandName.SESSION_WRITER_ACQUIRE: (AcquireWriterLeaseParams, WriterLeaseResult, False),
     CommandName.SESSION_WRITER_RENEW: (RenewWriterLeaseParams, WriterLeaseResult, False),
     CommandName.SESSION_WRITER_RELEASE: (ReleaseWriterLeaseParams, WriterLeaseResult, False),
@@ -138,17 +122,103 @@ _COMMAND_MODELS: dict[CommandName, tuple[type[BaseModel], type[BaseModel], bool]
     CommandName.WORKFLOW_SIGNAL: (SignalWorkflowParams, SignalWorkflowResult, False),
 }
 
+# Explicitly opaque operations.  Membership here is the only way an enum name
+# may use JsonObject; missing coverage fails import via the assertions below.
+LEGACY_QUERY_OPERATIONS: frozenset[QueryName] = frozenset(
+    {
+        QueryName.HEALTH_GET,
+        QueryName.COMMAND_GET,
+        QueryName.CONVERSATIONS_GET,
+        QueryName.SCHEDULE_GET,
+        QueryName.PLANS_LIST,
+        QueryName.NOTES_LIST,
+        QueryName.REPORTS_LIST,
+        QueryName.HISTORY_LIST,
+        QueryName.TRANSIT_GET,
+        QueryName.TICKET_GET,
+        QueryName.PLAN_GET,
+        QueryName.NOTE_GET,
+        QueryName.REPORT_GET,
+        QueryName.HARNESS_MODELS_LIST,
+        QueryName.TICKET_NEXT_ID,
+        QueryName.TICKET_EXISTS,
+        QueryName.SETTINGS_GET,
+        QueryName.WORKTREES_LIST,
+        QueryName.FAVORITES_GET,
+        QueryName.SPAWN_FAVORITES_GET,
+        QueryName.TEMPLATES_GET,
+        QueryName.THEMES_GET,
+    }
+)
+LEGACY_COMMAND_OPERATIONS: frozenset[CommandName] = frozenset(
+    {
+        CommandName.HARNESS_ANSWER,
+        CommandName.IMAGE_UPLOAD,
+        CommandName.TICKET_SAVE_BODY,
+        CommandName.TICKET_SCHEDULE,
+        CommandName.PLAN_CREATE,
+        CommandName.SETTINGS_UPDATE,
+        CommandName.LLM_SETTINGS_SET_DISABLED,
+        CommandName.LLM_PROVIDER_CREATE,
+        CommandName.LLM_PROVIDER_UPDATE,
+        CommandName.LLM_PROVIDER_DELETE,
+        CommandName.LLM_PROVIDER_MODELS_UPDATE,
+        CommandName.LLM_PROVIDER_DISCOVER_MODELS,
+        CommandName.LLM_POLICY_CREATE,
+        CommandName.LLM_POLICY_UPDATE,
+        CommandName.LLM_POLICY_DELETE,
+        CommandName.LLM_POLICY_ACTIVATE,
+        CommandName.LLM_POLICY_CLONE,
+        CommandName.LLM_FEATURE_POLICY_SET,
+        CommandName.LLM_PREVIEW_RESOLUTION,
+        CommandName.FAVORITES_SET,
+        CommandName.SPAWN_FAVORITES_SET,
+        CommandName.TEMPLATES_SET,
+        CommandName.THEMES_SET,
+        CommandName.THEME_IMPORT,
+        CommandName.TRIGGER_FIRE,
+        CommandName.AGENT_INTERRUPT,
+        CommandName.AGENT_MESSAGE,
+        CommandName.AGENT_RESUME_FROM_HISTORY,
+        CommandName.AGENT_SEND_KEY,
+        CommandName.AGENT_STOP,
+        CommandName.CROW_RENAME_ROGUE,
+        CommandName.CROW_RESET,
+        CommandName.CROW_SPAWN_ROGUE,
+        CommandName.HISTORY_DISMISS,
+        CommandName.NOTETAKER_CAPTURE_SUBMIT,
+        CommandName.PLAN_RENAME,
+        CommandName.PLANNER_SPAWN,
+        CommandName.SCHEDULER_SET_STEERING,
+        CommandName.HARNESS_USAGE_SAMPLE,
+        CommandName.TICKET_QUICK_CREATE,
+    }
+)
+
+assert set(_QUERY_MODELS).isdisjoint(LEGACY_QUERY_OPERATIONS)
+assert set(_COMMAND_MODELS).isdisjoint(LEGACY_COMMAND_OPERATIONS)
+assert set(_QUERY_MODELS) | LEGACY_QUERY_OPERATIONS == set(QueryName)
+assert set(_COMMAND_MODELS) | LEGACY_COMMAND_OPERATIONS == set(CommandName)
+
 
 def _operations() -> tuple[
     dict[QueryName, Operation[Any, Any, Any]],
     dict[CommandName, Operation[Any, Any, Any]],
 ]:
     queries = {
-        name: Operation(name, *(_QUERY_MODELS.get(name, (JsonObject, JsonObject, True))))
+        name: (
+            Operation(name, *_QUERY_MODELS[name])
+            if name in _QUERY_MODELS
+            else Operation(name, JsonObject, JsonObject, True)
+        )
         for name in QueryName
     }
     commands = {
-        name: Operation(name, *(_COMMAND_MODELS.get(name, (JsonObject, JsonObject, True))))
+        name: (
+            Operation(name, *_COMMAND_MODELS[name])
+            if name in _COMMAND_MODELS
+            else Operation(name, JsonObject, JsonObject, True)
+        )
         for name in CommandName
     }
     return queries, commands
@@ -167,12 +237,13 @@ def command_operation(name: CommandName) -> Operation[CommandName, Any, Any]:
 
 __all__ = [
     "COMMAND_OPERATIONS",
+    "LEGACY_COMMAND_OPERATIONS",
+    "LEGACY_QUERY_OPERATIONS",
     "QUERY_OPERATIONS",
     "CommandName",
     "EmptyParams",
     "JsonObject",
     "Operation",
-    "OrchestrationExecuteParams",
     "RosterGetParams",
     "TicketGetParams",
     "NamedReadParams",

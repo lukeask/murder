@@ -25,20 +25,9 @@ class ProjectionTopic(StrEnum):
     SESSIONS = "sessions"
 
 
-class NotificationChannel(StrEnum):
-    ERRORS = "errors"
-    PRESENCE = "presence"
-
-
 class ProjectionSubscription(ApplicationModel):
     kind: Literal["projections"] = "projections"
     topics: list[ProjectionTopic]
-    cursor: int | None = Field(default=None, ge=0)
-
-
-class NotificationSubscription(ApplicationModel):
-    kind: Literal["notifications"] = "notifications"
-    channels: list[NotificationChannel]
     cursor: int | None = Field(default=None, ge=0)
 
 
@@ -53,7 +42,7 @@ class FactSubscription(ApplicationModel):
 
 
 SubscriptionSpec = Annotated[
-    ProjectionSubscription | NotificationSubscription | FactSubscription,
+    ProjectionSubscription | FactSubscription,
     Field(discriminator="kind"),
 ]
 

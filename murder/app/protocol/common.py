@@ -14,7 +14,7 @@ class StrEnum(str, Enum):
         return str.__str__(self)
 
 
-APPLICATION_PROTOCOL_VERSION = 1
+APPLICATION_PROTOCOL_VERSION = 2
 
 
 class ClientKind(StrEnum):

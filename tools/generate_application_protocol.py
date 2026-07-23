@@ -34,7 +34,6 @@ from murder.app.protocol.requests import (  # noqa: E402
     QueryName,
 )
 from murder.app.protocol.subscriptions import (  # noqa: E402
-    NotificationChannel,
     ProjectionTopic,
 )
 from murder.app.protocol.wire import ApplicationWireMessage  # noqa: E402
@@ -162,8 +161,6 @@ export type ErrorCode = {_union(ErrorCode)};
 export type QueryName = {_union(QueryName)};
 export type CommandName = {_union(CommandName)};
 export type ProjectionTopic = {_union(ProjectionTopic)};
-export type NotificationChannel = {_union(NotificationChannel)};
-
 export interface ClientHello {{
   readonly op: 'client.hello';
   readonly protocol_version: number;
@@ -176,7 +173,7 @@ export interface ServerHello {{
   readonly server_id: string;
   readonly queries: readonly QueryName[];
   readonly commands: readonly CommandName[];
-  readonly subscriptions: readonly ('projections' | 'notifications' | 'facts')[];
+  readonly subscriptions: readonly ('projections' | 'facts')[];
   readonly terminal_streams: boolean;
   readonly fact_cursor: number;
   readonly projection_cursor: number;
@@ -204,11 +201,6 @@ export type SubscriptionSpec =
   | {{
       readonly kind: 'projections';
       readonly topics: readonly ProjectionTopic[];
-      readonly cursor?: number | null;
-    }}
-  | {{
-      readonly kind: 'notifications';
-      readonly channels: readonly NotificationChannel[];
       readonly cursor?: number | null;
     }}
   | {{
