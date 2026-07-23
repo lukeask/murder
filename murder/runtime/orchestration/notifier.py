@@ -10,16 +10,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
 
 from murder.observability.log_context import log_context
-from murder.runtime.orchestration.events import (
-    CommandEvent,
-    OrchestrationEvent,
-)
-
-if TYPE_CHECKING:
-    import sqlite3
+from murder.runtime.orchestration.events import OrchestrationEvent
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +21,7 @@ OrchestrationHandler = Callable[[OrchestrationEvent], Awaitable[None]]
 
 
 class SubscriptionHandle:
-    def __init__(self, notifier: OrchestrationNotifier, token: int) -> None:
+    def __init__(self, notifier: InProcessOrchestrationEventSink, token: int) -> None:
         self._notifier = notifier
         self._token = token
         self._cancelled = False
@@ -40,16 +33,13 @@ class SubscriptionHandle:
         self._notifier._subs.pop(self._token, None)
 
 
-class OrchestrationNotifier:
+class InProcessOrchestrationEventSink:
     """Private, best-effort orchestration notification fan-out.
 
     It has no socket, replay, request/reply, or durable event-log semantics.
     """
 
-    def __init__(self, db_conn: sqlite3.Connection | None = None) -> None:
-        # Only the command-work repository is retained. General notifications
-        # are never appended to the old events table.
-        self._command_db = db_conn
+    def __init__(self) -> None:
         self._subs: dict[int, OrchestrationHandler] = {}
         self._next_token = 0
         self._lock = asyncio.Lock()
@@ -66,34 +56,6 @@ class OrchestrationNotifier:
             await self._publish(event)
 
     async def _publish(self, event: OrchestrationEvent) -> None:
-        # Commands are durable workflow work items, not a replayable event
-        # stream. Their repository is the commands table; all other transient
-        # orchestration notifications remain memory-only.
-        if isinstance(event, CommandEvent) and self._command_db is not None:
-            from murder.state.persistence.commands import insert_command_event  # noqa: PLC0415
-
-            insert_command_event(
-                self._command_db,
-                command_id=str(event.id),
-                run_id=event.run_id,
-                agent_id=event.agent_id,
-                role=None,
-                ticket_id=getattr(event, "ticket_id", None),
-                target_worker=event.target_worker,
-                kind=event.kind,
-                payload=event.payload,
-                correlation_id=event.correlation_id,
-                idempotency_key=event.idempotency_key,
-                status=event.status.value,
-                claimed_by=event.claimed_by,
-                lease_expires_at=event.lease_expires_at,
-                attempt_count=event.attempt_count,
-                retryable=event.retryable,
-                result=event.result,
-                event_type=event.type,
-                event_payload={},
-                ts=event.ts.isoformat(timespec="seconds"),
-            )
         async with self._lock:
             handlers = list(self._subs.values())
 
@@ -115,6 +77,6 @@ class OrchestrationNotifier:
 
 __all__ = [
     "OrchestrationHandler",
-    "OrchestrationNotifier",
+    "InProcessOrchestrationEventSink",
     "SubscriptionHandle",
 ]
