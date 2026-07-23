@@ -27,6 +27,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - name: Verify generated application protocol is committed
+        run: python tools/generate_application_protocol.py --check
       # Build the wheel (proves the hook + esbuild bundle assemble), install it, then run the
       # shipped bundle's --smoke (F7) resolved exactly as the launcher resolves it at runtime —
       # via importlib.resources, from the installed package, not the repo tree. `python -m build`
