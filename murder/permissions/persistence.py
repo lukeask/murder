@@ -11,12 +11,14 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import BaseModel
 
+from murder.contracts.common import Principal, PrincipalKind
 from murder.facts.contracts import (
     AggregateRef,
-    FactActor,
     FactCorrelation,
+    PrivateFactPayload,
     ProjectionInputDraft,
     RetainedFactDraft,
+    fact_actor,
 )
 from murder.facts.log import append_fact, ensure_fact_schema
 from murder.permissions.contracts import (
@@ -173,30 +175,29 @@ class PermissionStore:
                     NAMESPACE_URL,
                     f"murder:approval-requested:{request.approval_id}",
                 ),
-                kind="permission.approval.requested",
                 occurred_at=request.requested_at,
                 aggregate=AggregateRef(
                     kind="workflow" if request.workflow_id is not None else "permission",
                     id=request.workflow_id or request.policy_decision_id,
                     revision=request.workflow_revision,
                 ),
-                actor=FactActor(
-                    kind=request.requested_by.kind,
-                    id=request.requested_by.id,
-                ),
+                actor=fact_actor(request.requested_by),
                 correlation=FactCorrelation(
                     correlation_id=request.policy_decision_id
                 ),
-                payload={
-                    "approval_id": str(request.approval_id),
-                    "operation_digest": request.operation_digest,
-                    "status": request.status,
-                    "workflow_id": (
-                        str(request.workflow_id)
-                        if request.workflow_id is not None
-                        else None
-                    ),
-                },
+                payload=PrivateFactPayload(
+                    kind="permission.approval.requested",
+                    data={
+                        "approval_id": str(request.approval_id),
+                        "operation_digest": request.operation_digest,
+                        "status": request.status,
+                        "workflow_id": (
+                            str(request.workflow_id)
+                            if request.workflow_id is not None
+                            else None
+                        ),
+                    },
+                ),
             ),
             projection_inputs=(
                 ProjectionInputDraft(
@@ -295,20 +296,22 @@ class PermissionStore:
             self._connection,
             RetainedFactDraft(
                 fact_id=grant.grant_id,
-                kind="permission.grant.issued",
                 occurred_at=grant.issued_at,
                 aggregate=AggregateRef(kind="permission_grant", id=grant.grant_id),
-                actor=FactActor(kind=grant.issued_by.kind, id=grant.issued_by.id),
+                actor=fact_actor(grant.issued_by),
                 correlation=FactCorrelation(correlation_id=grant.decision_id),
-                payload={
-                    "grant_id": str(grant.grant_id),
-                    "approval_id": (
-                        str(grant.approval_id) if grant.approval_id is not None else None
-                    ),
-                    "operation_digest": grant.operation_digest,
-                    "issued_to": grant.issued_to.model_dump(mode="json"),
-                    "scope": grant.scope.model_dump(mode="json"),
-                },
+                payload=PrivateFactPayload(
+                    kind="permission.grant.issued",
+                    data={
+                        "grant_id": str(grant.grant_id),
+                        "approval_id": (
+                            str(grant.approval_id) if grant.approval_id is not None else None
+                        ),
+                        "operation_digest": grant.operation_digest,
+                        "issued_to": grant.issued_to.model_dump(mode="json"),
+                        "scope": grant.scope.model_dump(mode="json"),
+                    },
+                ),
             ),
             projection_inputs=(
                 ProjectionInputDraft(
@@ -375,16 +378,23 @@ class PermissionStore:
                 self._connection,
                 RetainedFactDraft(
                     fact_id=fact_id,
-                    kind="permission.grant.revoked",
                     occurred_at=revoked_at,
                     aggregate=AggregateRef(kind="permission_grant", id=grant_id),
-                    actor=FactActor(kind="service", id="murder.permission-policy"),
+                    actor=fact_actor(
+                        Principal(
+                            kind=PrincipalKind.SERVICE,
+                            id="murder.permission-policy",
+                        )
+                    ),
                     correlation=FactCorrelation(correlation_id=grant.decision_id),
-                    payload={
-                        "grant_id": str(grant_id),
-                        "reason": reason,
-                        "uses": grant.uses,
-                    },
+                    payload=PrivateFactPayload(
+                        kind="permission.grant.revoked",
+                        data={
+                            "grant_id": str(grant_id),
+                            "reason": reason,
+                            "uses": grant.uses,
+                        },
+                    ),
                 ),
                 projection_inputs=(
                     ProjectionInputDraft(
@@ -467,27 +477,26 @@ class PermissionStore:
                 self._connection,
                 RetainedFactDraft(
                     fact_id=authorization.authorization_id,
-                    kind="permission.grant.used",
                     occurred_at=enforced_at,
                     aggregate=AggregateRef(
                         kind="permission_grant",
                         id=authorization.grant_id,
                         revision=use_number,
                     ),
-                    actor=FactActor(
-                        kind=authorization.subject.kind,
-                        id=authorization.subject.id,
-                    ),
+                    actor=fact_actor(authorization.subject),
                     correlation=FactCorrelation(
                         correlation_id=authorization.authorization_id
                     ),
-                    payload={
-                        "grant_id": str(authorization.grant_id),
-                        "authorization_id": str(authorization.authorization_id),
-                        "operation_id": str(authorization.operation_id),
-                        "operation_digest": authorization.operation_digest,
-                        "use_number": use_number,
-                    },
+                    payload=PrivateFactPayload(
+                        kind="permission.grant.used",
+                        data={
+                            "grant_id": str(authorization.grant_id),
+                            "authorization_id": str(authorization.authorization_id),
+                            "operation_id": str(authorization.operation_id),
+                            "operation_digest": authorization.operation_digest,
+                            "use_number": use_number,
+                        },
+                    ),
                 ),
                 projection_inputs=(
                     ProjectionInputDraft(

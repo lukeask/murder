@@ -1,5 +1,6 @@
 """Typed permission decisions and side-effect enforcement."""
 
+from murder.contracts.common import Principal
 from murder.permissions.contracts import (
     AllowDecision,
     ApprovalChoice,
@@ -61,6 +62,7 @@ __all__ = [
     "PermissionService",
     "PermissionStore",
     "PolicyResult",
+    "Principal",
     "ProposedOperation",
     "RequireApprovalDecision",
     "SafetyReviewEvidence",

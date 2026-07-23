@@ -21,14 +21,14 @@ from pydantic import (
     model_validator,
 )
 
+from murder.contracts.common import Principal
+
+# Permissions historically named this type; it is the shared Principal.
+PermissionPrincipal = Principal
+
 
 class PermissionModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class PermissionPrincipal(PermissionModel):
-    kind: Literal["user", "client", "workflow", "service", "reviewer", "llm"]
-    id: str = Field(min_length=1)
 
 
 class TerminalWrite(PermissionModel):

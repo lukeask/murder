@@ -17,8 +17,6 @@ from uuid import UUID, uuid4, uuid5
 
 from murder.facts.contracts import (
     AggregateRef,
-    FactActor,
-    FactCorrelation,
     ProjectionInputDraft,
     RetainedFactDraft,
     SessionLifecyclePayload,
@@ -27,6 +25,7 @@ from murder.facts.contracts import (
     WriterLeaseRenewedPayload,
     WriterLeaseRevokedPayload,
     WriterLeaseTakeoverPayload,
+    fact_actor,
 )
 from murder.facts.log import append_fact, ensure_fact_schema
 from murder.runtime.sessions.contracts import (
@@ -710,20 +709,15 @@ class SessionStore:
             self._connection,
             RetainedFactDraft(
                 fact_id=fact_id,
-                kind=payload.type,
                 occurred_at=occurred_at,
                 aggregate=AggregateRef(
                     kind="session",
                     id=payload.session_id,
                     revision=payload.fence,
                 ),
-                actor=FactActor(kind=holder.kind.value, id=holder.id),
-                correlation=FactCorrelation(
-                    correlation_id=correlation.correlation_id,
-                    causation_id=correlation.causation_id,
-                    trace_id=correlation.trace_id,
-                ),
-                payload=payload.model_dump(mode="json"),
+                actor=fact_actor(holder),
+                correlation=correlation,
+                payload=payload,
             ),
             projection_inputs=(
                 ProjectionInputDraft(
@@ -743,11 +737,11 @@ class SessionStore:
         actor: PrincipalRef | None,
         correlation: Correlation | None,
     ) -> None:
-        fact_actor = actor or PrincipalRef(
+        lifecycle_actor = actor or PrincipalRef(
             kind=PrincipalKind.SERVICE,
             id="session-store",
         )
-        fact_correlation = correlation or Correlation(
+        lifecycle_correlation = correlation or Correlation(
             correlation_id=uuid5(
                 _SESSION_FACT_NAMESPACE,
                 f"{record.session_id}:{record.revision}:{record.status.value}",
@@ -769,20 +763,15 @@ class SessionStore:
                     _SESSION_FACT_NAMESPACE,
                     f"{record.session_id}:{record.revision}:{payload.type}",
                 ),
-                kind=payload.type,
                 occurred_at=record.last_observed_at or record.started_at,
                 aggregate=AggregateRef(
                     kind="session",
                     id=record.session_id,
                     revision=record.revision,
                 ),
-                actor=FactActor(kind=fact_actor.kind.value, id=fact_actor.id),
-                correlation=FactCorrelation(
-                    correlation_id=fact_correlation.correlation_id,
-                    causation_id=fact_correlation.causation_id,
-                    trace_id=fact_correlation.trace_id,
-                ),
-                payload=payload.model_dump(mode="json"),
+                actor=fact_actor(lifecycle_actor),
+                correlation=lifecycle_correlation,
+                payload=payload,
             ),
             projection_inputs=(
                 ProjectionInputDraft(

@@ -3,46 +3,23 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AwareDatetime, Field, TypeAdapter
 
+from murder.contracts.common import (
+    ContractModel,
+    Correlation,
+    Principal,
+    PrincipalKind,
+    RequestContext,
+    StrEnum,
+)
 
-class StrEnum(str, Enum):
-    """Python 3.10 compatible string enum."""
-
-
-class ContractModel(BaseModel):
-    """Immutable public or persistence contract."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
-
-class PrincipalKind(StrEnum):
-    USER = "user"
-    CLIENT = "client"
-    WORKFLOW = "workflow"
-    SERVICE = "service"
-    REVIEWER = "reviewer"
-
-
-class PrincipalRef(ContractModel):
-    kind: PrincipalKind
-    id: str = Field(min_length=1)
-
-
-class Correlation(ContractModel):
-    correlation_id: UUID
-    causation_id: UUID | None = None
-    trace_id: UUID | None = None
-
-
-class RequestMeta(ContractModel):
-    request_id: UUID
-    correlation: Correlation
-    expected_revision: int | None = None
+# Compatibility spellings used by session call sites and the application protocol.
+PrincipalRef = Principal
+RequestMeta = RequestContext
 
 
 class SessionStatus(StrEnum):
@@ -225,10 +202,12 @@ __all__ = [
     "HarnessSessionRecord",
     "InterruptSession",
     "LeaseResource",
+    "Principal",
     "PrincipalKind",
     "PrincipalRef",
     "ReleaseWriterLease",
     "RenewWriterLease",
+    "RequestContext",
     "RequestMeta",
     "ResizeTerminal",
     "SESSION_COMMAND_ADAPTER",

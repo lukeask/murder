@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 from murder.permissions.contracts import (
     AuthorizationProof,
-    PermissionPrincipal,
     ProposedOperation,
     SessionControl,
     TerminalWrite,
@@ -31,12 +30,11 @@ def normalize_session_command(
     record: HarnessSessionRecord,
     principal: PrincipalRef,
 ) -> ProposedOperation:
-    actor = PermissionPrincipal.model_validate(principal.model_dump())
     if command.type == "write_terminal_input":
         data = command.data.encode("utf-8")
         return TerminalWrite(
             operation_id=command.operation_id,
-            principal=actor,
+            principal=principal,
             session_id=record.session_id,
             encoding=command.encoding,
             data_digest=hashlib.sha256(data).hexdigest(),
@@ -46,7 +44,7 @@ def normalize_session_command(
         )
     return SessionControl(
         operation_id=command.operation_id,
-        principal=actor,
+        principal=principal,
         session_id=record.session_id,
         command=command.type,
         arguments_digest=_digest(command.model_dump(mode="json")),
@@ -60,14 +58,12 @@ def normalize_writer_takeover(
 ) -> ProposedOperation:
     return WriterTakeover(
         operation_id=request.meta.request_id,
-        principal=PermissionPrincipal.model_validate(holder.model_dump()),
+        principal=holder,
         session_id=request.session_id,
         requested_mode=request.mode.value,
         current_lease_id=current_lease.lease_id,
         current_lease_fence=current_lease.fence,
-        current_holder=PermissionPrincipal.model_validate(
-            current_lease.holder.model_dump()
-        ),
+        current_holder=current_lease.holder,
         request_digest=_digest(request.model_dump(mode="json")),
     )
 
