@@ -5,7 +5,7 @@
  * ## Why hand-written, not a `listSlice.ts` factory shell
  *
  * Like {@link ../favorites/favoritesSlice.js favorites}, this is none of the list-slice factory's
- * `{ rows, status, error }` shape re-pulled on a `state.snapshot`. Settings are a small fixed record
+ * `{ rows, status, error }` shape re-pulled after projection invalidation. Settings are a small fixed record
  * loaded once via `settings.get` and persisted via `settings.update` (never snapshot-invalidated). So
  * it is a hand-written slice with its own shape — the documented precedent for a non-factory,
  * non-snapshot slice (see the favorites module doc).

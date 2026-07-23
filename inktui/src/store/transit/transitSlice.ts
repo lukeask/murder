@@ -15,7 +15,6 @@
  */
 
 import type { StateCreator } from 'zustand';
-import type { Entity } from '../../bus/protocol.js';
 import type { AppStore } from '../store.js';
 
 /** One commit as the slice cares about it — a presentation-free projection of the wire DTO. `tsEpoch`
@@ -53,13 +52,6 @@ export interface TransitState {
   /** Set when the last refresh rejected; cleared on the next successful load. */
   readonly error: string | null;
 }
-
-/**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice. The service polls the
- * branch HEADs and emits a `'transit'`-keyed change event when they move; the store re-pulls only the
- * transit slice (see `../store.ts`).
- */
-export const TRANSIT_INVALIDATING_ENTITY: Entity = 'transit';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus → `idle`. */
 export const initialTransitState: TransitState = { lanes: [], status: 'idle', error: null };

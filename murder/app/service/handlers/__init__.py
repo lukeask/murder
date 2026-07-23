@@ -1,9 +1,7 @@
 """Built-in feature handlers, grouped by namespace.
 
-``register_all(host)`` populates ``host._rpc_handlers`` with every default
-handler. The application composition root resolves these functions once into
-enum-keyed direct dispatch; the string registry remains only for old RPC
-consumers during retirement.
+``register_all(host)`` connects feature use cases directly to closed
+application capability enums.
 """
 
 from __future__ import annotations
@@ -17,6 +15,7 @@ from murder.app.service.handlers import (
     health,
     image,
     plan,
+    roster,
     sessions,
     settings,
     state,
@@ -37,6 +36,7 @@ def register_all(host: ServiceHost) -> None:
     harness_control.register(host)
     command.register(host)
     state.register(host)
+    roster.register(host)
     sessions.register(host)
     ticket.register(host)
     plan.register(host)

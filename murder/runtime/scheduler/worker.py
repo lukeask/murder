@@ -14,12 +14,13 @@ from murder.state.persistence.commands import enqueue_command
 from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
 from murder.bus.protocol import (
     CommandEvent,
-    Entity,
     SchedulerDecisionEvent,
     SchedulerModeEvent,
-    StateSnapshotEvent,
     UsageResetEvent,
 )
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
+from murder.runtime.scheduler.projection import invalidate_schedule
 from murder.verdict.policy.scheduler_policy import (
     SchedulerCaps,
     SchedulerInput,
@@ -101,14 +102,14 @@ class SchedulerWorker(Worker):
       priority pick; respects multiharness_cutoff
     """
 
-    SET_MODE = "scheduler.set_mode"
-    SET_PARAMS = "scheduler.set_params"
-    SET_STEERING = "scheduler.set_steering"
+    SET_MODE = OrchestrationCommand.SCHEDULER_SET_MODE
+    SET_PARAMS = OrchestrationCommand.SCHEDULER_SET_PARAMS
+    SET_STEERING = OrchestrationCommand.SCHEDULER_SET_STEERING
 
     def __init__(self) -> None:
         super().__init__(
             WorkerSpec(
-                name="scheduler",
+                name=WorkerName.SCHEDULER,
                 accepts=(self.SET_MODE, self.SET_PARAMS, self.SET_STEERING),
                 process_model="thread",
             )
@@ -174,8 +175,8 @@ class SchedulerWorker(Worker):
                 agent_id=self.name,
                 role=None,
                 ticket_id=None,
-                target_worker="orchestrator",
-                kind="scheduler.kickoff_ready",
+                target_worker=WorkerName.ORCHESTRATOR,
+                kind=OrchestrationCommand.SCHEDULER_KICKOFF_READY,
                 payload={},
                 correlation_id=command_id,
                 idempotency_key=idempotency_key,
@@ -458,8 +459,8 @@ class SchedulerWorker(Worker):
                 agent_id=self.name,
                 role=None,
                 ticket_id=None,
-                target_worker="orchestrator",
-                kind="scheduler.kickoff_ready",
+                target_worker=WorkerName.ORCHESTRATOR,
+                kind=OrchestrationCommand.SCHEDULER_KICKOFF_READY,
                 payload={"only": ticket_id},
                 correlation_id=command_id,
                 idempotency_key=idempotency_key,
@@ -573,34 +574,24 @@ class SchedulerWorker(Worker):
                 kicked_ticket_id=kicked_ticket_id,
             )
         )
-        # F1 (queue_row chunk) + F11 H1 coalescing: the rich `SchedulerDecisionEvent`
-        # above is an internal detail; the CLIENT-facing invalidation is the key-only
-        # `state.snapshot{queue_row}`, and Ink refetches the whole schedule slice on
-        # ANY queue_row event. The crow_magic tick runs every ~10s per (harness, window)
+        # The rich `SchedulerDecisionEvent` above is an internal detail. Schedule
+        # subscribers receive the feature-owned projection input below. The crow_magic
+        # tick runs every ~10s per (harness, window)
         # and recomputes usage/threshold/t_until_reset each time, but `state.schedule_snapshot`
         # only renders `decision` / `rationale` / `kicked_ticket_id` from this cache row
         # (the usage gauges read `harness_usage_snapshots` instead). So we emit only when
         # `_upsert_decision_cache` reports a change to one of those rendered fields
-        # (`emit_queue_row`), bounding refetches to genuine decision flips rather than
-        # every tick. Key = `harness:window_key` (the decision-cache primary key); no
-        # queue_row table exists (plan line 322). This is a thread worker with a live
-        # `ctx.bus`; Runtime.emit_snapshot is unavailable here, so we await directly.
-        if emit_queue_row:
-            await ctx.bus.publish(
-                StateSnapshotEvent(
-                    run_id=ctx.run_id,
-                    agent_id=self.name,
-                    entity=Entity.QUEUE_ROW,
-                    key=f"{harness}:{window_key}",
-                )
-            )
+        # (`emit_queue_row`), bounding refreshes to genuine decision flips rather than
+        # every tick. The invalidation key is the decision-cache primary key.
+        if emit_queue_row and ctx.db is not None:
+            invalidate_schedule(ctx.db, subject_key=f"decision:{harness}:{window_key}")
 
     async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
-        if command.kind == self.SET_MODE:
+        if command.kind is self.SET_MODE:
             return await self._handle_set_mode(command, ctx)
-        if command.kind == self.SET_PARAMS:
+        if command.kind is self.SET_PARAMS:
             return await self._handle_set_params(command, ctx)
-        if command.kind == self.SET_STEERING:
+        if command.kind is self.SET_STEERING:
             return await self._handle_set_steering(command, ctx)
         return {"handled": False}
 
@@ -699,17 +690,7 @@ class SchedulerWorker(Worker):
             """,
             (harness, steering, now),
         )
-        # Key-only client invalidation: queue_row already invalidates the Ink
-        # usage slice, which refetches the schedule snapshot (carrying steering).
-        if ctx.bus is not None and ctx.run_id is not None:
-            await ctx.bus.publish(
-                StateSnapshotEvent(
-                    run_id=ctx.run_id,
-                    agent_id=self.name,
-                    entity=Entity.QUEUE_ROW,
-                    key=f"steering:{harness}",
-                )
-            )
+        invalidate_schedule(ctx.db, subject_key=f"steering:{harness}")
         return {"handled": True, "harness": harness, "steering": steering}
 
     def _load_steering(self, db: sqlite3.Connection, harness: str) -> tuple[str, bool]:

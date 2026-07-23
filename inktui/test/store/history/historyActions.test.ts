@@ -1,11 +1,11 @@
 /**
  * History actions tests — `refresh()` projects the wire snapshot into rows, and `dismiss()`
  * optimistically marks the row dismissed then submits the `history.dismiss` orchestrator command.
- * Driven by {@link FakeBusClient}.
+ * Driven by {@link FakeApplicationClient}.
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import { createAppStore } from '../../../src/store/store.js';
 
 function flush(): Promise<void> {
@@ -13,7 +13,7 @@ function flush(): Promise<void> {
 }
 
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   fake.stubQuery('schedule.get', {
     invalidation_key: 'iv',
@@ -83,7 +83,7 @@ describe('history actions', () => {
         },
       ],
     });
-    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
@@ -99,16 +99,13 @@ describe('history actions', () => {
     // The row is optimistically marked dismissed.
     expect(store.getState().history.rows[0]?.status).toBe('dismissed');
     // And the orchestrator command was submitted with the item id.
-    const submit = fake.commandCalls.find((c) => c.name === 'orchestration.execute');
-    expect(submit?.params).toMatchObject({
-      kind: 'history.dismiss',
-      payload: { item_id: 'collaborator:0' },
-    });
+    const submit = fake.commandCalls.find((c) => c.name === 'history.dismiss');
+    expect(submit?.params).toMatchObject({ item_id: 'collaborator:0' });
   });
 
   it('resumeConversation submits agent.resume_from_history with the conversation id', async () => {
     const { fake, store } = setup();
-    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-r' });
+    fake.stubAllCommands({ ok: true, command_id: 'cmd-r' });
     fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
@@ -117,16 +114,13 @@ describe('history actions', () => {
 
     await store.getState().actions.history.resumeConversation('crow-t1');
 
-    const submit = fake.commandCalls.find((c) => c.name === 'orchestration.execute');
-    expect(submit?.params).toMatchObject({
-      kind: 'agent.resume_from_history',
-      payload: { conversation_id: 'crow-t1' },
-    });
+    const submit = fake.commandCalls.find((c) => c.name === 'agent.resume_from_history');
+    expect(submit?.params).toMatchObject({ conversation_id: 'crow-t1' });
   });
 
   it('resumeConversation swallows backend rejection (does not throw)', async () => {
     const { fake, store } = setup();
-    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-r' });
+    fake.stubAllCommands({ ok: true, command_id: 'cmd-r' });
     fake.stubQuery('command.get', {
       ok: true,
       status: 'failed',

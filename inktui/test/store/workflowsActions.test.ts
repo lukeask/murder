@@ -1,7 +1,7 @@
 /**
  * Workflows actions tests — the workflow-registry RPC pipeline (rule 3: actions are the only bus path).
  *
- * Drives the workflows slice through a `FakeBusClient`:
+ * Drives the workflows slice through a `FakeApplicationClient`:
  *  - `load()` fires `workflows.get` and fills the slice from the reply.
  *  - `save(defn)` upserts locally (optimistic) AND fires `workflows.set`, then SYNCS the slice to
  *     the server's normalized echo.
@@ -12,7 +12,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 import type { WorkflowDef } from '../../src/store/workflows/workflowsSlice.js';
@@ -51,7 +51,7 @@ function wf(name: string, description = ''): WorkflowDef {
 }
 
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   // Default stubs so an unrelated load/save/run resolves; tests override as needed. The save stub
   // echoes back the submitted workflows (the backend normalizes; tests that care override this).
   fake.stubQuery('workflows.get', { ok: true, workflows: [] });

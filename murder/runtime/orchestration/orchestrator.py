@@ -26,7 +26,7 @@ from murder.state.persistence.agents import (
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.agents.planning_handler import PlanningHandler
-from murder.bus import Entity, StatusChangeEvent, TicketStatus
+from murder.bus import StatusChangeEvent, TicketStatus
 from murder.llm.direct import resolve_direct_role_client
 from murder.config import (
     Config,
@@ -113,7 +113,6 @@ class Orchestrator:
 
     def __init__(self, rt: OrchestratorHost) -> None:
         self.rt = rt
-        self._question_listener: Any = None
         self._planner_spawn_locks: dict[str, asyncio.Lock] = {}
         self.completion_coordinator = CompletionCoordinator(
             rt,
@@ -163,7 +162,6 @@ class Orchestrator:
             repo_root=self.rt.repo_root,
             escalations=self._escalations(),
             emit_status=self._emit_ticket_status,
-            emit_snapshot=lambda tid: self.rt.publish_snapshot(Entity.TICKET, tid),
         )
 
     async def kickoff_ready(self, only: str | None = None) -> list[str]:
@@ -260,11 +258,6 @@ class Orchestrator:
                 to_status=to_status,
             )
         )
-        # F1: the status-transition choke point also emits the key-only
-        # state.snapshot{ticket}. ~5 sites funnel here (kickoff / retry / force /
-        # carve-ready, and outcome.fail_ticket via the injected emit_status), so
-        # the snapshot rides alongside the existing typed event in one place.
-        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
 
     async def _fail_ticket(self, ticket_id: str, reason: str) -> None:
         await self._outcomes().fail_ticket(ticket_id, reason)
@@ -339,7 +332,6 @@ class Orchestrator:
         # Fresh producer state; reattach resumes transcript projection from the
         # current pane scrollback rather than the original startup state.
         agent.start_conversation()
-        await self.rt.publish_snapshot(Entity.AGENT, agent.id)
         await self.spawn_crow_handler(ticket_id, crow_session)
 
     async def spawn_crow_handler(self, ticket_id: str, crow_session: str) -> str:
@@ -473,13 +465,7 @@ class Orchestrator:
             # Rogues bypass CrowAgent.start(), so kick off transcript projection
             # here: a fresh session gets fresh producer-owned parser state.
             agent.start_conversation()
-            # Broadcast the freshly spawned agent so the Ink roster / Crows panel
-            # picks it up immediately. Without this, rogue spawn emitted no `agent`
-            # snapshot (unlike the ticket/plan/note handlers and the crow heartbeat
-            # at crow_handler.py), so the new rogue only surfaced on the next
-            # unrelated `agent` invalidation. The frontend also refreshes proactively
-            # on spawn; this keeps the backend consistent with the event-driven design.
-            await self.rt.publish_snapshot(Entity.AGENT, agent_id)
+            # ``sync_agent`` above committed the roster input with this state.
         except BaseException:
             await self.rt.reap(agent_id)
             raise
@@ -565,37 +551,6 @@ class Orchestrator:
         )
         return {"handled": True, "agent_id": agent_id, "resumed_from": cid}
 
-    async def start_question_listener(self) -> None:
-        """Subscribe to QuestionEvents on the bus and route to the per-plan planning agent.
-
-        Fallback: if no plan is associated with the ticket, escalate to the user.
-        """
-        bus = self.rt.bus
-        if bus is None:
-            return
-
-        # Idempotent: drop any prior subscription so a repeat start (test
-        # harness, in-process restart) does not leak a handler closing over self.
-        self.stop_question_listener()
-
-        async def _handle(event: Any) -> None:
-            if getattr(event, "type", None) != "question":
-                return
-            ticket_id: str | None = getattr(event, "ticket_id", None)
-            question: str = str(getattr(event, "question", ""))
-            crow_session: str = str(getattr(event, "crow_session", ""))
-            await self.route_crow_ask(ticket_id, question, crow_session)
-
-        self._question_listener = bus.subscribe(_handle, None)
-
-    def stop_question_listener(self) -> None:
-        """Cancel the QuestionEvent subscription if one is active."""
-        listener = self._question_listener
-        if listener is not None:
-            with contextlib.suppress(Exception):
-                listener.cancel()
-            self._question_listener = None
-
     async def route_crow_ask(
         self,
         ticket_id: str | None,
@@ -671,7 +626,6 @@ class Orchestrator:
             # barrier — we proceed after the timeout regardless.
             await self._await_session_ready(handle.session_name)
             await self.spawn_planning_handler(plan_name, handle.session_name)
-            await self.rt.publish_snapshot(Entity.AGENT, agent_id)
             return agent_id
 
     async def spawn_planner(

@@ -14,7 +14,7 @@ import { render as inkRender } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { TopBar } from '../../src/components/TopBar.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
@@ -25,7 +25,7 @@ import {
 } from '../../src/store/connection/connectionStore.js';
 import { createAppStore } from '../../src/store/store.js';
 
-const { store } = createAppStore(new FakeBusClient());
+const { store } = createAppStore(new FakeApplicationClient());
 
 function Harness(): JSX.Element {
   const stores = createInputStores(['plans'], 'plans');

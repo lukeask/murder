@@ -6,21 +6,20 @@ these). Each mutating method must also emit the matching key-only
 ``state.snapshot{entity}`` per the F1 contract.
 
 Test harness mirrors ``test_f1_keyonly_snapshot_ticket.py``: a real Runtime with
-an in-memory-ish sqlite db + Bus, drained explicitly (conftest noop-patches
+an in-memory-ish sqlite db + OrchestrationNotifier, drained explicitly (conftest noop-patches
 ``asyncio.sleep`` so we never spin a poll loop).
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from murder.app.service.runtime import Runtime
-from murder.bus import Bus
-from murder.bus.protocol import Entity, StateSnapshotEvent
+from murder.app.protocol.requests import CommandName
+from murder.bus import OrchestrationNotifier
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -51,7 +50,7 @@ def _runtime(repo_root: Path) -> Runtime:
     rt.db = conn
     rt.run_id = "run-test"
     insert_run(conn, rt.run_id, "{}")
-    rt.bus = Bus(rt.run_id, conn)
+    rt.bus = OrchestrationNotifier(rt.run_id, conn)
     return rt
 
 
@@ -59,23 +58,6 @@ def _orch(rt: Runtime):
     from murder.runtime.orchestration.orchestrator import Orchestrator
 
     return Orchestrator(rt)
-
-
-async def _record(sink: list[object], ev: object) -> None:
-    sink.append(ev)
-
-
-def _snaps(captured: list[object], entity: Entity, key: str) -> list[StateSnapshotEvent]:
-    return [
-        e
-        for e in captured
-        if isinstance(e, StateSnapshotEvent) and e.entity == entity and e.key == key
-    ]
-
-
-async def _drain(rt: Runtime) -> None:
-    if rt._emit_tasks:
-        await asyncio.gather(*list(rt._emit_tasks))
 
 
 # === ticket.save_body =======================================================
@@ -118,18 +100,18 @@ async def test_save_body_persists_body_and_preserves_frontmatter(repo_root: Path
 
 
 @pytest.mark.asyncio
-async def test_save_body_emits_ticket_snapshot(repo_root: Path) -> None:
+async def test_save_body_appends_schedule_projection_input(repo_root: Path) -> None:
     rt = _runtime(repo_root)
     _insert_ticket(rt.db, "t002")
-    captured: list[object] = []
-    rt.bus.subscribe(lambda ev: _record(captured, ev))
 
     await _orch(rt).save_ticket_body("t002", "# Checklist\n[ ] a\n")
-    await _drain(rt)
 
-    snaps = _snaps(captured, Entity.TICKET, "t002")
-    assert len(snaps) >= 1
-    assert all(s.payload is None for s in snaps)
+    row = rt.db.execute(
+        "SELECT projection, subject_key, generation FROM projection_inputs "
+        "WHERE projection = 'schedule' AND subject_key = 't002' "
+        "ORDER BY generation DESC LIMIT 1"
+    ).fetchone()
+    assert dict(row) == {"projection": "schedule", "subject_key": "t002", "generation": 0}
 
 
 @pytest.mark.asyncio
@@ -188,13 +170,12 @@ async def test_schedule_invalid_duration_raises(repo_root: Path) -> None:
 async def test_schedule_emits_ticket_snapshot(repo_root: Path) -> None:
     rt = _runtime(repo_root)
     _insert_ticket(rt.db, "t013")
-    captured: list[object] = []
-    rt.bus.subscribe(lambda ev: _record(captured, ev))
-
     await _orch(rt).schedule_ticket("t013", "30m")
-    await _drain(rt)
-
-    assert len(_snaps(captured, Entity.TICKET, "t013")) == 1
+    row = rt.db.execute(
+        "SELECT subject_key FROM projection_inputs WHERE projection = 'schedule' "
+        "AND subject_key = 't013'"
+    ).fetchone()
+    assert row is not None
 
 
 # === plan.create ============================================================
@@ -203,8 +184,6 @@ async def test_schedule_emits_ticket_snapshot(repo_root: Path) -> None:
 @pytest.mark.asyncio
 async def test_create_plan_no_message_scaffolds_and_emits(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    captured: list[object] = []
-    rt.bus.subscribe(lambda ev: _record(captured, ev))
 
     result = await _orch(rt).create_plan("my-plan", "")
 
@@ -212,8 +191,6 @@ async def test_create_plan_no_message_scaffolds_and_emits(repo_root: Path) -> No
     assert plan_md(repo_root, "my-plan").exists()
     row = rt.db.execute("SELECT name FROM plans WHERE name = ?", ("my-plan",)).fetchone()
     assert row is not None
-    # scaffold_plan emits the plan snapshot; no planner spawned -> no message path.
-    assert len(_snaps(captured, Entity.PLAN, "my-plan")) >= 1
 
 
 @pytest.mark.asyncio
@@ -277,15 +254,21 @@ def _host_with_handlers(repo_root: Path):
     from murder.app.service.host import ServiceHost
 
     host = ServiceHost(config=_config(), repo_root=repo_root)
-    host.register_default_rpc_handlers()
+    host.register_application_handlers()
     host.orchestrator = _StubOrch()  # type: ignore[assignment]
     return host
 
 
-def test_host_registers_the_three_f3_methods(repo_root: Path) -> None:
+def test_host_registers_the_three_typed_capabilities(repo_root: Path) -> None:
     host = _host_with_handlers(repo_root)
-    for method in ("ticket.save_body", "ticket.schedule", "plan.create"):
-        assert method in host._rpc_handlers
+    from murder.app.protocol.requests import CommandName
+
+    for capability in (
+        CommandName.TICKET_SAVE_BODY,
+        CommandName.TICKET_SCHEDULE,
+        CommandName.PLAN_CREATE,
+    ):
+        assert capability in host._application_commands
 
 
 @pytest.mark.asyncio
@@ -293,9 +276,11 @@ async def test_host_dispatch_routes_to_orchestrator(repo_root: Path) -> None:
     host = _host_with_handlers(repo_root)
     stub = host.orchestrator
 
-    await host._rpc_handlers["ticket.save_body"]({"ticket_id": "t1", "body": "x"})
-    await host._rpc_handlers["ticket.schedule"]({"ticket_id": "t1", "duration": "1h"})
-    await host._rpc_handlers["plan.create"]({"plan_name": "p", "message": "go"})
+    from murder.app.protocol.requests import CommandName
+
+    await host._application_commands[CommandName.TICKET_SAVE_BODY]({"ticket_id": "t1", "body": "x"})
+    await host._application_commands[CommandName.TICKET_SCHEDULE]({"ticket_id": "t1", "duration": "1h"})
+    await host._application_commands[CommandName.PLAN_CREATE]({"plan_name": "p", "message": "go"})
 
     assert stub.calls == [  # type: ignore[attr-defined]
         ("save_ticket_body", "t1", "x"),
@@ -308,10 +293,10 @@ async def test_host_dispatch_routes_to_orchestrator(repo_root: Path) -> None:
 async def test_host_dispatch_validates_required_args(repo_root: Path) -> None:
     host = _host_with_handlers(repo_root)
     with pytest.raises(ValueError):
-        await host._rpc_handlers["ticket.save_body"]({"ticket_id": "", "body": "x"})
+        await host._application_commands[CommandName.TICKET_SAVE_BODY]({"ticket_id": "", "body": "x"})
     with pytest.raises(ValueError):
-        await host._rpc_handlers["ticket.save_body"]({"ticket_id": "t1"})  # body not str
+        await host._application_commands[CommandName.TICKET_SAVE_BODY]({"ticket_id": "t1"})  # body not str
     with pytest.raises(ValueError):
-        await host._rpc_handlers["ticket.schedule"]({"ticket_id": "  "})
+        await host._application_commands[CommandName.TICKET_SCHEDULE]({"ticket_id": "  "})
     with pytest.raises(ValueError):
-        await host._rpc_handlers["plan.create"]({"plan_name": " ", "message": "m"})
+        await host._application_commands[CommandName.PLAN_CREATE]({"plan_name": " ", "message": "m"})

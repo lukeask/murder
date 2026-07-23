@@ -7,7 +7,8 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
-from murder.state.persistence.event_log import insert_event
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.state.persistence.records import CommandRecord, command_record_from_row
 
 
@@ -23,8 +24,8 @@ def enqueue_command(
     agent_id: str,
     role: str | None,
     ticket_id: str | None,
-    target_worker: str,
-    kind: str,
+    target_worker: WorkerName,
+    kind: OrchestrationCommand,
     payload: dict[str, Any],
     correlation_id: str,
     idempotency_key: str,
@@ -53,8 +54,8 @@ def enqueue_command(
             agent_id,
             role,
             ticket_id,
-            target_worker,
-            kind,
+            target_worker.value,
+            kind.value,
             json.dumps(payload, default=str),
             correlation_id,
             idempotency_key,
@@ -72,7 +73,7 @@ def enqueue_command(
 def claim_next_command(
     conn: sqlite3.Connection,
     *,
-    target_worker: str,
+    target_worker: WorkerName,
     claimed_by: str,
     lease_expires_at: int,
 ) -> CommandRecord | None:
@@ -85,7 +86,7 @@ def claim_next_command(
          ORDER BY created_at, id
          LIMIT 1
         """,
-        (target_worker,),
+        (target_worker.value,),
     ).fetchone()
     if row is None:
         return None
@@ -285,8 +286,8 @@ def insert_command_event(
     agent_id: str,
     role: str | None,
     ticket_id: str | None,
-    target_worker: str,
-    kind: str,
+    target_worker: WorkerName,
+    kind: OrchestrationCommand,
     payload: dict[str, Any],
     correlation_id: str,
     idempotency_key: str,
@@ -322,19 +323,11 @@ def insert_command_event(
             retryable=retryable,
             result=result,
         )
-        event_id = insert_event(
-            conn,
-            run_id=run_id,
-            agent_id=agent_id,
-            role=role or "",
-            ticket_id=ticket_id,
-            type=event_type,
-            payload=event_payload,
-            schema_version=schema_version,
-            ts=ts,
-        )
         conn.execute("COMMIT")
-        return event_id
+        # Commands are durable work records, not generic event-log entries.
+        # Retain the integer return for callers that historically ignored it.
+        del event_type, event_payload, ts, schema_version
+        return 0
     except Exception:
         conn.execute("ROLLBACK")
         raise

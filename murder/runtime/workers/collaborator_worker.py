@@ -5,6 +5,8 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.terminal.tmux import TmuxError
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx, WorkerSpec
 
@@ -23,12 +25,12 @@ class CollaboratorWorker(Worker):
     ) -> None:
         super().__init__(
             WorkerSpec(
-                name="collaborator",
+                name=WorkerName.COLLABORATOR,
                 process_model="subprocess",
                 accepts=(
-                    "collaborator.chat_send",
-                    "collaborator.swap_model",
-                    "collaborator.transcript.refresh",
+                    OrchestrationCommand.COLLABORATOR_CHAT_SEND,
+                    OrchestrationCommand.COLLABORATOR_SWAP_MODEL,
+                    OrchestrationCommand.COLLABORATOR_TRANSCRIPT_REFRESH,
                 ),
             )
         )
@@ -46,8 +48,13 @@ class CollaboratorWorker(Worker):
     async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
         return await self._dispatch(command.kind, command.payload, ctx)
 
-    async def _dispatch(self, kind: str, payload: dict[str, Any], ctx: WorkerCtx) -> dict[str, Any]:
-        if kind == "collaborator.chat_send":
+    async def _dispatch(
+        self,
+        kind: OrchestrationCommand,
+        payload: dict[str, Any],
+        ctx: WorkerCtx,
+    ) -> dict[str, Any]:
+        if kind is OrchestrationCommand.COLLABORATOR_CHAT_SEND:
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("collaborator.chat_send requires non-empty payload.text")
@@ -96,12 +103,12 @@ class CollaboratorWorker(Worker):
             else:
                 agent.record_user_block(text)
             return {"handled": True, "agent_id": agent_id}
-        if kind == "collaborator.swap_model":
+        if kind is OrchestrationCommand.COLLABORATOR_SWAP_MODEL:
             if self._swap_model is None:
                 return {"ok": False, "error": "swap_model not implemented"}
             result = await self._swap_model(payload, ctx)
             return {"handled": True, **(result or {})}
-        if kind == "collaborator.transcript.refresh":
+        if kind is OrchestrationCommand.COLLABORATOR_TRANSCRIPT_REFRESH:
             agent_id = payload.get("agent_id", "collaborator-0")
             agent = self._get_agent(str(agent_id))
             if agent is None or not hasattr(agent, "refresh_transcript"):

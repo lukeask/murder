@@ -38,7 +38,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import type { BusClient } from '../../bus/BusClient.js';
+import { asCommandResult } from '../../application/resultCast.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { type ToastStoreApi, toastStore } from '../toast/toastStore.js';
 
 
@@ -100,11 +101,11 @@ function mintStem(): string {
 }
 
 /**
- * Create an image-draft store bound to a {@link BusClient}. The `toasts` param is the toast store to
+ * Create an image-draft store bound to a {@link ApplicationClient}. The `toasts` param is the toast store to
  * push done/failed feedback into — defaults to the app singleton, overridable for isolated tests.
  */
 export function createImageDraftStore(
-  bus: BusClient,
+  bus: ApplicationClient,
   toasts: ToastStoreApi = toastStore,
 ): ImageDraftStoreApi {
   // The FIFO upload queue: ids awaiting their turn, plus a flag for the one in flight. Closure-private
@@ -152,8 +153,9 @@ export function createImageDraftStore(
         if (get().drafts[draft.id] === undefined) {
           return;
         }
-        if (reply.ok === true && typeof reply.path === 'string') {
-          const path: string = reply.path;
+        const result = asCommandResult<'image.upload', { ok?: boolean; path?: string; error?: string }>(reply);
+        if (result.ok === true && typeof result.path === 'string') {
+          const path: string = result.path;
           set((state) => ({
             drafts: {
               ...state.drafts,
@@ -165,7 +167,7 @@ export function createImageDraftStore(
           markFailed(draft);
           toasts
             .getState()
-            .push(String(reply.error ?? 'image upload failed'), { severity: 'error' });
+            .push(String(result.error ?? 'image upload failed'), { severity: 'error' });
         }
       } catch (error: unknown) {
         if (get().drafts[draft.id] === undefined) {

@@ -7,6 +7,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.work.tickets.status import TicketStatus
 
 
@@ -115,8 +117,8 @@ class CommandRecord:
     agent_id: str | None
     role: str | None
     ticket_id: str | None
-    target_worker: str
-    kind: str
+    target_worker: WorkerName
+    kind: OrchestrationCommand
     payload_json: str
     correlation_id: str
     idempotency_key: str
@@ -266,8 +268,8 @@ def command_record_from_row(row: Mapping[str, Any]) -> CommandRecord:
         agent_id=row["agent_id"],
         role=row["role"],
         ticket_id=row["ticket_id"],
-        target_worker=str(row["target_worker"]),
-        kind=str(row["kind"]),
+        target_worker=WorkerName(str(row["target_worker"])),
+        kind=OrchestrationCommand(str(row["kind"])),
         payload_json=str(row["payload_json"] or "{}"),
         correlation_id=str(row["correlation_id"]),
         idempotency_key=str(row["idempotency_key"]),

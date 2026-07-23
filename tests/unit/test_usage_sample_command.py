@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import ValidationError
 
 from murder import usage_sample_command
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
 
@@ -66,9 +68,8 @@ async def test_service_usage_poll_loop_samples_before_first_sleep(monkeypatch) -
 
     with pytest.raises(asyncio.CancelledError):
         await usage_sample_command.run_service_usage_poll_loop(
-            broker=object(),  # type: ignore[arg-type]
+            repo_root=__import__("pathlib").Path("/repo"),
             db=object(),  # type: ignore[arg-type]
-            run_id="run-test",
         )
 
     assert order == ["sample", "sleep"]
@@ -81,21 +82,13 @@ async def test_usage_probe_worker_rejects_scheduler_probe_usage_alias() -> None:
     worker = UsageProbeWorker()
 
     assert "scheduler.probe_usage" not in worker.COMMAND_KINDS
-
-    handled = await worker.handle_command(
-        type("Cmd", (), {"name": "scheduler.probe_usage"})(),  # type: ignore[arg-type]
-        WorkerCtx(repo_root=__import__("pathlib").Path("/tmp")),  # type: ignore[arg-type]
-    )
-    assert handled is False
-
-    cmd = CommandEvent(
-        run_id="run-test",
-        agent_id="tester",
-        target_worker="usage-probe",
-        kind="scheduler.probe_usage",
-        payload={},
-        correlation_id="c1",
-        idempotency_key="k1",
-    )
-    result = await worker.on_command(cmd, WorkerCtx(repo_root=__import__("pathlib").Path("/tmp")))  # type: ignore[arg-type]
-    assert result == {"handled": False}
+    with pytest.raises(ValidationError, match="scheduler.probe_usage"):
+        CommandEvent(
+            run_id="run-test",
+            agent_id="tester",
+            target_worker=WorkerName.USAGE_PROBE,
+            kind="scheduler.probe_usage",
+            payload={},
+            correlation_id="c1",
+            idempotency_key="k1",
+        )

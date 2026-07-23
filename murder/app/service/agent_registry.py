@@ -104,7 +104,7 @@ class AgentRegistry:
         if agent is None:
             return
         # No AgentLifecycleEvent on reap: nothing reacts to the DEAD transition
-        # and reap is already on the bus via agent.stop() → StateSnapshotEvent.
+        # and reap is already recorded by the private orchestration lifecycle path.
         # Gilding it would only risk mid-teardown over-reaction (plan §2.5.A).
         if agent.ticket_id is not None:
             # Only evict the index slot matching THIS agent's role; a crow and

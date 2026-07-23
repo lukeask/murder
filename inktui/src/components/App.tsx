@@ -6,7 +6,7 @@
  *
  * Wiring, top to bottom:
  *  - {@link App} takes the two store bundles as props (constructed at the entrypoint with the real
- *    `BusClient`/input stores, or by a test with fakes — rule 4: the bus is injected, never imported
+ *    `ApplicationClient`/input stores, or by a test with fakes — rule 4: the bus is injected, never imported
  *    by a component). It mounts both context providers and renders {@link Shell} inside them.
  *  - {@link Shell} runs *inside* the providers (so it may read the stores) and installs the single
  *    root input loop with {@link useRootInput}. It is the only caller of that hook.
@@ -27,9 +27,9 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { BusClient } from '../bus/BusClient.js';
+import type { ApplicationClient } from '../application/ApplicationClient.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
-import { BusClientProvider, useBusClient } from '../hooks/useBusClient.js';
+import { ApplicationClientProvider, useApplicationClient } from '../hooks/useApplicationClient.js';
 import {
   type InputStores,
   InputStoresProvider,
@@ -641,7 +641,7 @@ function Shell({
     paneUi,
   } = useInputStores();
   const appStore = useAppStoreApi();
-  const bus = useBusClient();
+  const bus = useApplicationClient();
   const loadFavorites = useAppStore((s) => s.actions.favorites.load);
   const loadSettings = useAppStore((s) => s.actions.settings.load);
   const { stdout } = useStdout();
@@ -1378,7 +1378,7 @@ function Shell({
  * {@link Shell} composes, panels fill in.
  *
  * `bus` is threaded here so the {@link TmuxFrame} component can open a transient subscription
- * via {@link BusClientProvider} / {@link useBusClient}. Actions remain the only domain-data path
+ * via {@link ApplicationClientProvider} / {@link useApplicationClient}. Actions remain the only domain-data path
  * (rule 3); the bus context is for streaming display data only (C14 tmux frames).
  */
 export function App({
@@ -1390,7 +1390,7 @@ export function App({
 }: {
   readonly store: AppStoreApi;
   readonly inputStores: InputStores;
-  readonly bus: BusClient;
+  readonly bus: ApplicationClient;
   /** Current project/repo name for the top-bar branding; from `MURDER_PROJECT` (see index.tsx). */
   readonly project?: string | undefined;
   /** The kitty stdin shim's chord channel (Phase 2), injected at the live entrypoint like `bus`.
@@ -1400,9 +1400,9 @@ export function App({
   return (
     <AppStoreProvider value={store}>
       <InputStoresProvider value={inputStores}>
-        <BusClientProvider value={bus}>
+        <ApplicationClientProvider value={bus}>
           <Shell project={project} terminalEvents={terminalEvents} />
-        </BusClientProvider>
+        </ApplicationClientProvider>
       </InputStoresProvider>
     </AppStoreProvider>
   );

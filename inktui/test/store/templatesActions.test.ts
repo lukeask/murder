@@ -2,7 +2,7 @@
  * Templates actions tests — the template-registry RPC pipeline (rule 3: actions are the only bus
  * path).
  *
- * Drives the templates slice through a `FakeBusClient`:
+ * Drives the templates slice through a `FakeApplicationClient`:
  *  - `load()` fires `templates.get` and fills the slice from the reply.
  *  - `save(name, body)` upserts locally (optimistic) AND fires `templates.set`, then SYNCS the
  *     slice to the server's normalized echo.
@@ -12,7 +12,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectTemplatesByName } from '../../src/store/templates/templatesSlice.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
@@ -24,11 +24,14 @@ function errorToasts() {
 }
 
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   // Default stubs so an unrelated load/save resolves; tests override as needed. The save stub
   // echoes back the submitted templates (the backend normalizes; tests that care override this).
   fake.stubQuery('templates.get', { ok: true, templates: [] });
-  fake.stubCommand('templates.set', (params) => ({ ok: true, templates: params.templates }));
+  fake.stubCommand('templates.set', (params) => ({
+    ok: true,
+    templates: params['templates'] as readonly { name: string; body: string }[],
+  }));
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
@@ -68,7 +71,9 @@ describe('templates actions', () => {
     // to the RETURNED list, not the optimistic one.
     fake.stubCommand('templates.set', (params) => ({
       ok: true,
-      templates: [...params.templates].sort((a, b) => a.name.localeCompare(b.name)),
+      templates: [...(params['templates'] as readonly { name: string; body: string }[])].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
     }));
 
     await store.getState().actions.templates.save('zed', 'Z');

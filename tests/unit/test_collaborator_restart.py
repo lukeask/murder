@@ -15,6 +15,7 @@ import pytest
 from murder.runtime.terminal.tmux import TmuxError
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.collaborator_worker import CollaboratorWorker
+from murder.runtime.orchestration.commands import OrchestrationCommand
 
 
 def _agent(*, send=None, live=True):
@@ -42,7 +43,7 @@ def test_dead_session_respawns_retries_once_and_surfaces_notice():
     )
 
     result = asyncio.run(
-        worker._dispatch("collaborator.chat_send", {"text": "hello"}, _ctx())
+        worker._dispatch(OrchestrationCommand.COLLABORATOR_CHAT_SEND, {"text": "hello"}, _ctx())
     )
 
     assert result == {"handled": True, "agent_id": "collaborator-1"}
@@ -67,7 +68,7 @@ def test_transient_tmux_error_with_live_session_propagates():
 
     with pytest.raises(TmuxError):
         asyncio.run(
-            worker._dispatch("collaborator.chat_send", {"text": "hello"}, _ctx())
+            worker._dispatch(OrchestrationCommand.COLLABORATOR_CHAT_SEND, {"text": "hello"}, _ctx())
         )
     assert ensure.await_count == 1  # no respawn attempt
     agent.record_notice_block_event.assert_not_awaited()
@@ -82,7 +83,7 @@ def test_happy_path_unchanged():
     )
 
     result = asyncio.run(
-        worker._dispatch("collaborator.chat_send", {"text": "hi"}, _ctx())
+        worker._dispatch(OrchestrationCommand.COLLABORATOR_CHAT_SEND, {"text": "hi"}, _ctx())
     )
 
     assert result == {"handled": True, "agent_id": "collaborator-0"}

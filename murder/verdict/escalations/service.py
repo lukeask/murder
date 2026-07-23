@@ -17,7 +17,7 @@ from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import escalation_md
 
 if TYPE_CHECKING:
-    from murder.bus.broker import Bus
+    from murder.bus import OrchestrationNotifier
 
 
 def _clamp_severity(severity: int) -> int:
@@ -30,7 +30,7 @@ class EscalationService:
 
     conn: sqlite3.Connection
     repo_root: Path
-    bus: Bus | None = None
+    bus: OrchestrationNotifier | None = None
     run_id: str | None = None
     agent_id: str = "orchestrator"
     role: AgentRole = AgentRole.COLLABORATOR

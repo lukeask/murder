@@ -7,11 +7,11 @@
  *  - `tui.load_spawn_favorites {}` → `{ ok, favorites: [SpawnFavorite,…] }` — load the saved list.
  *  - `tui.save_spawn_favorites { favorites }` → `{ ok, favorites }` — persist it.
  * Declared via a `declare module` augmentation of the shared {@link RpcMethods} registry, so the
- * frozen C1/C2 bus files (`BusClient.ts`/`UdsBusClient.ts`) stay byte-identical — the seam (rule 4).
+ * frozen C1/C2 bus files (`ApplicationClient.ts`/`ApplicationWebSocketClient.ts`) stay byte-identical — the seam (rule 4).
  * The keys here (`tui.load_spawn_favorites`/`tui.save_spawn_favorites`) are distinct from every
  * other slice's keys.
  *
- * ## Bus status: LIVE
+ * ## Application protocol status: live
  *
  * Both methods are registered on the live Python bus (`host.py`). Spawn favorites persist
  * user-level at `~/.config/murder/spawn_favorites.yaml` (NOT in `.murder/`, so they follow the
@@ -25,7 +25,8 @@
  *   failure (a save the user explicitly requested deserves visible feedback).
  */
 
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 
 /** A named bundle of the wizard's first-step choices, re-spawnable in one pick. */
 export interface SpawnFavorite {
@@ -39,12 +40,12 @@ export interface SpawnFavorite {
  * The spawn-favorites RPC declarations, augmenting the shared {@link RpcMethods} registry without
  * editing the frozen C1/C2 bus files (rule 4 — the seam). Keys distinct from every other slice's.
  *
- * **Bus status:** both LIVE (registered in `host.py`). The list round-trips in both directions; the
+ * Both operations are registered in `host.py`. The list round-trips in both directions; the
  * save reply echoes the persisted list back.
  */
 
 
-/** The spawn-favorites actions, bound to one {@link BusClient}. Wizard-local; no store handle. */
+/** The spawn-favorites actions, bound to one {@link ApplicationClient}. Wizard-local; no store handle. */
 export interface SpawnFavoritesActions {
   /**
    * Load the persisted spawn favorites via `tui.load_spawn_favorites`. Resolves with the saved list
@@ -60,16 +61,19 @@ export interface SpawnFavoritesActions {
 }
 
 /**
- * Build the spawn-favorites actions bound to one injected {@link BusClient}. No store handle: the
+ * Build the spawn-favorites actions bound to one injected {@link ApplicationClient}. No store handle: the
  * favorites list is wizard-local closure state, not a global slice.
  */
-export function createSpawnFavoritesActions(bus: BusClient): SpawnFavoritesActions {
+export function createSpawnFavoritesActions(bus: ApplicationClient): SpawnFavoritesActions {
   return {
     async load(): Promise<SpawnFavorite[]> {
       try {
         const reply = await bus.query('spawn_favorites.get', {});
         // Coerce the readonly wire list to a mutable array for the caller.
-        return [...reply.favorites];
+        return [
+          ...asQueryResult<'spawn_favorites.get', { favorites: readonly SpawnFavorite[] }>(reply)
+            .favorites,
+        ];
       } catch {
         // RPC / transport error — opening the wizard must not fail; degrade to no favorites.
         return [];
@@ -79,7 +83,10 @@ export function createSpawnFavoritesActions(bus: BusClient): SpawnFavoritesActio
     async save(favorites: readonly SpawnFavorite[]): Promise<SpawnFavorite[]> {
       // Let a rejection propagate — the wizard catches it to toast (intentional vs `load`).
       const reply = await bus.command('spawn_favorites.set', { favorites });
-      return [...reply.favorites];
+      return [
+        ...asCommandResult<'spawn_favorites.set', { favorites: readonly SpawnFavorite[] }>(reply)
+          .favorites,
+      ];
     },
   };
 }

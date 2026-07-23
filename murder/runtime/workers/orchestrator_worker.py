@@ -4,7 +4,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
+from murder.app.protocol.requests import CommandName
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
 
 
@@ -308,58 +311,72 @@ async def _reconfigure_collaborator(
     return await orch.reconfigure_collaborator()
 
 
-# Command kind -> handler. Adding a command kind is now one table entry (plus the
-# matching ``accepts`` string) instead of a constructor kwarg + elif + bootstrap
-# wire. Each handler performs the payload-field extraction its kind needs and
-# returns the orchestrator method's result verbatim.
-_HANDLERS: dict[str, Handler] = {
-    "scheduler.kickoff_ready": _kickoff_ready,
-    "ticket.apply_carve_ready": _apply_carve_ready,
-    "notetaker.capture.submit": _capture_submit,
-    "note.ensure": _note_ensure,
-    "note.retire": _note_retire,
-    "history.dismiss": _history_dismiss,
-    "agent.resume_from_history": _history_resume,
-    "agent.message": _agent_message,
-    "agent.send_key": _agent_send_key,
-    "agent.transcript.refresh": _agent_transcript_refresh,
-    "agent.interrupt": _agent_interrupt,
-    "agent.stop": _agent_stop,
-    "crow.rename_rogue": _rename_rogue,
-    "crow.reset": _crow_reset,
-    "plan.scaffold": _scaffold_plan,
-    "plan.rename": _rename_plan,
-    "plan.deprecate": _deprecate_plan,
-    "ticket.retry_failed": _retry_failed,
-    "ticket.set_schedule_at": _set_schedule_at,
-    "ticket.update_metadata": _update_metadata,
-    "ticket.force_status": _force_status,
-    "ticket.quick_kick": _quick_kick,
-    "ticket.quick_create": _quick_create,
-    "crow.spawn_rogue": _spawn_rogue,
-    "planner.spawn": _spawn_planner,
-    "collaborator.reconfigure": _reconfigure_collaborator,
+# Private command -> handler. Each handler performs the payload-field
+# extraction its kind needs and returns the orchestrator method's result.
+_HANDLERS: dict[OrchestrationCommand, Handler] = {
+    OrchestrationCommand.SCHEDULER_KICKOFF_READY: _kickoff_ready,
+    OrchestrationCommand.TICKET_APPLY_CARVE_READY: _apply_carve_ready,
+    OrchestrationCommand.NOTETAKER_CAPTURE_SUBMIT: _capture_submit,
+    OrchestrationCommand.NOTE_ENSURE: _note_ensure,
+    OrchestrationCommand.NOTE_RETIRE: _note_retire,
+    OrchestrationCommand.HISTORY_DISMISS: _history_dismiss,
+    OrchestrationCommand.AGENT_RESUME_FROM_HISTORY: _history_resume,
+    OrchestrationCommand.AGENT_MESSAGE: _agent_message,
+    OrchestrationCommand.AGENT_SEND_KEY: _agent_send_key,
+    OrchestrationCommand.AGENT_TRANSCRIPT_REFRESH: _agent_transcript_refresh,
+    OrchestrationCommand.AGENT_INTERRUPT: _agent_interrupt,
+    OrchestrationCommand.AGENT_STOP: _agent_stop,
+    OrchestrationCommand.CROW_RENAME_ROGUE: _rename_rogue,
+    OrchestrationCommand.CROW_RESET: _crow_reset,
+    OrchestrationCommand.PLAN_SCAFFOLD: _scaffold_plan,
+    OrchestrationCommand.PLAN_RENAME: _rename_plan,
+    OrchestrationCommand.PLAN_DEPRECATE: _deprecate_plan,
+    OrchestrationCommand.TICKET_RETRY_FAILED: _retry_failed,
+    OrchestrationCommand.TICKET_SET_SCHEDULE_AT: _set_schedule_at,
+    OrchestrationCommand.TICKET_UPDATE_METADATA: _update_metadata,
+    OrchestrationCommand.TICKET_FORCE_STATUS: _force_status,
+    OrchestrationCommand.TICKET_QUICK_KICK: _quick_kick,
+    OrchestrationCommand.TICKET_QUICK_CREATE: _quick_create,
+    OrchestrationCommand.CROW_SPAWN_ROGUE: _spawn_rogue,
+    OrchestrationCommand.PLANNER_SPAWN: _spawn_planner,
+    OrchestrationCommand.COLLABORATOR_RECONFIGURE: _reconfigure_collaborator,
+}
+
+_APPLICATION_COMMANDS: dict[CommandName, OrchestrationCommand] = {
+    CommandName.AGENT_INTERRUPT: OrchestrationCommand.AGENT_INTERRUPT,
+    CommandName.AGENT_MESSAGE: OrchestrationCommand.AGENT_MESSAGE,
+    CommandName.AGENT_RESUME_FROM_HISTORY: OrchestrationCommand.AGENT_RESUME_FROM_HISTORY,
+    CommandName.AGENT_SEND_KEY: OrchestrationCommand.AGENT_SEND_KEY,
+    CommandName.AGENT_STOP: OrchestrationCommand.AGENT_STOP,
+    CommandName.CROW_RENAME_ROGUE: OrchestrationCommand.CROW_RENAME_ROGUE,
+    CommandName.CROW_RESET: OrchestrationCommand.CROW_RESET,
+    CommandName.CROW_SPAWN_ROGUE: OrchestrationCommand.CROW_SPAWN_ROGUE,
+    CommandName.HISTORY_DISMISS: OrchestrationCommand.HISTORY_DISMISS,
+    CommandName.NOTETAKER_CAPTURE_SUBMIT: OrchestrationCommand.NOTETAKER_CAPTURE_SUBMIT,
+    CommandName.PLAN_RENAME: OrchestrationCommand.PLAN_RENAME,
+    CommandName.PLANNER_SPAWN: OrchestrationCommand.PLANNER_SPAWN,
+    CommandName.TICKET_QUICK_CREATE: OrchestrationCommand.TICKET_QUICK_CREATE,
 }
 
 
 async def dispatch_orchestrator_command(
     orchestrator: OrchestratorCommands,
-    kind: str,
+    command: CommandName,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Execute an orchestration use case without publishing a bus command."""
+    """Execute a closed application command without publishing a bus command."""
 
-    handler = _HANDLERS.get(kind)
-    if handler is None:
-        raise ValueError(f"unsupported orchestration command {kind!r}")
-    return await handler(orchestrator, payload)
+    orchestration_command = _APPLICATION_COMMANDS.get(command)
+    if orchestration_command is None:
+        raise ValueError(f"unsupported orchestration command {command.value!r}")
+    return await _HANDLERS[orchestration_command](orchestrator, payload)
 
 
 class OrchestratorCommandWorker(Worker):
     def __init__(self, orchestrator: OrchestratorCommands) -> None:
         super().__init__(
             WorkerSpec(
-                name="orchestrator",
+                name=WorkerName.ORCHESTRATOR,
                 process_model="thread",
                 accepts=tuple(_HANDLERS),
             )
@@ -375,6 +392,4 @@ class OrchestratorCommandWorker(Worker):
             # this worker with no handler. Keep the three-way contract's "not
             # handled here" return distinct from a domain failure.
             return {"handled": False}
-        return await dispatch_orchestrator_command(
-            self._orch, command.kind, command.payload
-        )
+        return await _HANDLERS[command.kind](self._orch, command.payload)

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
-from murder.bus import Entity, TicketStatus
+from murder.bus import TicketStatus
 from murder.state.persistence.tickets import (
     apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
 )
@@ -158,11 +158,6 @@ class TicketOps:
                     ticket_id,
                     exc,
                 )
-        # Sync method (no surrounding coroutine): use the sync emit_snapshot
-        # choke point. New ticket -> the schedule snapshot's planned bucket
-        # changed. (TicketSync would also emit on its next reconcile, but this
-        # closes the 1.5 s poll gap the direct DB insert opens.)
-        self.rt.emit_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ticket_id": ticket_id, "title": title}
 
     async def reopen_ticket(self, ticket_id: str) -> list[str]:
@@ -170,9 +165,6 @@ class TicketOps:
         cascaded = lifecycle.reopen(self.rt.db, ticket_id)
         for tid in {ticket_id, *cascaded}:
             await self._reap_ticket_crow_agents(tid)
-            # F1: reopen cascade has no StatusChangeEvent today; emit the
-            # key-only ticket snapshot for every ticket whose status changed.
-            await self.rt.publish_snapshot(Entity.TICKET, tid)
         return list(cascaded)
 
     async def reset_crow(self, ticket_id: str) -> dict[str, Any]:
@@ -228,13 +220,9 @@ class TicketOps:
     async def set_schedule_at(self, ticket_id: str, schedule_at: str | None) -> dict[str, Any]:
         """Update the schedule_at timestamp for a ticket."""
         assert self.rt.db is not None
-        now = datetime.now().isoformat(timespec="seconds")
-        self.rt.db.execute(
-            "UPDATE tickets SET schedule_at = ?, updated_at = ? WHERE id = ?",
-            (schedule_at, now, ticket_id),
-        )
-        self.rt.db.commit()
-        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
+        from murder.state.persistence.tickets import update_ticket_schedule_at
+
+        update_ticket_schedule_at(self.rt.db, ticket_id, schedule_at)
         return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}
 
     async def save_ticket_body(self, ticket_id: str, body: str) -> dict[str, Any]:
@@ -288,10 +276,6 @@ class TicketOps:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(frontmatter + body.rstrip("\n") + "\n", encoding="utf-8")
         reconcile_ticket_md(conn=self.rt.db, repo_root=self.rt.repo_root, ticket_id=ticket_id)
-        # ``reconcile_ticket_md`` builds a throwaway TicketSync with no
-        # on_ticket_change callback, so the F1 snapshot does not fire from it.
-        # Emit explicitly after the reconcile commits.
-        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
     async def schedule_ticket(self, ticket_id: str, duration: str) -> dict[str, Any]:
@@ -354,7 +338,6 @@ class TicketOps:
                 deps=deps,
                 checklist=checklist,
             )
-        await self.rt.publish_snapshot(Entity.TICKET, ticket_id)
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
     async def force_ticket_status(self, ticket_id: str, status: str) -> dict[str, Any]:

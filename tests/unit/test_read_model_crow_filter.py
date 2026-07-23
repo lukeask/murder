@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from murder.app.service.read_model import FAILED_STALE_AFTER, ServiceReadModel
+from murder.app.service.read_model import FAILED_STALE_AFTER
+from murder.roster import RosterService
 from murder.state.persistence.agents import upsert_agent
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import db_path
@@ -28,8 +29,8 @@ def _age_heartbeat(conn, agent_id: str, when: datetime) -> None:
 
 
 def _snapshot_ids(repo_root) -> set[str]:
-    snapshot = ServiceReadModel(db_path(repo_root)).get_crow_snapshot()
-    return {s.agent_id for s in snapshot.sessions}
+    snapshot = RosterService(db_path(repo_root)).get()
+    return {str(session["agent_id"]) for session in snapshot["sessions"]}
 
 
 def test_crow_snapshot_excludes_done_and_dead(repo_root) -> None:

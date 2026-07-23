@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import {
   createHarnessModelsActions,
   modelsFor,
@@ -12,7 +12,7 @@ import {
 
 describe('harnessModelsActions — fetch', () => {
   it('returns the live snapshot models (merged over the static map)', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     bus.stubQuery('harness_models.list', {
       models: { claude_code: [{ id: 'opus', label: 'Opus 5' }] },
       as_of: '2026-06-09T00:00:00Z',
@@ -24,7 +24,7 @@ describe('harnessModelsActions — fetch', () => {
   });
 
   it('falls back to the static map when the RPC is not live (rejects)', async () => {
-    const bus = new FakeBusClient(); // no stub → rpc rejects
+    const bus = new FakeApplicationClient(); // no stub → rpc rejects
     const map = await createHarnessModelsActions(bus).fetch();
     expect(map).toBe(STATIC_HARNESS_MODELS);
   });

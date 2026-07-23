@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
-from murder.bus import Entity
 from murder.llm.direct import resolve_direct_role_client
 from murder.work import notes as notes_mod
 
@@ -48,22 +47,11 @@ class NoteOps:
             note_name=notes_mod.today_name(),
             title=title,
         )
-        # submit_capture writes notes rows DIRECTLY (bypassing NoteSync), creating
-        # and possibly renaming the note within this RPC. The provisional name is
-        # never observed by a client before the rename, so emit once on the final
-        # resolved name from the return dict. Async path -> publish_snapshot.
-        resolved = result.get("note_name")
-        if isinstance(resolved, str) and resolved:
-            await self.rt.publish_snapshot(Entity.NOTE, resolved)
         return result
 
     async def ensure_note(self, name: str) -> dict[str, Any]:
         assert self.rt.db is not None
         row = notes_mod.ensure_note(self.rt.db, self.rt.repo_root, name)
-        # ensure_note writes the notes row directly (bypassing NoteSync); a new
-        # note may have appeared in the active list. Emit key-only via the async
-        # choke point.
-        await self.rt.publish_snapshot(Entity.NOTE, name)
         return {"name": name, "materialized_path": str(row.get("materialized_path", ""))}
 
     async def retire_note(self, name: str) -> dict[str, Any]:
@@ -72,9 +60,6 @@ class NoteOps:
             dest = notes_mod.retire_note(self.rt.db, self.rt.repo_root, name)
         except Exception as exc:
             raise ValueError(f"could not retire note: {exc}") from exc
-        # Retire flips status away from 'active' -> the note drops from the notes
-        # snapshot (status='active' filter). Emit so the client refetches and drops it.
-        await self.rt.publish_snapshot(Entity.NOTE, name)
         return {"name": name, "dest_name": dest.name}
 
 

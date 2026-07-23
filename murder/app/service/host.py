@@ -6,28 +6,26 @@ import asyncio
 import contextlib
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from murder.app.service.application import ApplicationDispatcher
+from murder.app.protocol.requests import CommandName, QueryName
+from murder.app.protocol.subscriptions import ProjectionTopic
+from murder.app.service.application import ApplicationDispatcher, ApplicationHandler
 from murder.app.service.bootstrap import start_supervisor_workers
 from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.read_model import ServiceReadModel
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.app.service.runtime import (
     ActivityDispatcherFactory,
     Runtime,
     TriggerDispatcherFactory,
 )
 from murder.app.service.supervisor import Supervisor
-from murder.bus.broker import DurableBroker
-from murder.bus.transport_socket import (
-    CapturedTerminalFrame,
-    SocketBusServer,
-    default_socket_path,
-)
+from murder.app.service.socket_server import ApplicationSocketServer
+from murder.facts.log import FactLog, ProjectionInputLog
 from murder.config import Config
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
@@ -40,6 +38,7 @@ from murder.state.storage.service_registry import (
     remove_service_session,
     write_service_session,
 )
+from murder.roster.service import register_projection_provider
 from murder.usage_sample_command import run_service_usage_poll_loop
 
 LOGGER = logging.getLogger(__name__)
@@ -53,19 +52,23 @@ TRANSIT_POLL_INTERVAL_S = 4.0
 # background design exists to avoid, so we throttle to a small handful.
 REATTACH_CONCURRENCY = 4
 
-RpcHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
 
+@dataclass(frozen=True)
+class CapturedTerminalFrame:
+    data: str
+    columns: int
+    rows: int
 
 @dataclass
 class ServiceHost:
-    """Wires runtime, application services, socket server, and legacy workers.
+    """Wires runtime, application services, and the application socket server.
 
     Responsibility (keep it this narrow): the process COMPOSITION ROOT and
     lifecycle owner. ``start``/``stop`` wire the collaborators and own the
-    background tasks; ``register_default_rpc_handlers`` just delegates to the
+    background tasks; ``register_application_handlers`` just delegates to the
     ``handlers/`` package. This class deliberately holds NO request logic.
 
-    Extending the RPC surface — DO NOT add a handler closure here. Inline
+    Extending the application surface — DO NOT add a handler closure here. Inline
     accretion is exactly what doubled this file to ~1100 lines before it was
     slain back to a composition root. Instead:
       • New method in an existing namespace → add it in
@@ -91,23 +94,32 @@ class ServiceHost:
 
     config: Config
     repo_root: Path
-    socket_path: Path = field(default_factory=default_socket_path)
-    tcp_port: int | None = None
+    websocket_host: str = "127.0.0.1"
+    websocket_port: int = 0
     activity_dispatcher_factory: ActivityDispatcherFactory | None = None
     trigger_dispatcher_factory: TriggerDispatcherFactory | None = None
     runtime: Runtime | None = None
     read_model: ServiceReadModel | None = None
-    broker: DurableBroker | None = None
+    fact_log: FactLog | None = None
+    projection_input_log: ProjectionInputLog | None = None
+    projection_providers: ProjectionProviderRegistry = field(
+        default_factory=ProjectionProviderRegistry, repr=False
+    )
     orchestrator: Orchestrator | None = None
     supervisor: Supervisor | None = None
-    socket_server: SocketBusServer | None = None
-    tcp_bound: tuple[str, int] | None = None
+    socket_server: ApplicationSocketServer | None = None
+    websocket_bound: tuple[str, int] | None = None
     _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _transit_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _model_catalog_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _reattach_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    _rpc_handlers: dict[str, RpcHandler] = field(default_factory=dict, repr=False)
+    _application_queries: dict[QueryName, ApplicationHandler] = field(
+        default_factory=dict, repr=False
+    )
+    _application_commands: dict[CommandName, ApplicationHandler] = field(
+        default_factory=dict, repr=False
+    )
     _service_session_name: str | None = field(default=None, repr=False)
 
     async def _capture_tmux_frame(
@@ -159,11 +171,16 @@ class ServiceHost:
         columns, rows = await tmux.pane_dimensions(session)
         return CapturedTerminalFrame(data=frame, columns=columns, rows=rows)
 
-    def register_rpc_handler(self, method: str, handler: RpcHandler) -> None:
-        self._rpc_handlers[method] = handler
+    def register_application_query(self, name: QueryName, handler: ApplicationHandler) -> None:
+        """Register a feature use case at the closed application boundary."""
+        self._application_queries[name] = handler
 
-    def register_default_rpc_handlers(self) -> None:
-        """Register feature handlers for direct and retiring RPC consumers."""
+    def register_application_command(self, name: CommandName, handler: ApplicationHandler) -> None:
+        """Register a feature use case at the closed application boundary."""
+        self._application_commands[name] = handler
+
+    def register_application_handlers(self) -> None:
+        """Register feature-owned handlers at the closed application boundary."""
         from murder.app.service.handlers import register_all
 
         register_all(self)
@@ -222,13 +239,39 @@ class ServiceHost:
     async def _start_inner(self) -> None:
         assert self.runtime is not None and self.runtime.bus is not None
         assert self.runtime.db is not None and self.runtime.run_id is not None
-        self.register_default_rpc_handlers()
+        self.register_application_handlers()
 
-        self.broker = DurableBroker(self.runtime.bus, self.runtime.db)
-        for method, handler in self._rpc_handlers.items():
-            self.broker.register_rpc_handler(method, handler)
+        register_projection_provider(
+            self.projection_providers,
+            self.runtime.roster,
+            self.runtime.db,
+        )
+        assert self.read_model is not None
+        # Composition root wiring only: each provider calls the feature's own
+        # read surface.  The socket server merely asks the registry; it never
+        # switches on projection names or imports feature domains.
+        self.projection_providers.register(
+            ProjectionTopic.CONVERSATIONS,
+            lambda: self.read_model.get_conversations_snapshot().model_dump(mode="json"),
+        )
+        self.projection_providers.register(
+            ProjectionTopic.SCHEDULE,
+            lambda: self.read_model.get_schedule_snapshot().model_dump(mode="json"),
+        )
+        for topic, query in (
+            (ProjectionTopic.FAVORITES, QueryName.FAVORITES_GET),
+            (ProjectionTopic.TEMPLATES, QueryName.TEMPLATES_GET),
+            (ProjectionTopic.THEMES, QueryName.THEMES_GET),
+            (ProjectionTopic.WORKFLOWS, QueryName.WORKFLOWS_GET),
+            (ProjectionTopic.SETTINGS, QueryName.SETTINGS_GET),
+        ):
+            handler = self._application_queries[query]
+            self.projection_providers.register(topic, lambda handler=handler: handler({}))
+        self.fact_log = FactLog(self.runtime.db)
+        self.projection_input_log = ProjectionInputLog(self.runtime.db)
 
         self.orchestrator = Orchestrator(self.runtime)
+        self.runtime.crow_ask_router = self.orchestrator.route_crow_ask
         # Route malformed-artifact parse errors back to the owning agent now
         # that the orchestrator (which delivers `agent.message`) exists.
         if self.runtime._sync is not None:
@@ -241,29 +284,74 @@ class ServiceHost:
 
         orchestrator = self.orchestrator
 
-        async def _execute_orchestration(body: dict[str, Any]) -> dict[str, Any]:
-            payload = body.get("payload", {})
-            if not isinstance(payload, dict):
-                raise ValueError("orchestration payload must be an object")
-            return await dispatch_orchestrator_command(
-                orchestrator,
-                str(body["kind"]),
-                payload,
-            )
+        orchestrator_commands = (
+            CommandName.AGENT_INTERRUPT,
+            CommandName.AGENT_MESSAGE,
+            CommandName.AGENT_RESUME_FROM_HISTORY,
+            CommandName.AGENT_SEND_KEY,
+            CommandName.AGENT_STOP,
+            CommandName.CROW_RENAME_ROGUE,
+            CommandName.CROW_RESET,
+            CommandName.CROW_SPAWN_ROGUE,
+            CommandName.HISTORY_DISMISS,
+            CommandName.NOTETAKER_CAPTURE_SUBMIT,
+            CommandName.PLAN_RENAME,
+            CommandName.PLANNER_SPAWN,
+            CommandName.TICKET_QUICK_CREATE,
+        )
+        for command_name in orchestrator_commands:
+            async def _execute(body: dict[str, Any], name: CommandName = command_name) -> dict[str, Any]:
+                return await dispatch_orchestrator_command(orchestrator, name, body)
 
-        application = ApplicationDispatcher.compose(
-            self._rpc_handlers,
-            orchestration=_execute_orchestration,
+            self.register_application_command(command_name, _execute)
+
+        def _set_scheduler_steering(body: dict[str, Any]) -> dict[str, Any]:
+            from murder.app.service.scheduler_steering import set_steering
+
+            runtime = self.runtime
+            if runtime is None or runtime.db is None:
+                raise RuntimeError("service runtime is unavailable")
+            harness = body.get("harness")
+            steering = body.get("steering")
+            if not isinstance(harness, str) or not isinstance(steering, str):
+                raise ValueError("scheduler.set_steering requires harness and steering strings")
+            return set_steering(runtime.db, harness=harness, steering=steering)
+
+        async def _sample_usage(body: dict[str, Any]) -> dict[str, Any]:
+            from murder.app.service.usage_sampling import sample_usage
+
+            runtime = self.runtime
+            if runtime is None or runtime.db is None:
+                raise RuntimeError("service runtime is unavailable")
+            raw_modes = body.get("modes")
+            if raw_modes is not None and not isinstance(raw_modes, list):
+                raise ValueError("state.harness_usage.sample modes must be a list when provided")
+            modes = {str(mode) for mode in raw_modes} if raw_modes is not None else None
+            return await sample_usage(repo_root=self.repo_root, db=runtime.db, modes=modes)
+
+        self.register_application_command(CommandName.SCHEDULER_SET_STEERING, _set_scheduler_steering)
+        self.register_application_command(CommandName.HARNESS_USAGE_SAMPLE, _sample_usage)
+
+        application = ApplicationDispatcher(
+            queries=self._application_queries,
+            commands=self._application_commands,
         )
-        self.socket_server = SocketBusServer(
-            self.broker,
-            run_id=self.runtime.run_id,
-            socket_path=self.socket_path,
-            tmux_frame_capture=self._capture_tmux_frame,
-            application_gateway=ApplicationGateway(application),
+        self.socket_server = ApplicationSocketServer(
+            gateway=ApplicationGateway(application),
+            facts=self.fact_log,
+            projection_inputs=self.projection_input_log,
+            providers=self.projection_providers,
+            run_id=str(self.runtime.run_id),
+            terminal_capture=self._capture_tmux_frame,
+            assets_dir=(self.repo_root / "webui" / "dist"),
         )
-        await self.socket_server.start()
-        session = write_service_session(self.repo_root, self.socket_path)
+        self.websocket_bound = await self.socket_server.start(
+            host=self.websocket_host, port=self.websocket_port
+        )
+        host, port = self.websocket_bound
+        session = write_service_session(
+            self.repo_root, f"ws://{host}:{port}/api/ws"
+        )
         self._service_session_name = session.name
 
         # Startup recovery: reattach handlers to crows whose tmux session
@@ -276,15 +364,13 @@ class ServiceHost:
             self._reattach_surviving_crows(), name="crow-reattach"
         )
 
-        if self.tcp_port is not None:
-            self.tcp_bound = await self.socket_server.start_tcp_listener(port=self.tcp_port)
-            LOGGER.info("TCP bus listener on %s:%d", *self.tcp_bound)
+        LOGGER.info("application websocket listener on ws://%s:%d/api/ws", *self.websocket_bound)
 
         self.supervisor = await start_supervisor_workers(
             repo_root=self.repo_root,
             runtime=self.runtime,
             orchestrator=self.orchestrator,
-            broker=self.broker,
+            bus=self.runtime.bus,
         )
         self._startup_rogue_task = asyncio.create_task(
             self._ensure_startup_rogue_safely(), name="startup-rogue-ensure"
@@ -293,32 +379,12 @@ class ServiceHost:
             self._persist_catalog_then_write_models_doc(), name="startup-model-catalog"
         )
         self._usage_poll_task = asyncio.create_task(
-            run_service_usage_poll_loop(self.broker, self.runtime.db, str(self.runtime.run_id)),
+            run_service_usage_poll_loop(self.repo_root, self.runtime.db),
             name="usage-sample-poll",
         )
         self._projection_poll_task = asyncio.create_task(
             self._run_projection_poll_loop(), name="transcript-projection-poll"
         )
-        self._transit_poll_task = asyncio.create_task(
-            self._run_transit_poll_loop(), name="transit-graph-poll"
-        )
-        try:
-            await self.orchestrator.start_question_listener()
-        except Exception as exc:
-            LOGGER.error("start_question_listener failed: %s", exc, exc_info=True)
-            if self.runtime is not None and self.runtime.bus and self.runtime.run_id:
-                from murder.bus import ErrorEvent
-
-                with contextlib.suppress(Exception):
-                    await self.runtime.bus.publish(
-                        ErrorEvent(
-                            run_id=str(self.runtime.run_id),
-                            agent_id="system",
-                            ticket_id=None,
-                            message=f"start_question_listener failed: {exc}",
-                            recoverable=False,
-                        )
-                    )
     async def _ensure_startup_rogue_safely(self) -> None:
         """Best-effort: spawn the user's configured Startup Rogue on boot.
 
@@ -395,7 +461,7 @@ class ServiceHost:
                                 parsed={"agent_id": agent.id, "queued": queued},
                                 choices=choices,
                                 dedup_hash=hashlib.sha1(
-                                    f"{agent.id}|{live_state}|{queued}".encode("utf-8")
+                                    f"{agent.id}|{live_state}|{queued}".encode()
                                 ).hexdigest(),
                             )
                         )
@@ -434,45 +500,6 @@ class ServiceHost:
             )
         except Exception:
             LOGGER.error("crow reattach task failed", exc_info=True)
-
-    async def _run_transit_poll_loop(self) -> None:
-        """Service-owned ticker that republishes the Transit graph key when any
-        watched branch HEAD moves. Git changes have no UI write to hang an
-        invalidation off, so this lightweight poll computes the cheap
-        ``transit_fingerprint`` each tick and publishes a key-only
-        ``Entity.TRANSIT`` snapshot only when it changes (the client refetches
-        the full graph via ``state.transit_snapshot``). Modeled on
-        ``_run_projection_poll_loop`` so it stays compatible with the conftest
-        noop-sleep patch (no busy-spin)."""
-        from murder.bus import Entity
-        from murder.state.storage.git_transit import transit_fingerprint
-
-        last_fingerprint: str | None = None
-        while True:
-            runtime = self.runtime
-            if runtime is not None:
-                try:
-                    fingerprint = await asyncio.to_thread(transit_fingerprint, self.repo_root)
-                except Exception:
-                    fingerprint = last_fingerprint
-                    LOGGER.debug(
-                        "transit fingerprint tick failed for repo %s (keeping last fingerprint=%r)",
-                        self.repo_root,
-                        last_fingerprint,
-                        exc_info=True,
-                    )
-                if fingerprint != last_fingerprint:
-                    last_fingerprint = fingerprint
-                    try:
-                        await runtime.publish_snapshot(Entity.TRANSIT, "*")
-                    except Exception:
-                        LOGGER.debug(
-                            "transit snapshot publish failed for %s (fingerprint=%r)",
-                            Entity.TRANSIT,
-                            fingerprint,
-                            exc_info=True,
-                        )
-            await asyncio.sleep(TRANSIT_POLL_INTERVAL_S)
 
     async def run_until_signal(self) -> None:
         if self.runtime is None:
@@ -534,7 +561,8 @@ class ServiceHost:
             self.runtime = None
 
         self.read_model = None
-        self.broker = None
+        self.fact_log = None
+        self.projection_input_log = None
         self.orchestrator = None
 
     async def __aenter__(self) -> ServiceHost:

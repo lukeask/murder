@@ -17,10 +17,10 @@
 
 import Convert from 'ansi-to-html';
 import { useEffect, useMemo, useState } from 'react';
-import { useBus } from '../../bus/BusContext.js';
+import { useApplicationClient } from '../../application/ApplicationClientContext.js';
 
 export function TmuxFrameView({ agentId }: { readonly agentId: string }): React.JSX.Element {
-  const bus = useBus();
+  const bus = useApplicationClient();
   const [frame, setFrame] = useState<string>('');
 
   // One converter instance, reading the current theme colors off CSS vars so the ANSI palette tracks

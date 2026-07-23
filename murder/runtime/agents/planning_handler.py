@@ -369,6 +369,8 @@ class PlanningHandler(Daemon):
         from uuid import uuid4
 
         from murder.state.persistence.commands import enqueue_command
+        from murder.runtime.orchestration.commands import OrchestrationCommand
+        from murder.runtime.orchestration.worker_names import WorkerName
 
         assert self.runtime.db is not None and self.runtime.run_id is not None
         command_id = str(uuid4())
@@ -384,8 +386,8 @@ class PlanningHandler(Daemon):
             agent_id=self.id,
             role=self.role.value if hasattr(self.role, "value") else str(self.role),
             ticket_id=ticket_id,
-            target_worker="orchestrator",
-            kind="ticket.apply_carve_ready",
+            target_worker=WorkerName.ORCHESTRATOR,
+            kind=OrchestrationCommand.TICKET_APPLY_CARVE_READY,
             payload={"ticket_id": ticket_id, "carve": spec},
             correlation_id=command_id,
             idempotency_key=idempotency_key,

@@ -2,7 +2,7 @@ import { Text } from 'ink';
 import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { META_SEP } from '../../components/glyphs.js';
 import { useAppStore } from '../../hooks/useAppStore.js';
-import { useBusClient } from '../../hooks/useBusClient.js';
+import { useApplicationClient } from '../../hooks/useApplicationClient.js';
 import { type GotoIntent, useGotoLine } from '../../hooks/useGotoLine.js';
 import { useEffectiveFocus, usePanelKeymap, usePaneScrollBus } from '../../hooks/useInputStores.js';
 import { stageTranscriptFocusId } from '../../input/focusIds.js';
@@ -157,7 +157,7 @@ export const TranscriptController = memo(function TranscriptController({
     [focusId, paneScroll, setScrollUp],
   );
 
-  const bus = useBusClient();
+  const bus = useApplicationClient();
   const [tmuxFrame, setTmuxFrame] = useState('');
   useEffect(() => {
     if (viewMode !== 'tmux') {

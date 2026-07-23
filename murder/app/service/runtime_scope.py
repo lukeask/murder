@@ -6,14 +6,13 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from murder.bus import Bus
+from murder.bus import OrchestrationNotifier
 from murder.runtime.agents.events import AgentEventSink
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from murder.runtime.agents.base import LifecycleParticipant
-    from murder.bus.protocol import Entity
     from murder.config import Config
 
 
@@ -22,15 +21,10 @@ class AgentLifecycleHost(Protocol):
 
     repo_root: Path
     db: sqlite3.Connection | None
-    bus: Bus | None
+    bus: OrchestrationNotifier | None
     run_id: str | None
 
     def sync_agent(self, agent: LifecycleParticipant) -> None: ...
-
-    # F1 key-only snapshot choke points (sync + async; see Runtime).
-    def emit_snapshot(self, entity: Entity, key: str) -> None: ...
-
-    async def publish_snapshot(self, entity: Entity, key: str) -> None: ...
 
     def get_crow(self, ticket_id: str) -> LifecycleParticipant | None: ...
 

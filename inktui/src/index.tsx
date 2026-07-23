@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
-import type { BusClient } from './bus/BusClient.js';
-import { FakeBusClient } from './bus/FakeBusClient.js';
-import { UdsBusClient } from './bus/UdsBusClient.js';
+import type { ApplicationClient } from './application/ApplicationClient.js';
+import { FakeApplicationClient } from './application/FakeApplicationClient.js';
+import { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
 import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
 import type { PanelId } from './input/panels.js';
@@ -24,15 +24,13 @@ export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
  *
  * ## Two modes
  *
- *  - **Live (default, `node dist/index.js`).** Wires a {@link UdsBusClient} onto the service socket
- *    given by `MURDER_SERVICE_SOCKET` (the Python launcher resolves the per-project socket
- *    path and hands it over via the env var; the TS side NEVER reimplements that hash, it only
- *    connects to the path it is given). The app stays mounted: Ink keeps the process alive on stdin
+ *  - **Live (default, `node dist/index.js`).** Wires an application WebSocket client to the
+ *    `MURDER_APPLICATION_WS_URL` supplied by the launcher. The app stays mounted: Ink keeps the process alive on stdin
  *    raw mode, slice-invalidation events from the service repaint the panels live, and the run ends
  *    only when the user exits (ctrl+c → Ink resolves `waitUntilExit`). On exit we tear down the store
  *    subscriptions and close the socket.
  *
- *  - **Smoke (`--smoke`).** A one-shot mount→unmount against a {@link FakeBusClient}, requiring **no**
+ *  - **Smoke (`--smoke`).** A one-shot mount→unmount against a {@link FakeApplicationClient}, requiring **no**
  *    socket and **no** running service. It paints one frame and exits clean, so the CI build gate
  *    (F8) can invoke `node index.js --smoke` to prove the bundle loads and parses. This is the old
  *    dev-smoke behaviour, preserved deliberately as the cheap "does it boot" check.
@@ -50,21 +48,25 @@ export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 const STARTUP_PANELS: readonly PanelId[] = [];
 
 /**
- * Read the service socket path from `MURDER_SERVICE_SOCKET`. The Python launcher resolves the per-project
- * absolute path (Open decision #2) and passes it here; this side does not derive or rehash it. A
- * missing/empty var is a hard, clear failure — without it there is no service to connect to.
+ * Read the sole application WebSocket endpoint from the launcher. A missing
+ * endpoint is a hard failure — there is no fallback transport.
  */
-export function resolveSocketPath(env: NodeJS.ProcessEnv = process.env): string {
-  // MURDER_BUS_SOCKET remains a one-release launcher compatibility fallback.
-  const socketPath = env['MURDER_SERVICE_SOCKET'] ?? env['MURDER_BUS_SOCKET'];
-  if (socketPath === undefined || socketPath.trim().length === 0) {
+export function resolveApplicationWebSocketUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const websocketUrl = env['MURDER_APPLICATION_WS_URL'];
+  if (websocketUrl === undefined || websocketUrl.trim().length === 0) {
     throw new Error(
-      'MURDER_SERVICE_SOCKET is not set. The murder launcher must pass the absolute service socket path ' +
-        'via this env var (the Ink runner does not derive the per-project socket path itself). ' +
-        'Run the TUI via `murder`, or set MURDER_SERVICE_SOCKET to the service socket path.',
+      'MURDER_APPLICATION_WS_URL is not set. Launch the TUI through murder so it can pass the service WebSocket URL.',
     );
   }
-  return socketPath;
+  try {
+    const parsed = new URL(websocketUrl);
+    if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+      throw new Error('not a WebSocket URL');
+    }
+    return websocketUrl;
+  } catch {
+    throw new Error('MURDER_APPLICATION_WS_URL must be a ws:// or wss:// URL.');
+  }
 }
 
 /**
@@ -82,12 +84,12 @@ export function resolveProject(env: NodeJS.ProcessEnv = process.env): string | u
 }
 
 /**
- * Mount the shell against a live {@link UdsBusClient} and hold the terminal open until the user
+ * Mount the shell against the live application WebSocket and hold the terminal open until the user
  * exits. The store hydrates itself through the bus hydrate contract on construction: one snapshot
  * reply plus server-attached tails replaces the old startup prime RPCs and replay-gated
  * subscriptions. Returns when the app exits.
  */
-export async function runLive(busFactory: () => BusClient = makeLiveBus): Promise<void> {
+export async function runLive(busFactory: () => ApplicationClient = makeLiveBus): Promise<void> {
   const teardownKeyUsage = startKeyUsagePersistence();
   const bus = busFactory();
   const { store, dispose } = createAppStore(bus);
@@ -316,50 +318,50 @@ function detectIfTty(shim: StdinShim, driver: KeyProtocolDriver): Promise<boolea
   return driver.detect();
 }
 
-/** Register a (re)connect listener if the client exposes `onConnect` (the live {@link UdsBusClient}
+/** Register a (re)connect listener if the client exposes `onConnect` (the live application client
  * does; the fake does not). Narrowed structurally so the seam stays the transport-agnostic
- * {@link BusClient}, exactly as {@link closeIfSupported} does. Returns the disposer, or `undefined`
+ * {@link ApplicationClient}, exactly as {@link closeIfSupported} does. Returns the disposer, or `undefined`
  * when unsupported so the caller can fall back to a one-shot prime. */
-function onConnectIfSupported(bus: BusClient, listener: () => void): (() => void) | undefined {
-  const maybe = bus as BusClient & { onConnect?: (listener: () => void) => () => void };
+function onConnectIfSupported(bus: ApplicationClient, listener: () => void): (() => void) | undefined {
+  const maybe = bus as ApplicationClient & { onConnect?: (listener: () => void) => () => void };
   return maybe.onConnect?.(listener);
 }
 
 /** Register a disconnect listener if the client exposes `onDisconnect` (the live
- * {@link UdsBusClient} does; the fake does not). Same structural narrowing as
+ * the application client does; the fake does not). Same structural narrowing as
  * {@link onConnectIfSupported}; returns the disposer, or `undefined` when unsupported. */
-function onDisconnectIfSupported(bus: BusClient, listener: () => void): (() => void) | undefined {
-  const maybe = bus as BusClient & { onDisconnect?: (listener: () => void) => () => void };
+function onDisconnectIfSupported(bus: ApplicationClient, listener: () => void): (() => void) | undefined {
+  const maybe = bus as ApplicationClient & { onDisconnect?: (listener: () => void) => () => void };
   return maybe.onDisconnect?.(listener);
 }
 
 /** Register a permanent-error listener if the client exposes `onPermanentError` (the live
- * {@link UdsBusClient} does; the fake does not). Same structural narrowing as
+ * the application client does; the fake does not). Same structural narrowing as
  * {@link onConnectIfSupported}; returns the disposer, or `undefined` when unsupported. */
 function onPermanentErrorIfSupported(
-  bus: BusClient,
+  bus: ApplicationClient,
   listener: (error: Error) => void,
 ): (() => void) | undefined {
-  const maybe = bus as BusClient & {
+  const maybe = bus as ApplicationClient & {
     onPermanentError?: (listener: (error: Error) => void) => () => void;
   };
   return maybe.onPermanentError?.(listener);
 }
 
-/** Close the bus connection if the client exposes a `close()` (the live {@link UdsBusClient} does;
- * the fake does not). Narrowed structurally so the seam stays the transport-agnostic `BusClient`. */
-function closeIfSupported(bus: BusClient): void {
-  const maybe = bus as BusClient & { close?: () => void };
+/** Close the application connection if the client exposes a `close()` (the live client does;
+ * the fake does not). Narrowed structurally so the seam stays the transport-agnostic `ApplicationClient`. */
+function closeIfSupported(bus: ApplicationClient): void {
+  const maybe = bus as ApplicationClient & { close?: () => void };
   maybe.close?.();
 }
 
 /** Construct the live bus client from the env-provided socket path. */
-function makeLiveBus(): BusClient {
-  return new UdsBusClient({ socketPath: resolveSocketPath() });
+function makeLiveBus(): ApplicationClient {
+  return new ApplicationWebSocketClient(resolveApplicationWebSocketUrl());
 }
 
 /**
- * One-shot smoke mount: render against a {@link FakeBusClient} seeded with canned data, paint once,
+ * One-shot smoke mount: render against a {@link FakeApplicationClient} seeded with canned data, paint once,
  * then unmount so the run terminates instead of blocking. No socket, no service. This is what F8's
  * build gate calls to prove the bundle loads.
  */
@@ -380,19 +382,25 @@ export async function runSmoke(): Promise<void> {
   teardownKeyUsage();
 }
 
-/** A {@link FakeBusClient} seeded with one crow + idle usage so the smoke frame paints both regions. */
-function makeSmokeBus(): FakeBusClient {
-  const fake = new FakeBusClient();
+/** A {@link FakeApplicationClient} seeded with one crow + idle usage so the smoke frame paints both regions. */
+function makeSmokeBus(): FakeApplicationClient {
+  const fake = new FakeApplicationClient();
   fake.stubQuery('roster.get', {
+    as_of: new Date().toISOString(),
     invalidation_key: 'smoke',
     sessions: [
       {
         agent_id: 'collaborator',
         role: 'collaborator',
+        ticket_id: null,
+        ticket_title: null,
         status: 'idle',
         harness: 'claude',
         model: 'anthropic/claude-opus',
         display_name: 'collaborator',
+        last_seen: null,
+        started_at: null,
+        ticket_status: null,
       },
     ],
   });

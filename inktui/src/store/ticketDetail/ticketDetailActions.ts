@@ -25,7 +25,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { TicketDetailState, TicketFrontmatter } from './ticketDetailSlice.js';
@@ -123,7 +124,7 @@ export function isValidDuration(text: string): boolean {
 
 // ── Actions ─────────────────────────────────────────────────────────────────────────────────────
 
-/** The ticket-detail actions, bound to one `BusClient` + store handle. */
+/** The ticket-detail actions, bound to one `ApplicationClient` + store handle. */
 export interface TicketDetailActions {
   /**
    * Load the detail for a ticket and open the editor slice. Transitions status:
@@ -171,7 +172,7 @@ function toFrontmatter(dto: TicketDetailReply): TicketFrontmatter {
 }
 
 export function createTicketDetailActions(
-  bus: BusClient,
+  bus: ApplicationClient,
   store: StoreApi<AppStore>,
 ): TicketDetailActions {
   return {
@@ -190,7 +191,9 @@ export function createTicketDetailActions(
         },
       }));
       try {
-        const reply = await bus.query('ticket.get', { ticket_id: ticketId });
+        const reply = asQueryResult<'ticket.get', TicketDetailReply | null>(
+          await bus.query('ticket.get', { ticket_id: ticketId }),
+        );
         store.setState((state) => {
           // Stale-reply guard: a slow `open(A)` must NOT overwrite the slice once the user has
           // opened/closed to a different ticket. Open A (slow) → escape + open B (fast); B resolves,
@@ -282,8 +285,9 @@ export function createTicketDetailActions(
         // thinks the body saved when it did not (silent data loss). Route it to the SAME error
         // path as a thrown rejection: slice `error` + the global error toast (the landed write-RPC
         // surfacing mechanism, commit 73d7110).
-        if (reply.ok === false) {
-          const message = reply.error ?? 'save failed';
+        const result = asCommandResult<'ticket.save_body', { ok?: boolean; error?: string }>(reply);
+        if (result.ok === false) {
+          const message = result.error ?? 'save failed';
           store.setState((state) => ({
             ticketDetail: { ...state.ticketDetail, status: 'error', error: message },
           }));

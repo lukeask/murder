@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from murder.app.service.command_dispatch import ClaimedCommand, CommandDispatcher
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx
 from murder.runtime.workers.process_runner import SubprocessWorkerRunner
 from murder.runtime.workers.process_targets import usage_probe_process_target
@@ -52,7 +53,7 @@ class Supervisor:
         self._ctx = ctx
         if self._ctx.shutdown is None:
             self._ctx.shutdown = asyncio.Event()
-        self._states: dict[str, _WorkerState] = {}
+        self._states: dict[WorkerName, _WorkerState] = {}
         self._command_poll_s = command_poll_s
         self._reaper_task: asyncio.Task[None] | None = None
         self._commands = command_dispatcher
@@ -96,7 +97,7 @@ class Supervisor:
                 self._command_reaper_loop(), name="supervisor:command-reaper"
             )
 
-    async def stop_worker(self, name: str) -> None:
+    async def stop_worker(self, name: WorkerName) -> None:
         state = self._states.pop(name, None)
         if state is None:
             return
@@ -124,7 +125,7 @@ class Supervisor:
             await _await_cancelled_task(self._reaper_task, label="supervisor:command-reaper")
             self._reaper_task = None
 
-    async def dispatch(self, worker_name: str, command: WorkerCommand) -> bool:
+    async def dispatch(self, worker_name: WorkerName, command: WorkerCommand) -> bool:
         state = self._states.get(worker_name)
         if state is None:
             return False
@@ -166,7 +167,7 @@ class Supervisor:
     async def _start_subprocess_runner(self, worker: Worker) -> SubprocessWorkerRunner | None:
         if worker.spec.process_model != "subprocess":
             return None
-        if worker.spec.name != "usage-probe":
+        if worker.spec.name != WorkerName.USAGE_PROBE:
             return None
         runner = SubprocessWorkerRunner(
             usage_probe_process_target,

@@ -6,6 +6,7 @@ import sqlite3
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.protocol.workflows import (
     GetWorkflowRunParams,
     ListWorkflowRunsParams,
@@ -73,9 +74,9 @@ def register(host: ServiceHost) -> None:
             "run": run.model_dump(mode="json"),
         }
 
-    host.register_rpc_handler("workflow.runs.list", _runs_list)
-    host.register_rpc_handler("workflow.runs.get", _runs_get)
-    host.register_rpc_handler("workflow.signal", _signal)
+    host.register_application_query(QueryName.WORKFLOW_RUNS_LIST, _runs_list)
+    host.register_application_query(QueryName.WORKFLOW_RUNS_GET, _runs_get)
+    host.register_application_command(CommandName.WORKFLOW_SIGNAL, _signal)
 
 
 __all__ = ["register"]

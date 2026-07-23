@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
-from murder.bus import Entity
 from murder.llm.harness_control.runtime.manual_input import emit_fenced_manual_input
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id
@@ -107,19 +106,6 @@ class AgentOps:
                 block=conversation.block_to_wire(block),
             )
         )
-        # History view: a new user turn is a new intention in the history feed.
-        # Emit a key-only history snapshot (mirroring the PLAN publish below) so
-        # connected clients refetch and surface it. Read-model spine, no extra write.
-        await self.rt.publish_snapshot(Entity.HISTORY, agent_id)
-        # F1 (plan sort-order): the plans list orders by MAX(captured_at) of each
-        # plan's ``planner-{name}`` messages (read_model.get_plans_snapshot), so a
-        # user turn to a planner reorders the list WITHOUT any plans-table write.
-        # This is the low-rate, plan-scoped, runtime-layer choke point for that
-        # reorder; emit a key-only plan snapshot. (The high-rate poll-driven
-        # ``merge_transcript`` rebuild that ALSO re-sorts is deferred per the
-        # plan's coalescing caveat -- see commit message follow-up.)
-        if agent_id.startswith("planner-"):
-            await self.rt.publish_snapshot(Entity.PLAN, agent_id[len("planner-") :])
 
     async def send_agent_message(
         self,

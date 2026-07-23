@@ -7,7 +7,7 @@
  *    NORMALIZED list (names validated, de-duped last-wins, sorted), so a successful save SYNCS the
  *    slice to `result.templates`.
  * Declared via a `declare module` augmentation of the shared {@link RpcMethods} registry, so the
- * C1/C2 bus files (`BusClient.ts`/`UdsBusClient.ts`) stay byte-identical — the seam (rule 4). The
+ * C1/C2 bus files (`ApplicationClient.ts`/`ApplicationWebSocketClient.ts`) stay byte-identical — the seam (rule 4). The
  * keys here (`tui.load_templates`/`tui.save_templates`) are distinct from every other slice's keys.
  *
  * ## Optimistic local-first writes
@@ -20,7 +20,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { TemplateRecord } from './templatesSlice.js';
@@ -33,7 +34,7 @@ import type { TemplateRecord } from './templatesSlice.js';
  */
 
 
-/** The templates actions, bound to one {@link BusClient} + store handle. */
+/** The templates actions, bound to one {@link ApplicationClient} + store handle. */
 export interface TemplatesActions {
   /**
    * Load the persisted templates via `tui.load_templates` (once, at startup). Ref-swaps the slice to
@@ -61,7 +62,7 @@ function toItems(templates: readonly TemplateRecord[] | undefined): readonly Tem
 }
 
 export function createTemplatesActions(
-  bus: BusClient,
+  bus: ApplicationClient,
   store: StoreApi<AppStore>,
 ): TemplatesActions {
   /**
@@ -75,7 +76,11 @@ export function createTemplatesActions(
     try {
       const reply = await bus.command('templates.set', { templates: next });
       store.setState({
-        templates: { items: toItems(reply.templates), status: 'ready', error: null },
+        templates: {
+          items: toItems(asCommandResult<'templates.set', { templates?: readonly TemplateRecord[] }>(reply).templates),
+          status: 'ready',
+          error: null,
+        },
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -93,7 +98,11 @@ export function createTemplatesActions(
       try {
         const reply = await bus.query('templates.get', {});
         store.setState({
-          templates: { items: toItems(reply.templates), status: 'ready', error: null },
+          templates: {
+            items: toItems(asQueryResult<'templates.get', { templates?: readonly TemplateRecord[] }>(reply).templates),
+            status: 'ready',
+            error: null,
+          },
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

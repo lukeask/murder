@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from murder.facts.contracts import (
@@ -77,6 +78,168 @@ class FactLogError(RuntimeError):
 
 class FactIdentityConflictError(FactLogError):
     """A fact id was reused for different immutable content."""
+
+
+class ReplayGapError(FactLogError):
+    """A retained cursor can no longer be replayed."""
+
+
+class FactLog:
+    """The durable, immutable fact stream.
+
+    This deliberately owns only fact persistence, retention, replay, and
+    tailing.  It is not an event bus and has no request routing surface.
+    """
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        poll_interval_s: float = 0.05,
+        retention_min_records: int = 20_000,
+        retention_max_age_days: int = 7,
+    ) -> None:
+        self._connection = connection
+        self._poll_interval_s = poll_interval_s
+        self._retention_min_records = retention_min_records
+        self._retention_max_age = timedelta(days=retention_max_age_days)
+        ensure_fact_schema(connection)
+
+    def append(
+        self,
+        draft: RetainedFactDraft,
+        *,
+        projection_inputs: Sequence[ProjectionInputDraft] = (),
+        recorded_at: datetime | None = None,
+    ) -> tuple[RetainedFactRecord, tuple[ProjectionInputRecord, ...]]:
+        return append_fact(
+            self._connection,
+            draft,
+            projection_inputs=projection_inputs,
+            recorded_at=recorded_at,
+        )
+
+    def watermark(self) -> int:
+        return _watermark(self._connection, "retained_facts")
+
+    def is_cursor_retained(self, cursor: int) -> bool:
+        return _cursor_retained(self._connection, "retained_facts", cursor)
+
+    def replay(
+        self,
+        *,
+        after_sequence: int,
+        kinds: frozenset[str] = frozenset(),
+        until_sequence: int | None = None,
+    ) -> tuple[RetainedFactRecord, ...]:
+        return replay_facts(
+            self._connection,
+            after_sequence=after_sequence,
+            kinds=kinds,
+            until_sequence=until_sequence,
+            limit=100_000,
+        )
+
+    async def tail(
+        self, *, after_sequence: int, kinds: frozenset[str] = frozenset()
+    ) -> AsyncIterator[RetainedFactRecord]:
+        cursor = after_sequence
+        while True:
+            if not self.is_cursor_retained(cursor):
+                raise ReplayGapError(f"fact cursor {cursor} is outside retained history")
+            records = self.replay(after_sequence=cursor, kinds=kinds)
+            if records:
+                for record in records:
+                    cursor = record.sequence
+                    yield record
+            else:
+                await asyncio.sleep(self._poll_interval_s)
+
+    def prune(self, *, now: datetime | None = None) -> int:
+        overage = _record_overage(self._connection, "retained_facts", self._retention_min_records)
+        if overage <= 0:
+            return 0
+        cutoff = ((now or datetime.now(timezone.utc)) - self._retention_max_age).isoformat(
+            timespec="seconds"
+        )
+        rows = self._connection.execute(
+            """
+            SELECT f.fact_id FROM retained_facts AS f
+            WHERE f.recorded_at < ?
+              AND NOT EXISTS (SELECT 1 FROM projection_inputs AS p WHERE p.source_fact_id = f.fact_id)
+            ORDER BY f.sequence ASC LIMIT ?
+            """,
+            (cutoff, overage),
+        ).fetchall()
+        ids = [str(row["fact_id"]) for row in rows]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        result = self._connection.execute(
+            f"DELETE FROM retained_facts WHERE fact_id IN ({placeholders})", ids
+        )
+        return int(result.rowcount or 0)
+
+
+class ProjectionInputLog:
+    """Durable invalidation stream, separate from facts and orchestration."""
+
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        poll_interval_s: float = 0.05,
+        retention_min_records: int = 20_000,
+        retention_max_age_days: int = 7,
+    ) -> None:
+        self._connection = connection
+        self._poll_interval_s = poll_interval_s
+        self._retention_min_records = retention_min_records
+        self._retention_max_age = timedelta(days=retention_max_age_days)
+        ensure_fact_schema(connection)
+
+    def append(self, draft: ProjectionInputDraft) -> ProjectionInputRecord:
+        return append_projection_input(self._connection, draft)
+
+    def watermark(self) -> int:
+        return _watermark(self._connection, "projection_inputs")
+
+    def is_cursor_retained(self, cursor: int) -> bool:
+        return _cursor_retained(self._connection, "projection_inputs", cursor)
+
+    def replay(
+        self, *, after_sequence: int, projections: frozenset[str], until_sequence: int | None = None,
+        limit: int = 1000,
+    ) -> tuple[ProjectionInputRecord, ...]:
+        return replay_projection_inputs(self._connection, projections=projections,
+            after_sequence=after_sequence, until_sequence=until_sequence, limit=limit)
+
+    async def tail(self, *, after_sequence: int, projections: frozenset[str]) -> AsyncIterator[ProjectionInputRecord]:
+        cursor = after_sequence
+        while True:
+            if not self.is_cursor_retained(cursor):
+                raise ReplayGapError(f"projection cursor {cursor} is outside retained history")
+            records = self.replay(after_sequence=cursor, projections=projections)
+            if records:
+                cursor = records[-1].sequence
+                latest = {(item.projection, item.subject_key): item for item in records}
+                for item in sorted(latest.values(), key=lambda value: value.sequence):
+                    yield item
+            else:
+                await asyncio.sleep(self._poll_interval_s)
+
+    def prune(self, *, now: datetime | None = None) -> int:
+        overage = _record_overage(self._connection, "projection_inputs", self._retention_min_records)
+        if overage <= 0:
+            return 0
+        cutoff = ((now or datetime.now(timezone.utc)) - self._retention_max_age).isoformat(
+            timespec="seconds"
+        )
+        result = self._connection.execute(
+            "DELETE FROM projection_inputs WHERE sequence IN (SELECT sequence FROM projection_inputs WHERE created_at < ? ORDER BY sequence ASC LIMIT ?)",
+            (cutoff, overage),
+        )
+        return int(result.rowcount or 0)
 
 
 def append_fact(
@@ -452,10 +615,32 @@ def _schema_statements(script: str) -> Iterator[str]:
         yield "\n".join(statement)
 
 
+def _watermark(connection: sqlite3.Connection, table: str) -> int:
+    row = connection.execute(f"SELECT COALESCE(MAX(sequence), 0) AS max_sequence FROM {table}").fetchone()
+    return int(row["max_sequence"] if row is not None else 0)
+
+
+def _cursor_retained(connection: sqlite3.Connection, table: str, cursor: int) -> bool:
+    if cursor < 0 or cursor > _watermark(connection, table):
+        return False
+    row = connection.execute(f"SELECT MIN(sequence) AS min_sequence FROM {table}").fetchone()
+    if row is None or row["min_sequence"] is None:
+        return cursor == 0
+    return cursor >= int(row["min_sequence"]) - 1
+
+
+def _record_overage(connection: sqlite3.Connection, table: str, minimum: int) -> int:
+    row = connection.execute(f"SELECT COUNT(*) AS n_records FROM {table}").fetchone()
+    return int(row["n_records"] if row is not None else 0) - minimum
+
+
 __all__ = [
     "FACT_SCHEMA_SQL",
     "FactIdentityConflictError",
     "FactLogError",
+    "FactLog",
+    "ProjectionInputLog",
+    "ReplayGapError",
     "append_fact",
     "append_projection_input",
     "ensure_fact_schema",

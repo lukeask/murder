@@ -12,13 +12,12 @@
  * {@link createListSlice} factory in `../listSlice.js` — this file is a thin shell over it. Only
  * the row type, the slice key (`roster`), and the invalidating entity are domain-specific here.
  *
- * Copy this file to add slice X: rename `RosterRow`→`XRow` and its fields for X's DTO, point
- * `INVALIDATING_ENTITY` at X's {@link Entity} key, and pass X's key to `createListSlice`. The
+ * Copy this file to add slice X: rename `RosterRow`→`XRow` and its fields for X's DTO, then pass
+ * X's key to `createListSlice`. The
  * action (`./rosterActions.ts`) and selector (`../selectors/rosterSelectors.ts`) follow the same
  * copy recipe; the loading/error/ref-swap mechanics are inherited from the factory, not re-derived.
  */
 
-import type { Entity } from '../../bus/protocol.js';
 import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
@@ -77,21 +76,6 @@ export interface RosterRow {
  * the union is part of the contract (it stays `'idle' | 'loading' | 'ready' | 'error'`).
  */
 export type RosterState = ListState<RosterRow>;
-
-/**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice. The service emits
- * key-only change events naming the entity that changed; the store re-pulls *only* the slice whose
- * `INVALIDATING_ENTITY` matches (see `../store.ts`). Crows are `agent`-keyed on the wire.
- */
-export const ROSTER_INVALIDATING_ENTITY: Entity = 'agent';
-
-/**
- * A SECOND {@link Entity} key that invalidates this slice. Each crow's `state.crow_snapshot` reply
- * carries escalation counts (`open_escalations` / `max_severity`, JOINed in the Python DTO), so an
- * `escalation` change must re-pull the roster to keep those counts fresh — an escalation can be
- * created or resolved without a coincident `agent` change, which would otherwise leave them stale.
- */
-export const ROSTER_ESCALATION_INVALIDATING_ENTITY: Entity = 'escalation';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
 export const initialRosterState: RosterState = initialListState<RosterRow>();

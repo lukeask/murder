@@ -64,7 +64,7 @@ def test_redacted_mode_creates_db_with_schema_and_session_info(tmp_path):
     row = advconn.execute("SELECT * FROM session_info").fetchone()
     assert row["run_id"] == "run-2"
     assert row["mode"] == "redacted"
-    assert "events.schema_version=" in row["main_schema"]
+    assert "retained_facts.v1=" in row["main_schema"]
     assert "runs.advanced_log_path=" in row["main_schema"]
     advconn.close()
 

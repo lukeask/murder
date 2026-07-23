@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
-from murder.bus import Entity
 from murder.state.persistence import history as history_store
 
 
@@ -24,10 +23,6 @@ class HistoryOps:
     async def dismiss(self, item_id: str) -> dict[str, Any]:
         assert self.rt.db is not None
         history_store.set_history_status(self.rt.db, item_id, "dismissed")
-        # Dismiss flips an item's derived status to 'dismissed' -> it drops from
-        # the loose-threads view. Emit key-only so clients refetch (note_ops
-        # pattern). The snapshot key carries no per-item granularity.
-        await self.rt.publish_snapshot(Entity.HISTORY, item_id)
         return {"item_id": item_id, "status": "dismissed"}
 
 

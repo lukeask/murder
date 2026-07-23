@@ -8,7 +8,7 @@
  * The four-group ordering follows the interaction spec (Approach › Crows panel (0)):
  *   collaborator → planning agents → rogue crows → ticket crows
  *
- * Role→group mapping (from `murder/bus/protocol.py` `Role` enum + Ink spec):
+ * Role→group mapping (from `murder/application/protocol.py` `Role` enum + Ink spec):
  *   'collaborator'                                    → collaborator
  *   'planner'                                         → planners
  *   'crow' with ticketId === null                     → rogue crows
@@ -142,7 +142,7 @@ function modelBasename(model: string | null): string {
  * Classify a `RosterRow.role` string into one of the four display groups, or `null` to exclude
  * internal/infrastructure roles.
  *
- * Role→group mapping (from `murder/bus/protocol.py`):
+ * Role→group mapping (from `murder/application/protocol.py`):
  *   'collaborator'    → collaborator
  *   'planner'         → planners   (user-facing planning agent)
  *   'crow' + !ticketId → rogue     (rogue crow: no ticket assigned)

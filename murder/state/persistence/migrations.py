@@ -353,21 +353,23 @@ def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_events_schema_version(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT 1 FROM pragma_table_info('events') WHERE name = 'schema_version'"
-    ).fetchone()
-    if row is not None:
-        return
-    conn.execute("ALTER TABLE events ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1")
+def _migrate_drop_legacy_events(conn: sqlite3.Connection) -> None:
+    """Remove the pre-application-transport generic event stream.
+
+    Its mixed payloads were never a valid source of feature state and cannot
+    be promoted safely to retained facts.  Durable consumers now own explicit
+    tables (for example ``structured_decisions``), so retaining the old table
+    would invite an accidental replay seam.
+    """
+    conn.execute("DROP TABLE IF EXISTS events")
 
 
 def _migrate_fact_log(conn: sqlite3.Connection) -> None:
     """Add the immutable retained-fact and projection-input boundary.
 
-    This deliberately does not backfill the generalized ``events`` table:
-    legacy bus rows mix commands, notifications, decisions, and compatibility
-    traffic, so promoting them would invent fact semantics after the event.
+    This deliberately does not backfill legacy generic events: those rows mix
+    commands, notifications, decisions, and compatibility traffic, so
+    promoting them would invent fact semantics after the event.
     """
 
     conn.executescript(
@@ -1178,17 +1180,21 @@ def current_schema_marker(conn: sqlite3.Connection) -> str:
     """Return a defensible main-DB schema/migration version string.
 
     There is no single integer schema version in murder.db; the closest stable
-    markers are the ``events.schema_version`` column default and the presence of
-    the additive ``runs.advanced_log_path`` pointer. The advanced log's
+    markers are the retained-fact table and the additive
+    ``runs.advanced_log_path`` pointer. The advanced log's
     ``session_info`` row records this so a captured session can be tied back to
     the schema that produced it. Tolerant of partial schemas (returns
     ``"unknown"`` fields rather than raising).
     """
     try:
-        row = conn.execute("SELECT schema_version FROM events ORDER BY id DESC LIMIT 1").fetchone()
-        events_ver = row["schema_version"] if row is not None else 1
+        fact_table = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'retained_facts'"
+            ).fetchone()
+            is not None
+        )
     except sqlite3.Error:
-        events_ver = "unknown"
+        fact_table = False
     try:
         has_ptr = (
             conn.execute(
@@ -1198,7 +1204,7 @@ def current_schema_marker(conn: sqlite3.Connection) -> str:
         )
     except sqlite3.Error:
         has_ptr = False
-    return f"events.schema_version={events_ver};runs.advanced_log_path={has_ptr}"
+    return f"retained_facts.v1={fact_table};runs.advanced_log_path={has_ptr}"
 
 
 def _migrate_conversation_store(conn: sqlite3.Connection) -> None:

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import {
   createSpawnFavoritesActions,
   type SpawnFavorite,
@@ -17,9 +17,12 @@ const FAVORITES: SpawnFavorite[] = [
 
 describe('spawnFavoritesActions', () => {
   it('save() sends the records and load() round-trips the persisted list', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     // The save reply echoes back what was persisted; load returns that same list.
-    bus.stubCommand('spawn_favorites.set', (p) => ({ ok: true, favorites: p.favorites }));
+    bus.stubCommand('spawn_favorites.set', (p) => ({
+      ok: true,
+      favorites: p['favorites'] as readonly SpawnFavorite[],
+    }));
     bus.stubQuery('spawn_favorites.get', { ok: true, favorites: FAVORITES });
     const actions = createSpawnFavoritesActions(bus);
 
@@ -32,7 +35,7 @@ describe('spawnFavoritesActions', () => {
   });
 
   it('load() degrades to [] when the RPC rejects (unstubbed)', async () => {
-    const bus = new FakeBusClient(); // no stub → rpc rejects
+    const bus = new FakeApplicationClient(); // no stub → rpc rejects
     expect(await createSpawnFavoritesActions(bus).load()).toEqual([]);
   });
 });

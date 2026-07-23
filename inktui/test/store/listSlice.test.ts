@@ -8,7 +8,7 @@
  * mechanics is caught at the factory boundary, not only via a domain.
  */
 
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import type { CrowSnapshotReply } from '../../src/store/roster/rosterActions.js';
 import { createAppStore } from '../../src/store/store.js';
 
@@ -30,7 +30,7 @@ async function flush(): Promise<void> {
 
 describe('createRefreshAction — shared list-slice mechanics', () => {
   it('projects the reply into rows and flips the slice to ready', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
 
@@ -43,7 +43,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
   });
 
   it('issues exactly one rpc for the slice it is bound to', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
 
@@ -53,7 +53,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
   });
 
   it('ref-swaps ONLY its own slice key — siblings keep identity', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const notesBefore = store.getState().notes;
@@ -70,7 +70,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
   });
 
   it('routes a rejected rpc into the slice error field, never thrown past the action', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', () => {
       throw new Error('bus down');
     });
@@ -86,7 +86,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
     // A cold-start `state.snapshot` storm can fire refresh() once per ticket (~130x). The microtask
     // deferral lets the whole synchronous burst bump `seq` to its final value before any RPC fires,
     // so every stale token short-circuits BEFORE hitting the wire — only the last call issues an RPC.
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const refresh = store.getState().actions.roster.refresh;
@@ -105,7 +105,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
   it('a stale (superseded) refresh still flashes loading before short-circuiting', async () => {
     // The early token check is AFTER the loading setState, so a burst still shows loading — only the
     // RPC is skipped for stale tokens. Verify the loading flag is set synchronously by the burst.
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const refresh = store.getState().actions.roster.refresh;
@@ -122,7 +122,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
   it('coalesces refresh() calls separated by microtasks into exactly ONE rpc', async () => {
     // A WS subscription replay delivers one `state.snapshot` per message — each on its own turn. The
     // shared drain loop must collapse that async storm the same way it collapses a sync burst.
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     const refresh = store.getState().actions.roster.refresh;
@@ -140,7 +140,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
   });
 
   it('does not flash loading over existing rows on background refresh', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', crowReply());
     const { store } = createAppStore(fake);
     await store.getState().actions.roster.refresh();
@@ -166,7 +166,7 @@ describe('createRefreshAction — shared list-slice mechanics', () => {
 
   it('marks the slice loading before the rpc resolves', async () => {
     let resolveReply: (r: CrowSnapshotReply) => void = () => {};
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery(
       'roster.get',
       () =>

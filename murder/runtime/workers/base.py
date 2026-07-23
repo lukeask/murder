@@ -8,14 +8,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from murder.bus.protocol import CommandEvent, EventFilter
+from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 
 
 @dataclass(frozen=True)
 class WorkerSpec:
-    name: str
-    accepts: tuple[str, ...] = ()
-    interests: tuple[EventFilter, ...] = ()
+    name: WorkerName
+    accepts: tuple[OrchestrationCommand, ...] = ()
     # "thread" is a historical label: these workers are NOT run on a dedicated
     # thread. The supervisor schedules them as cooperative asyncio tasks on its
     # single event loop (see supervisor.py), so their run/on_command bodies must
@@ -29,7 +30,7 @@ class WorkerSpec:
 
 @dataclass(frozen=True)
 class WorkerCommand:
-    name: str
+    name: OrchestrationCommand
     args: dict[str, Any] = field(default_factory=dict)
 
 
@@ -49,16 +50,12 @@ class Worker(ABC):
         self.spec = spec
 
     @property
-    def name(self) -> str:
+    def name(self) -> WorkerName:
         return self.spec.name
 
     @property
-    def accepts(self) -> tuple[str, ...]:
+    def accepts(self) -> tuple[OrchestrationCommand, ...]:
         return self.spec.accepts
-
-    @property
-    def interests(self) -> tuple[EventFilter, ...]:
-        return self.spec.interests
 
     async def on_start(self, ctx: WorkerCtx) -> None:
         return None

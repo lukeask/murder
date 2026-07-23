@@ -1,9 +1,8 @@
 """Long-lived async runtime + supervisor.
 
-Owns the asyncio loop, the SQLite connection, the bus, and the lifecycle
-of all agents. This backend runs headless: the Ink TUI is a separate Node
-process that connects over a Unix socket and consumes the bus from outside
-this loop. Daemons (e.g. CrowHandler) are coroutines spawned and supervised
+Owns the asyncio loop, the SQLite connection, private orchestration signals,
+and the lifecycle of all agents. This backend runs headless: application
+clients connect to the service-owned WebSocket endpoint. Daemons (e.g. CrowHandler) are coroutines spawned and supervised
 here; their "tmux session" is a logfile being tailed for debug
 visibility, not a real interactive session.
 
@@ -32,8 +31,8 @@ from murder.app.service.document_access import DocumentAccess
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
-from murder.bus import Bus, EventFilter, SubscriptionHandle
-from murder.bus.protocol import AgentLifecycleEvent, Entity, StateSnapshotEvent
+from murder.bus import OrchestrationHandler, OrchestrationNotifier, SubscriptionHandle
+from murder.bus.protocol import AgentLifecycleEvent, OrchestrationEvent
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.advanced_log import (
     AdvancedLogBase,
@@ -60,12 +59,6 @@ from murder.state.persistence.activities import (
     reap_expired_claims,
     reap_expired_reservations,
 )
-from murder.state.persistence.agents import (
-    set_agent_status as _db_set_agent_status,
-)
-from murder.state.persistence.agents import (
-    upsert_agent as _db_upsert_agent,
-)
 from murder.state.persistence.conversation import mark_stale_conversations
 from murder.state.persistence.runs import end_run as _db_end_run
 from murder.state.persistence.runs import insert_run as _db_insert_run
@@ -84,6 +77,7 @@ from murder.state.storage.paths import (
 )
 from murder.state.storage.run_id_allocation import allocate_run_id
 from murder.work.workflows.service import WorkflowRuntime
+from murder.roster.service import RosterService
 
 if TYPE_CHECKING:
     from murder.config import Config
@@ -96,17 +90,8 @@ if TYPE_CHECKING:
     from murder.work.simple_doc_sync import SimpleDocSync
     from murder.work.tickets.sync import TicketSync
 
-Handler = Callable[[Any], Awaitable[None]]
 ActivityDispatcherFactory = Callable[[sqlite3.Connection], "ActivityDispatcher"]
 TriggerDispatcherFactory = Callable[[sqlite3.Connection], "TriggerDispatcher"]
-
-# Dual-write legacy bus entities onto application projection topics.
-# schedule is owned by tickets persistence; plans/notes/reports/history/transit
-# have no ProjectionTopic subscription path.
-_ENTITY_PROJECTION_TOPICS: dict[Entity, str] = {
-    Entity.AGENT: "roster",
-}
-
 
 class Runtime:
     """Async context manager owning the murder process lifecycle."""
@@ -129,16 +114,14 @@ class Runtime:
         self._trigger_dispatcher_factory = trigger_dispatcher_factory
         self.activity_dispatcher: ActivityDispatcher | None = None
         self.trigger_dispatcher: TriggerDispatcher | None = None
-        self.bus: Bus | None = None
+        self.bus: OrchestrationNotifier | None = None
         self.run_id: str | None = None
         self._agents = AgentRegistry()
         self.agents = self._agents
         self.event_sink: AgentEventSink = LoggingAgentEventSink()
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        # Holds in-flight key-only state.snapshot publish tasks scheduled from
-        # sync choke points (see ``emit_snapshot``). Retaining the reference
-        # keeps a fire-and-forget task from being GC'd mid-publish, and lets
-        # ``stop()`` (and tests) drain pending emits deterministically.
+        # Holds in-flight private orchestration tasks so shutdown can drain
+        # them deterministically.
         self._emit_tasks: set[asyncio.Task[None]] = set()
         self._shutdown = asyncio.Event()
         self.harness_versions = HarnessVersionRegistry()
@@ -161,6 +144,8 @@ class Runtime:
         # Durable observation→external-decision→verified-execution router.
         # It owns no policy and is initialized only once the persisted bus exists.
         self.structured_decisions: Any | None = None
+        self.crow_ask_router: Callable[[str | None, str, str], Awaitable[None]] | None = None
+        self.roster = RosterService(db_path(self.repo_root))
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -270,7 +255,7 @@ class Runtime:
                         links={"run_id": self.run_id},
                     )
                 )
-            self.bus = Bus(self.run_id, self.db)
+            self.bus = OrchestrationNotifier(self.run_id, self.db)
             self.structured_decisions = StructuredDecisionRouter(self)
             # The flight recorder is a normal bus SUBSCRIBER (plan §2.5.A): when
             # on, it captures EVERY event (filter=None) and routes each to its
@@ -280,16 +265,7 @@ class Runtime:
             if mode != "off":
                 self._recorder_sub = self.bus.subscribe(self._record_bus_event)
                 self._agents.on_lifecycle = self._emit_agent_lifecycle
-            self._sync = FilesystemSyncSupervisor.attach(
-                self.repo_root,
-                self.db,
-                on_ticket_change=lambda tid: self.emit_snapshot(Entity.TICKET, tid),
-                on_plan_change=lambda name: self.emit_snapshot(Entity.PLAN, name),
-                # Notes and reports use the async notify_changed seam (F5.1/F5.3):
-                # pass bus + run_id so _emit is live; on_note_change is removed.
-                bus=self.bus,
-                run_id=self.run_id,
-            )
+            self._sync = FilesystemSyncSupervisor.attach(self.repo_root, self.db)
             self.plan_sync = self._sync.plan_sync
             self.note_sync = self._sync.note_sync
             self.notetaker_context_sync = self._sync.notetaker_context_sync
@@ -300,7 +276,6 @@ class Runtime:
                 self.db,
                 plan_sync=self.plan_sync,
                 note_sync=self.note_sync,
-                on_note_change=lambda name: self.emit_snapshot(Entity.NOTE, name),
             )
             # Seeding stays on the boot path (cheap, idempotent — restores missing
             # examples before the loops scan). The heavy markdown->DB reconcile is now
@@ -399,95 +374,8 @@ class Runtime:
             with contextlib.suppress(FileNotFoundError, OSError):
                 lock_path(self.repo_root).unlink()
 
-    def emit_snapshot(self, entity: Entity, key: str) -> None:
-        """Schedule a key-only ``state.snapshot`` from a SYNC choke point.
-
-        THE F1 CHOKE-POINT / EMIT PATTERN (copy this verbatim for sibling
-        entities — ticket / plan / note / queue_row):
-
-        - Each read-model domain has ONE sync persistence choke point that all
-          its mutations funnel through (for ``agent`` that is ``sync_agent``;
-          for tickets it is the lifecycle/status hook, etc.). Emit the key-only
-          ``state.snapshot{entity, key}`` from that single hook, NOT at every
-          call site, so coverage is "one helper call" rather than "21 scattered
-          emits."
-        - ``bus.publish`` is ASYNC but these choke points are SYNC. Every sync
-          mutation runs on the Runtime's asyncio loop thread, so we grab the
-          running loop and schedule the publish as a task. We retain the task in
-          ``self._emit_tasks`` (a) so a fire-and-forget coroutine can't be GC'd
-          mid-publish and (b) so ``stop()`` / tests can drain pending emits.
-        - ASYNC callers (orchestrator, workers) that already sit in a coroutine
-          should ``await bus.publish(StateSnapshotEvent(...))`` directly rather
-          than route through here -- this helper exists ONLY for the sync gap.
-        - The contract is key-only: emit just ``entity`` + ``key``; never inline
-          the changed body (the client refetches the named slice).
-
-        No-ops before the bus exists or outside a running loop (e.g. tests
-        calling the sync method without a loop) so persistence never fails.
-        """
-        self._append_compatibility_projection_input(entity, key)
-        if self.bus is None or self.run_id is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        task = loop.create_task(
-            self.bus.publish(
-                StateSnapshotEvent(
-                    run_id=self.run_id,
-                    agent_id="runtime",
-                    entity=entity,
-                    key=key,
-                )
-            )
-        )
-        self._emit_tasks.add(task)
-        task.add_done_callback(self._emit_tasks.discard)
-
-    def _append_compatibility_projection_input(self, entity: Entity, key: str) -> None:
-        """Dual-write for compatibility domains still funneling through emit_snapshot."""
-        if self.db is None:
-            return
-        projection = _ENTITY_PROJECTION_TOPICS.get(entity)
-        if projection is None:
-            return
-        from uuid import NAMESPACE_URL, uuid5  # noqa: PLC0415
-
-        from murder.facts.contracts import ProjectionInputDraft  # noqa: PLC0415
-        from murder.facts.log import append_projection_input  # noqa: PLC0415
-
-        try:
-            row = self.db.execute(
-                """
-                SELECT COALESCE(MAX(generation), -1) + 1 AS next_gen
-                  FROM projection_inputs
-                 WHERE projection = ? AND subject_key = ?
-                """,
-                (projection, key),
-            ).fetchone()
-            generation = int(row[0] if not hasattr(row, "keys") else row["next_gen"])
-            append_projection_input(
-                self.db,
-                ProjectionInputDraft(
-                    input_id=uuid5(
-                        NAMESPACE_URL,
-                        f"compat-projection:{projection}:{key}:{generation}",
-                    ),
-                    projection=projection,
-                    subject_key=key,
-                    generation=generation,
-                ),
-            )
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "failed to append compatibility projection input for %s/%s",
-                projection,
-                key,
-            )
-
-    async def _record_bus_event(self, event: Any) -> None:
-        """Bus-subscriber handler for the flight recorder (plan §2.5.A).
+    async def _record_bus_event(self, event: OrchestrationEvent) -> None:
+        """OrchestrationNotifier-subscriber handler for the flight recorder (plan §2.5.A).
 
         Enqueue-and-return: the writer copies the correlation ids off the ambient
         ``log_context`` (which ``asyncio.gather`` propagated from the publisher),
@@ -538,42 +426,12 @@ class Runtime:
         self._emit_tasks.add(task)
         task.add_done_callback(self._emit_tasks.discard)
 
-    async def publish_snapshot(self, entity: Entity, key: str) -> None:
-        """Emit a key-only ``state.snapshot`` from an ASYNC choke point.
-
-        The async counterpart to ``emit_snapshot``: callers already inside a
-        coroutine (orchestrator / coordinator / outcome RPC handlers) ``await``
-        this directly rather than scheduling a task. It is exactly the backbone-
-        sanctioned "async callers ``await bus.publish(StateSnapshotEvent(...))``
-        directly" pattern with the envelope factored out so the ~8 ticket sites
-        don't retype it (and can't typo the entity). Key-only by contract.
-
-        No-ops before the bus / run id exist so handlers never fail on it.
-        """
-        self._append_compatibility_projection_input(entity, key)
-        if self.bus is None or self.run_id is None:
-            return
-        await self.bus.publish(
-            StateSnapshotEvent(
-                run_id=self.run_id,
-                agent_id="runtime",
-                entity=entity,
-                key=key,
-            )
-        )
-
     def sync_agent(self, agent: LifecycleParticipant) -> None:
-        """Persist current agent fields to SQLite, then emit a key-only snapshot.
-
-        This is the single agent-mutation choke point: ~21 sites
-        (spawn / status change / stop / rename / reap side-effects) call here,
-        so emitting ``state.snapshot{entity=agent}`` once at the end covers them
-        all. See ``emit_snapshot`` for the sync->async pattern siblings reuse.
-        """
+        """Persist an agent plus its roster invalidation as one feature operation."""
         if self.db is None:
             return
         worktree_path = getattr(agent, "worktree_path", None)
-        _db_upsert_agent(
+        self.roster.sync_agent(
             self.db,
             agent_id=agent.id,
             role=agent.role.value,
@@ -586,10 +444,8 @@ class Runtime:
             worktree_path=str(worktree_path) if worktree_path is not None else None,
             pid=None,
         )
-        # Phase 2 flight recorder: agent mutation choke point (no-op when off).
-        # This is a non-bus rich seam: the key-only StateSnapshotEvent emitted
-        # below deliberately omits these fields, so this is not a duplicate of a
-        # bus event — it captures what the snapshot does not.
+        # Flight-recorder data is observational only; roster refresh travels
+        # through the transactional feature projection input above.
         self.advanced_log.record_state_mutation(
             StateMutationRecord(
                 entity="agent",
@@ -603,7 +459,6 @@ class Runtime:
                 worktree_path=str(worktree_path) if worktree_path is not None else None,
             )
         )
-        self.emit_snapshot(Entity.AGENT, agent.id)
 
     def register_agent(self, agent: LifecycleParticipant) -> None:
         self._agents.register(agent, persist=self.sync_agent)
@@ -622,7 +477,9 @@ class Runtime:
             agent_id,
             tasks=self._tasks,
             db=self.db,
-            set_dead=_db_set_agent_status,
+            set_dead=lambda conn, agent_id, status: self.roster.set_agent_status(
+                conn, agent_id, status
+            ),
         )
 
     def rename_agent(
@@ -641,12 +498,11 @@ class Runtime:
     @asynccontextmanager
     async def subscription(
         self,
-        handler: Handler,
-        filter: EventFilter | None = None,
+        handler: OrchestrationHandler,
     ) -> AsyncGenerator[SubscriptionHandle, None]:
         if self.bus is None:
             raise RuntimeError("Runtime not started (no bus)")
-        handle = self.bus.subscribe(handler, filter)
+        handle = self.bus.subscribe(handler)
         try:
             yield handle
         finally:

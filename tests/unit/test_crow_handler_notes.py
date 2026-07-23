@@ -1,9 +1,9 @@
-"""CrowHandler routes ``>>> NOTE`` output to the DB events table, not the ticket .md.
+"""CrowHandler routes verified ``>>> ASK`` markers directly to orchestration.
 
 Regression guard for review finding #7: the legacy ``ticket_parser.append_section``
 sink rewrote only ``## Plan`` / ``## Working notes`` and dropped frontmatter +
 ``# Checklist``, so a note could clobber unified-ticket metadata. Under
-DB-owns-runtime notes now land in the ``events`` table via the bus.
+NOTE markers are neither public facts nor generic orchestration events.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.bus import Bus
+from murder.bus import OrchestrationNotifier
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
@@ -56,10 +56,11 @@ def db(tmp_path: Path):
 def handler(db, tmp_path: Path) -> CrowHandler:
     runtime = MagicMock()
     runtime.db = db
-    runtime.bus = Bus(run_id="test-run", db_conn=db)
+    runtime.bus = OrchestrationNotifier(run_id="test-run", db_conn=db)
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     runtime.publish_snapshot = AsyncMock()
+    runtime.crow_ask_router = None
     return CrowHandler(
         agent_id="crow_handler-t001",
         ticket_id="t001",
@@ -89,7 +90,7 @@ def _seed_ticket(db, repo_root: Path) -> Path:
     return tpath
 
 
-def test_note_lands_in_db_and_leaves_unified_ticket_untouched(handler, db, tmp_path):
+def test_note_leaves_unified_ticket_untouched(handler, db, tmp_path):
     tpath = _seed_ticket(db, tmp_path)
     before = tpath.read_bytes()
 
@@ -104,14 +105,6 @@ def test_note_lands_in_db_and_leaves_unified_ticket_untouched(handler, db, tmp_p
     )
     asyncio.run(handler.observe_conversation_changes(changes))
 
-    # The note is durable in the events audit log...
-    rows = db.execute(
-        "SELECT type, ticket_id, payload_json FROM events WHERE type = 'note'"
-    ).fetchall()
-    assert len(rows) == 1
-    assert rows[0]["ticket_id"] == "t001"
-    assert "discovered the config lives in settings.json" in rows[0]["payload_json"]
-
     # ...and the unified ticket .md — frontmatter + checklist — is byte-for-byte intact.
     assert tpath.read_bytes() == before
 
@@ -119,6 +112,8 @@ def test_note_lands_in_db_and_leaves_unified_ticket_untouched(handler, db, tmp_p
 def test_projected_assistant_messages_emit_markers_once_each(handler, db, tmp_path) -> None:
     """Stable frames replay nothing; a distinct assistant block remains distinct."""
     _seed_ticket(db, tmp_path)
+    routed = AsyncMock()
+    handler.runtime.crow_ask_router = routed
     marker = ">>> ASK: which port should I use?\n>>> DONE"
     first_doc = {
         "harness": "claude_code",
@@ -140,15 +135,13 @@ def test_projected_assistant_messages_emit_markers_once_each(handler, db, tmp_pa
     _, second = project_parsed_doc_with_changes(db, "crow-t001", second_doc)
     asyncio.run(handler.observe_conversation_changes(second))
 
-    question_count = 2
-    assert (
-        db.execute("SELECT COUNT(*) FROM events WHERE type = 'question'").fetchone()[0]
-        == question_count
-    )
+    assert routed.await_count == 2
 
 
 def test_growing_assistant_message_emits_each_completed_marker_once(handler, db, tmp_path) -> None:
     _seed_ticket(db, tmp_path)
+    routed = AsyncMock()
+    handler.runtime.crow_ask_router = routed
     first_text = ">>> ASK: first question\n>>> NOTE: first note\n>>> END"
     working_doc = {
         "harness": "claude_code",
@@ -175,10 +168,4 @@ def test_growing_assistant_message_emits_each_completed_marker_once(handler, db,
     _, sealed = project_parsed_doc_with_changes(db, "crow-t001", sealed_doc)
     asyncio.run(handler.observe_conversation_changes(sealed))
 
-    question_count = 2
-    note_count = 1
-    assert (
-        db.execute("SELECT COUNT(*) FROM events WHERE type = 'question'").fetchone()[0]
-        == question_count
-    )
-    assert db.execute("SELECT COUNT(*) FROM events WHERE type = 'note'").fetchone()[0] == note_count
+    assert routed.await_count == 2

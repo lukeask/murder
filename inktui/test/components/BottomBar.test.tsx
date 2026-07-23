@@ -1,7 +1,7 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { BottomBar, useBottomBarLines } from '../../src/components/BottomBar.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
@@ -130,7 +130,7 @@ describe('BottomBar — toast overlays', () => {
   });
 
   it('renders toasts on a blank host line when the hints widget is disabled (zero packed lines)', async () => {
-    const { store, dispose } = createAppStore(new FakeBusClient());
+    const { store, dispose } = createAppStore(new FakeApplicationClient());
     store.setState((state) => ({
       settings: {
         ...state.settings,
@@ -155,7 +155,7 @@ describe('BottomBar — toast overlays', () => {
   });
 
   it('useBottomBarLines counts the toast host line, so the Shell footer budget matches the render', async () => {
-    const { store, dispose } = createAppStore(new FakeBusClient());
+    const { store, dispose } = createAppStore(new FakeApplicationClient());
     store.setState((state) => ({
       settings: {
         ...state.settings,

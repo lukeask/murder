@@ -14,7 +14,7 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { makeChatInputHandler } from '../../src/components/App.js';
 import { ChatInput } from '../../src/components/ChatInput.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
@@ -62,8 +62,8 @@ function Harness({
 }): JSX.Element {
   function Root(): null {
     // Wire the persistent chat handler exactly as App.tsx's Shell does. F9: an image-draft store is
-    // threaded in (no images pasted in these tests, so a bare FakeBusClient-backed one suffices).
-    const imageDraft = createImageDraftStore(new FakeBusClient());
+    // threaded in (no images pasted in these tests, so a bare FakeApplicationClient-backed one suffices).
+    const imageDraft = createImageDraftStore(new FakeApplicationClient());
     // Workstream E: the chat handler now takes a CommandCtx for the `:`/`/` prefix dispatcher. These
     // tests never type a prefix, so a no-op ctx is sufficient (the dispatcher returns false → normal
     // send path runs, exactly as before).
@@ -105,10 +105,10 @@ function Harness({
 }
 
 async function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   fake.stubQuery('roster.get', ROSTER_REPLY);
-  // F2: chat sends route through orchestration.execute (agent.message command kind), not a direct RPC.
-  fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  // F2: chat sends route through direct application command (agent.message command kind), not a direct RPC.
+  fake.stubAllCommands({ ok: true, command_id: 'cmd-1' });
   fake.stubQuery('command.get', { ok: true, status: 'done', result_json: '{}' });
   const { store, dispose } = createAppStore(fake);
   await store.getState().actions.roster.refresh();
@@ -154,8 +154,7 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
 
     const sendCalls = fake.commandCalls.filter(
       (c) =>
-        c.name === 'orchestration.execute' &&
-        (c.params as { kind: string }).kind === 'agent.message',
+        c.name === 'agent.message',
     );
     expect(sendCalls.length).toBe(1);
     expect(sendCalls[0]?.params).toMatchObject({
@@ -317,9 +316,9 @@ function seedQueued(store: ReturnType<typeof createAppStore>['store'], message: 
   }));
 }
 
-function submitsOfKind(fake: FakeBusClient, kind: string) {
+function submitsOfKind(fake: FakeApplicationClient, kind: string) {
   return fake.commandCalls.filter(
-    (c) => c.name === 'orchestration.execute' && (c.params as { kind: string }).kind === kind,
+    (c) => c.name === kind,
   );
 }
 
@@ -583,22 +582,4 @@ describe('ChatInput — queued-message line', () => {
     dispose();
   });
 
-  it('applyState updates the meta map from a conversation.state event', async () => {
-    const { store, dispose } = await setup();
-    store.getState().actions.conversations.applyState({
-      type: 'conversation.state',
-      event_id: 1,
-      ts: 'now',
-      run_id: 'r',
-      agent_id: 'collab-1',
-      conversation_id: 'collab-1',
-      live_state: 'awaiting_input',
-      queued_message: null,
-    } as never);
-    expect(store.getState().conversations.meta['collab-1']).toEqual({
-      liveState: 'awaiting_input',
-      queuedMessage: null,
-    });
-    dispose();
-  });
 });

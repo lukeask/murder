@@ -8,6 +8,7 @@ from pathlib import Path
 from murder.work.notes.sync import NoteSync
 from murder.work.plans.sync import PlanSync
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.runtime.orchestration.worker_names import WorkerName
 
 
 class PlanSyncWorker(Worker):
@@ -19,7 +20,7 @@ class PlanSyncWorker(Worker):
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
     ) -> None:
-        super().__init__(WorkerSpec(name="plan_sync", heartbeat_s=poll_s))
+        super().__init__(WorkerSpec(name=WorkerName.PLAN_SYNC, heartbeat_s=poll_s))
         self._sync = PlanSync(repo_root, db, poll_s=poll_s, debounce_s=debounce_s)
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002
@@ -50,7 +51,7 @@ class NoteSyncWorker(Worker):
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
     ) -> None:
-        super().__init__(WorkerSpec(name="note_sync", heartbeat_s=poll_s))
+        super().__init__(WorkerSpec(name=WorkerName.NOTE_SYNC, heartbeat_s=poll_s))
         self._sync = NoteSync(repo_root, db, poll_s=poll_s, debounce_s=debounce_s)
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:  # noqa: ARG002

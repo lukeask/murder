@@ -7,15 +7,15 @@
  *    ref-swap-only-this-key) like every other list slice.
  *  - `dismiss(itemId)` — submit the `history.dismiss` orchestrator command and OPTIMISTICALLY mark
  *    the row `dismissed` in the slice so it drops from the loose-threads view immediately, without
- *    waiting for the snapshot round-trip. The authoritative refetch (driven by the `history`
- *    `state.snapshot` the dismiss op publishes) reconciles shortly after.
+ *    waiting for the next authoritative refresh to reconcile it.
  *
  * `state.history_snapshot` and `history.dismiss` are declared via declaration merging (mirroring the
  * notes/roster actions) rather than editing the frozen bus files.
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import { submitCommand } from '../commandSubmit.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
@@ -62,7 +62,7 @@ function toHistoryRow(dto: HistoryItemDto): HistoryRow {
   };
 }
 
-/** The history actions, bound to one `BusClient` + store handle. */
+/** The history actions, bound to one `ApplicationClient` + store handle. */
 export interface HistoryActions {
   /** Re-pull the history feed and ref-swap only the `history` slice. Rejections land in
    * `history.error` — never thrown past the action. */
@@ -78,11 +78,12 @@ export interface HistoryActions {
   resumeConversation(conversationId: string): Promise<void>;
 }
 
-export function createHistoryActions(bus: BusClient, store: StoreApi<AppStore>): HistoryActions {
+export function createHistoryActions(bus: ApplicationClient, store: StoreApi<AppStore>): HistoryActions {
   const { refresh } = createRefreshAction(bus, store, {
     key: 'history',
     method: 'history.list',
-    project: (reply) => reply.items.map(toHistoryRow),
+    project: (reply) =>
+      asQueryResult<'history.list', HistorySnapshotReply>(reply).items.map(toHistoryRow),
   });
 
   return {

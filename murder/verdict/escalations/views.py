@@ -60,17 +60,10 @@ def get_escalation_history(
 
 def ack_escalation_db(escalation_id: int, db_path: Path) -> None:
     """Mark an escalation resolved by setting ``resolved_at`` to now."""
-    now = datetime.utcnow().isoformat(timespec="seconds")
+    from murder.state.persistence.escalations import resolve_escalation
+
     with closing(get_db(Path(db_path))) as conn:
-        conn.execute(
-            """
-            UPDATE escalations
-               SET resolved = 1,
-                   resolved_at = ?
-             WHERE id = ?
-            """,
-            (now, int(escalation_id)),
-        )
+        resolve_escalation(conn, int(escalation_id))
 
 
 def _record_from_row(row: sqlite3.Row) -> EscalationRecord:

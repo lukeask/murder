@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.runtime.orchestration.worker_names import WorkerName
 
 LOGGER = logging.getLogger(__name__)
 DONE_SESSION_TTL_MINUTES = 10
@@ -14,7 +15,9 @@ SWEEP_INTERVAL_S = 60.0
 
 class DoneSessionSweeperWorker(Worker):
     def __init__(self, *, sweep_interval_s: float = SWEEP_INTERVAL_S) -> None:
-        super().__init__(WorkerSpec(name="done-session-sweeper", heartbeat_s=sweep_interval_s))
+        super().__init__(
+            WorkerSpec(name=WorkerName.DONE_SESSION_SWEEPER, heartbeat_s=sweep_interval_s)
+        )
         self._interval = sweep_interval_s
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:

@@ -79,16 +79,6 @@ class ApplicationGateway:
                 operation.result_model, result, capability=request.name.value
             )
 
-        if request.name is CommandName.ORCHESTRATION_EXECUTE:
-            operation = command_operation(request.name)
-            params = self._validate_params(
-                operation.params_model, params, capability=request.name.value
-            )
-            result = await self._application.command(request.name, params)
-            return self._validate_result(
-                operation.result_model, result, capability=request.name.value
-            )
-
         if request.name is CommandName.APPROVAL_DECIDE:
             if authenticated_client_id is None:
                 raise ValueError("approval.decide requires an authenticated client")

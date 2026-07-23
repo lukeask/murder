@@ -11,7 +11,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import type { TransitCommit, TransitLane, TransitState } from './transitSlice.js';
 
@@ -77,14 +78,14 @@ export function project(reply: TransitSnapshotReply): readonly TransitLane[] {
   return reply.lanes.map(toTransitLane);
 }
 
-/** The transit actions, bound to one `BusClient` + store handle. */
+/** The transit actions, bound to one `ApplicationClient` + store handle. */
 export interface TransitActions {
   /** Re-pull the commit-graph and ref-swap only the `transit` slice. Rejections land in
    * `transit.error` — never thrown past the action (so the invalidation loop stays fire-and-forget). */
   refresh(): Promise<void>;
 }
 
-export function createTransitActions(bus: BusClient, store: StoreApi<AppStore>): TransitActions {
+export function createTransitActions(bus: ApplicationClient, store: StoreApi<AppStore>): TransitActions {
   // Per-slice request token + shared drain — mirrors listSlice.ts (async snapshot storms included).
   let seq = 0;
   let drainPromise: Promise<void> | null = null;
@@ -105,7 +106,11 @@ export function createTransitActions(bus: BusClient, store: StoreApi<AppStore>):
             if (token !== seq) {
               continue;
             }
-            const next: TransitState = { lanes: project(reply), status: 'ready', error: null };
+            const next: TransitState = {
+              lanes: project(asQueryResult<'transit.get', TransitSnapshotReply>(reply)),
+              status: 'ready',
+              error: null,
+            };
             store.setState({ transit: next });
             return;
           } catch (error: unknown) {

@@ -4,13 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from murder.bus.protocol import Entity
 
 
 @dataclass
@@ -28,8 +23,6 @@ class MarkdownSyncLoop(ABC):
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
-        entity: "Entity | None" = None,
-        on_change: "Callable[[Entity, str], Awaitable[None]] | None" = None,
     ) -> None:
         self.repo_root = repo_root
         self.poll_s = poll_s
@@ -37,18 +30,6 @@ class MarkdownSyncLoop(ABC):
         self._seen: dict[Path, FileSnapshot] = {}
         self._changed_at: dict[Path, float] = {}
         self._running = False
-        self._entity = entity
-        self._on_change = on_change
-
-    async def notify_changed(self, key: str) -> None:
-        """Fire the on_change callback iff both entity and callback are set.
-
-        Call this ONLY at points where a real change was committed (after an
-        upsert/revision that actually wrote, after rename/deprecate) — never on
-        a bare file-touch or when the hash matched (no loop).
-        """
-        if self._entity is not None and self._on_change is not None:
-            await self._on_change(self._entity, key)
 
     async def run(self) -> None:
         self._running = True

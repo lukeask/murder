@@ -10,9 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from murder.bus.protocol import SOCKET_BASENAME, SOCKET_RUNTIME_SUBDIR
-
 SESSION_HASH_LEN = 12
+RUNTIME_SUBDIR = "murder"
 
 
 @dataclass(frozen=True)
@@ -22,7 +21,7 @@ class ServiceSession:
     path_hash: str
     repo_root: Path
     pid: int
-    socket_path: Path
+    websocket_url: str
 
 
 class AmbiguousServiceSessionError(ValueError):
@@ -35,7 +34,7 @@ class AmbiguousServiceSessionError(ValueError):
 def service_runtime_root() -> Path:
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if runtime_dir:
-        return Path(runtime_dir) / SOCKET_RUNTIME_SUBDIR
+        return Path(runtime_dir) / RUNTIME_SUBDIR
     return Path(f"/tmp/murder-{os.getuid()}")
 
 
@@ -54,10 +53,6 @@ def project_session_name(repo_root: Path) -> str:
     return f"{project_session_basename(repo_root)}-{project_path_hash(repo_root)}"
 
 
-def socket_path_for_repo(repo_root: Path) -> Path:
-    return service_runtime_root() / project_session_name(repo_root) / SOCKET_BASENAME
-
-
 def service_registry_dir() -> Path:
     return service_runtime_root() / "sessions"
 
@@ -68,7 +63,7 @@ def service_registry_path(name: str) -> Path:
 
 def write_service_session(
     repo_root: Path,
-    socket_path: Path,
+    websocket_url: str,
     *,
     pid: int | None = None,
 ) -> ServiceSession:
@@ -79,7 +74,7 @@ def write_service_session(
         path_hash=project_path_hash(repo_root),
         repo_root=repo_root,
         pid=pid or os.getpid(),
-        socket_path=socket_path,
+        websocket_url=websocket_url,
     )
     path = service_registry_path(session.name)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +87,7 @@ def write_service_session(
                 "path_hash": session.path_hash,
                 "repo_root": str(session.repo_root),
                 "pid": session.pid,
-                "socket_path": str(session.socket_path),
+                "websocket_url": session.websocket_url,
             },
             sort_keys=True,
         )
@@ -119,7 +114,7 @@ def read_service_session(path: Path) -> ServiceSession | None:
             path_hash=str(raw["path_hash"]),
             repo_root=Path(str(raw["repo_root"])),
             pid=int(raw["pid"]),
-            socket_path=Path(str(raw["socket_path"])),
+            websocket_url=str(raw["websocket_url"]),
         )
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -165,6 +160,5 @@ __all__ = [
     "service_registry_dir",
     "service_registry_path",
     "service_runtime_root",
-    "socket_path_for_repo",
     "write_service_session",
 ]

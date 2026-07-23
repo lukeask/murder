@@ -510,12 +510,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         """
         if not had_changes or not self.id.startswith("planner-"):
             return
-        runtime = getattr(self, "runtime", None)
-        if runtime is None:
-            return
-        from murder.bus.protocol import Entity
-
-        await runtime.publish_snapshot(Entity.PLAN, self.id[len("planner-") :])
+        return
 
     @property
     def pending_message(self) -> str | None:

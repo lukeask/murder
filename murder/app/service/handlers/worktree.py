@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.requests import QueryName
 from murder.app.service.handlers._common import threaded
 
 if TYPE_CHECKING:
@@ -28,4 +29,4 @@ def register(host: ServiceHost) -> None:
         }
 
     # Pure git subprocess + file reads, no shared connection — offloaded.
-    host.register_rpc_handler("worktree.list", threaded(_worktree_list))
+    host.register_application_query(QueryName.WORKTREES_LIST, threaded(_worktree_list))

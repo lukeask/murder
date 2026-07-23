@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.requests import CommandName
 from murder.app.service.handlers._common import require_orchestrator
 
 if TYPE_CHECKING:
@@ -25,4 +26,4 @@ def register(host: ServiceHost) -> None:
             auto_name=auto_name,
         )
 
-    host.register_rpc_handler("plan.create", _plan_create)
+    host.register_application_command(CommandName.PLAN_CREATE, _plan_create)

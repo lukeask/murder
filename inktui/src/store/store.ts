@@ -16,22 +16,18 @@
  *  - **Built with `zustand/vanilla` `createStore`,** not the React `create` — the store layer must
  *    stay framework-agnostic (rule 4). The React binding lives in `src/hooks/`.
  *
- * Event-driven invalidation (the data-flow contract):
- *   on construction the store opens two projection hydrations — compatibility topics still
- *   deliver `state.snapshot` / conversation events, while feature-owned topics deliver
- *   `projection.invalidate` messages. Each path names what changed; the store maps that to the
- *   slice whose refresh action re-pulls and ref-swaps only itself. Unrelated keys match no slice
- *   → no re-pull. Dual path is intentional during migration: schedule invalidate and ticket-entity
- *   snapshots may both refresh tickets/usage until compatibility snapshots are retired.
+ * Event-driven invalidation (the data-flow contract): on construction the store opens one typed
+ * projection hydration. Every live message is a `projection.invalidate`; its projection names the
+ * slice refresh action that re-pulls and ref-swaps only the affected state.
  *
  * To add slice X: first write its three thin-shell files (`xSlice.ts`/`xActions.ts` +
  * `xSelectors.ts`) over the shared `./listSlice.ts` factory — copy the roster files and supply
  * only X's row type, RPC method (+ reply type), and `project` fn (see `roster/rosterSlice.ts` for
  * the canonical example). Then wire it here (≈5 local edits, all additive — the compiler guides you):
- *   1. import `createXSlice`, `createXActions`, `X_INVALIDATING_ENTITY`, `initialXState`, `XState`;
+ *   1. import `createXSlice`, `createXActions`, `initialXState`, `XState`;
  *   2. add `x: XState;` to the `AppStore` interface and `x: XActions;` to `AppActions`;
  *   3. spread `...createXSlice(...a)` into the store initializer;
- *   4. add `x: createXActions(bus, store)` to the `actions` object and one entry to `invalidations`;
+ *   4. add `x: createXActions(bus, store)` to the `actions` object and map its projection below;
  *   5. add `x: initialXState` to `initialAppState` (keep it mirroring every slice).
  * The pattern does not fan out — no dispatch/wiring logic changes, only these additions, and the
  * `{ rows, status, error }` mechanics are never re-derived (they come from the factory).
@@ -39,21 +35,13 @@
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type {
-  BusClient,
-  BusEventListener,
+  ApplicationClient,
   HydrateSnapshots,
   ProjectionInvalidation,
   ProjectionInvalidationListener,
   Unsubscribe,
-} from '../bus/BusClient.js';
-import type {
-  ConversationBlockEvent,
-  ConversationStateEvent,
-  Entity,
-  ErrorEvent,
-  StateSnapshotEvent,
-} from '../bus/protocol.js';
-import { isReadEnvelope } from '../bus/readEnvelope.js';
+} from '../application/ApplicationClient.js';
+import { isReadEnvelope } from '../application/normalizeReply.js';
 import type { ProjectionTopic } from '../generated/applicationProtocol.js';
 import { applyThemeRecords, type ThemeRecord } from '../theme/palettes.js';
 import {
@@ -82,41 +70,23 @@ import {
 import { createHistoryActions, type HistoryActions } from './history/historyActions.js';
 import {
   createHistorySlice,
-  HISTORY_INVALIDATING_ENTITY,
   type HistoryState,
   initialHistoryState,
 } from './history/historySlice.js';
 import { createNotesActions, type NotesActions } from './notes/notesActions.js';
-import {
-  createNotesSlice,
-  initialNotesState,
-  NOTES_INVALIDATING_ENTITY,
-  type NotesState,
-} from './notes/notesSlice.js';
+import { createNotesSlice, initialNotesState, type NotesState } from './notes/notesSlice.js';
 import { createPlansActions, type PlansActions } from './plans/plansActions.js';
-import {
-  createPlansSlice,
-  initialPlansState,
-  PLANS_INVALIDATING_ENTITY,
-  type PlansState,
-} from './plans/plansSlice.js';
+import { createPlansSlice, initialPlansState, type PlansState } from './plans/plansSlice.js';
 import { createReportsActions, type ReportsActions } from './reports/reportsActions.js';
 import {
   createReportsSlice,
   initialReportsState,
-  REPORTS_INVALIDATING_ENTITY,
   type ReportsState,
 } from './reports/reportsSlice.js';
 import type { CrowSessionDto, CrowSnapshotReply } from './roster/rosterActions.js';
 import { createRosterActions, type RosterActions } from './roster/rosterActions.js';
 import type { RosterRow } from './roster/rosterSlice.js';
-import {
-  createRosterSlice,
-  initialRosterState,
-  ROSTER_ESCALATION_INVALIDATING_ENTITY,
-  ROSTER_INVALIDATING_ENTITY,
-  type RosterState,
-} from './roster/rosterSlice.js';
+import { createRosterSlice, initialRosterState, type RosterState } from './roster/rosterSlice.js';
 import type { SettingsWire } from './settings/settingsActions.js';
 import { createSettingsActions, type SettingsActions } from './settings/settingsActions.js';
 import {
@@ -152,25 +122,17 @@ import type { TicketRow } from './tickets/ticketsSlice.js';
 import {
   createTicketsSlice,
   initialTicketsState,
-  TICKETS_INVALIDATING_ENTITY,
   type TicketsState,
 } from './tickets/ticketsSlice.js';
-import { toastStore } from './toast/toastStore.js';
 import { createTransitActions, type TransitActions } from './transit/transitActions.js';
 import {
   createTransitSlice,
   initialTransitState,
-  TRANSIT_INVALIDATING_ENTITY,
   type TransitState,
 } from './transit/transitSlice.js';
 import { createUsageActions, type UsageActions } from './usage/usageActions.js';
 import type { UsageRow } from './usage/usageSlice.js';
-import {
-  createUsageSlice,
-  initialUsageState,
-  USAGE_INVALIDATING_ENTITY,
-  type UsageState,
-} from './usage/usageSlice.js';
+import { createUsageSlice, initialUsageState, type UsageState } from './usage/usageSlice.js';
 import { createWorkflowsActions, type WorkflowsActions } from './workflows/workflowsActions.js';
 import {
   createWorkflowsSlice,
@@ -202,9 +164,13 @@ export interface AppActions {
 
 export interface HydrationState {
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
+  readonly error: string | null;
+  readonly projections: HydrationCursorState;
+}
+
+export interface HydrationCursorState {
   readonly cursor: number | null;
   readonly mode: 'cold' | 'resume' | 'snapshot_fallback' | null;
-  readonly error: string | null;
 }
 
 /**
@@ -236,32 +202,21 @@ export interface AppStore {
 /** The store handle. Re-exported so callers don't reach into `zustand/vanilla` directly. */
 export type AppStoreApi = StoreApi<AppStore>;
 
-/**
- * A slice's refresh entry: which {@link Entity} invalidates it, and the action to run on that event.
- * The invalidation loop iterates a list of these — adding a slice is appending one entry, never
- * touching the dispatch logic.
- */
-interface SliceInvalidation {
-  readonly entity: Entity;
-  readonly refresh: () => void;
-}
-
 export const initialHydrationState: HydrationState = {
   status: 'idle',
-  cursor: null,
-  mode: null,
   error: null,
+  projections: { cursor: null, mode: null },
 };
 
 /**
- * Create the app store with an injected {@link BusClient} (rule 4 — tests pass `FakeBusClient`, prod
- * passes `UdsBusClient`; the store has no idea which). Returns the vanilla store handle and the bus
+ * Create the app store with an injected {@link ApplicationClient} (rule 4 — tests pass `FakeApplicationClient`, prod
+ * passes `ApplicationWebSocketClient`; the store has no idea which). Returns the vanilla store handle and the bus
  * subscription disposer so the owner (the app entrypoint) can tear the wiring down cleanly.
  *
  * The store is created first, then actions are built against its handle, then the bus subscription
  * is opened — so an event that fires the instant we subscribe finds the actions already in place.
  */
-export function createAppStore(bus: BusClient): {
+export function createAppStore(bus: ApplicationClient): {
   store: AppStoreApi;
   dispose: () => void;
 } {
@@ -310,71 +265,7 @@ export function createAppStore(bus: BusClient): {
   };
   store.setState({ actions });
 
-  // 3. Invalidation table: entity → the slice refresh it triggers. Usually one entry per slice, but
-  //    a slice may be invalidated by more than one entity (the roster carries JOINed escalation
-  //    counts, so both `agent` and `escalation` changes re-pull it).
-  // Lazy slices (plans/notes/reports/history/transit) back panels that are CLOSED on startup. Their
-  // invalidation refresh is GATED on the slice having been fetched at least once (`status !== 'idle'`
-  // — the fresh-store boot value is `idle`). The panel's own mount-effect fires the first fetch when
-  // it is opened, which moves the slice off `idle`; only then do subsequent `state.snapshot` events
-  // re-pull it. This keeps the cold-start `state.snapshot` storm from fetching heavy data for panels
-  // nobody opened (transit alone is ~110KB), while a panel that HAS been opened still stays live.
-  const invalidations: readonly SliceInvalidation[] = [
-    { entity: ROSTER_INVALIDATING_ENTITY, refresh: () => void actions.roster.refresh() },
-    { entity: ROSTER_ESCALATION_INVALIDATING_ENTITY, refresh: () => void actions.roster.refresh() },
-    {
-      entity: PLANS_INVALIDATING_ENTITY,
-      refresh: () => {
-        if (store.getState().plans.status !== 'idle') void actions.plans.refresh();
-      },
-    },
-    {
-      entity: NOTES_INVALIDATING_ENTITY,
-      refresh: () => {
-        if (store.getState().notes.status !== 'idle') void actions.notes.refresh();
-      },
-    },
-    {
-      entity: REPORTS_INVALIDATING_ENTITY,
-      refresh: () => {
-        if (store.getState().reports.status !== 'idle') void actions.reports.refresh();
-      },
-    },
-    { entity: TICKETS_INVALIDATING_ENTITY, refresh: () => void actions.tickets.refresh() },
-    {
-      entity: HISTORY_INVALIDATING_ENTITY,
-      refresh: () => {
-        if (store.getState().history.status !== 'idle') void actions.history.refresh();
-      },
-    },
-    {
-      entity: TRANSIT_INVALIDATING_ENTITY,
-      refresh: () => {
-        if (store.getState().transit.status !== 'idle') void actions.transit.refresh();
-      },
-    },
-    { entity: USAGE_INVALIDATING_ENTITY, refresh: () => void actions.usage.refresh() },
-  ];
-
-  // A-D4 exhaustiveness guard. The `invalidations` table above is hand-maintained, and its entries
-  // are typed `Entity` (widened), so nothing forces every Entity value to be wired. This parallel
-  // record is literal-keyed by Entity: omitting a key — or adding a value to the `Entity` union in
-  // protocol.ts without wiring it — is a COMPILE error here. Runtime-inert; exists only for tsc.
-  // Mirror any change to `invalidations` here (and vice versa).
-  const _INVALIDATION_COVERAGE = {
-    ticket: TICKETS_INVALIDATING_ENTITY,
-    agent: ROSTER_INVALIDATING_ENTITY,
-    plan: PLANS_INVALIDATING_ENTITY,
-    note: NOTES_INVALIDATING_ENTITY,
-    report: REPORTS_INVALIDATING_ENTITY,
-    escalation: ROSTER_ESCALATION_INVALIDATING_ENTITY,
-    queue_row: USAGE_INVALIDATING_ENTITY,
-    history: HISTORY_INVALIDATING_ENTITY,
-    transit: TRANSIT_INVALIDATING_ENTITY,
-  } satisfies Record<Entity, Entity>;
-  void _INVALIDATION_COVERAGE;
-
-  const hydration = wireHydration(bus, store, actions, invalidations);
+  const hydration = wireHydration(bus, store, actions);
 
   return {
     store,
@@ -384,10 +275,11 @@ export function createAppStore(bus: BusClient): {
   };
 }
 
-/** Compatibility topics still served from the event-table hydrate path (state.snapshot, etc.). */
-const COMPAT_HYDRATE_TOPICS: readonly ProjectionTopic[] = [
+/** Projections used by the store, for both startup snapshots and invalidations. */
+const HYDRATE_TOPICS: readonly ProjectionTopic[] = [
   'conversations',
   'roster',
+  'schedule',
   'favorites',
   'templates',
   'themes',
@@ -395,43 +287,14 @@ const COMPAT_HYDRATE_TOPICS: readonly ProjectionTopic[] = [
   'settings',
 ];
 
-/**
- * Feature-owned projections with broker snapshots + projection.invalidate. Subscribed separately
- * from compatibility topics (distinct cursor domains on the wire).
- */
-const FEATURE_HYDRATE_TOPICS: readonly ProjectionTopic[] = [
-  'schedule',
-  'approvals',
-  'permissions',
-  'sessions',
-  'workflow_runs',
-  'activities',
-];
-
 function wireHydration(
-  bus: BusClient,
+  bus: ApplicationClient,
   store: AppStoreApi,
   actions: AppActions,
-  invalidations: readonly SliceInvalidation[],
 ): { dispose: () => void } {
   let disposed = false;
   let hydrationLive = false;
-  const pendingTail: Parameters<BusEventListener>[0][] = [];
   const pendingInvalidations: ProjectionInvalidation[] = [];
-  const listener: BusEventListener = (event) => {
-    if (disposed) {
-      return;
-    }
-    if (!hydrationLive) {
-      if (event.type === 'error') {
-        routeHydratedEvent(event, actions, invalidations);
-        return;
-      }
-      pendingTail.push(event);
-      return;
-    }
-    routeHydratedEvent(event, actions, invalidations);
-  };
   const invalidationListener: ProjectionInvalidationListener = (invalidation) => {
     if (disposed) {
       return;
@@ -443,7 +306,7 @@ function wireHydration(
     routeProjectionInvalidation(invalidation, actions);
   };
 
-  store.setState({ hydration: { status: 'loading', cursor: null, mode: null, error: null } });
+  store.setState({ hydration: { ...initialHydrationState, status: 'loading' } });
   const unsubscribers: Unsubscribe[] = [];
   const recordUnsubscribe = (unsubscribe: Unsubscribe): void => {
     if (disposed) {
@@ -454,30 +317,18 @@ function wireHydration(
   };
   // Force cold on boot (`since: null`) so the first ready delivers authoritative snapshots.
   // Hello projection_cursor is used as the default since only when callers omit `since` after
-  // handshake (resume-from-watermark). Compatibility and feature topics must stay split.
-  const compatHydrate = bus
-    .hydrate(COMPAT_HYDRATE_TOPICS, listener, undefined, null)
+  // handshake (resume-from-watermark).
+  const hydrate = bus.hydrate(HYDRATE_TOPICS, invalidationListener, null).then((reply) => {
+    recordUnsubscribe(reply.unsubscribe);
+    return reply;
+  });
+  void hydrate
     .then((reply) => {
-      recordUnsubscribe(reply.unsubscribe);
-      return reply;
-    });
-  const featureHydrate = bus
-    .hydrate(FEATURE_HYDRATE_TOPICS, undefined, invalidationListener, null)
-    .then((reply) => {
-      recordUnsubscribe(reply.unsubscribe);
-      return reply;
-    });
-  void Promise.all([compatHydrate, featureHydrate])
-    .then(([compatReply, featureReply]) => {
       if (disposed) {
         return;
       }
-      applyHydrateSnapshots(store, { ...compatReply.snapshots, ...featureReply.snapshots });
+      applyHydrateSnapshots(store, reply.snapshots);
       hydrationLive = true;
-      for (const event of pendingTail) {
-        routeHydratedEvent(event, actions, invalidations);
-      }
-      pendingTail.length = 0;
       for (const invalidation of pendingInvalidations) {
         routeProjectionInvalidation(invalidation, actions);
       }
@@ -485,9 +336,11 @@ function wireHydration(
       store.setState({
         hydration: {
           status: 'ready',
-          cursor: featureReply.cursor ?? compatReply.cursor,
-          mode: featureReply.mode ?? compatReply.mode ?? null,
           error: null,
+          projections: {
+            cursor: reply.cursor ?? null,
+            mode: reply.mode ?? null,
+          },
         },
       });
     })
@@ -497,7 +350,9 @@ function wireHydration(
       }
       if (disposed) return;
       const message = error instanceof Error ? error.message : String(error);
-      store.setState({ hydration: { status: 'error', cursor: null, mode: null, error: message } });
+      store.setState({
+        hydration: { ...initialHydrationState, status: 'error', error: message },
+      });
     });
 
   return {
@@ -515,11 +370,30 @@ function routeProjectionInvalidation(
   actions: AppActions,
 ): void {
   switch (invalidation.projection) {
+    case 'conversations':
+      void actions.conversations.refresh();
+      return;
+    case 'roster':
+      void actions.roster.refresh();
+      return;
     case 'schedule':
-      // Prefer invalidate-driven refetch for the feature-owned schedule projection; the legacy
-      // ticket/queue_row state.snapshot path remains wired as a dual-write fallback.
       void actions.tickets.refresh();
       void actions.usage.refresh();
+      return;
+    case 'favorites':
+      void actions.favorites.load();
+      return;
+    case 'templates':
+      void actions.templates.load();
+      return;
+    case 'themes':
+      void actions.themes.load();
+      return;
+    case 'workflows':
+      void actions.workflows.load();
+      return;
+    case 'settings':
+      void actions.settings.load();
       return;
     case 'approvals':
     case 'permissions':
@@ -531,35 +405,6 @@ function routeProjectionInvalidation(
       return;
     default:
       return;
-  }
-}
-
-function routeHydratedEvent(
-  event: Parameters<BusEventListener>[0],
-  actions: AppActions,
-  invalidations: readonly SliceInvalidation[],
-): void {
-  if (event.type === 'state.snapshot') {
-    const snapshot: StateSnapshotEvent = event;
-    for (const invalidation of invalidations) {
-      if (invalidation.entity === snapshot.entity) {
-        invalidation.refresh();
-      }
-    }
-    return;
-  }
-  if (event.type === 'conversation.block') {
-    actions.conversations.applyBlock(event as ConversationBlockEvent);
-    return;
-  }
-  if (event.type === 'conversation.state') {
-    actions.conversations.applyState(event as ConversationStateEvent);
-    return;
-  }
-  if (event.type === 'error') {
-    const errorEvent: ErrorEvent = event;
-    const severity = errorEvent.recoverable ? 'warning' : 'error';
-    toastStore.getState().push(errorEvent.message, { severity, ttlMs: 12000 });
   }
 }
 

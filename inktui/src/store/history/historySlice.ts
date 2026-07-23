@@ -14,7 +14,6 @@
  * actions file (`./historyActions.ts`), not here (the slice holds state only).
  */
 
-import type { Entity } from '../../bus/protocol.js';
 import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
@@ -40,13 +39,6 @@ export interface HistoryRow {
 
 /** The history slice's state — the shared {@link ListState} shape specialized to {@link HistoryRow}. */
 export type HistoryState = ListState<HistoryRow>;
-
-/**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice. The service emits
- * `'history'`-keyed change events on every new user turn and on dismiss; the store re-pulls only the
- * history slice (see `../store.ts`).
- */
-export const HISTORY_INVALIDATING_ENTITY: Entity = 'history';
 
 /** The initial, pre-fetch slice value. */
 export const initialHistoryState: HistoryState = initialListState<HistoryRow>();

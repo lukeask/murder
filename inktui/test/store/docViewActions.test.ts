@@ -7,11 +7,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createAppStore } from '../../src/store/store.js';
 
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   // F2: doc bodies come from per-kind display RPCs returning a DisplaySnapshot ({ name, markdown }).
   fake.stubQuery('plan.get', { name: 'p', markdown: '# Title\nbody' });

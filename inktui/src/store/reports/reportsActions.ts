@@ -13,7 +13,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import type { ReportRow } from './reportsSlice.js';
@@ -52,7 +53,7 @@ function toReportRow(dto: ReportDto): ReportRow {
 }
 
 /**
- * The reports actions, bound to one `BusClient` + store handle.
+ * The reports actions, bound to one `ApplicationClient` + store handle.
  */
 export interface ReportsActions {
   /**
@@ -62,10 +63,11 @@ export interface ReportsActions {
   refresh(): Promise<void>;
 }
 
-export function createReportsActions(bus: BusClient, store: StoreApi<AppStore>): ReportsActions {
+export function createReportsActions(bus: ApplicationClient, store: StoreApi<AppStore>): ReportsActions {
   return createRefreshAction(bus, store, {
     key: 'reports',
     method: 'reports.list',
-    project: (reply) => reply.reports.map(toReportRow),
+    project: (reply) =>
+      asQueryResult<'reports.list', ReportsSnapshotReply>(reply).reports.map(toReportRow),
   });
 }

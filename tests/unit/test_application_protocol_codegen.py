@@ -28,10 +28,14 @@ def test_generated_contract_names_public_capabilities_not_bus_primitives() -> No
     generated = (ROOT / "inktui" / "src" / "generated" / "applicationProtocol.ts").read_text(
         encoding="utf-8"
     )
-    assert "orchestration.execute" in generated
+    assert "agent.message" in generated
+    assert "orchestration.execute" not in generated
     assert "terminal.attach" in generated
     assert "subscription.event" in generated
     assert "target_worker" not in generated
     assert "EventFilter" not in generated
     assert "RpcMessage" not in generated
     assert "PubMessage" not in generated
+    assert "export type QueryResultMap" in generated
+    assert 'readonly "roster.get": { readonly params: {  }; readonly result:' in generated
+    assert ": any" not in generated

@@ -7,11 +7,9 @@ plain markdown bodies, no frontmatter, full revision tracking.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from murder.bus.protocol import Entity
 from murder.state.persistence import reports as _reports_db
 from murder.state.storage.paths import report_md, reports_dir
 from murder.work.simple_doc_sync import SimpleDocSync
@@ -23,12 +21,10 @@ def ReportSync(
     *,
     poll_s: float = 1.5,
     debounce_s: float = 0.75,
-    on_change: "Callable[[Entity, str], Any] | None" = None,
 ) -> SimpleDocSync:
     """Return a ``SimpleDocSync`` configured for ``.murder/reports/*.md``.
 
-    The ``on_change`` callback takes ``(Entity, str)`` and is awaited via the
-    F5.1 ``notify_changed`` seam so report edits emit ``state.snapshot{report}``.
+    File reconciliation writes the authoritative report rows directly.
     """
     return SimpleDocSync(
         repo_root,
@@ -39,8 +35,6 @@ def ReportSync(
         get_fn=_reports_db.get_report,
         upsert_fn=_reports_db.upsert_report,
         insert_revision_fn=_reports_db.insert_report_revision,
-        entity=Entity.REPORT,
         poll_s=poll_s,
         debounce_s=debounce_s,
-        on_change=on_change,
     )

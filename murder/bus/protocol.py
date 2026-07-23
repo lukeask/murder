@@ -1,34 +1,16 @@
-"""Transitional internal bus contract.
+"""Private in-process orchestration notifications.
 
-Interactive clients use the service-owned contracts in
-``murder.app.protocol``.  This module remains the internal compatibility
-surface for workers, durable facts, and old CLI tooling while those
-implementations migrate behind feature boundaries.  Do not add new public
-client capabilities here.
-
-Amendment process
------------------
-- **Additive changes** (new optional fields, new BusEvent kinds, new
-  closed-enum values that don't change existing meaning) MAY be made
-  inline.
-- **Non-additive changes** to the internal compatibility socket MUST bump
-  ``PROTOCOL_VERSION``.
-
-Out of scope
-------------
-Broker implementations, transport framing read/write loops, kind handler
-bodies, asyncio glue, sqlite glue. Types and constants only. If you find
-yourself importing ``asyncio`` here, you're in the wrong file.
-
-See `.agents/old/bus_protocol.md` for the design rationale behind these
-shapes.
+Application clients use the typed WebSocket contract in
+``murder.app.protocol``. This module contains only notification and command
+shapes exchanged inside one service process; it is not a wire protocol and
+must not grow client-facing envelopes.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal
 from uuid import UUID, uuid4
 
 try:
@@ -40,12 +22,11 @@ except ImportError:  # Python <3.11
             return str.__str__(self)
 
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field
 
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.work.tickets.status import TicketStatus
-
-PROTOCOL_VERSION = 5
-
 
 # === Closed enums ============================================================
 
@@ -77,33 +58,8 @@ class CommandStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-class Entity(StrEnum):
-    """Closed — adding a value bumps PROTOCOL_VERSION."""
 
-    TICKET = "ticket"
-    AGENT = "agent"
-    PLAN = "plan"
-    NOTE = "note"
-    REPORT = "report"
-    ESCALATION = "escalation"
-    QUEUE_ROW = "queue_row"
-    HISTORY = "history"
-    TRANSIT = "transit"
-
-
-class PresenceState(StrEnum):
-    ATTENDED = "attended"
-    HEADLESS = "headless"
-
-
-class ClientKind(StrEnum):
-    TUI = "tui"
-    WEB = "web"
-    CLI_EPHEMERAL = "cli_ephemeral"
-    WORKER = "worker"
-
-
-# === Inner events (persisted to events table; discriminated by `type`) =======
+# === Internal notifications ==================================================
 
 
 class _BaseEvent(BaseModel):
@@ -114,8 +70,8 @@ class _BaseEvent(BaseModel):
     role: Role | None = None
     ticket_id: str | None = None
 
-    # Flight-recorder routing (plan §2.5.A). The recorder is a bus SUBSCRIBER
-    # that captures each event into the table named here — events SELF-DESCRIBE
+    # Flight-recorder routing. The recorder subscribes to the private notifier
+    # and captures each event into the table named here — events self-describe
     # their family, so there is no central match/registry to edit per new type.
     # Default ``event_records`` means "captured into the generic bulky dump";
     # subclasses whose forensic shape belongs in a typed family override it; a
@@ -125,9 +81,6 @@ class _BaseEvent(BaseModel):
     # being captured. (ClassVar → pydantic treats it as a class attr, not a
     # field, so it is not serialized and does not touch the wire contract.)
     record_family: ClassVar[str | None] = "event_records"
-
-
-# --- Legacy types (semantics unchanged from murder/bus.py pre-refactor) ------
 
 
 class HeartbeatEvent(_BaseEvent):
@@ -143,24 +96,6 @@ class SummaryEvent(_BaseEvent):
     checklist_done: int = 0
     checklist_total: int = 0
     last_message_excerpt: str = ""
-
-
-class QuestionEvent(_BaseEvent):
-    type: Literal["question"] = "question"
-    question: str
-    crow_session: str
-    recent_pane: str = ""
-
-
-class NoteEvent(_BaseEvent):
-    """A free-text working note emitted by a crow via a ``>>> NOTE:`` marker.
-
-    Under DB-owns-runtime these land in the ``events`` table (audit log), not
-    the ticket ``.md`` — the bus persists every event before fan-out.
-    """
-
-    type: Literal["note"] = "note"
-    note: str
 
 
 class EscalationEvent(_BaseEvent):
@@ -192,18 +127,16 @@ class ErrorEvent(_BaseEvent):
 
 
 class CommandEvent(_BaseEvent):
-    """A request to a worker. Lives in both ``commands`` and ``events``.
+    """A durable request to a closed internal worker target.
 
-    The ``commands`` row is the work queue; the ``events`` row is the
-    audit log. Both are written in one transaction. ``events.payload_json``
-    carries enough to reconstruct the command id; the full body lives in
-    ``commands``.
+    The command repository is the work queue and audit source; this in-process
+    notification only wakes current-process consumers.
     """
 
     type: Literal["command"] = "command"
     record_family: ClassVar[str] = "command_records"
-    target_worker: str
-    kind: str
+    target_worker: WorkerName
+    kind: OrchestrationCommand
     payload: dict[str, Any] = Field(default_factory=dict)
     correlation_id: str
     idempotency_key: str
@@ -213,48 +146,6 @@ class CommandEvent(_BaseEvent):
     attempt_count: int = 0
     retryable: bool = True
     result: dict[str, Any] | None = None
-
-
-class StateSnapshotEvent(_BaseEvent):
-    """Key-only notification that an entity changed.
-
-    Body lives in SQLite; every client holds a read-only DB handle and
-    refetches on receipt. See `.agents/old/worker_bus_refactor.md` §D.5 for
-    the deliberation.
-    """
-
-    type: Literal["state.snapshot"] = "state.snapshot"
-    entity: Entity
-    key: str
-    entity_version: int = 0
-    # Reserved forward-compat field (F1, unused now). The bus->client contract
-    # stays key-only: default behaviour is a tiny key-only push and the client
-    # refetches the named slice. A future low-bandwidth mode MAY inline the
-    # changed data here (paired with field-masked snapshot RPCs) to skip the
-    # refetch round-trip. This is a superset of what clients consume today --
-    # no second event format, no migration. Do NOT build a translation layer
-    # off this field as part of F1.
-    payload: dict[str, Any] | None = None
-
-
-class PresenceEvent(_BaseEvent):
-    """Broadcast when the supervisor's debounced presence state transitions.
-
-    Asymmetric debounce: connect→attended is immediate (responsive ramp);
-    disconnect→headless is delayed by PRESENCE_DISCONNECT_DEBOUNCE_S to
-    absorb blips.
-
-    ``version`` is monotonic per supervisor lifetime. Subscribers MUST
-    ignore events with version not strictly greater than the last seen,
-    so that bridges that don't preserve order can't corrupt downstream
-    workers' adaptive cadence.
-    """
-
-    type: Literal["presence"] = "presence"
-    state: PresenceState
-    user_count: int = 0
-    kinds: dict[str, int] = Field(default_factory=dict)
-    version: int
 
 
 class SchedulerModeEvent(_BaseEvent):
@@ -287,10 +178,8 @@ class CompletionVerdictEvent(_BaseEvent):
     """A completion coordinator verdict for a ticket (peer of SchedulerDecisionEvent).
 
     Published at both verdict sites in ``verdict/completion/coordinator.py`` so
-    the forensic capture rides the one bus aspect instead of a parallel
-    ``record_decision()`` call. Confirmed TUI consumer (Luke, 2026-06-16): the
-    client reads it via the key-only ``state.snapshot`` + slice-refetch path, not
-    this rich event directly — keep the payload forensics-shaped, server-side.
+    the forensic capture rides the one in-process notification path instead of
+    a parallel ``record_decision()`` call.
     """
 
     type: Literal["completion.verdict"] = "completion.verdict"
@@ -305,9 +194,7 @@ class AgentLifecycleEvent(_BaseEvent):
 
     Published at registry mutations — INCLUDING the ones that emitted nothing
     before (``clear``, force-stop) — so the recorder captures them into
-    ``agent_records`` and the per-emitter ``record_agent()`` calls go away. NOT
-    emitted on ``reap``'s DEAD transition: nothing reacts to it and reap is
-    already on the bus via the ``agent.stop() → StateSnapshotEvent`` path.
+    ``agent_records`` and the per-emitter ``record_agent()`` calls go away.
     """
 
     type: Literal["agent.lifecycle"] = "agent.lifecycle"
@@ -330,19 +217,12 @@ class ConversationBlockEvent(_BaseEvent):
     """Content-bearing conversation block push event.
 
     Additive event kind for event-sourced transcripts. ``action`` distinguishes
-    immutable appends from live trailing-block updates without touching the
-    closed ``Entity`` enum or key-only ``StateSnapshotEvent`` contract.
+    immutable appends from live trailing-block updates without relying on a
+    generic entity-invalidated notification.
 
-    TUIchat-4 (Condensed view) reuses this channel for a third ``action``,
-    ``chunk-summarized``: an incremental hint that a rolling chunk summary was
-    persisted. For that action ``block`` carries the summary payload
-    ``{conversation_id, summary, block_ids}`` (NOT a transcript-row block); the
-    client folds it into its ephemeral chunk-summaries map between snapshots
-    (``state.conversations_snapshot`` chunk_summaries[] stays the source of
-    truth). This MUST stay in sync with the frontend ``ConversationBlockEvent``
-    action union in ``inktui/src/bus/protocol.ts`` — omitting it here makes the
-    producer's ``chunk-summarized`` publish raise a validation error, the event
-    never reaches the client, and Condensed renders identically to Verbose.
+    ``chunk-summarized`` is an incremental hint that a rolling chunk summary
+    was persisted. For that action ``block`` carries
+    ``{conversation_id, summary, block_ids}``, not a transcript-row block.
     """
 
     type: Literal["conversation.block"] = "conversation.block"
@@ -357,9 +237,8 @@ class ConversationStateEvent(_BaseEvent):
     Companion to ``ConversationBlockEvent`` on the same additive-event-kind
     seam: emitted whenever a conversation's parsed harness UI state
     (``working`` / ``awaiting_input`` / ``awaiting_approval``) or its queued
-    -but-undelivered user message changes. Key-only ``StateSnapshotEvent``
-    semantics do not fit here: the TUI renders the queued line / awaiting
-    badge live and there is no snapshot entity for conversations.
+    -but-undelivered user message changes. The application renders the queued
+    line and awaiting badge from its typed conversation projection.
     """
 
     type: Literal["conversation.state"] = "conversation.state"
@@ -368,65 +247,13 @@ class ConversationStateEvent(_BaseEvent):
     queued_message: str | None = None
 
 
-class TmuxFrameEvent(_BaseEvent):
-    """Raw ANSI frame from tmux for the focused pane.
-
-    Streamed **only** while the tmux fullscreen mode is active (``ctrl+y``
-    in the Ink TUI); the bus subscription is opened on enter and closed on
-    exit. There is **no standing cost** when nobody is subscribed — the
-    capture loop runs only for the lifetime of the subscription task.
-
-    The ``frame`` field carries the full rendered ANSI output of the pane
-    as a single snapshot string (from ``tmux capture-pane -e``). The
-    consumer replaces its display on every event (no incremental patching).
-
-    Pane-scoping note: the current ``EventFilter`` has no ``pane_id``
-    field.  The server delivers a single stream for the configured focused
-    pane; per-pane multiplexing is deferred (flagged in ``protocol.ts``
-    C14 note).
-    """
-
-    type: Literal["tmux.frame"] = "tmux.frame"
-    frame: str
-
-
-class HarnessDecisionRequestEvent(_BaseEvent):
-    """Durable external-decision request projected from verified evidence."""
-
-    type: Literal["harness.decision.request"] = "harness.decision.request"
-    record_family: ClassVar[str] = "decision_records"
-    decision_request_id: str
-    decision_kind: Literal["question", "permission"]
-    request_identity: str
-    observation_revision: tuple[int, int, int]
-    request: dict[str, Any]
-
-
-class HarnessDecisionResponseEvent(_BaseEvent):
-    """Recorded user/policy choice, persisted before verified execution."""
-
-    type: Literal["harness.decision.response"] = "harness.decision.response"
-    record_family: ClassVar[str] = "decision_records"
-    decision_request_id: str
-    decision_kind: Literal["question", "permission"]
-    request_identity: str
-    response: dict[str, Any]
-    decided_by: str
-
-
-# --- Discriminated union of inner events ------------------------------------
-
-BusEvent = Annotated[
+OrchestrationEvent = (
     HeartbeatEvent
     | SummaryEvent
-    | QuestionEvent
-    | NoteEvent
     | EscalationEvent
     | StatusChangeEvent
     | ErrorEvent
     | CommandEvent
-    | StateSnapshotEvent
-    | PresenceEvent
     | SchedulerModeEvent
     | SchedulerDecisionEvent
     | CompletionVerdictEvent
@@ -434,281 +261,27 @@ BusEvent = Annotated[
     | UsageResetEvent
     | ConversationBlockEvent
     | ConversationStateEvent
-    | TmuxFrameEvent
-    | HarnessDecisionRequestEvent
-    | HarnessDecisionResponseEvent,
-    Field(discriminator="type"),
-]
+)
 
-BUS_EVENT_ADAPTER: TypeAdapter[BusEvent] = TypeAdapter(BusEvent)
 
+# === Internal orchestration constants ========================================
 
-# Back-compat: the legacy ``AgentEvent`` excludes the three new types so
-# call sites that pattern-match on it keep their narrowed semantics until
-# they migrate to ``BusEvent``.
-AgentEvent = Annotated[
-    HeartbeatEvent
-    | SummaryEvent
-    | QuestionEvent
-    | EscalationEvent
-    | StatusChangeEvent
-    | ErrorEvent,
-    Field(discriminator="type"),
-]
-
-
-# === Filter ==================================================================
-
-
-class EventFilter(BaseModel):
-    """Server-applied filter. Fields compose with AND; ``None`` matches any.
-
-    The broker MUST apply filters before fanout. At the future tier-3 scale
-    (~45 clients in `.agents/old/worker_bus_refactor.md` handoff §5.2)
-    client-side filtering is O(clients × events) and untenable.
-    """
-
-    role: Role | None = None
-    ticket_id: str | None = None
-    type: str | None = None
-    entity: Entity | None = None
-    entity_id: str | None = None
-    conversation_id: str | None = None
-    target_worker: str | None = None
-    kind: str | None = None
-    agent_id: str | None = None
-
-    def matches(self, event: BaseModel) -> bool:
-        if self.role is not None and getattr(event, "role", None) != self.role:
-            return False
-        if self.agent_id is not None and getattr(event, "agent_id", None) != self.agent_id:
-            return False
-        if self.ticket_id is not None and getattr(event, "ticket_id", None) != self.ticket_id:
-            return False
-        if self.type is not None and getattr(event, "type", None) != self.type:
-            return False
-        if self.entity is not None and getattr(event, "entity", None) != self.entity:
-            return False
-        if self.entity_id is not None and getattr(event, "entity_id", None) != self.entity_id:
-            return False
-        if (
-            self.conversation_id is not None
-            and getattr(event, "conversation_id", None) != self.conversation_id
-        ):
-            return False
-        if (
-            self.target_worker is not None
-            and getattr(event, "target_worker", None) != self.target_worker
-        ):
-            return False
-        if self.kind is not None and getattr(event, "kind", None) != self.kind:
-            return False
-        return True
-
-
-# === Envelope bodies =========================================================
-
-
-class HelloBody(BaseModel):
-    """Sent by the client as the first message after socket connect.
-
-    Server responds with ``AckBody(kind="subscribed")`` after a successful
-    handshake or ``ErrBody(code="protocol_version_mismatch")`` if versions
-    disagree. ``client_id`` is intended to be stable across reconnects.
-
-    v0 NOTE: the server currently keys sessions by ``id(transport)``, not by
-    ``client_id`` — it does NOT resume in-flight RPC state on reconnect, and a
-    reconnect counts as a fresh presence increment. Two live connections that
-    share a ``client_id`` both bump presence. Resume/dedupe by ``client_id`` is
-    not yet implemented; don't rely on it.
-    """
-
-    protocol_version: int
-    client_kind: ClientKind
-    client_id: str
-    since_id: int | None = None
-
-
-class SubArgs(BaseModel):
-    """Subscribe arguments. ``since_id=N`` MUST replay every persisted event
-    with ``events.id > N`` before the live tail begins, terminated by
-    ``AckBody(kind="replay_done", watermark=...)``.
-
-    ``tail_only=True`` skips replay entirely: the server treats the replay
-    cursor as the current watermark so only events published *after* subscribe
-    are delivered. Use for ephemeral notifications (e.g. bus ``error`` events)
-    that must not re-toast historical failures on every TUI connect.
-
-    ``presence_retain=True`` makes presence sticky-retain: server emits the
-    current PresenceEvent on the new subscription immediately after
-    replay_done so late subscribers aren't blind to current state.
-    """
-
-    filter: EventFilter = Field(default_factory=EventFilter)
-    since_id: int | None = None
-    tail_only: bool = False
-    presence_retain: bool = True
-
-
-class RpcArgs(BaseModel):
-    target: str
-    body: dict[str, Any] = Field(default_factory=dict)
-    timeout_s: float = 30.0
-
-
-class HydrateArgs(BaseModel):
-    topics: list[str] = Field(default_factory=lambda: ["all"])
-    cursor: int | None = None
-    timeout_s: float = 30.0
-
-
-class HydrateReplayEvent(BaseModel):
-    seq: int
-    event: BusEvent
-
-
-class HydrateReply(BaseModel):
-    snapshots: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    cursor: int
-    mode: Literal["cold", "resume", "snapshot_fallback"]
-    replay: list[HydrateReplayEvent] = Field(default_factory=list)
-
-
-class AckBody(BaseModel):
-    kind: Literal[
-        "subscribed",
-        "replay_done",
-        "rpc_reply",
-        "hydrate_reply",
-        "pong",
-        "published",
-    ]
-    watermark: int | None = None
-    result: dict[str, Any] | None = None
-
-
-class ErrBody(BaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] = Field(default_factory=dict)
-
-
-class WakeBody(BaseModel):
-    """Per-client signal sent immediately on connect / reconnect.
-
-    Distinct from PresenceEvent. PresenceEvent is broadcast and represents
-    a global debounced transition; WakeBody is per-client and represents
-    "you just joined — here are the entities whose state is most likely
-    stale for you." Not persisted to ``events``.
-    """
-
-    client_id: str
-    reason: Literal["connect", "reconnect"] = "connect"
-    fresh_state_hints: list[Entity] = Field(default_factory=list)
-
-
-# === Wire envelope (discriminated by `op`) ===================================
-
-
-class _BaseMessage(BaseModel):
-    schema_version: int = PROTOCOL_VERSION
-    correlation_id: str = ""
-
-
-class HelloMessage(_BaseMessage):
-    op: Literal["hello"] = "hello"
-    body: HelloBody
-
-
-class PubMessage(_BaseMessage):
-    op: Literal["pub"] = "pub"
-    event: BusEvent
-    seq: int | None = None
-
-
-class SubMessage(_BaseMessage):
-    op: Literal["sub"] = "sub"
-    args: SubArgs
-
-
-class RpcMessage(_BaseMessage):
-    op: Literal["rpc"] = "rpc"
-    args: RpcArgs
-
-
-class HydrateMessage(_BaseMessage):
-    op: Literal["hydrate"] = "hydrate"
-    args: HydrateArgs
-
-
-class AckMessage(_BaseMessage):
-    op: Literal["ack"] = "ack"
-    body: AckBody
-
-
-class ErrMessage(_BaseMessage):
-    op: Literal["err"] = "err"
-    body: ErrBody
-
-
-class WakeMessage(_BaseMessage):
-    op: Literal["wake"] = "wake"
-    body: WakeBody
-
-
-WireMessage = Annotated[
-    HelloMessage
-    | PubMessage
-    | SubMessage
-    | RpcMessage
-    | HydrateMessage
-    | AckMessage
-    | ErrMessage
-    | WakeMessage,
-    Field(discriminator="op"),
-]
-
-WIRE_MESSAGE_ADAPTER: TypeAdapter[WireMessage] = TypeAdapter(WireMessage)
-
-
-# === Wire constants ==========================================================
-
-SOCKET_RUNTIME_SUBDIR = "murder"
-SOCKET_BASENAME = "bus.sock"
-
-DEFAULT_RPC_TIMEOUT_S = 30.0
-DEFAULT_HEARTBEAT_INTERVAL_S = 5.0
 DEFAULT_LEASE_TTL_S = 30.0
 DEFAULT_MAX_COMMAND_ATTEMPTS = 3
 COMMAND_REAPER_INTERVAL_S = 5.0
 
-PRESENCE_DISCONNECT_DEBOUNCE_S = 30.0
-PRESENCE_USER_KINDS: frozenset[ClientKind] = frozenset({ClientKind.TUI, ClientKind.WEB})
-# Only these client kinds count toward PresenceEvent.user_count.
-
-SUBSCRIBER_QUEUE_DEFAULT = 1024
-IDEMPOTENCY_WINDOW_S = 60.0
-
 
 __all__ = [
-    "PROTOCOL_VERSION",
     "Role",
     "TicketStatus",
     "AgentStatus",
     "CommandStatus",
-    "Entity",
-    "PresenceState",
-    "ClientKind",
     "HeartbeatEvent",
     "SummaryEvent",
-    "QuestionEvent",
-    "NoteEvent",
     "EscalationEvent",
     "StatusChangeEvent",
     "ErrorEvent",
     "CommandEvent",
-    "StateSnapshotEvent",
-    "PresenceEvent",
     "SchedulerModeEvent",
     "SchedulerDecisionEvent",
     "CompletionVerdictEvent",
@@ -716,41 +289,8 @@ __all__ = [
     "UsageResetEvent",
     "ConversationBlockEvent",
     "ConversationStateEvent",
-    "TmuxFrameEvent",
-    "HarnessDecisionRequestEvent",
-    "HarnessDecisionResponseEvent",
-    "BusEvent",
-    "AgentEvent",
-    "BUS_EVENT_ADAPTER",
-    "EventFilter",
-    "HelloBody",
-    "SubArgs",
-    "RpcArgs",
-    "HydrateArgs",
-    "HydrateReplayEvent",
-    "HydrateReply",
-    "AckBody",
-    "ErrBody",
-    "WakeBody",
-    "HelloMessage",
-    "PubMessage",
-    "SubMessage",
-    "RpcMessage",
-    "HydrateMessage",
-    "AckMessage",
-    "ErrMessage",
-    "WakeMessage",
-    "WireMessage",
-    "WIRE_MESSAGE_ADAPTER",
-    "SOCKET_RUNTIME_SUBDIR",
-    "SOCKET_BASENAME",
-    "DEFAULT_RPC_TIMEOUT_S",
-    "DEFAULT_HEARTBEAT_INTERVAL_S",
+    "OrchestrationEvent",
     "DEFAULT_LEASE_TTL_S",
     "DEFAULT_MAX_COMMAND_ATTEMPTS",
     "COMMAND_REAPER_INTERVAL_S",
-    "PRESENCE_DISCONNECT_DEBOUNCE_S",
-    "PRESENCE_USER_KINDS",
-    "SUBSCRIBER_QUEUE_DEFAULT",
-    "IDEMPOTENCY_WINDOW_S",
 ]

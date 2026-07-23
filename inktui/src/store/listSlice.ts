@@ -3,7 +3,7 @@
  * tickets) share instead of copy-pasting ~80% byte-identical slice/action code.
  *
  * Every domain slice in this app is the same shape: a `{ rows, status, error }` triple, fed by a
- * single "read the whole snapshot" RPC, ref-swapping *only* its own key on each `state.snapshot`
+ * single typed projection query, ref-swapping *only* its own key after a projection invalidation
  * invalidation (the granularity contract — see `./store.ts`). The ONLY things that differ per
  * domain are: the row type, the slice key, the RPC method name, and the DTO→rows projection. This
  * module captures everything else exactly once.
@@ -27,7 +27,7 @@
  */
 
 import type { StateCreator, StoreApi } from 'zustand';
-import type { BusClient, QueryMethod, QueryParams, QueryResult } from '../bus/BusClient.js';
+import type { ApplicationClient, QueryMethod, QueryParams, QueryResult } from '../application/ApplicationClient.js';
 import type { AppStore } from './store.js';
 
 /**
@@ -84,7 +84,7 @@ export function createRefreshAction<
   Method extends QueryMethod,
   Row,
 >(
-  bus: BusClient,
+  bus: ApplicationClient,
   store: StoreApi<AppStore>,
   config: {
     readonly key: Key;
@@ -93,7 +93,7 @@ export function createRefreshAction<
   },
 ): { refresh(): Promise<void> } {
   const { key, method, project } = config;
-  // Per-slice request token: a burst of `state.snapshot` invalidations (or a reconnect re-prime)
+  // Per-slice request token: a burst of projection invalidations (or a reconnect re-prime)
   // can fire `refresh()` repeatedly with no ordering guarantee on the RPCs. Without this guard an
   // OLDER reply that resolves last would overwrite a newer one's rows as `ready` (stale clobber).
   // Each call bumps `seq`; a reply only applies if it is still the latest when the RPC settles.

@@ -16,8 +16,9 @@ from uuid import uuid4
 
 import pytest
 
-from murder.bus import Bus
-from murder.bus.protocol import CommandEvent, Entity, StateSnapshotEvent
+from murder.bus import OrchestrationNotifier
+from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
 from murder.state.persistence.schema import get_db, init_db
@@ -33,16 +34,12 @@ def _ctx(repo_root: Path) -> WorkerCtx:
         "INSERT INTO runs(run_id, started_at, config_snapshot) "
         "VALUES ('run-test', '2026-01-01', '{}')"
     )
-    bus = Bus("run-test", conn)
+    bus = OrchestrationNotifier("run-test", conn)
     return WorkerCtx(repo_root=repo_root, db=conn, bus=bus, run_id="run-test")
 
 
 async def _record(sink: list[object], ev: object) -> None:
     sink.append(ev)
-
-
-def _snaps(captured: list[object], entity: Entity) -> list[StateSnapshotEvent]:
-    return [e for e in captured if isinstance(e, StateSnapshotEvent) and e.entity == entity]
 
 
 def _window(now: datetime, pct: float) -> UsageWindow:
@@ -59,7 +56,7 @@ def _set_steering_command(harness: str, steering: str) -> CommandEvent:
     return CommandEvent(
         id=uuid4(),
         run_id="run-test",
-        target_worker="scheduler",
+        target_worker=WorkerName.SCHEDULER,
         kind=SchedulerWorker.SET_STEERING,
         payload={"harness": harness, "steering": steering},
         correlation_id="c",
@@ -146,8 +143,6 @@ def test_migrate_scheduler_steering_adds_table_to_old_db() -> None:
 def test_set_steering_upserts_and_emits_key_only_queue_row(repo_root: Path) -> None:
     async def _run() -> None:
         ctx = _ctx(repo_root)
-        captured: list[object] = []
-        ctx.bus.subscribe(lambda ev: _record(captured, ev))
         worker = SchedulerWorker()
 
         res = await worker.on_command(_set_steering_command("codex", "pause"), ctx)
@@ -157,10 +152,12 @@ def test_set_steering_upserts_and_emits_key_only_queue_row(repo_root: Path) -> N
         ).fetchone()
         assert row["steering"] == "pause"
 
-        snaps = _snaps(captured, Entity.QUEUE_ROW)
-        assert len(snaps) == 1
-        assert snaps[0].key == "steering:codex"
-        assert snaps[0].payload is None  # key-only contract
+        input_row = ctx.db.execute(
+            "SELECT projection, subject_key, generation FROM projection_inputs "
+            "WHERE projection = 'schedule' AND subject_key = 'steering:codex'"
+        ).fetchone()
+        assert input_row is not None
+        assert input_row["generation"] == 0
 
         # Update (upsert) the same harness.
         await worker.on_command(_set_steering_command("codex", "prefer"), ctx)

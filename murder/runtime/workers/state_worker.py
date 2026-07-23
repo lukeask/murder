@@ -4,7 +4,9 @@ import asyncio
 from typing import Any
 
 from murder.state.persistence import escalations as dbmod
-from murder.bus.protocol import CommandEvent, Entity, StateSnapshotEvent
+from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
 
 MIN_ESCALATION_SEVERITY = 1
@@ -15,13 +17,13 @@ DEFAULT_ESCALATION_SEVERITY = 2
 class StateCommandWorker(Worker):
     """DB-backed state mutations requested by frontend clients."""
 
-    ESCALATION_CREATE = "state.escalation.create"
-    ESCALATION_ACK = "state.escalation.ack"
+    ESCALATION_CREATE = OrchestrationCommand.STATE_ESCALATION_CREATE
+    ESCALATION_ACK = OrchestrationCommand.STATE_ESCALATION_ACK
 
     def __init__(self) -> None:
         super().__init__(
             WorkerSpec(
-                name="state",
+                name=WorkerName.STATE,
                 accepts=(self.ESCALATION_CREATE, self.ESCALATION_ACK),
                 process_model="thread",
             )
@@ -31,24 +33,15 @@ class StateCommandWorker(Worker):
         await stop_event.wait()
 
     async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
-        if command.kind == self.ESCALATION_ACK:
+        if command.kind is self.ESCALATION_ACK:
             if ctx.db is None:
                 raise RuntimeError("StateCommandWorker requires ctx.db")
             escalation_id = command.payload.get("escalation_id")
             if escalation_id is None:
                 raise ValueError("state.escalation.ack requires escalation_id")
             dbmod.resolve_escalation(ctx.db, int(escalation_id))
-            if ctx.bus is not None and ctx.run_id is not None:
-                await ctx.bus.publish(
-                    StateSnapshotEvent(
-                        run_id=ctx.run_id,
-                        agent_id=self.name,
-                        entity=Entity.ESCALATION,
-                        key=str(escalation_id),
-                    )
-                )
             return {"handled": True, "escalation_id": int(escalation_id)}
-        if command.kind != self.ESCALATION_CREATE:
+        if command.kind is not self.ESCALATION_CREATE:
             return {"handled": False}
         if ctx.db is None:
             raise RuntimeError("StateCommandWorker requires ctx.db")
@@ -73,13 +66,4 @@ class StateCommandWorker(Worker):
             source_event_id=int(source_event_id) if source_event_id is not None else None,
             body_path=command.payload.get("body_path"),
         )
-        if ctx.bus is not None and ctx.run_id is not None:
-            await ctx.bus.publish(
-                StateSnapshotEvent(
-                    run_id=ctx.run_id,
-                    agent_id=self.name,
-                    entity=Entity.ESCALATION,
-                    key=str(escalation_id),
-                )
-            )
         return {"handled": True, "escalation_id": escalation_id}

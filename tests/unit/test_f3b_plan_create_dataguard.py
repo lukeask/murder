@@ -11,7 +11,7 @@ Rules under test (mirroring notes' status-aware ``active_note_name_exists``):
      (the superseded row is archived to a fresh key via rename_plan).
   3. No collision -> normal create.
 
-Harness mirrors test_f3_ticket_plan_rpcs.py (real Runtime + sqlite + Bus; conftest
+Harness mirrors test_f3_ticket_plan_rpcs.py (real Runtime + sqlite + OrchestrationNotifier; conftest
 noop-patches asyncio.sleep so no poll loop spins).
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from murder.app.service.runtime import Runtime
-from murder.bus import Bus
+from murder.bus import OrchestrationNotifier
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -52,7 +52,7 @@ def _runtime(repo_root: Path) -> Runtime:
     rt.db = conn
     rt.run_id = "run-test"
     insert_run(conn, rt.run_id, "{}")
-    rt.bus = Bus(rt.run_id, conn)
+    rt.bus = OrchestrationNotifier(rt.run_id, conn)
     return rt
 
 

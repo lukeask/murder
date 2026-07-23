@@ -7,11 +7,11 @@
  *  - resolve flips `uploading → done` (path filled) or `→ failed`, each pushing the right toast;
  *  - a draft dropped mid-flight has its upload result discarded and its toast suppressed.
  *
- * Drives a {@link FakeBusClient} + a fresh isolated {@link createToastStore} so no global state leaks.
+ * Drives a {@link FakeApplicationClient} + a fresh isolated {@link createToastStore} so no global state leaks.
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import { createImageDraftStore } from '../../../src/store/imageDraft/imageDraftStore.js';
 import { createToastStore } from '../../../src/store/toast/toastStore.js';
 
@@ -24,7 +24,7 @@ async function flush(): Promise<void> {
 
 describe('imageDraftStore.paste', () => {
   it('mints a stem synchronously and records the draft as uploading before any await', () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     bus.stubCommand('image.upload', { ok: true, path: '/p.png' });
     const store = createImageDraftStore(bus, createToastStore());
 
@@ -38,8 +38,8 @@ describe('imageDraftStore.paste', () => {
   });
 
   it('passes the minted stem as `name` to image.upload and fills the path on done', async () => {
-    const bus = new FakeBusClient();
-    bus.stubCommand('image.upload', (params) => ({ ok: true, path: `/img/${params.name}.png` }));
+    const bus = new FakeApplicationClient();
+    bus.stubCommand('image.upload', (params) => ({ ok: true, path: `/img/${params['name']}.png` }));
     const toasts = createToastStore();
     const store = createImageDraftStore(bus, toasts);
 
@@ -58,7 +58,7 @@ describe('imageDraftStore.paste', () => {
   });
 
   it('flips to failed and pushes an error toast when the server returns !ok', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     bus.stubCommand('image.upload', { ok: false, error: 'disk full' });
     const toasts = createToastStore();
     const store = createImageDraftStore(bus, toasts);
@@ -71,7 +71,7 @@ describe('imageDraftStore.paste', () => {
   });
 
   it('flips to failed and pushes an error toast when the RPC rejects', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     bus.stubCommand('image.upload', () => {
       throw new Error('socket closed');
     });
@@ -86,7 +86,7 @@ describe('imageDraftStore.paste', () => {
   });
 
   it('serializes uploads FIFO — one in flight at a time, in paste order', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     let inFlight = 0;
     let maxConcurrent = 0;
     const order: string[] = [];
@@ -95,9 +95,9 @@ describe('imageDraftStore.paste', () => {
       inFlight += 1;
       maxConcurrent = Math.max(maxConcurrent, inFlight);
       await Promise.resolve();
-      order.push(String(params.name));
+      order.push(String(params['name']));
       inFlight -= 1;
-      return { ok: true, path: `/p/${params.name}` };
+      return { ok: true, path: `/p/${params['name']}` };
     });
     const store = createImageDraftStore(bus, createToastStore());
 
@@ -116,10 +116,10 @@ describe('imageDraftStore.paste', () => {
   });
 
   it('drops a draft mid-flight: discards the upload result and suppresses its toast', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     bus.stubCommand('image.upload', async (params) => {
       await Promise.resolve();
-      return { ok: true, path: `/p/${params.name}` };
+      return { ok: true, path: `/p/${params['name']}` };
     });
     const toasts = createToastStore();
     const store = createImageDraftStore(bus, toasts);
@@ -137,9 +137,9 @@ describe('imageDraftStore.paste', () => {
   });
 
   it('pathsById returns only done drafts (uploading/failed excluded)', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     // First paste succeeds; re-stub so the second fails — exercises both branches into pathsById.
-    bus.stubCommand('image.upload', (params) => ({ ok: true, path: `/p/${params.name}` }));
+    bus.stubCommand('image.upload', (params) => ({ ok: true, path: `/p/${params['name']}` }));
     const store = createImageDraftStore(bus, createToastStore());
     const okId = store.getState().paste(Buffer.from('y'), 'png');
     for (let i = 0; i < 5; i++) {

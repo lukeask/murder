@@ -24,7 +24,8 @@ from murder.app.protocol.permissions import (
     ListPermissionsParams,
     ListPermissionsResult,
 )
-from murder.app.protocol.requests import CommandName, OrchestrationAction, QueryName
+from murder.app.protocol.read_models import CrowSnapshot
+from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.protocol.sessions import (
     AcquireWriterLeaseParams,
     ExecuteSessionCommandParams,
@@ -51,8 +52,8 @@ from murder.app.protocol.workflows import (
 )
 
 Name = TypeVar("Name", QueryName, CommandName)
-Params = TypeVar("Params", bound=BaseModel)
-Result = TypeVar("Result", bound=BaseModel)
+Params = TypeVar("Params")
+Result = TypeVar("Result")
 
 
 class JsonObject(RootModel[dict[str, JsonValue]]):
@@ -69,16 +70,28 @@ class EmptyParams(ApplicationModel):
     """An operation which accepts no caller supplied fields."""
 
 
-class OrchestrationExecuteParams(ApplicationModel):
-    kind: OrchestrationAction
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
+class RosterGetParams(EmptyParams):
+    """``roster.get`` is deliberately argument-free.
+
+    The roster implementation remains a read-model adapter for now; this DTO
+    is the seam that lets its implementation move without widening the public
+    request contract.
+    """
+
+
+class TicketGetParams(ApplicationModel):
+    ticket_id: str = Field(min_length=1)
+
+
+class NamedReadParams(ApplicationModel):
+    name: str = Field(min_length=1)
 
 
 @dataclass(frozen=True)
 class Operation(Generic[Name, Params, Result]):
     name: Name
-    params_model: type[Params]
-    result_model: type[Result]
+    params_model: object
+    result_model: object
     legacy: bool = False
 
 
@@ -90,12 +103,27 @@ _QUERY_MODELS: dict[QueryName, tuple[type[BaseModel], type[BaseModel], bool]] = 
     QueryName.APPROVALS_LIST: (ListApprovalsParams, ListApprovalsResult, False),
     QueryName.APPROVALS_GET: (GetApprovalParams, GetApprovalResult, False),
     QueryName.PERMISSIONS_LIST: (ListPermissionsParams, ListPermissionsResult, False),
-    QueryName.WORKFLOWS_GET: (GetWorkflowsParams, GetWorkflowsResult, True),
+    QueryName.ROSTER_GET: (RosterGetParams, CrowSnapshot, False),
+    QueryName.WORKFLOWS_GET: (GetWorkflowsParams, GetWorkflowsResult, False),
     QueryName.WORKFLOW_RUNS_LIST: (ListWorkflowRunsParams, ListWorkflowRunsResult, False),
     QueryName.WORKFLOW_RUNS_GET: (GetWorkflowRunParams, GetWorkflowRunResult, False),
 }
 _COMMAND_MODELS: dict[CommandName, tuple[type[BaseModel], type[BaseModel], bool]] = {
-    CommandName.ORCHESTRATION_EXECUTE: (OrchestrationExecuteParams, JsonObject, True),
+    CommandName.AGENT_INTERRUPT: (JsonObject, JsonObject, True),
+    CommandName.AGENT_MESSAGE: (JsonObject, JsonObject, True),
+    CommandName.AGENT_RESUME_FROM_HISTORY: (JsonObject, JsonObject, True),
+    CommandName.AGENT_SEND_KEY: (JsonObject, JsonObject, True),
+    CommandName.AGENT_STOP: (JsonObject, JsonObject, True),
+    CommandName.CROW_RENAME_ROGUE: (JsonObject, JsonObject, True),
+    CommandName.CROW_RESET: (JsonObject, JsonObject, True),
+    CommandName.CROW_SPAWN_ROGUE: (JsonObject, JsonObject, True),
+    CommandName.HISTORY_DISMISS: (JsonObject, JsonObject, True),
+    CommandName.NOTETAKER_CAPTURE_SUBMIT: (JsonObject, JsonObject, True),
+    CommandName.PLAN_RENAME: (JsonObject, JsonObject, True),
+    CommandName.PLANNER_SPAWN: (JsonObject, JsonObject, True),
+    CommandName.SCHEDULER_SET_STEERING: (JsonObject, JsonObject, True),
+    CommandName.HARNESS_USAGE_SAMPLE: (JsonObject, JsonObject, True),
+    CommandName.TICKET_QUICK_CREATE: (JsonObject, JsonObject, True),
     CommandName.SESSION_WRITER_ACQUIRE: (AcquireWriterLeaseParams, WriterLeaseResult, False),
     CommandName.SESSION_WRITER_RENEW: (RenewWriterLeaseParams, WriterLeaseResult, False),
     CommandName.SESSION_WRITER_RELEASE: (ReleaseWriterLeaseParams, WriterLeaseResult, False),
@@ -105,8 +133,8 @@ _COMMAND_MODELS: dict[CommandName, tuple[type[BaseModel], type[BaseModel], bool]
         False,
     ),
     CommandName.APPROVAL_DECIDE: (DecideApprovalParams, DecideApprovalResult, False),
-    CommandName.WORKFLOWS_SET: (SetWorkflowsParams, SetWorkflowsResult, True),
-    CommandName.WORKFLOW_START: (StartWorkflowParams, StartWorkflowResult, True),
+    CommandName.WORKFLOWS_SET: (SetWorkflowsParams, SetWorkflowsResult, False),
+    CommandName.WORKFLOW_START: (StartWorkflowParams, StartWorkflowResult, False),
     CommandName.WORKFLOW_SIGNAL: (SignalWorkflowParams, SignalWorkflowResult, False),
 }
 
@@ -145,6 +173,9 @@ __all__ = [
     "JsonObject",
     "Operation",
     "OrchestrationExecuteParams",
+    "RosterGetParams",
+    "TicketGetParams",
+    "NamedReadParams",
     "QueryName",
     "command_operation",
     "query_operation",

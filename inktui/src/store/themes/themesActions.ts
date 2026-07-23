@@ -8,7 +8,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import { applyThemeRecords, type ThemeRecord } from '../../theme/palettes.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
@@ -26,7 +27,7 @@ function toItems(themes: readonly ThemeRecord[] | undefined): readonly ThemeReco
   return themes ?? [];
 }
 
-export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): ThemesActions {
+export function createThemesActions(bus: ApplicationClient, store: StoreApi<AppStore>): ThemesActions {
   async function commit(next: readonly ThemeRecord[]): Promise<void> {
     applyThemeRecords(next);
     store.setState((state) => ({
@@ -34,7 +35,9 @@ export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): 
     }));
     try {
       const reply = await bus.command('themes.set', { themes: next });
-      const saved = toItems(reply.themes);
+      const saved = toItems(
+        asCommandResult<'themes.set', { themes?: readonly ThemeRecord[] }>(reply).themes,
+      );
       applyThemeRecords(saved);
       store.setState({ themes: { items: saved, status: 'ready', error: null } });
     } catch (error: unknown) {
@@ -49,7 +52,9 @@ export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): 
       store.setState((state) => ({ themes: { ...state.themes, status: 'loading' } }));
       try {
         const reply = await bus.query('themes.get', {});
-        const items = toItems(reply.themes);
+        const items = toItems(
+          asQueryResult<'themes.get', { themes?: readonly ThemeRecord[] }>(reply).themes,
+        );
         applyThemeRecords(items);
         store.setState({ themes: { items, status: 'ready', error: null } });
       } catch (error: unknown) {
@@ -69,10 +74,13 @@ export function createThemesActions(bus: BusClient, store: StoreApi<AppStore>): 
         json,
         ...(id === undefined ? {} : { id }),
       });
-      const items = toItems(reply.themes);
+      const result = asCommandResult<'theme.import', { themes?: readonly ThemeRecord[]; id: string }>(
+        reply,
+      );
+      const items = toItems(result.themes);
       applyThemeRecords(items);
       store.setState({ themes: { items, status: 'ready', error: null } });
-      return reply.id;
+      return result.id;
     },
 
     async remove(id: string): Promise<void> {

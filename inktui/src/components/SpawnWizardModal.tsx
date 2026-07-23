@@ -583,7 +583,7 @@ export function spawnWizardMode(
         // Exit-then-act: the wizard is already gone and focus restored, so an inline error has
         // nowhere to render. Surface the action-level RPC rejection on the global toastStore (a
         // singleton, independent of this unmounted wizard's lifecycle), using the structured
-        // `rpc error [code]: message` text from UdsBusClient's rejection.
+        // `rpc error [code]: message` text from ApplicationWebSocketClient's rejection.
         const message = error instanceof Error ? error.message : String(error);
         toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       });

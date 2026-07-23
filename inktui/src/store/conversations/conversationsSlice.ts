@@ -1,29 +1,23 @@
 /**
- * Conversations slice — per-agent chat transcript, fed by `ConversationBlockEvent` off the bus.
+ * Conversations slice — per-agent chat transcript, refreshed from typed projection snapshots.
  *
  * Deliberately NOT a `listSlice.ts` factory shell. Reasons:
- *  - The factory is for `{rows,status,error}` re-pulled on a `state.snapshot` entity event.
- *    `'conversation'` is NOT in the `Entity` union (protocol.ts line 60), so this slice is never
- *    snapshot-invalidated and must handle its own event subscription (see `store.ts`).
- *  - Data arrives as content-bearing appends/updates (`ConversationBlockEvent`), not "re-pull the
- *    whole list". Each event appends/replaces one block in one agent's transcript — a splice, not a
- *    replace.
+ *  - The subscription invalidates the `conversations` projection; `store.ts` then refreshes this
+ *    snapshot as the authoritative transcript state.
  *  - The map is keyed by `agent_id` (from `BaseEvent`, always present) — no `conversation_id`
  *    parsing anywhere. The Python `ConversationsStore.conversation_id_for_agent` is 1:1; we treat
  *    it as such and key by agentId directly (CONTRACT ASSUMPTION: one conversation per agent).
  *
  * Shape follows `ticketDetail` as precedent for a hand-written, non-factory, non-snapshot slice.
  *
- * Ref-swap granularity: `applyBlock` produces `{...prev, [agentId]: updatedBlocks}` — other agents'
- * arrays keep identity, so per-pane `memo`'d components only re-render for the agent whose history
- * changed.
+ * Ref-swap granularity is per refresh: the authoritative snapshot replaces each affected transcript.
  */
 
 import type { StateCreator } from 'zustand';
 import type { AppStore } from '../store.js';
 
 /**
- * One conversation block as it arrives over the wire (`ConversationBlockEvent.block`).
+ * One conversation block as it arrives in a projection snapshot.
  *
  * IMPORTANT — the real wire shape (Python `block_to_wire`, see
  * `murder/state/persistence/conversation.py`) is the conversation_blocks ROW, not the segment:
@@ -54,7 +48,7 @@ export interface ConversationBlock {
 }
 
 /**
- * Parse a wire `ConversationBlockEvent.block` row into our typed DTO. Pure.
+ * Parse a snapshot block row into our typed DTO. Pure.
  *
  * Unwraps the storage row: reads the numeric `id`, and pulls the segment dict out of `payload`.
  * The segment's `type` (not the row's `kind`) is the selector discriminant. Defensive: if `payload`
@@ -87,7 +81,7 @@ export function parseBlock(raw: Record<string, unknown>): ConversationBlock {
 
 /**
  * The conversations slice state. Keyed by `agentId`; each value is an ordered array of blocks
- * (append/update semantics from `ConversationBlockEvent`). All fields readonly — ref-swapped
+ * (authoritative snapshot semantics). All fields readonly — ref-swapped
  * wholesale on change at the per-agent transcript level (not the whole map).
  *
  * `activePaneAgentId`: the currently visible transcript pane agent. `null` = no explicit
@@ -96,8 +90,8 @@ export function parseBlock(raw: Record<string, unknown>): ConversationBlock {
  * bottom).
  */
 /**
- * Per-agent conversation liveness, fed by `ConversationStateEvent` (and primed from the
- * `state.conversations_snapshot` `live_state`/`queued_message` columns). `liveState` is the parsed
+ * Per-agent conversation liveness comes from the `conversations` projection snapshot's
+ * `live_state`/`queued_message` columns. `liveState` is the parsed
  * harness UI state (`working` / `awaiting_input` / `awaiting_approval`); `queuedMessage` is a user
  * message the service accepted while the harness was busy, held for idle delivery — the chat input
  * renders it as the one-line "queued" row and lets Enter interrupt-to-send-now.
@@ -177,9 +171,8 @@ export interface ConversationsState {
   /**
    * Per-agent rolling chunk summaries for the Condensed view (TUIchat-4). Ordered by `chunkIdx`
    * ascending. Ephemeral (mirrors the other snapshot-fed fields, e.g. `meta`): primed from the
-   * `state.conversations_snapshot` `chunk_summaries[]` (the source of truth) and incrementally folded
-   * from live `conversation.block` / `chunk-summarized` events so Condensed updates without waiting
-   * for a full re-snapshot. Absent/empty entry → Condensed falls back to verbose-like (intermediates
+   * `conversations` projection snapshot `chunk_summaries[]` (the source of truth). Absent/empty
+   * entry → Condensed falls back to verbose-like (intermediates
    * render as-is — never blank). Consumed by `selectConversationView` when a pane's effective mode is
    * `condensed`.
    */
@@ -204,8 +197,7 @@ export const initialConversationsState: ConversationsState = {
 /**
  * Slice factory. Not a `createListSlice` shell — this slice has its own shape.
  * Contributes only the `conversations` key; `../store.ts` composes it.
- * No `*_INVALIDATING_ENTITY` — this slice is driven by `conversation.block` events
- * via a second `bus.subscribe` in `store.ts`, not by `state.snapshot` entity events.
+ * The `conversations` projection invalidation triggers this slice's authoritative refresh.
  */
 export const createConversationsSlice: StateCreator<
   AppStore,

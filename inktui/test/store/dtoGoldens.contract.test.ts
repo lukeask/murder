@@ -11,8 +11,8 @@
  * golden anchor (F11 H3, `conversationBlockContract.test.ts`), extended to the read-reply DTOs.
  *
  * Each golden is the FULL post-envelope wire shape `{ ok: true, value: <DTO> }`. We stub the bare
- * `value` (FakeBusClient re-wraps `state.*` reads in `{ok, value}` and runs the SAME shared unwrap
- * the live `UdsBusClient` runs, A-D3) — so this also exercises the live wrap/unwrap round-trip and
+ * `value` (FakeApplicationClient re-wraps `state.*` reads in `{ok, value}` and runs the SAME shared unwrap
+ * the live `ApplicationClient` runs, A-D3) — so this also exercises the live wrap/unwrap round-trip and
  * keeps the fake honest against the real wire shape.
  *
  * Drift detection:
@@ -21,12 +21,12 @@
  *  - Ink side: if a consumer reads a key the producer doesn't emit (renamed/removed field), the
  *    projected row/frontmatter below loses its value → this fails.
  *
- * Complements (does NOT duplicate) `tests/unit/test_protocol_agreement.py` (PROTOCOL_VERSION /
- * Entity / BusEvent names) — that is the protocol layer; this is the per-DTO field-shape layer.
+ * Complements (does NOT duplicate) the generated application-protocol contract test (application
+ * capability / application-event names) — that is the protocol layer; this is the per-DTO field-shape layer.
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import type { NotesSnapshotReply } from '../../src/store/notes/notesActions.js';
 import type { PlansSnapshotReply } from '../../src/store/plans/plansActions.js';
 import type { ReportsSnapshotReply } from '../../src/store/reports/reportsActions.js';
@@ -61,16 +61,16 @@ const reports = reportsGolden as ReadEnvelope<ReportsSnapshotReply>;
 const schedule = scheduleGolden as ReadEnvelope<ScheduleSnapshotReply>;
 const ticketDetail = ticketDetailGolden as ReadEnvelope<TicketDetailReply>;
 
-/** All goldens must be the post-envelope wire shape — the honesty check vs. FakeBusClient. */
+/** All goldens must be the post-envelope wire shape — the honesty check vs. FakeApplicationClient. */
 function expectEnvelope(env: ReadEnvelope<unknown>): void {
   expect(env.ok).toBe(true);
   expect(env).toHaveProperty('value');
 }
 
-/** Build a store with every `state.*` read stubbed by its golden `value` (FakeBusClient re-wraps
+/** Build a store with every `state.*` read stubbed by its golden `value` (FakeApplicationClient re-wraps
  * `state.*` into `{ok, value}` and unwraps via the shared util, mirroring the live transport). */
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   // Stub the bare DTO (golden `value`); the fake adds the {ok, value} envelope for `state.*`.
   fake.stubQuery('roster.get', crow.value);
   fake.stubQuery('plans.list', plans.value);
@@ -83,7 +83,7 @@ function setup() {
 }
 
 describe('read-reply DTO cross-language field-shape goldens (A-D2)', () => {
-  it('every golden is the real {ok, value} read envelope (FakeBusClient live-wrap honesty)', () => {
+  it('every golden is the real {ok, value} read envelope (FakeApplicationClient live-wrap honesty)', () => {
     expectEnvelope(crow);
     expectEnvelope(plans);
     expectEnvelope(notes);

@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.protocol.workflows import (
     GetWorkflowsParams,
     SetWorkflowsParams,
@@ -85,7 +86,6 @@ def register(host: ServiceHost) -> None:
         return {"ok": True, "workflows": save_workflows(workflows)}
 
     async def _tui_run_workflow(body: dict[str, Any]) -> dict[str, Any]:
-        from murder.bus import Entity
         from murder.work.workflows.launch import run_workflow_by_name
 
         params = StartWorkflowParams.model_validate(body)
@@ -108,11 +108,6 @@ def register(host: ServiceHost) -> None:
             # repr would leak as a bare name); mirrors other handlers'
             # bad-input -> ValueError contract.
             raise ValueError(f"no saved workflow named {name!r}")
-
-        # Publish every freshly created ticket so the frontend renders the
-        # new run tree before any crow spawns.
-        for tid in result.created_ticket_ids:
-            await host.runtime.publish_snapshot(Entity.TICKET, tid)
 
         # Kick only THIS run's stages: kickoff_ready(only=tid) spawns a stage
         # only if it's an eligible root, so downstream/dep-gated stages and
@@ -165,15 +160,19 @@ def register(host: ServiceHost) -> None:
         themes, new_id = import_theme_from_json(json_str, theme_id=theme_id)
         return {"ok": True, "themes": themes, "id": new_id}
 
-    host.register_rpc_handler("tui.load_favorites", _tui_load_favorites)
-    host.register_rpc_handler("tui.save_favorites", _tui_save_favorites)
-    host.register_rpc_handler("tui.load_templates", _tui_load_templates)
-    host.register_rpc_handler("tui.save_templates", _tui_save_templates)
-    host.register_rpc_handler("tui.load_workflows", _tui_load_workflows)
-    host.register_rpc_handler("tui.save_workflows", _tui_save_workflows)
-    host.register_rpc_handler("tui.run_workflow", _tui_run_workflow)
-    host.register_rpc_handler("tui.load_spawn_favorites", _tui_load_spawn_favorites)
-    host.register_rpc_handler("tui.save_spawn_favorites", _tui_save_spawn_favorites)
-    host.register_rpc_handler("tui.load_themes", _tui_load_themes)
-    host.register_rpc_handler("tui.save_themes", _tui_save_themes)
-    host.register_rpc_handler("tui.import_theme", _tui_import_theme)
+    host.register_application_query(QueryName.FAVORITES_GET, _tui_load_favorites)
+    host.register_application_query(
+        QueryName.SPAWN_FAVORITES_GET, _tui_load_spawn_favorites
+    )
+    host.register_application_query(QueryName.TEMPLATES_GET, _tui_load_templates)
+    host.register_application_query(QueryName.THEMES_GET, _tui_load_themes)
+    host.register_application_query(QueryName.WORKFLOWS_GET, _tui_load_workflows)
+    host.register_application_command(CommandName.FAVORITES_SET, _tui_save_favorites)
+    host.register_application_command(
+        CommandName.SPAWN_FAVORITES_SET, _tui_save_spawn_favorites
+    )
+    host.register_application_command(CommandName.TEMPLATES_SET, _tui_save_templates)
+    host.register_application_command(CommandName.THEMES_SET, _tui_save_themes)
+    host.register_application_command(CommandName.THEME_IMPORT, _tui_import_theme)
+    host.register_application_command(CommandName.WORKFLOWS_SET, _tui_save_workflows)
+    host.register_application_command(CommandName.WORKFLOW_START, _tui_run_workflow)

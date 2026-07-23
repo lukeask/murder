@@ -3,7 +3,7 @@
  *
  * The store itself ({@link createAppStore}) is framework-agnostic vanilla Zustand (rule 4). This
  * file is the thin React adapter: a context that carries the one store instance (constructed with
- * the injected `BusClient` at the app root, so the bus dependency is wired once and never imported by
+ * the injected `ApplicationClient` at the app root, so the bus dependency is wired once and never imported by
  * a component), and a `useAppStore(selector, equality?)` hook that subscribes a component to exactly
  * the slice its selector picks. Pass `shallow` as the equality fn for object/array selections so a
  * ref-swap of an *unrelated* slice does not re-render this component — the rule-1 over-render guard,

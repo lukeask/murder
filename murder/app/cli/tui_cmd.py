@@ -1,9 +1,8 @@
 """TUI launch and service-start commands.
 
-The TUI is the Ink (Node) frontend (F8). `murder` brings the daemon up, resolves the service socket,
-then spawns the Node Ink process pointed at that socket via `MURDER_SERVICE_SOCKET`. The Node side
-never re-derives the per-project socket path — it connects to exactly the absolute path it is handed
-(Open decision #2). The legacy in-process Textual `MurderApp` has been retired (F10).
+The TUI is the Ink (Node) frontend. `murder` brings the daemon up, resolves its
+application WebSocket URL, then passes that URL to Ink. There is no Unix
+application transport or fallback protocol.
 """
 
 from __future__ import annotations
@@ -23,7 +22,8 @@ from murder.app.cli.service_cmd import (
     _run_async_entry,
     apply_client_log_level,
 )
-from murder.bus.transport_socket import default_socket_path
+from murder.state.storage.paths import lock_path
+from murder.state.storage.service_registry import list_service_sessions, project_session_name
 
 # Node runtime floor (current LTS). Ink 5 needs >=18; 20 is the future-proof floor we ship against.
 MIN_NODE_MAJOR = 20
@@ -85,8 +85,8 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
     return ["node", str(bundle_path)], None
 
 
-def _spawn_ink(argv: list[str], cwd: Path | None, socket_path: Path, project: str) -> int:
-    """Spawn the resolved Ink runner against the service socket, inheriting the tty, and wait.
+def _spawn_ink(argv: list[str], cwd: Path | None, websocket_url: str, project: str) -> int:
+    """Spawn the resolved Ink runner against the service WebSocket, inheriting the tty, and wait.
 
     The child owns the terminal (inherited stdio) and shares our process group, so ctrl+c reaches
     it directly. We do **not** tear the daemon down on exit — the service is authoritative and keeps
@@ -97,9 +97,7 @@ def _spawn_ink(argv: list[str], cwd: Path | None, socket_path: Path, project: st
     (in dev it runs from `inktui/`).
     """
     env = dict(os.environ)
-    env["MURDER_SERVICE_SOCKET"] = str(socket_path)
-    # Compatibility for older bundled clients during a rolling package upgrade.
-    env["MURDER_BUS_SOCKET"] = str(socket_path)
+    env["MURDER_APPLICATION_WS_URL"] = websocket_url
     env["MURDER_PROJECT"] = project
     proc = subprocess.run(argv, cwd=str(cwd) if cwd is not None else None, env=env, check=False)
     return proc.returncode
@@ -107,13 +105,19 @@ def _spawn_ink(argv: list[str], cwd: Path | None, socket_path: Path, project: st
 
 async def _launch_tui() -> None:
     repo = _repo_root()
-    socket_path = default_socket_path(repo)
+    socket_path = lock_path(repo)
     # Resolve the runner and check Node BEFORE bringing the daemon up — fail fast and clearly,
     # without spawning anything, if the host can't run the TUI.
     argv, cwd = _resolve_ink_entrypoint(repo)
     _require_node()
     await _ensure_supervisor(repo, socket_path)
-    _spawn_ink(argv, cwd, socket_path, repo.name)
+    session = next(
+        (item for item in list_service_sessions() if item.name == project_session_name(repo)),
+        None,
+    )
+    if session is None:
+        raise InkLaunchError("service started without publishing its WebSocket endpoint")
+    _spawn_ink(argv, cwd, session.websocket_url, repo.name)
 
 
 def cmd_up(
@@ -134,7 +138,7 @@ def cmd_up(
 
     async def _up() -> None:
         repo = _repo_root()
-        started = await _ensure_supervisor_started(repo, default_socket_path(repo))
+        started = await _ensure_supervisor_started(repo, lock_path(repo))
         typer.echo("started" if started else "already up")
 
     _run_async_entry(_up())

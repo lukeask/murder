@@ -10,11 +10,10 @@ from murder.state.storage.service_registry import (
     project_path_hash,
     project_session_name,
     resolve_service_session_selector,
-    socket_path_for_repo,
 )
 
 
-def test_project_session_name_and_socket_path_use_resolved_full_path(
+def test_project_session_name_uses_resolved_full_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -30,7 +29,6 @@ def test_project_session_name_and_socket_path_use_resolved_full_path(
     assert kenny_name == f"project-{project_path_hash(kenny)}"
     assert tony_name == f"project-{project_path_hash(tony)}"
     assert kenny_name != tony_name
-    assert socket_path_for_repo(kenny) == tmp_path / "runtime" / "murder" / kenny_name / "bus.sock"
 
 
 def test_resolve_service_session_selector_rejects_duplicate_basenames(tmp_path: Path) -> None:
@@ -40,7 +38,7 @@ def test_resolve_service_session_selector_rejects_duplicate_basenames(tmp_path: 
         path_hash="aaaaaaaaaaaa",
         repo_root=tmp_path / "kenny" / "project",
         pid=1001,
-        socket_path=tmp_path / "one.sock",
+        websocket_url="ws://127.0.0.1:9001/api/ws",
     )
     second = ServiceSession(
         name="project-bbbbbbbbbbbb",
@@ -48,7 +46,7 @@ def test_resolve_service_session_selector_rejects_duplicate_basenames(tmp_path: 
         path_hash="bbbbbbbbbbbb",
         repo_root=tmp_path / "tony" / "project",
         pid=1002,
-        socket_path=tmp_path / "two.sock",
+        websocket_url="ws://127.0.0.1:9002/api/ws",
     )
 
     with pytest.raises(AmbiguousServiceSessionError) as exc_info:

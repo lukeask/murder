@@ -5,7 +5,7 @@
  *  - `crow.spawn_rogue` — spawn a new rogue crow.
  *  - `planner.spawn` — spawn (or return) a per-plan planning agent.
  *
- * ## Bus status — command kind, not a standalone RPC (F2)
+ * ## Application command status
  *
  * Both kinds are **orchestrator command kinds**, dispatched through the LIVE `command.submit`
  * choke point ({@link ../commandSubmit.js}), not direct RPCs. `crow.spawn_rogue` may be followed by
@@ -13,11 +13,11 @@
  * the single prompt source.
  *
  * The `command.submit`/`command.status` RPC types live in the base `RpcMethods` (`../../bus/
- * BusClient.ts`); no per-slice `declare module` is needed here.
+ * ApplicationClient.ts`); no per-slice `declare module` is needed here.
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { submitCommand } from '../commandSubmit.js';
 import type { SettingsState } from '../settings/settingsSlice.js';
 import type { AppStore } from '../store.js';
@@ -143,7 +143,7 @@ function openSpawnedAgentPane(store: StoreApi<AppStore>, agentId: string): void 
 }
 
 /**
- * Build the spawn actions bound to one injected {@link BusClient}, and (optionally) the app store
+ * Build the spawn actions bound to one injected {@link ApplicationClient}, and (optionally) the app store
  * handle so a successful spawn can auto-open the agent's transcript pane (item 9e).
  *
  * When `store` is supplied, a successful spawn opens the agent's transcript pane override and pins it
@@ -152,7 +152,7 @@ function openSpawnedAgentPane(store: StoreApi<AppStore>, agentId: string): void 
  *
  * Rule 3: this is the ONLY caller of the bus for spawn. Components never touch bus.rpc.
  */
-export function createSpawnActions(bus: BusClient, store?: StoreApi<AppStore>): SpawnActions {
+export function createSpawnActions(bus: ApplicationClient, store?: StoreApi<AppStore>): SpawnActions {
   return {
     async spawnRogue(params: SpawnRogueParams): Promise<SpawnRogueResult> {
       const payload: Record<string, unknown> = {

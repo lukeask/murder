@@ -24,9 +24,9 @@ them so the *path of least resistance* is the correct pattern, not the old one.
    parent-indent, column tuples — all `useMemo` view-models. The store stays reusable by a
    future React-DOM (web/phone) client.
 3. **Actions are the only view→bus path.** Components never touch the bus. The store's action
-   layer is the sole caller of `BusClient`.
+   layer is the sole caller of `ApplicationClient`.
 4. **The store is framework- & transport-agnostic.** No Ink/terminal/socket assumptions in any
-   slice or action. `BusClient` is an **injected interface** so tests fake it and a future
+   slice or action. `ApplicationClient` is an **injected interface** so tests fake it and a future
    WebSocket bridge swaps transport with zero store edits.
 5. **Input/focus is data, not gating.** One root `useInput` dispatcher; panels *declare* their
    keymaps; focus is a state machine with a *derived* candidate set. No `check_action`-style
@@ -50,7 +50,7 @@ change them deliberately, not casually.
 
 | Concern | Choice | Why |
 |---------|--------|-----|
-| Language | **TypeScript 6** (strict) | Typed seam (`BusClient`, wire protocol, discriminated-union agent identity) is the whole point; see § tsconfig flags. |
+| Language | **TypeScript 6** (strict) | Typed seam (`ApplicationClient`, wire protocol, discriminated-union agent identity) is the whole point; see § tsconfig flags. |
 | View | **Ink 7** (React 19) | React-for-terminal — our instincts are React (see plan § Why Ink). Thin view over a store we own. |
 | Store | **Zustand 5** | *Is* the `useSyncExternalStore`+actions shape, TS-first; `useStore(selector, shallow)` gives referential stability per selector for free. |
 | Tests | **Vitest 4** + **ink-testing-library 4** | Vitest shares esbuild/tsx so no separate test-build; ink-testing-library asserts on the painted frame (component-test idiom). |
@@ -99,7 +99,7 @@ Full strictness is deliberate. The non-default flags, grouped:
 ```
 inktui/
   src/
-    bus/         transport seam: BusClient interface, FakeBusClient, UdsBusClient, protocol.ts
+    application/ transport seam: ApplicationClient interface, FakeApplicationClient, UdsApplicationClient, protocol.ts
     store/       Zustand slices + actions (the only view->bus path)
     selectors/   useMemo view-models (presentation lives here, not the store)
     components/  Ink components (pure functions of a slice, React.memo + narrow selector)

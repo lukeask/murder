@@ -1,10 +1,10 @@
 /**
  * TmuxFrameView: attaches to a terminal stream and renders replacement ANSI frames as HTML.
- * We emit a frame with an SGR color code through the FakeBusClient and assert the converter produced
+ * We emit a frame with an SGR color code through the FakeApplicationClient and assert the converter produced
  * colored markup (a <span style> with a color) and that the empty state shows before any frame.
  */
 
-import { FakeBusClient } from '@core/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '@core/application/FakeApplicationClient.js';
 import { screen, cleanup } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,7 +20,7 @@ describe('TmuxFrameView', () => {
   });
 
   it('renders an ANSI terminal replacement frame as colored HTML', () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     renderWithStore(<TmuxFrameView agentId="a1" />, { bus });
     // Red foreground "hi" then reset.
     act(() => {
@@ -34,7 +34,7 @@ describe('TmuxFrameView', () => {
   });
 
   it('ignores frames for a different agent (filter scope)', () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     renderWithStore(<TmuxFrameView agentId="a1" />, { bus });
     act(() => {
       bus.emitTerminal('b2', 'other');

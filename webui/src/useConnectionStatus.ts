@@ -1,17 +1,17 @@
 /**
- * `useConnectionStatus` — exposes the {@link WsBusClient}'s live connection state to React.
+ * `useConnectionStatus` — exposes the {@link ApplicationWebSocketClient}'s live connection state to React.
  *
- * The status hooks (`onConnect`/`onDisconnect`/`onPermanentError`) are off the BusClient interface
- * — the wiring narrows for them structurally, exactly as the Ink app does (see UdsBusClient). This
+ * The status hooks (`onConnect`/`onDisconnect`/`onPermanentError`) are off the ApplicationClient interface
+ * — the wiring narrows for them structurally, exactly as the Ink app does. This
  * hook subscribes to those callbacks and reflects them as a small union the header renders.
  */
 
 import { useEffect, useState } from 'react';
-import type { WsBusClient } from './bus/WsBusClient.js';
+import type { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'error';
 
-export function useConnectionStatus(bus: WsBusClient): ConnectionStatus {
+export function useConnectionStatus(bus: ApplicationWebSocketClient): ConnectionStatus {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   useEffect(() => {
     const offConnect = bus.onConnect(() => setStatus('connected'));

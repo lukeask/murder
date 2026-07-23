@@ -31,7 +31,6 @@ from murder.app.protocol.projections import (  # noqa: E402
 )
 from murder.app.protocol.requests import (  # noqa: E402
     CommandName,
-    OrchestrationAction,
     QueryName,
 )
 from murder.app.protocol.subscriptions import (  # noqa: E402
@@ -107,8 +106,11 @@ def _operation_maps() -> str:
     def render_map(name: str, operations: dict[object, object]) -> str:
         rows = []
         for operation in operations.values():
-            params = "any" if operation.legacy else _model_ts(operation.params_model)
-            result = "any" if operation.legacy else _model_ts(operation.result_model)
+            # Every operation has a registry DTO.  ``legacy`` records a
+            # transitional implementation only; it must never erase the
+            # client contract into ``any``.
+            params = _model_ts(operation.params_model)
+            result = _model_ts(operation.result_model)
             rows.append(
                 f"  readonly {json.dumps(operation.name.value)}: {{ readonly params: "
                 f"{params}; readonly result: {result} }};"
@@ -136,7 +138,9 @@ def _operation_maps() -> str:
             "export type QueryParams<M extends QueryMethod> = QueryMethods[M]['params'];\n"
             "export type QueryResult<M extends QueryMethod> = QueryMethods[M]['result'];\n"
             "export type CommandParams<M extends CommandMethod> = CommandMethods[M]['params'];\n"
-            "export type CommandResult<M extends CommandMethod> = CommandMethods[M]['result'];",
+            "export type CommandResult<M extends CommandMethod> = CommandMethods[M]['result'];\n\n"
+            "export type QueryResultMap = { readonly [M in QueryMethod]: QueryResult<M> };\n"
+            "export type CommandResultMap = { readonly [M in CommandMethod]: CommandResult<M> };",
         )
     )
 
@@ -157,7 +161,6 @@ export type ClientKind = {_union(ClientKind)};
 export type ErrorCode = {_union(ErrorCode)};
 export type QueryName = {_union(QueryName)};
 export type CommandName = {_union(CommandName)};
-export type OrchestrationAction = {_union(OrchestrationAction)};
 export type ProjectionTopic = {_union(ProjectionTopic)};
 export type NotificationChannel = {_union(NotificationChannel)};
 
@@ -252,8 +255,7 @@ export interface TerminalAttachMessage {{
   readonly op: 'terminal.attach';
   readonly stream_id: string;
   readonly target: {{
-    readonly session_id?: string | null;
-    readonly legacy_agent_id?: string | null;
+    readonly session_id: string;
   }};
   readonly after_sequence: number;
 }}
@@ -279,8 +281,7 @@ export interface TerminalAttachedMessage {{
 export interface TerminalFrame {{
   readonly type: 'terminal.frame';
   readonly subscription_id: string;
-  readonly session_id?: string | null;
-  readonly legacy_agent_id?: string | null;
+  readonly session_id: string;
   readonly sequence: number;
   readonly captured_at: string;
   readonly columns: number;
@@ -293,8 +294,7 @@ export interface TerminalFrame {{
 export interface TerminalChunk {{
   readonly type: 'terminal.chunk';
   readonly subscription_id: string;
-  readonly session_id?: string | null;
-  readonly legacy_agent_id?: string | null;
+  readonly session_id: string;
   readonly sequence: number;
   readonly encoding: 'utf-8';
   readonly data: string;
@@ -303,8 +303,7 @@ export interface TerminalChunk {{
 export interface TerminalStreamGap {{
   readonly type: 'terminal.gap';
   readonly subscription_id: string;
-  readonly session_id?: string | null;
-  readonly legacy_agent_id?: string | null;
+  readonly session_id: string;
   readonly expected_sequence: number;
   readonly next_sequence: number;
   readonly snapshot_required: boolean;

@@ -14,7 +14,7 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { NEW_PLAN_MODE_ID, newPlanMode } from '../../src/components/NewPlanModal.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
@@ -78,7 +78,7 @@ function Harness({
 /** Build stores with tickets panel focused (the prior focus to restore). */
 function setup() {
   const stores = createInputStores(['tickets'], 'tickets');
-  const bus = new FakeBusClient();
+  const bus = new FakeApplicationClient();
   const actions = createDialogActions(bus);
 
   bus.stubCommand('plan.create', {
@@ -206,7 +206,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
 
   it('a rejected plan.create pushes an error toast and keeps the form up', async () => {
     const { stores } = setup();
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     bus.stubCommand('plan.create', () => {
       throw new Error('rpc error [internal]: plan create failed');
     });

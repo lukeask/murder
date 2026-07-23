@@ -9,14 +9,14 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { StoreApi } from 'zustand';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import { createSpawnActions } from '../../../src/store/dialogs/spawnActions.js';
 import type { AppStore } from '../../../src/store/store.js';
 
 /** A bus that accepts a `crow.spawn_rogue` command and returns `agentId` from its terminal status. */
-function spawnBus(agentId: string | undefined): FakeBusClient {
-  const bus = new FakeBusClient();
-  bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+function spawnBus(agentId: string | undefined): FakeApplicationClient {
+  const bus = new FakeApplicationClient();
+  bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
   bus.stubQuery('command.get', {
     ok: true,
     status: 'done',

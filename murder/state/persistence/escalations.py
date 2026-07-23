@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime
 
 from murder.state.persistence.records import EscalationRecord, escalation_record_from_row
+from murder.roster.repository import RosterRepository
 
 
 def _now() -> str:
@@ -22,15 +23,28 @@ def insert_escalation(
     source_event_id: int | None = None,
     body_path: str | None = None,
 ) -> int:
-    cur = conn.execute(
-        """
-        INSERT INTO escalations
-            (ts, ticket_id, severity, reason, to_recipient, source_event_id, body_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (_now(), ticket_id, severity, reason, to_recipient, source_event_id, body_path),
-    )
-    return int(cur.lastrowid or 0)
+    owns_transaction = conn.isolation_level is None and not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO escalations
+                (ts, ticket_id, severity, reason, to_recipient, source_event_id, body_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (_now(), ticket_id, severity, reason, to_recipient, source_event_id, body_path),
+        )
+        escalation_id = int(cur.lastrowid or 0)
+        RosterRepository().invalidate(conn, subject_key=f"escalation:{escalation_id}")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        raise
+    else:
+        if owns_transaction:
+            conn.commit()
+    return escalation_id
 
 
 def list_pending_escalations(
@@ -49,7 +63,19 @@ def list_pending_escalations(
 
 
 def resolve_escalation(conn: sqlite3.Connection, escalation_id: int) -> None:
-    conn.execute(
-        "UPDATE escalations SET resolved = 1, resolved_at = ? WHERE id = ?",
-        (_now(), escalation_id),
-    )
+    owns_transaction = conn.isolation_level is None and not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "UPDATE escalations SET resolved = 1, resolved_at = ? WHERE id = ?",
+            (_now(), escalation_id),
+        )
+        RosterRepository().invalidate(conn, subject_key=f"escalation:{escalation_id}")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        raise
+    else:
+        if owns_transaction:
+            conn.commit()

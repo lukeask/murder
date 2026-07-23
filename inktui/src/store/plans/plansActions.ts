@@ -13,7 +13,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import { createSpawnActions, plannerSpawnParams } from '../dialogs/spawnActions.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
@@ -58,7 +59,7 @@ function toPlanRow(dto: PlanDto): PlanRow {
 }
 
 /**
- * The plans actions, bound to one `BusClient` + store handle. Returned to `../store.ts`.
+ * The plans actions, bound to one `ApplicationClient` + store handle. Returned to `../store.ts`.
  */
 export interface PlansActions {
   /**
@@ -76,13 +77,13 @@ export interface PlansActions {
   spawnPlanner(name: string): Promise<void>;
 }
 
-export function createPlansActions(bus: BusClient, store: StoreApi<AppStore>): PlansActions {
+export function createPlansActions(bus: ApplicationClient, store: StoreApi<AppStore>): PlansActions {
   const spawn = createSpawnActions(bus, store);
   return {
     ...createRefreshAction(bus, store, {
       key: 'plans',
       method: 'plans.list',
-      project: (reply) => reply.plans.map(toPlanRow),
+      project: (reply) => asQueryResult<'plans.list', PlansSnapshotReply>(reply).plans.map(toPlanRow),
     }),
     async spawnPlanner(name: string): Promise<void> {
       try {

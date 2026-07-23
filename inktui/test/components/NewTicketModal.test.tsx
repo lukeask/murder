@@ -11,7 +11,7 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { NEW_TICKET_MODE_ID, newTicketMode } from '../../src/components/NewTicketModal.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
@@ -51,12 +51,12 @@ function Harness({
 /** Build stores with the tickets panel focused (prior focus to restore). */
 function setup() {
   const stores = createInputStores(['tickets'], 'tickets');
-  const bus = new FakeBusClient();
+  const bus = new FakeApplicationClient();
 
-  // F2: `ticket.quick_create` is an orchestrator command kind routed through `orchestration.execute` +
+  // F2: `ticket.quick_create` is an orchestrator command kind routed through `direct application command` +
   // `command.get` (not a standalone RPC). Status returns `'done'` on the first poll with the
   // worker reply JSON-encoded in `result_json` (matching the live `command.get` shape).
-  bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
   bus.stubQuery('command.get', {
     ok: true,
     status: 'done',
@@ -157,11 +157,8 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     await tick();
     await tick();
     // The submit carries the `ticket.quick_create` command kind + the title payload.
-    const submitCall = bus.commandCalls.find((c) => c.name === 'orchestration.execute');
-    expect(submitCall?.params).toMatchObject({
-      kind: 'ticket.quick_create',
-      payload: { title: 'fix bug' },
-    });
+    const submitCall = bus.commandCalls.find((c) => c.name === 'ticket.quick_create');
+    expect(submitCall?.params).toMatchObject({ title: 'fix bug' });
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('t-001', 'my ticket');
   });
@@ -182,11 +179,11 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
 
   it('a rejected ticket create pushes an error toast with the rejection message', async () => {
     const stores = createInputStores(['tickets'], 'tickets');
-    const bus = new FakeBusClient();
-    // `ticket.quick_create` routes through `orchestration.execute`; reject at the submit choke point so
+    const bus = new FakeApplicationClient();
+    // `ticket.quick_create` routes through `direct application command`; reject at the submit choke point so
     // `quickCreateTicket` rejects. Exit-then-act: the modal is gone before this lands; the toast
-    // must still fire on the global singleton with the structured UdsBusClient text.
-    bus.stubCommand('orchestration.execute', () => {
+    // must still fire on the global singleton with the structured UdsApplicationClient text.
+    bus.stubAllCommands(() => {
       throw new Error('rpc error [internal]: ticket create failed');
     });
     stores.modes.getState().enter(newTicketMode(stores.modes, createDialogActions(bus), {}));

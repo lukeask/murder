@@ -87,21 +87,27 @@ CREATE TABLE IF NOT EXISTS agents (
     pid               INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS events (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts              TEXT NOT NULL,
-    run_id          TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
-    agent_id        TEXT,
-    role            TEXT,
-    ticket_id       TEXT,
-    type            TEXT NOT NULL,
-    schema_version  INTEGER NOT NULL DEFAULT 1,
-    payload_json    TEXT NOT NULL
+-- Verified harness decisions are durable control records, not generic bus
+-- events.  They retain the exact identity binding required to resume an
+-- already-recorded answer after a service crash.
+CREATE TABLE IF NOT EXISTS structured_decisions (
+    decision_request_id TEXT PRIMARY KEY,
+    agent_id            TEXT NOT NULL,
+    decision_kind       TEXT NOT NULL CHECK (decision_kind IN ('question', 'permission')),
+    request_identity    TEXT NOT NULL,
+    request_json        TEXT NOT NULL,
+    response_json       TEXT,
+    decided_by          TEXT,
+    created_at          TEXT NOT NULL,
+    responded_at        TEXT,
+    CHECK ((response_json IS NULL) = (decided_by IS NULL)),
+    CHECK ((response_json IS NULL) = (responded_at IS NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_events_run    ON events(run_id);
-CREATE INDEX IF NOT EXISTS idx_events_ticket ON events(ticket_id);
-CREATE INDEX IF NOT EXISTS idx_events_type   ON events(type);
+CREATE INDEX IF NOT EXISTS idx_structured_decisions_agent_kind_identity
+    ON structured_decisions(agent_id, decision_kind, request_identity);
+CREATE INDEX IF NOT EXISTS idx_structured_decisions_agent_response
+    ON structured_decisions(agent_id, response_json);
 
 -- Feature-owned retained fact log.  Unlike the legacy generalized events
 -- table, rows here are immutable outcomes only: commands, addressed workflow
@@ -911,9 +917,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_conversation_chunk_summaries,
         _migrate_conversation_store,
         _migrate_conversation_queued_message,
+        _migrate_drop_legacy_events,
         _migrate_drop_sentinel,
         _migrate_drop_ticket_write_set,
-        _migrate_events_schema_version,
         _migrate_fact_log,
         _migrate_history_status,
         _migrate_map_summaries,
@@ -940,7 +946,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     # create indexes and child tables that reference the new shape.
     _migrate_workflow_runs(conn)
     conn.executescript(SCHEMA_SQL)
-    _migrate_events_schema_version(conn)
+    _migrate_drop_legacy_events(conn)
     _migrate_fact_log(conn)
     _migrate_ticket_metadata_columns(conn)
     _migrate_ticket_last_error(conn)

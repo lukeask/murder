@@ -23,7 +23,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import type { TicketRow } from './ticketsSlice.js';
@@ -117,7 +118,7 @@ function projectTickets(reply: ScheduleSnapshotReply): readonly TicketRow[] {
 }
 
 /**
- * The tickets actions, bound to one `BusClient` + store handle. Returned to `../store.ts`,
+ * The tickets actions, bound to one `ApplicationClient` + store handle. Returned to `../store.ts`,
  * which hangs them off the store so components dispatch `store.getState().actions.tickets.refresh()`.
  */
 export interface TicketsActions {
@@ -133,10 +134,10 @@ export interface TicketsActions {
   refresh(): Promise<void>;
 }
 
-export function createTicketsActions(bus: BusClient, store: StoreApi<AppStore>): TicketsActions {
+export function createTicketsActions(bus: ApplicationClient, store: StoreApi<AppStore>): TicketsActions {
   return createRefreshAction(bus, store, {
     key: 'tickets',
     method: 'schedule.get',
-    project: projectTickets,
+    project: (reply) => projectTickets(asQueryResult<'schedule.get', ScheduleSnapshotReply>(reply)),
   });
 }

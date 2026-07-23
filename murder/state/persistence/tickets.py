@@ -27,7 +27,7 @@ def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
-def _append_schedule_projection_input(
+def invalidate_ticket_schedule(
     conn: sqlite3.Connection,
     *,
     ticket_id: str,
@@ -93,6 +93,10 @@ def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
                 "INSERT INTO checklist(ticket_id, ord, text, done) VALUES (?, ?, ?, ?)",
                 (ticket.id, item.ord, item.text, 1 if item.done else 0),
             )
+        invalidate_ticket_schedule(conn, ticket_id=ticket.id, operation="insert")
+        from murder.roster.repository import RosterRepository
+
+        RosterRepository().invalidate(conn, subject_key=f"ticket:{ticket.id}")
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -139,6 +143,10 @@ def apply_ticket_carve_payload(
                 "INSERT INTO checklist(ticket_id, ord, text, done) VALUES (?, ?, ?, 0)",
                 (ticket_id, ord_, text),
             )
+        invalidate_ticket_schedule(conn, ticket_id=ticket_id, operation="carve")
+        from murder.roster.repository import RosterRepository
+
+        RosterRepository().invalidate(conn, subject_key=f"ticket:{ticket_id}")
         conn.execute("RELEASE carve_payload")
     except Exception:
         conn.execute("ROLLBACK TO carve_payload")
@@ -202,11 +210,35 @@ def update_ticket_status(conn: sqlite3.Connection, ticket_id: str, new_status: s
         # of workflow truth. Their terminal outcomes become addressed signals that
         # advance the authoritative persisted state machine in this same transaction.
         notify_ticket_status(conn, ticket_id=ticket_id, status=new_status)
-        # Feature-owned schedule projection invalidation (dual-write with bus
-        # StateSnapshotEvent emits that still happen at higher layers).
-        _append_schedule_projection_input(
+        # Feature-owned schedule projection invalidation.
+        invalidate_ticket_schedule(
             conn, ticket_id=ticket_id, operation=f"status:{new_status}"
         )
+        from murder.roster.repository import RosterRepository
+
+        RosterRepository().invalidate(conn, subject_key=f"ticket:{ticket_id}")
+    except BaseException:
+        if owns_transaction:
+            conn.rollback()
+        raise
+    else:
+        if owns_transaction:
+            conn.commit()
+
+
+def update_ticket_schedule_at(
+    conn: sqlite3.Connection, ticket_id: str, schedule_at: str | None
+) -> None:
+    """Update scheduling metadata and its schedule projection atomically."""
+    owns_transaction = conn.isolation_level is None and not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "UPDATE tickets SET schedule_at = ?, updated_at = ? WHERE id = ?",
+            (schedule_at, _now(), ticket_id),
+        )
+        invalidate_ticket_schedule(conn, ticket_id=ticket_id, operation="schedule_at")
     except BaseException:
         if owns_transaction:
             conn.rollback()

@@ -21,7 +21,7 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import {
   SPAWN_WIZARD_MODE_ID,
@@ -35,7 +35,10 @@ import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createHarnessModelsActions } from '../../src/store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../../src/store/dialogs/spawnActions.js';
-import { createSpawnFavoritesActions } from '../../src/store/dialogs/spawnFavoritesActions.js';
+import {
+  createSpawnFavoritesActions,
+  type SpawnFavorite,
+} from '../../src/store/dialogs/spawnFavoritesActions.js';
 import { createWorktreeOptionsActions } from '../../src/store/dialogs/worktreeOptionsActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
@@ -46,25 +49,24 @@ async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-function submitKinds(bus: FakeBusClient): string[] {
+function submitKinds(bus: FakeApplicationClient): string[] {
   return bus.commandCalls
-    .filter((c) => c.name === 'orchestration.execute')
-    .map((c) => String((c.params as { kind: string }).kind));
+    .filter((c) => c.name === 'crow.spawn_rogue' || c.name === 'agent.message')
+    .map((c) => c.name);
 }
 
-function spawnSubmitPayload(bus: FakeBusClient): Record<string, unknown> {
+function spawnSubmitPayload(bus: FakeApplicationClient): Record<string, unknown> {
   const call = bus.commandCalls.find(
     (c) =>
-      c.name === 'orchestration.execute' &&
-      (c.params as { kind: string }).kind === 'crow.spawn_rogue',
+      c.name === 'crow.spawn_rogue',
   );
   return (call?.params as { payload: Record<string, unknown> }).payload;
 }
 
-function kickoffSubmitPayload(bus: FakeBusClient): Record<string, unknown> | undefined {
+function kickoffSubmitPayload(bus: FakeApplicationClient): Record<string, unknown> | undefined {
   const call = bus.commandCalls.find(
     (c) =>
-      c.name === 'orchestration.execute' && (c.params as { kind: string }).kind === 'agent.message',
+      c.name === 'agent.message',
   );
   return call ? (call.params as { payload: Record<string, unknown> }).payload : undefined;
 }
@@ -95,8 +97,8 @@ function Harness({
  * the live model + worktree actions wired (so the flow matches production). */
 function setup(spawnContext: SpawnContext | null = null) {
   const stores = createInputStores(['notes'], 'notes');
-  const bus = new FakeBusClient();
-  bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  const bus = new FakeApplicationClient();
+  bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
   bus.stubQuery('command.get', {
     ok: true,
     status: 'done',
@@ -238,12 +240,12 @@ describe('SpawnWizardModal — dependent-field flow', () => {
   });
 
   it('a rejected spawn pushes an error toast with the rejection message', async () => {
-    // `crow.spawn_rogue` routes through `orchestration.execute`; reject at the submit choke point so
+    // `crow.spawn_rogue` routes through `direct application command`; reject at the submit choke point so
     // `spawnRogue` rejects. Exit-then-act: the wizard is gone before this lands; the toast must
-    // still fire on the global singleton with the structured UdsBusClient text.
+    // still fire on the global singleton with the structured UdsApplicationClient text.
     const stores = createInputStores(['notes'], 'notes');
-    const bus = new FakeBusClient();
-    bus.stubCommand('orchestration.execute', () => {
+    const bus = new FakeApplicationClient();
+    bus.stubAllCommands(() => {
       throw new Error('rpc error [internal]: spawn failed');
     });
     stores.modes.getState().enter(
@@ -565,9 +567,9 @@ describe('SpawnWizardModal — dependent-field flow', () => {
 describe('H4 — spawn payload contract (real spawn action)', () => {
   const REQUIRED_SPAWN_FIELDS = ['harness', 'model'] as const;
 
-  function liveStubBus(): FakeBusClient {
-    const bus = new FakeBusClient();
-    bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+  function liveStubBus(): FakeApplicationClient {
+    const bus = new FakeApplicationClient();
+    bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     bus.stubQuery('command.get', {
       ok: true,
       status: 'done',
@@ -714,15 +716,18 @@ describe('SpawnWizardModal — spawn favorites (the two new behavioral contracts
   /** Like `setup()` but wires the favorites column with `ONE_FAVORITE` loaded. */
   function setupWithFavorite() {
     const stores = createInputStores(['notes'], 'notes');
-    const bus = new FakeBusClient();
-    bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    const bus = new FakeApplicationClient();
+    bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     bus.stubQuery('command.get', {
       ok: true,
       status: 'done',
       result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
     });
     bus.stubQuery('spawn_favorites.get', { ok: true, favorites: [ONE_FAVORITE] });
-    bus.stubCommand('spawn_favorites.set', (p) => ({ ok: true, favorites: p.favorites }));
+    bus.stubCommand('spawn_favorites.set', (p) => ({
+      ok: true,
+      favorites: p['favorites'] as readonly SpawnFavorite[],
+    }));
     const actions = createSpawnActions(bus);
     const enter = () =>
       stores.modes.getState().enter(
@@ -884,8 +889,8 @@ describe('alt+s dispatcher test', () => {
   it('alt+s does NOT fire spawn while wizard is already up (exclusive capture)', async () => {
     const stores = createInputStores(['notes'], 'notes');
     const spawnFn = vi.fn();
-    const bus = new FakeBusClient();
-    bus.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    const bus = new FakeApplicationClient();
+    bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     const actions = createSpawnActions(bus);
     stores.modes.getState().enter(spawnWizardMode(stores.modes, actions, { spawnContext: null }));
     const { stdin } = render(<Harness stores={stores} spawn={spawnFn} />);

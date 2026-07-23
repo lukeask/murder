@@ -3,7 +3,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 import { everforestDarkHard, hasTheme, listThemeIds } from '../../src/theme/palettes.js';
@@ -19,9 +19,12 @@ function sampleThemeRecord(id: string) {
 }
 
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   fake.stubQuery('themes.get', { ok: true, themes: [] });
-  fake.stubCommand('themes.set', (params) => ({ ok: true, themes: params.themes }));
+  fake.stubCommand('themes.set', (params) => ({
+    ok: true,
+    themes: params['themes'] as readonly unknown[],
+  }));
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };

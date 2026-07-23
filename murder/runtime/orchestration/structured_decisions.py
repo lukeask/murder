@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from murder.bus import HarnessDecisionRequestEvent, HarnessDecisionResponseEvent
 from murder.llm.harness_control.capabilities.permissions import (
     PermissionAnswerRequest,
     PermissionDecisionKind,
@@ -106,7 +106,7 @@ class StructuredDecisionRouter:
     async def observe(self, agent: Any, snapshot: ObservationSnapshot) -> None:
         """Publish each currently visible normalized request exactly once."""
 
-        if self._host.bus is None or self._host.db is None or self._host.run_id is None:
+        if self._host.db is None or self._host.run_id is None:
             return
         await self._resume_recorded_responses(agent, snapshot)
         candidates: list[tuple[DecisionKind, str, dict[str, object]]] = []
@@ -161,7 +161,6 @@ class StructuredDecisionRouter:
                 # durable fact that this surface kind occurred previously.
                 self._cleared.add(key)
 
-        revision = snapshot.revision
         for kind, identity, request in candidates:
             key = (agent.id, kind)
             if self._visible.get(key) == identity:
@@ -177,31 +176,19 @@ class StructuredDecisionRouter:
                 # lingering terminal dialog remains the prior occurrence until
                 # a real absent/different observation is seen.
                 continue
-            occurrence = (
-                f"{revision.pane_epoch}:{revision.capture_sequence}:"
-                f"{revision.semantic_sequence}"
-            )
+            revision = snapshot.revision
+            occurrence = f"{revision.pane_epoch}:{revision.capture_sequence}:{revision.semantic_sequence}"
             request_id = str(
                 uuid5(NAMESPACE_URL, f"{agent.id}:{kind}:{identity}:{occurrence}")
             )
             if kind == "permission":
                 self._bridge_permission_request(agent, request, request_id=request_id)
-            await self._host.bus.publish(
-                HarnessDecisionRequestEvent(
-                    run_id=self._host.run_id,
-                    agent_id=agent.id,
-                    role=getattr(agent, "role", None),
-                    ticket_id=getattr(agent, "ticket_id", None),
-                    decision_request_id=request_id,
-                    decision_kind=kind,
-                    request_identity=identity,
-                    observation_revision=(
-                        revision.pane_epoch,
-                        revision.capture_sequence,
-                        revision.semantic_sequence,
-                    ),
-                    request=request,
-                )
+            self._record_request(
+                request_id=request_id,
+                agent_id=agent.id,
+                decision_kind=kind,
+                request_identity=identity,
+                request=request,
             )
 
     def _bridge_permission_request(
@@ -321,19 +308,7 @@ class StructuredDecisionRouter:
                 semantic_request=semantic_request,
                 decided_by=decided_by,
             )
-        await self._host.bus.publish(
-            HarnessDecisionResponseEvent(
-                run_id=self._host.run_id,
-                agent_id=agent_id,
-                role=getattr(agent, "role", None),
-                ticket_id=getattr(agent, "ticket_id", None),
-                decision_request_id=request_id,
-                decision_kind=kind,
-                request_identity=identity,
-                response=response,
-                decided_by=decided_by,
-            )
-        )
+        self._record_response(request_id, response=response, decided_by=decided_by)
         executed = (
             await agent.answer_verified_question(semantic_request, operation_id=request_id)
             if kind == "question"
@@ -347,18 +322,18 @@ class StructuredDecisionRouter:
         """Start decisions recorded before a crash when no operation exists yet."""
 
         rows = self._host.db.execute(
-            "SELECT payload_json FROM events "
-            "WHERE type = 'harness.decision.response' AND agent_id = ? ORDER BY id",
+            "SELECT decision_request_id, decision_kind, request_identity, response_json "
+            "FROM structured_decisions WHERE agent_id = ? AND response_json IS NOT NULL "
+            "ORDER BY created_at, decision_request_id",
             (agent.id,),
         ).fetchall()
         for row in rows:
-            response_event = json.loads(row["payload_json"])
-            request_id = str(response_event.get("decision_request_id") or "")
+            request_id = str(row["decision_request_id"] or "")
             if not request_id or self._operation_exists(request_id):
                 continue
             persisted = self._load_request(request_id)
-            kind = str(response_event.get("decision_kind") or "")
-            identity = str(response_event.get("request_identity") or "")
+            kind = str(row["decision_kind"] or "")
+            identity = str(row["request_identity"] or "")
             if (
                 persisted is None
                 or persisted.get("agent_id") != agent.id
@@ -367,7 +342,7 @@ class StructuredDecisionRouter:
                 or self._current_identity(kind, snapshot) != identity
             ):
                 continue
-            response = response_event.get("response")
+            response = json.loads(str(row["response_json"]))
             if not isinstance(response, dict):
                 continue
             semantic_request = self._decode_response(kind, identity, persisted["request"], response)
@@ -389,11 +364,8 @@ class StructuredDecisionRouter:
 
     def _has_any_occurrence(self, agent_id: str, kind: str, identity: str) -> bool:
         row = self._host.db.execute(
-            "SELECT payload_json FROM events WHERE type = 'harness.decision.request' "
-            "AND agent_id = ? "
-            "AND json_extract(payload_json, '$.decision_kind') = ? "
-            "AND json_extract(payload_json, '$.request_identity') = ? "
-            "ORDER BY id DESC LIMIT 1",
+            "SELECT 1 FROM structured_decisions "
+            "WHERE agent_id = ? AND decision_kind = ? AND request_identity = ? LIMIT 1",
             (agent_id, kind, identity),
         ).fetchone()
         return row is not None
@@ -401,9 +373,8 @@ class StructuredDecisionRouter:
     def _has_kind_history(self, agent_id: str, kind: str) -> bool:
         return (
             self._host.db.execute(
-                "SELECT 1 FROM events WHERE type = 'harness.decision.request' "
-                "AND agent_id = ? "
-                "AND json_extract(payload_json, '$.decision_kind') = ? LIMIT 1",
+                "SELECT 1 FROM structured_decisions "
+                "WHERE agent_id = ? AND decision_kind = ? LIMIT 1",
                 (agent_id, kind),
             ).fetchone()
             is not None
@@ -412,8 +383,8 @@ class StructuredDecisionRouter:
     def _response_exists(self, request_id: str) -> bool:
         return (
             self._host.db.execute(
-                "SELECT 1 FROM events WHERE type = 'harness.decision.response' "
-                "AND json_extract(payload_json, '$.decision_request_id') = ? LIMIT 1",
+                "SELECT 1 FROM structured_decisions "
+                "WHERE decision_request_id = ? AND response_json IS NOT NULL LIMIT 1",
                 (request_id,),
             ).fetchone()
             is not None
@@ -421,16 +392,59 @@ class StructuredDecisionRouter:
 
     def _load_request(self, request_id: str) -> dict[str, Any] | None:
         row = self._host.db.execute(
-            "SELECT agent_id, payload_json FROM events "
-            "WHERE type = 'harness.decision.request' "
-            "AND json_extract(payload_json, '$.decision_request_id') = ? ORDER BY id DESC LIMIT 1",
+            "SELECT agent_id, decision_kind, request_identity, request_json "
+            "FROM structured_decisions WHERE decision_request_id = ?",
             (request_id,),
         ).fetchone()
         if row is None:
             return None
-        payload = json.loads(row["payload_json"])
-        payload["agent_id"] = str(row["agent_id"] or "")
-        return payload
+        return {
+            "agent_id": str(row["agent_id"] or ""),
+            "decision_kind": str(row["decision_kind"]),
+            "request_identity": str(row["request_identity"]),
+            "request": json.loads(str(row["request_json"])),
+        }
+
+    def _record_request(
+        self,
+        *,
+        request_id: str,
+        agent_id: str,
+        decision_kind: DecisionKind,
+        request_identity: str,
+        request: dict[str, object],
+    ) -> None:
+        self._host.db.execute(
+            "INSERT OR IGNORE INTO structured_decisions "
+            "(decision_request_id, agent_id, decision_kind, request_identity, request_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                request_id,
+                agent_id,
+                decision_kind,
+                request_identity,
+                json.dumps(request, sort_keys=True, separators=(",", ":")),
+                datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+            ),
+        )
+        self._host.db.commit()
+
+    def _record_response(
+        self, request_id: str, *, response: dict[str, Any], decided_by: str
+    ) -> None:
+        cursor = self._host.db.execute(
+            "UPDATE structured_decisions SET response_json = ?, decided_by = ?, responded_at = ? "
+            "WHERE decision_request_id = ? AND response_json IS NULL",
+            (
+                json.dumps(response, sort_keys=True, separators=(",", ":")),
+                decided_by,
+                datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+                request_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"decision response lost its identity binding: {request_id}")
+        self._host.db.commit()
 
     @staticmethod
     def _current_identity(kind: str, snapshot: ObservationSnapshot) -> str | None:

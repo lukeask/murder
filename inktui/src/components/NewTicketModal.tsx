@@ -132,7 +132,7 @@ export function newTicketMode(
               // Exit-then-act: the modal is already gone and focus restored, so an inline field
               // error has nowhere to render. Surface the action-level RPC rejection on the global
               // toastStore (a singleton, independent of this unmounted modal's lifecycle), using the
-              // structured `rpc error [code]: message` text from UdsBusClient's rejection.
+              // structured `rpc error [code]: message` text from ApplicationWebSocketClient's rejection.
               const message = error instanceof Error ? error.message : String(error);
               toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
             });

@@ -14,7 +14,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createAppStore, initialAppState } from '../../src/store/store.js';
 import type { TicketDetailReply } from '../../src/store/ticketDetail/ticketDetailActions.js';
 import { isValidDuration } from '../../src/store/ticketDetail/ticketDetailActions.js';
@@ -49,14 +49,14 @@ const DETAIL_REPLY: TicketDetailReply = {
 
 /** Filter queryCalls or commandCalls by method name. */
 function callsFor(
-  fake: FakeBusClient,
+  fake: FakeApplicationClient,
   method: string,
 ): ReadonlyArray<{ name: string; params: unknown }> {
   return [...fake.queryCalls, ...fake.commandCalls].filter((c) => c.name === method);
 }
 
 function setup(detailReply: TicketDetailReply = DETAIL_REPLY) {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   fake.stubQuery('ticket.get', detailReply);
   fake.stubCommand('ticket.save_body', { ok: true });
   fake.stubCommand('ticket.schedule', { ok: true });
@@ -161,7 +161,7 @@ describe('ticketDetailActions.open', () => {
   });
 
   it('sets status error on rejection', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('ticket.get', () => {
       throw new Error('not found');
     });
@@ -175,7 +175,7 @@ describe('ticketDetailActions.open', () => {
   });
 
   it('maps a live null detail reply to an editor error', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('ticket.get', null);
     fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
@@ -281,7 +281,7 @@ describe('ticketDetailActions.saveBody', () => {
   });
 
   it('sets status error on save failure', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('ticket.get', DETAIL_REPLY);
     fake.stubCommand('ticket.save_body', () => {
       throw new Error('write failed');
@@ -299,7 +299,7 @@ describe('ticketDetailActions.saveBody', () => {
     // The service can RESOLVE (not reject) with {handled:true, ok:false, error} — e.g. ticket not
     // found (orchestrator.py save_ticket_body). Without the ok===false guard this would take the
     // success branch → savedBody updated, status 'ready' → silent data loss. Prove it now errors.
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('ticket.get', DETAIL_REPLY);
     fake.stubCommand('ticket.save_body', { ok: false, error: 'ticket not found: T-1' });
     fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });

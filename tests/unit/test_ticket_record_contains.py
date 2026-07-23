@@ -16,6 +16,8 @@ from murder.state.persistence.records import (
     EscalationRecord,
     TicketRecord,
 )
+from murder.runtime.orchestration.worker_names import WorkerName
+from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.work.tickets.status import TicketStatus
 
 
@@ -48,8 +50,8 @@ def _make_command() -> CommandRecord:
         agent_id=None,
         role=None,
         ticket_id=None,
-        target_worker="",
-        kind="",
+        target_worker=WorkerName.ORCHESTRATOR,
+        kind=OrchestrationCommand.AGENT_STOP,
         payload_json="{}",
         correlation_id="",
         idempotency_key="",

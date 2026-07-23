@@ -15,6 +15,8 @@ from uuid import uuid4
 import pytest
 
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.worker_names import WorkerName
+from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -120,8 +122,8 @@ def _create_command(title: Any) -> CommandEvent:
     return CommandEvent(
         id=uuid4(),
         run_id="run",
-        target_worker="orchestrator",
-        kind="ticket.quick_create",
+        target_worker=WorkerName.ORCHESTRATOR,
+        kind=OrchestrationCommand.TICKET_QUICK_CREATE,
         payload={"title": title},
         correlation_id="c",
         idempotency_key="i",

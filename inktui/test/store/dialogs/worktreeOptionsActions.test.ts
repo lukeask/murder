@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import {
   buildWorktreeOptions,
   createWorktreeOptionsActions,
@@ -51,7 +51,7 @@ describe('resolveWorktreePayload — wire fields', () => {
 
 describe('createWorktreeOptionsActions.fetch', () => {
   it('pulls worktrees.list, drops main, splices the rest between main + new', async () => {
-    const bus = new FakeBusClient();
+    const bus = new FakeApplicationClient();
     bus.stubQuery('worktrees.list', {
       ok: true,
       entries: [
@@ -75,7 +75,7 @@ describe('createWorktreeOptionsActions.fetch', () => {
   });
 
   it('falls back to [main, +new] when the RPC rejects', async () => {
-    const opts = await createWorktreeOptionsActions(new FakeBusClient()).fetch();
+    const opts = await createWorktreeOptionsActions(new FakeApplicationClient()).fetch();
     expect(opts.map((o) => o.key)).toEqual([MAIN_WORKTREE_KEY, NEW_WORKTREE_KEY]);
   });
 });

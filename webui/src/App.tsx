@@ -18,7 +18,7 @@ import { useAppStoreApi } from '@core/hooks/useAppStore.js';
 import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@core/theme/palettes.js';
 import { setTheme } from '@core/theme/themeStore.js';
 import { useEffect, useRef, useState } from 'react';
-import type { WsBusClient } from './bus/WsBusClient.js';
+import type { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
 import { type ConnectionStatus, useConnectionStatus } from './useConnectionStatus.js';
 import { MOBILE_QUERY, useMediaQuery } from './useMediaQuery.js';
@@ -76,7 +76,7 @@ const KEYBIND_HINTS: readonly KeybindHint[] = [
   { chord: 'C-o', desc: 'settings' },
 ];
 
-export function App({ bus }: { readonly bus: WsBusClient }): React.JSX.Element {
+export function App({ bus }: { readonly bus: ApplicationWebSocketClient }): React.JSX.Element {
   useThemeCssVars();
   const status = useConnectionStatus(bus);
   const isMobile = useMediaQuery(MOBILE_QUERY);

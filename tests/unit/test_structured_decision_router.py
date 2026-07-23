@@ -9,7 +9,7 @@ from uuid import UUID
 
 import pytest
 
-from murder.bus import Bus
+from murder.bus import OrchestrationNotifier
 from murder.llm.harness_control.capabilities.permissions import permission_fingerprint
 from murder.llm.harness_control.capabilities.questions import question_fingerprint
 from murder.llm.harness_control.model import (
@@ -45,7 +45,7 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
         ("run-1", "2026-07-12T00:00:00+00:00", "{}"),
     )
-    bus = Bus("run-1", db)
+    bus = OrchestrationNotifier("run-1", db)
     now = datetime(2026, 7, 12, tzinfo=timezone.utc)
     revision = ObservationRevision(1, 2, 3)
     base = unknown_snapshot(HarnessId("codex"), captured_at=now, revision=revision)
@@ -115,13 +115,19 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         await router.observe(agent, snapshot)
 
         rows = db.execute(
-            "SELECT payload_json FROM events WHERE type = ? AND agent_id = ?",
-            ("harness.decision.request", agent.id),
+            "SELECT decision_request_id, decision_kind, request_identity, request_json "
+            "FROM structured_decisions WHERE agent_id = ?",
+            (agent.id,),
         ).fetchall()
         matching = [
-            json.loads(row["payload_json"])
+            {
+                "decision_request_id": row["decision_request_id"],
+                "decision_kind": row["decision_kind"],
+                "request_identity": row["request_identity"],
+                "request": json.loads(row["request_json"]),
+            }
             for row in rows
-            if json.loads(row["payload_json"])["decision_kind"] == kind
+            if row["decision_kind"] == kind
         ]
         assert len(matching) == 1
         request = matching[0]
@@ -137,9 +143,9 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         await StructuredDecisionRouter(runtime).observe(agent, snapshot)
         assert (
             db.execute(
-                "SELECT count(*) FROM events WHERE type = ? AND agent_id = ? "
-                "AND json_extract(payload_json, '$.decision_request_id') = ?",
-                ("harness.decision.request", agent.id, request["decision_request_id"]),
+                "SELECT count(*) FROM structured_decisions "
+                "WHERE agent_id = ? AND decision_request_id = ?",
+                (agent.id, request["decision_request_id"]),
             ).fetchone()[0]
             == 1
         )
@@ -218,10 +224,8 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         await restarted_router.observe(agent, repeated_occurrence)
         assert (
             db.execute(
-                "SELECT count(*) FROM events WHERE type = 'harness.decision.request' "
-                "AND agent_id = ? "
-                "AND json_extract(payload_json, '$.decision_kind') = ? "
-                "AND json_extract(payload_json, '$.request_identity') = ?",
+                "SELECT count(*) FROM structured_decisions "
+                "WHERE agent_id = ? AND decision_kind = ? AND request_identity = ?",
                 (agent.id, kind, identity),
             ).fetchone()[0]
             == 2  # noqa: PLR2004 - two distinct occurrences of identical content
@@ -237,13 +241,18 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
     agent.latest_ingested_frame = SimpleNamespace(snapshot=crash_snapshot)
     await router.observe(agent, crash_snapshot)
     crash_identity = question_fingerprint(crash_question)
-    crash_request = next(
-        json.loads(row["payload_json"])
-        for row in db.execute(
-            "SELECT payload_json FROM events WHERE type = 'harness.decision.request'"
-        ).fetchall()
-        if json.loads(row["payload_json"])["request_identity"] == crash_identity
-    )
+    crash_row = db.execute(
+        "SELECT decision_request_id, decision_kind, request_identity, request_json "
+        "FROM structured_decisions WHERE request_identity = ?",
+        (crash_identity,),
+    ).fetchone()
+    assert crash_row is not None
+    crash_request = {
+        "decision_request_id": crash_row["decision_request_id"],
+        "decision_kind": crash_row["decision_kind"],
+        "request_identity": crash_row["request_identity"],
+        "request": json.loads(crash_row["request_json"]),
+    }
     agent.answer_verified_question.side_effect = RuntimeError("crash before operation persist")
     with pytest.raises(RuntimeError, match="crash before operation"):
         await router.respond(
@@ -269,7 +278,7 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
     assert agent.answer_verified_question.await_count == EXPECTED_QUESTION_EXECUTIONS
     agent.answer_verified_permission.assert_awaited_once()
     response_count = db.execute(
-        "SELECT count(*) FROM events WHERE type = 'harness.decision.response'"
+        "SELECT count(*) FROM structured_decisions WHERE response_json IS NOT NULL"
     ).fetchone()[0]
     assert response_count == len(snapshots) + 1
 
@@ -290,7 +299,7 @@ async def test_permission_observe_and_respond_bridge_permission_service(
         "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
         ("run-perm", "2026-07-12T00:00:00+00:00", "{}"),
     )
-    bus = Bus("run-perm", db)
+    bus = OrchestrationNotifier("run-perm", db)
     now = datetime(2026, 7, 12, tzinfo=timezone.utc)
     revision = ObservationRevision(1, 1, 1)
     base = unknown_snapshot(HarnessId("codex"), captured_at=now, revision=revision)
@@ -327,11 +336,17 @@ async def test_permission_observe_and_respond_bridge_permission_service(
     router = StructuredDecisionRouter(runtime)
     await router.observe(agent, snapshot)
 
-    request = json.loads(
-        db.execute(
-            "SELECT payload_json FROM events WHERE type = 'harness.decision.request'"
-        ).fetchone()["payload_json"]
-    )
+    row = db.execute(
+        "SELECT decision_request_id, decision_kind, request_identity, request_json "
+        "FROM structured_decisions"
+    ).fetchone()
+    assert row is not None
+    request = {
+        "decision_request_id": row["decision_request_id"],
+        "decision_kind": row["decision_kind"],
+        "request_identity": row["request_identity"],
+        "request": json.loads(row["request_json"]),
+    }
     assert request["decision_kind"] == "permission"
     pending = PermissionStore(db).get_pending_approval_for_operation(
         UUID(request["decision_request_id"])

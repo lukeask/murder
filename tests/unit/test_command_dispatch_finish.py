@@ -13,22 +13,25 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from murder.app.service.command_dispatch import CommandDispatcher, command_from_row
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.state.persistence import commands as command_db
 from murder.state.persistence.runs import insert_run
 from murder.state.persistence.schema import get_db, init_db
 
 
-def _command(kind: str = "agent.stop") -> CommandEvent:
+def _command(kind: OrchestrationCommand = OrchestrationCommand.AGENT_STOP) -> CommandEvent:
     return CommandEvent(
         id=uuid4(),
         run_id="run",
         agent_id="",
         role=None,
         ticket_id=None,
-        target_worker="orchestrator",
+        target_worker=WorkerName.ORCHESTRATOR,
         kind=kind,
         payload={},
         correlation_id="c",
@@ -162,6 +165,22 @@ def test_command_from_row_round_trips_valid_uuid() -> None:
     assert str(event.id) == row_id
 
 
+def test_command_event_rejects_unknown_worker_name() -> None:
+    body = _command().model_dump()
+    body["target_worker"] = "unregistered-worker"
+
+    with pytest.raises(ValidationError):
+        CommandEvent.model_validate(body)
+
+
+def test_command_event_rejects_unknown_orchestration_command() -> None:
+    body = _command().model_dump()
+    body["kind"] = "unregistered.command"
+
+    with pytest.raises(ValidationError):
+        CommandEvent.model_validate(body)
+
+
 def test_command_from_row_raises_on_non_uuid_id() -> None:
     with pytest.raises(ValueError, match="non-UUID id"):
         command_from_row(_row("not-a-uuid"))
@@ -175,7 +194,9 @@ def test_claim_next_quarantines_non_uuid_row() -> None:
     original = mod.cmd_db.claim_next_command
     mod.cmd_db.claim_next_command = lambda *a, **k: _row("not-a-uuid")  # type: ignore[assignment]
     try:
-        claimed = dispatcher.claim_next(target_worker="orchestrator", claimed_by="orchestrator")
+        claimed = dispatcher.claim_next(
+            target_worker=WorkerName.ORCHESTRATOR, claimed_by="orchestrator"
+        )
     finally:
         mod.cmd_db.claim_next_command = original  # type: ignore[assignment]
 
@@ -195,16 +216,28 @@ def test_renewed_live_command_is_not_reaped_or_redispatched(tmp_path, monkeypatc
         agent_id="",
         role=None,
         ticket_id=None,
-        target_worker="orchestrator",
-        kind="crow.spawn_rogue",
+        target_worker=WorkerName.ORCHESTRATOR,
+        kind=OrchestrationCommand.CROW_SPAWN_ROGUE,
         payload={"harness": "cursor", "model": "cursor-grok-4-5", "effort": "medium"},
         correlation_id="c",
         idempotency_key="i",
     )
     dispatcher = CommandDispatcher(conn=conn, repo_root=tmp_path, lease_ttl_s=30)
     monkeypatch.setattr("murder.app.service.command_dispatch.time.time", lambda: 100.0)
-    claimed = dispatcher.claim_next(target_worker="orchestrator", claimed_by="orchestrator")
+    claimed = dispatcher.claim_next(
+        target_worker=WorkerName.ORCHESTRATOR, claimed_by="orchestrator"
+    )
     assert claimed is not None
+    assert claimed.event.target_worker is WorkerName.ORCHESTRATOR
+    assert claimed.event.kind is OrchestrationCommand.CROW_SPAWN_ROGUE
+    stored = conn.execute(
+        "SELECT target_worker, kind FROM commands WHERE id = ?", (command_id,)
+    ).fetchone()["target_worker"]
+    assert stored == WorkerName.ORCHESTRATOR.value
+    stored_kind = conn.execute(
+        "SELECT kind FROM commands WHERE id = ?", (command_id,)
+    ).fetchone()["kind"]
+    assert stored_kind == OrchestrationCommand.CROW_SPAWN_ROGUE.value
 
     monkeypatch.setattr("murder.app.service.command_dispatch.time.time", lambda: 125.0)
     assert dispatcher.renew(command_id, claimed_by="orchestrator")

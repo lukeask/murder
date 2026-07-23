@@ -13,6 +13,7 @@ import asyncio
 import logging
 
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.runtime.orchestration.worker_names import WorkerName
 
 LOGGER = logging.getLogger(__name__)
 ORPHAN_PLANNER_TTL_MINUTES = 30
@@ -22,7 +23,7 @@ SWEEP_INTERVAL_S = 60.0
 class PlannerSessionSweeperWorker(Worker):
     def __init__(self, *, sweep_interval_s: float = SWEEP_INTERVAL_S) -> None:
         super().__init__(
-            WorkerSpec(name="planner-session-sweeper", heartbeat_s=sweep_interval_s)
+            WorkerSpec(name=WorkerName.PLANNER_SESSION_SWEEPER, heartbeat_s=sweep_interval_s)
         )
         self._interval = sweep_interval_s
 

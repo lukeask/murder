@@ -4,9 +4,8 @@
  * Copied from {@link ../roster/rosterSlice.js} per the copy recipe (and parallel to
  * {@link ../notes/notesSlice.js} — notes and reports share the same DTO shape, but are two
  * separate concrete slices). Row fields mirror Python `ReportSummary` (name + char_count +
- * updated_at). The invalidating entity is `'report'` — NOTE: this value must be added to the
- * `Entity` union in `src/bus/protocol.ts` and the Python `murder/bus/protocol.py` Entity enum
- * (currently absent; see contract gap note in store.ts).
+ * updated_at). Reports are refreshed explicitly because the current application projection
+ * protocol has no reports topic.
  *
  * The shared `{ rows, status, error }` mechanics come from the generic {@link ListState} +
  * {@link createListSlice} factory in `../listSlice.js` — this file is a thin shell over it.
@@ -14,7 +13,6 @@
  * Copy this file to add slice X: same steps as the notes/roster recipe.
  */
 
-import type { Entity } from '../../bus/protocol.js';
 import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
@@ -35,18 +33,6 @@ export interface ReportRow {
  * `'idle' | 'loading' | 'ready' | 'error'` union is part of the contract.
  */
 export type ReportsState = ListState<ReportRow>;
-
-/**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice.
- *
- * CONTRACT GAP (flagged): `'report'` is not yet in the Python `Entity` enum in
- * `murder/bus/protocol.py` or the TypeScript `Entity` union in `src/bus/protocol.ts`. It has
- * been added to the TS protocol.ts for this chunk. The Python side and `PROTOCOL_VERSION` must
- * be updated in lockstep when service B13 lands. Until then, `report`-entity events will not
- * arrive from the live bus; the slice will only refresh via direct `actions.reports.refresh()`
- * calls. Tests drive it via `FakeBusClient` which accepts any entity value.
- */
-export const REPORTS_INVALIDATING_ENTITY: Entity = 'report';
 
 /** The initial, pre-fetch slice value. */
 export const initialReportsState: ReportsState = initialListState<ReportRow>();

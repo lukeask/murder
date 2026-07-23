@@ -54,7 +54,7 @@ _FILE_LIKE_RE = re.compile(
     re.VERBOSE,
 )
 
-# Bare-dotted-name reference fallback (e.g., `murder.bus.Bus.publish`).
+# Bare-dotted-name reference fallback (e.g., `murder.bus.OrchestrationNotifier.publish`).
 # Resolves only if the dotted prefix maps to a real file under repo_root.
 _DOTTED_RE = re.compile(r"^[a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)+$")
 

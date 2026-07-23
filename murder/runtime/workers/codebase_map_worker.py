@@ -25,6 +25,7 @@ from typing import Any
 
 from murder.llm.clients.base import APIClient, CompletionResult, ToolSpec
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.runtime.orchestration.worker_names import WorkerName
 
 LOGGER = logging.getLogger(__name__)
 MAP_INTERVAL_S = 30.0
@@ -104,7 +105,7 @@ def _build_client(feature: str = "codebase_file_summary") -> APIClient | None:
 
 class CodebaseMapWorker(Worker):
     def __init__(self, *, interval_s: float = MAP_INTERVAL_S) -> None:
-        super().__init__(WorkerSpec(name="codebase-map", heartbeat_s=interval_s))
+        super().__init__(WorkerSpec(name=WorkerName.CODEBASE_MAP, heartbeat_s=interval_s))
         self._interval = interval_s
         # Resolved on first tick; ``False`` once we've decided no client exists
         # (logged once, then idle forever). ``None`` = not yet resolved.

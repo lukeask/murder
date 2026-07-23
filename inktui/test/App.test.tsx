@@ -1,7 +1,7 @@
 /**
  * App-shell integration test — the skeleton-level companion to the per-panel test idiom
  * Renders the real {@link App} against a
- * `FakeBusClient`-backed store + the C4 input stores and asserts the composition: the bars, the
+ * `FakeApplicationClient`-backed store + the C4 input stores and asserts the composition: the bars, the
  * always-visible chat input, and region visibility driven by the panel set.
  *
  * This is the idiom a future shell-level test copies: build the two store bundles with fakes, render
@@ -11,7 +11,7 @@
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../src/application/FakeApplicationClient.js';
 import { App, bodyHeightForChrome, deriveSpawnContext } from '../src/components/App.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import { stageTranscriptFocusId } from '../src/input/focusIds.js';
@@ -29,7 +29,7 @@ async function tick(): Promise<void> {
 
 /** Build the shell against fakes with a given visible-panel set. */
 function setup(visible: readonly PanelId[]) {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   const inputStores = createInputStores(visible);
@@ -138,15 +138,15 @@ describe('App shell', () => {
   it('mounts a favorited crow transcript pane in the center-stage group (not the crows list pane)', async () => {
     // App-path test: renders the full App and proves the favorited crow's transcript pane is
     // mounted in the center-stage group via the pane bridge.
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', {
       invalidation_key: 'iv',
       sessions: [
         { agent_id: 'collab-1', role: 'collaborator', status: 'idle', display_name: 'TestCollab' },
       ],
     });
-    // F2: chat sends route through orchestration.execute (agent.message command kind), not a direct RPC.
-    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    // F2: chat sends route through direct application command (agent.message command kind), not a direct RPC.
+    fake.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     fake.stubQuery('command.get', { ok: true, status: 'done', result_json: '{}' });
     const { store, dispose } = createAppStore(fake);
     await store.getState().actions.roster.refresh();
@@ -218,9 +218,9 @@ describe('bodyHeightForChrome', () => {
 });
 
 describe('deriveSpawnContext — doc file context gated by the highlighted center-stage pane', () => {
-  /** Build a minimal FakeBusClient-backed store. */
+  /** Build a minimal FakeApplicationClient-backed store. */
   function makeStore() {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     return createAppStore(fake);
   }
@@ -295,7 +295,7 @@ describe('alt+w — toggle show/hide for the highlighted center-stage pane', () 
   /** A full App against fakes, with a roster carrying one default-favorited collaborator (→ one center-stage
    * transcript pane) so alt+w has a transcript pane to hide. */
   async function setupApp() {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', {
       invalidation_key: 'iv',
       sessions: [
@@ -371,7 +371,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
   });
 
   it('loads the persisted theme into the global themeStore on mount', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     // settings.get resolves with the light theme → the bridge applies it after load.
     fake.stubQuery('settings.get', {
@@ -388,7 +388,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
   });
 
   it('reacts to a live settings.theme change (the optimistic update path)', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     fake.stubCommand('settings.update', {
       ok: true,
@@ -409,7 +409,7 @@ describe('theme bridge (Phase 5) — settings.theme → themeStore', () => {
   });
 
   it('falls back to the default theme for an unknown persisted id', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     fake.stubQuery('settings.get', {
       ok: true,

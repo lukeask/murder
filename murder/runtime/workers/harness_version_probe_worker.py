@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.llm.harnesses import REGISTRY
 from murder.llm.harnesses.version_probe import (
     ProbeResult,
@@ -91,7 +93,10 @@ async def _run_probe(config: Config, updater: RegistryUpdater) -> dict[str, Any]
 
 
 class HarnessVersionProbeWorker(Worker):
-    COMMAND_KINDS = ("state.harness_version.probe", "config.harnesses_changed")
+    COMMAND_KINDS = (
+        OrchestrationCommand.STATE_HARNESS_VERSION_PROBE,
+        OrchestrationCommand.CONFIG_HARNESSES_CHANGED,
+    )
 
     def __init__(
         self,
@@ -101,7 +106,7 @@ class HarnessVersionProbeWorker(Worker):
     ) -> None:
         super().__init__(
             WorkerSpec(
-                name="harness-version-probe",
+                name=WorkerName.HARNESS_VERSION_PROBE,
                 accepts=self.COMMAND_KINDS,
                 process_model="thread",
             )

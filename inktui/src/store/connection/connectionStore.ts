@@ -5,7 +5,7 @@
  * This is the single source of truth for the {@link ../../components/TopBar.js TopBar}'s connection
  * badge. Like {@link ../../terminal/capsStore.js capsStore} (and unlike an app-store slice) it is
  * written by the **transport wiring** in `index.tsx` — the `connect()`/`onConnect`/`onDisconnect`/
- * `onPermanentError` hooks of the {@link ../../bus/UdsBusClient.js UdsBusClient} — not by any
+ * `onPermanentError` hooks of the application WebSocket client — not by any
  * bus-RPC action. Connection state is a process-wide transport fact, not entity state pulled from
  * the service, so it lives outside the slice graph exactly as terminal capability does.
  *
@@ -24,7 +24,7 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
  * The transport-connection state.
  *  - `'unknown'` — initial; the wiring has not reported anything yet. Renders NO badge, which is
  *    exactly what smoke runs, the fake bus, and most component tests want: a transport that never
- *    drives this store (the {@link ../../bus/FakeBusClient.js FakeBusClient} has no connect hooks)
+ *    drives this store (the {@link application/FakeApplicationClient.js FakeApplicationClient} has no connect hooks)
  *    leaves the badge silent rather than asserting a misleading "connected"/"connecting".
  *  - `'connecting'` — the live wiring set this just before the first `connect()`.
  *  - `'connected'` — a handshake completed (`onConnect`).

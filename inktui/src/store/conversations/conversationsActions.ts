@@ -16,10 +16,7 @@
  *     selectors/transcript pane, NOT here (rule 2). This action receives the resolved agentId from its
  *     caller, never parses a conversation_id (rule 1 / anti-pattern).
  *
- *  3. `applyBlock(event)` — pure setState, no bus call. Called by the second `bus.subscribe` in
- *     `store.ts` on each `conversation.block` event. Handles both `block-appended` (push) and
- *     `block-updated` (replace trailing block with matching id). Ref-swaps only the affected
- *     agent's transcript array — sibling agents keep identity.
+ *  3. Projection invalidations refresh the authoritative conversation snapshot through `store.ts`.
  *
  * `agent.message` is dispatched as an orchestrator command kind via `command.submit` (the live
  * write seam) rather than as a direct RPC — see {@link ../commandSubmit.js}. The discriminated-union
@@ -27,8 +24,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
-import type { ConversationBlockEvent, ConversationStateEvent } from '../../bus/protocol.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import { stageTranscriptFocusId } from '../../input/focusIds.js';
 import { submitCommand } from '../commandSubmit.js';
 import type { AppStore } from '../store.js';
@@ -45,9 +42,8 @@ import {
  * Declares the conversations read RPC via declaration merging rather than editing the frozen C1 bus
  * files. `state.conversations_snapshot` is the bus-contract name (`domain.verb`, mirrors Python
  * `RuntimeClient.get_conversations_snapshot`). Called on connect to prime the transcripts map so a
- * cold-start service (no `conversation.block` events yet) paints populated transcript panes immediately.
+ * cold-start service paints populated transcript panes immediately.
  */
-
 
 /**
  * One block as it appears inside `ConversationSummary.blocks` (the `ConversationBlockSummary` DTO,
@@ -106,9 +102,7 @@ export interface ConversationSummaryDto {
  * The `state.conversations_snapshot` reply. Mirrors the service's `ConversationsSnapshot` DTO
  * (`murder/app/protocol/read_models.py`). `conversations` is a list of `ConversationSummary` entries
  * (only `in_progress` conversations), each carrying the full block history for that agent.
- * Keying is by `agent_id` (CONTRACT ASSUMPTION: one active conversation per agent — same assumption
- * the slice already makes for `conversation.block` events). `parseBlock` applies to each block row
- * unchanged since `ConversationBlockSummary` has the same `id`/`payload` shape as the event block.
+ * Keying is by `agent_id` (CONTRACT ASSUMPTION: one active conversation per agent).
  */
 export interface ConversationsSnapshotReply {
   conversations: readonly ConversationSummaryDto[];
@@ -167,7 +161,7 @@ export function applyConversationsSnapshot(
   }));
 }
 
-/** The conversations actions, bound to one `BusClient` + store handle. */
+/** The conversations actions, bound to one `ApplicationClient` + store handle. */
 export interface ConversationsActions {
   /**
    * Explicit refresh: pull all agent transcripts from `state.conversations_snapshot` and populate
@@ -175,7 +169,7 @@ export interface ConversationsActions {
    * `applyConversationsSnapshot`; this action remains for explicit refresh/mount paths.
    *
    * Errors are swallowed (fire-and-forget from the priming path; transcripts remain empty rather
-   * than crashing, and live `conversation.block` events will populate them as they arrive).
+   * than crashing; the next projection invalidation retries the authoritative refresh).
    */
   refresh(): Promise<void>;
 
@@ -190,27 +184,6 @@ export interface ConversationsActions {
    * from the UI perspective). The bus-level error policy (timeouts) is the implementation's.
    */
   send(agentId: string, message: string): Promise<void>;
-
-  /**
-   * Apply a `ConversationBlockEvent` to the transcript map. Pure `setState` — no bus call.
-   * Called by the `store.ts` subscription on each `conversation.block` event.
-   *
-   * Semantics (mirroring Python `ConversationsStore.apply_event`):
-   *  - `block-appended`: push the new block onto the agent's transcript array.
-   *  - `block-updated`: replace the last block whose `id` matches — or push if none match
-   *    (defensive: `FakeBusClient` tests drive both branches).
-   *
-   * Ref-swap: produces `{...prev, [agentId]: newArray}` so only the affected agent's transcript
-   * changes identity — other agents' arrays are untouched (the granularity contract).
-   */
-  applyBlock(event: ConversationBlockEvent): void;
-
-  /**
-   * Apply a `ConversationStateEvent` to the per-agent meta map. Pure `setState` — no bus call.
-   * Called by the `store.ts` subscription on each `conversation.state` event. Ref-swaps only the
-   * affected agent's meta entry (granularity contract, same as `applyBlock`).
-   */
-  applyState(event: ConversationStateEvent): void;
 
   /**
    * Forward one raw key to the agent's harness pane via the `agent.send_key` orchestrator command.
@@ -300,7 +273,7 @@ function activatePaneReapAges(
 }
 
 export function createConversationsActions(
-  bus: BusClient,
+  bus: ApplicationClient,
   store: StoreApi<AppStore>,
 ): ConversationsActions {
   // Per-call request token — guards against a stale reply replacing the authoritative set when a
@@ -316,7 +289,10 @@ export function createConversationsActions(
         // (`{...old, ...parsed}`) would keep an agent whose conversation has since ENDED (absent
         // from the snapshot) forever — accumulating ghost panes/dead transcripts across reconnects.
         // The map is rebuilt from exactly the snapshot's conversations.
-        applyConversationsSnapshot(store, reply);
+        applyConversationsSnapshot(
+          store,
+          asQueryResult<'conversations.get', ConversationsSnapshotReply>(reply),
+        );
       } catch {
         // Swallow: priming is best-effort; live events will hydrate the transcripts when they arrive.
       }
@@ -365,90 +341,6 @@ export function createConversationsActions(
         const message = error instanceof Error ? error.message : String(error);
         toastStore.getState().push(`send failed: ${message}`, { severity: 'error', ttlMs: 12000 });
       }
-    },
-
-    applyBlock(event: ConversationBlockEvent): void {
-      const agentId = event.agent_id;
-
-      // TUIchat-4: the Condensed-view chunk summary reuses the `conversation.block` channel with
-      // `action: 'chunk-summarized'`; its `block` is the summary payload, NOT a transcript row, so it
-      // must never reach `parseBlock`/the transcript array. Fold it into the ephemeral chunkSummaries
-      // map as an incremental hint (the snapshot's chunk_summaries[] stays the source of truth and
-      // overwrites these on the next re-prime). `summary_id`/`chunk_idx` are absent on the live event:
-      // use -1 and append at the tail (events arrive in flush order, the contract).
-      if (event.action === 'chunk-summarized') {
-        const block = event.block;
-        const summaryText = typeof block['summary'] === 'string' ? block['summary'] : '';
-        if (!summaryText) return; // empty-summary guard mirrors the backend (Condensed → verbose)
-        const rawIds = block['block_ids'];
-        const blockIds = Array.isArray(rawIds)
-          ? rawIds.map((id) => Number(id)).filter((n) => Number.isFinite(n))
-          : [];
-        store.setState((state) => {
-          const prev = state.conversations.chunkSummaries[agentId] ?? [];
-          const matchIdx = findChunkSummaryIndex(prev, blockIds);
-          const next: ChunkSummary = {
-            summaryId: -1,
-            chunkIdx: matchIdx === -1 ? prev.length : (prev[matchIdx]?.chunkIdx ?? matchIdx),
-            summary: summaryText,
-            blockIds,
-          };
-          const updated = matchIdx === -1 ? [...prev, next] : replaceAt(prev, matchIdx, next);
-          return {
-            conversations: {
-              ...state.conversations,
-              chunkSummaries: {
-                ...state.conversations.chunkSummaries,
-                [agentId]: updated,
-              },
-            },
-          };
-        });
-        return;
-      }
-
-      const parsed = parseBlock(event.block);
-
-      store.setState((state) => {
-        const prev = state.conversations;
-        const existing: readonly (typeof parsed)[] = prev.transcripts[agentId] ?? [];
-
-        const matchIdx = findBlockIndex(existing, parsed.id);
-        const updated =
-          matchIdx === -1 ? [...existing, parsed] : replaceAt(existing, matchIdx, parsed);
-
-        return {
-          conversations: {
-            ...prev,
-            transcripts: { ...prev.transcripts, [agentId]: updated },
-          },
-        };
-      });
-    },
-
-    applyState(event: ConversationStateEvent): void {
-      const agentId = event.agent_id;
-      const next: ConversationMeta = {
-        liveState: event.live_state ?? null,
-        queuedMessage: event.queued_message ?? null,
-      };
-      store.setState((state) => {
-        const prev = state.conversations.meta[agentId];
-        // Identity-preserve when nothing changed so memoised consumers skip re-render.
-        if (
-          prev !== undefined &&
-          prev.liveState === next.liveState &&
-          prev.queuedMessage === next.queuedMessage
-        ) {
-          return state;
-        }
-        return {
-          conversations: {
-            ...state.conversations,
-            meta: { ...state.conversations.meta, [agentId]: next },
-          },
-        };
-      });
     },
 
     async sendKey(agentId: string, key: string, literal: boolean, enter = false): Promise<void> {
@@ -564,38 +456,3 @@ const CHAT_VIEW_CYCLE: Readonly<Record<ChatViewMode, ChatViewMode>> = {
   condensed: 'tmux',
   tmux: 'verbose',
 };
-
-function findBlockIndex(blocks: readonly ConversationBlock[], id: ConversationBlock['id']): number {
-  if (id === null) {
-    return -1;
-  }
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    if (blocks[i]?.id === id) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function findChunkSummaryIndex(
-  summaries: readonly ChunkSummary[],
-  blockIds: readonly number[],
-): number {
-  const key = chunkBlockIdsKey(blockIds);
-  for (let i = summaries.length - 1; i >= 0; i--) {
-    if (chunkBlockIdsKey(summaries[i]?.blockIds ?? []) === key) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function chunkBlockIdsKey(blockIds: readonly number[]): string {
-  return [...blockIds].sort((a, b) => a - b).join(',');
-}
-
-function replaceAt<T>(items: readonly T[], index: number, item: T): readonly T[] {
-  const next = [...items];
-  next[index] = item;
-  return next;
-}

@@ -6,7 +6,6 @@ from pathlib import Path
 
 from murder.app.protocol.read_models import (
     ConversationsSnapshot,
-    CrowSnapshot,
     HistorySnapshot,
     NoteDisplaySnapshot,
     NotesSnapshot,
@@ -84,9 +83,6 @@ class ServiceReadModel:
 
     def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
         return self._work.get_report_display(name)
-
-    def get_crow_snapshot(self) -> CrowSnapshot:
-        return self._runtime.get_crow_snapshot()
 
     def get_conversations_snapshot(self) -> ConversationsSnapshot:
         return self._runtime.get_conversations_snapshot()

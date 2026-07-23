@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
+from murder.roster.repository import RosterRepository
+
 
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
@@ -25,87 +27,45 @@ def upsert_agent(
     worktree_path: str | None = None,
     pid: int | None = None,
 ) -> None:
-    """Insert or update an agent row."""
-    now = _now()
-    existing = conn.execute("SELECT 1 FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
-    if existing is None:
-        conn.execute(
-            """
-            INSERT INTO agents
-                (agent_id, role, ticket_id, session, harness, model, worktree_path, status,
-                 start_commit, started_at, last_heartbeat_at, pid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                agent_id,
-                role,
-                ticket_id,
-                session,
-                harness,
-                model,
-                worktree_path,
-                status,
-                start_commit,
-                now,
-                now,
-                pid,
-            ),
-        )
-    else:
-        conn.execute(
-            """
-            UPDATE agents
-               SET role = ?, ticket_id = ?, session = ?, harness = COALESCE(?, harness),
-                   model = COALESCE(?, model),
-                   worktree_path = COALESCE(?, worktree_path),
-                   status = ?,
-                   start_commit = COALESCE(?, start_commit),
-                   last_heartbeat_at = ?,
-                   pid = COALESCE(?, pid)
-             WHERE agent_id = ?
-            """,
-            (
-                role,
-                ticket_id,
-                session,
-                harness,
-                model,
-                worktree_path,
-                status,
-                start_commit,
-                now,
-                pid,
-                agent_id,
-            ),
-        )
+    """Persist through the roster feature's atomic write boundary."""
+    RosterRepository().sync_agent(
+        conn,
+        agent_id=agent_id,
+        role=role,
+        ticket_id=ticket_id,
+        session=session,
+        harness=harness,
+        model=model,
+        status=status,
+        start_commit=start_commit,
+        worktree_path=worktree_path,
+        pid=pid,
+    )
 
 
 # F11 H1 — heartbeat emit coalescing.
 #
-# A plain heartbeat only bumps ``last_heartbeat_at``; the ONLY thing the
-# ``state.crow_snapshot`` consumer derives from that field is the client-side
+# A plain heartbeat only bumps ``last_heartbeat_at``; the roster projection
+# derives the client-side
 # "stuck" flag (Ink ``isStuck``: ``now - last_seen > STUCK_AFTER``, mirrored from
 # Python ``read_model.STUCK_AFTER`` / ``crow_health.STUCK_AFTER = 60s``). The Ink
-# roster is event-driven (re-pulled ONLY on an ``agent``-entity ``state.snapshot``;
-# there is no client refetch timer), so we cannot drop the heartbeat emit entirely
+# roster is event-driven (re-pulled through ``projection.invalidate``; there is
+# no client refetch timer), so we cannot drop the refresh input entirely
 # or a healthy crow's ``last_seen`` would freeze and it would render as falsely
-# "stuck" after 60s. But emitting ``agent`` on every ~5s beat is the antipattern
+# "stuck" after 60s. But invalidating on every ~5s beat is the antipattern
 # (a refetch storm Ink can't use — it renders no sub-bucket heartbeat precision).
 #
-# Policy: emit ``agent`` only when ``floor(now / HEARTBEAT_EMIT_BUCKET_S)`` advances,
+# Policy: invalidate only when ``floor(now / HEARTBEAT_EMIT_BUCKET_S)`` advances,
 # i.e. at most once per bucket per agent. The bucket is half ``STUCK_AFTER`` so the
 # client's worst-case ``last_seen`` staleness (bucket + bus latency) stays well under
 # the 60s stuck threshold and a live crow never flips to false-stuck. Status changes
-# go through the ``sync_agent`` choke point (which already emits ``agent``) and are
+# go through the ``sync_agent`` choke point (which already appends roster input) and are
 # unaffected by this gate.
 HEARTBEAT_EMIT_BUCKET_S: float = 30.0
 
 
 def heartbeat_agent(conn: sqlite3.Connection, agent_id: str) -> None:
-    conn.execute(
-        "UPDATE agents SET last_heartbeat_at = ? WHERE agent_id = ?",
-        (_now(), agent_id),
-    )
+    RosterRepository().heartbeat_agent(conn, agent_id=agent_id, invalidate=True)
 
 
 def heartbeat_bucket(now_s: float, *, bucket_s: float = HEARTBEAT_EMIT_BUCKET_S) -> int:
@@ -120,10 +80,7 @@ def heartbeat_bucket(now_s: float, *, bucket_s: float = HEARTBEAT_EMIT_BUCKET_S)
 
 
 def set_agent_status(conn: sqlite3.Connection, agent_id: str, status: str) -> None:
-    conn.execute(
-        "UPDATE agents SET status = ?, last_heartbeat_at = ? WHERE agent_id = ?",
-        (status, _now(), agent_id),
-    )
+    RosterRepository().set_agent_status(conn, agent_id=agent_id, status=status)
 
 
 def get_agent_status(conn: sqlite3.Connection, agent_id: str) -> str | None:

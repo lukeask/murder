@@ -23,7 +23,8 @@
  * on main or spin up a new branch).
  */
 
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 
 /**
  * The `worktrees.list` query reply shape, declared here via TypeScript declaration merging.
@@ -121,18 +122,18 @@ export interface WorktreeOptionsActions {
 }
 
 /**
- * Build the worktree-options actions bound to one injected {@link BusClient}. `fetch` calls
+ * Build the worktree-options actions bound to one injected {@link ApplicationClient}. `fetch` calls
  * `worktree.list`, drops the main entry (the picker synthesizes its own `main checkout` head) and
  * splices the remaining (non-main) worktrees in via {@link buildWorktreeOptions}.
  */
-export function createWorktreeOptionsActions(bus: BusClient): WorktreeOptionsActions {
+export function createWorktreeOptionsActions(bus: ApplicationClient): WorktreeOptionsActions {
   return {
     async fetch(): Promise<readonly WorktreeOption[]> {
       try {
         const reply = await bus.query('worktrees.list', {});
-        const existing: ExistingWorktree[] = reply.entries
-          .filter((entry: ExistingWorktree) => !entry.is_main)
-          .map((entry: ExistingWorktree) => ({
+        const existing: ExistingWorktree[] = asQueryResult<'worktrees.list', WorktreeListReply>(reply).entries
+          .filter((entry) => !entry.is_main)
+          .map((entry) => ({
             path: entry.path,
             ...(entry.branch !== null ? { branch: entry.branch } : {}),
           }));

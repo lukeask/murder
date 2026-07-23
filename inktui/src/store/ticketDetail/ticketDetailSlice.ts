@@ -2,7 +2,7 @@
  * Ticket-detail slice — holds the body (and display-only frontmatter) of the currently open ticket.
  *
  * Copied from {@link ../tickets/ticketsSlice.js} per the C3 copy recipe. Key differences:
- *  - This is NOT an event-invalidated slice (no `INVALIDATING_ENTITY` — the detail is loaded on
+ *  - This is a demand-loaded slice: the detail is loaded on
  *    demand when the user presses enter on a ticket, not on every bus snapshot). The editor
  *    controls loading/saving explicitly via its actions.
  *  - The editable document is the ticket **body** (a markdown string). Display-only context
@@ -89,7 +89,7 @@ export const initialTicketDetailState: TicketDetailState = {
 
 /**
  * Slice factory. Contributes only the `ticketDetail` key; `../store.ts` composes it.
- * Note: no `*_INVALIDATING_ENTITY` — this slice is demand-loaded, not snapshot-driven.
+ * This slice is demand-loaded, not projection-snapshot-driven.
  */
 export const createTicketDetailSlice: StateCreator<
   AppStore,

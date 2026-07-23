@@ -52,7 +52,7 @@ def test_codebase_map_worker_registered(monkeypatch):
             repo_root=Path("/repo"),
             runtime=runtime,
             orchestrator=orchestrator,
-            broker=object(),
+                bus=object(),
         )
     )
 

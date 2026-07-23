@@ -1,4 +1,4 @@
-"""Runtime-panel snapshot builders: crows, conversations, schedule."""
+"""Runtime-panel snapshot builders: conversations and schedule."""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from murder.app.protocol.read_models import (
     ConversationChunkSummary,
     ConversationsSnapshot,
     ConversationSummary,
-    CrowSessionSummary,
-    CrowSnapshot,
     InvalidationKeys,
     ScheduleSnapshot,
 )
@@ -21,14 +19,12 @@ from murder.app.service.schedule_snapshot import build_schedule_snapshot
 
 from ._common import (
     ReadModelBase,
-    _keep_failed_session,
     _optional_str,
-    _parse_datetime,
 )
 
 
 class RuntimeReadModel(ReadModelBase):
-    """Build crow/conversation/schedule snapshots."""
+    """Build conversation and schedule snapshots."""
 
     def get_schedule_snapshot(self) -> ScheduleSnapshot:
         as_of = datetime.utcnow()
@@ -38,89 +34,6 @@ class RuntimeReadModel(ReadModelBase):
                 as_of=as_of,
                 invalidation_key=self.keys.current_key(InvalidationKeys.schedule),
             )
-
-    def get_crow_snapshot(self) -> CrowSnapshot:
-        as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                """
-                SELECT a.agent_id, a.role, a.ticket_id, a.status, a.session,
-                       (
-                         SELECT hs.session_id
-                           FROM harness_sessions hs
-                          WHERE hs.transport = 'tmux'
-                            AND hs.transport_ref = a.session
-                            AND hs.status NOT IN ('stopped','failed','lost')
-                          ORDER BY hs.started_at DESC, hs.session_id DESC
-                          LIMIT 1
-                       ) AS persistent_session_id,
-                       COALESCE(a.harness, t.harness) AS harness,
-                       COALESCE(a.model, t.model) AS model,
-                       a.worktree_path,
-                       a.started_at, a.last_heartbeat_at,
-                       COALESCE(t.title, '') AS title,
-                       COALESCE(t.status, '') AS ticket_status
-                  FROM agents a
-                  LEFT JOIN tickets t ON t.id = a.ticket_id
-                 WHERE a.status NOT IN ('done', 'dead')
-                 ORDER BY
-                       CASE a.status
-                         WHEN 'escalating' THEN 0
-                         WHEN 'blocked' THEN 1
-                         WHEN 'running' THEN 2
-                         WHEN 'idle' THEN 3
-                         WHEN 'failed' THEN 4
-                         ELSE 5
-                       END,
-                       a.started_at DESC,
-                       a.agent_id
-                """
-            ).fetchall()
-            ticket_ids = [str(r["ticket_id"]) for r in rows if r["ticket_id"]]
-            open_by_ticket: dict[str, tuple[int, int]] = {}
-            if ticket_ids:
-                placeholders = ",".join("?" * len(ticket_ids))
-                for esc in conn.execute(
-                    f"""
-                    SELECT ticket_id, COUNT(*) AS n, MAX(severity) AS max_sev
-                      FROM escalations
-                     WHERE resolved = 0 AND ticket_id IN ({placeholders})
-                     GROUP BY ticket_id
-                    """,
-                    ticket_ids,
-                ).fetchall():
-                    open_by_ticket[str(esc["ticket_id"])] = (
-                        int(esc["n"]),
-                        int(esc["max_sev"] or 0),
-                    )
-        sessions = tuple(
-            CrowSessionSummary(
-                agent_id=str(row["agent_id"]),
-                role=str(row["role"]),
-                ticket_id=_optional_str(row["ticket_id"]) or None,
-                ticket_title=str(row["title"] or ""),
-                status=str(row["status"]),
-                display_name=_optional_str(row["session"]),
-                harness=_optional_str(row["harness"]),
-                last_seen=_parse_datetime(row["last_heartbeat_at"]),
-                started_at=_parse_datetime(row["started_at"]),
-                ticket_status=_optional_str(row["ticket_status"]) or None,
-                worktree_path=_optional_str(row["worktree_path"]),
-                model=_optional_str(row["model"]),
-                open_escalations=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[0],
-                max_severity=open_by_ticket.get(str(row["ticket_id"] or ""), (0, 0))[1],
-                session_id=_optional_str(row["persistent_session_id"]),
-            )
-            for row in rows
-        )
-        # done/dead are excluded in SQL; drop stale failed agents here so the
-        # wire roster never carries them (Ink does no client-side filtering).
-        sessions = tuple(s for s in sessions if _keep_failed_session(s, now=as_of))
-        return CrowSnapshot(
-            sessions=sessions,
-            as_of=as_of,
-            invalidation_key=self.keys.current_key(InvalidationKeys.crows),
-        )
 
     def get_conversations_snapshot(self) -> ConversationsSnapshot:
         """Return active conversation histories for a newly connected TUI."""

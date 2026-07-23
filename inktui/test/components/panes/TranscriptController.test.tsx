@@ -1,10 +1,10 @@
 import { render } from 'ink-testing-library';
 import { act, type JSX } from 'react';
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import { TranscriptController } from '../../../src/components/panes/TranscriptController.js';
 import { AppStoreProvider } from '../../../src/hooks/useAppStore.js';
-import { BusClientProvider } from '../../../src/hooks/useBusClient.js';
+import { ApplicationClientProvider } from '../../../src/hooks/useApplicationClient.js';
 import { InputStoresProvider } from '../../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../../src/input/createInputStores.js';
 import { stageTranscriptFocusId } from '../../../src/input/focusIds.js';
@@ -42,12 +42,12 @@ function Harness({
   store,
   inputStores,
 }: {
-  readonly bus: FakeBusClient;
+  readonly bus: FakeApplicationClient;
   readonly store: AppStoreApi;
   readonly inputStores: ReturnType<typeof createInputStores>;
 }): JSX.Element {
   return (
-    <BusClientProvider value={bus}>
+    <ApplicationClientProvider value={bus}>
       <AppStoreProvider value={store}>
         <InputStoresProvider value={inputStores}>
           <TranscriptController
@@ -58,13 +58,13 @@ function Harness({
           />
         </InputStoresProvider>
       </AppStoreProvider>
-    </BusClientProvider>
+    </ApplicationClientProvider>
   );
 }
 
 describe('TranscriptController', () => {
   it('treats scroll-up as older history and scroll-down as newer history for keys and wheel', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     const { store, dispose } = createAppStore(fake);
     store.setState((state) => ({
       roster: {

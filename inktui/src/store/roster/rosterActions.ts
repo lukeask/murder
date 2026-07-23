@@ -1,11 +1,11 @@
 /**
  * Roster actions — the *only* code that calls the bus for crow data (rule 3).
  *
- * An action is a closure over the injected {@link BusClient} and the store's `set`. It issues one
+ * An action is a closure over the injected {@link ApplicationClient} and the store's `set`. It issues one
  * query, projects the wire DTO into the slice's presentation-free {@link RosterRow}s, and ref-swaps
  * *only* the `roster` slice. Components and selectors never reach the bus — they dispatch these
  * actions (exposed off the store handle) or read the slice. This file is the seam a future
- * web/phone client reuses unchanged: no Ink, no terminal, no socket — just `BusClient` + the store.
+ * web/phone client reuses unchanged: no Ink, no terminal, no socket — just `ApplicationClient` + the store.
  *
  * The loading→ready/error lifecycle + ref-swap-only-this-key mechanics now come from the shared
  * {@link createRefreshAction} factory in `../listSlice.js` — this file supplies only the three
@@ -19,7 +19,7 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { submitCommand } from '../commandSubmit.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
@@ -45,7 +45,7 @@ export interface CrowSnapshotReply {
 
 /**
  * One session row as it crosses the wire (Python `CrowSessionSummary`). Presentation-free.
- * `role` mirrors `murder/bus/protocol.py`'s `Role` enum (`'collaborator' | 'planner' | 'crow' |
+ * `role` mirrors `murder/application/protocol.py`'s `Role` enum (`'collaborator' | 'planner' | 'crow' |
  * …`). The slice stores it as a raw string; `crowsSelectors.ts` (C9) uses it for type-grouping.
  *
  * Rich fields from Python `CrowSessionSummary`:
@@ -102,7 +102,7 @@ function toRosterRow(session: CrowSessionDto): RosterRow {
 }
 
 /**
- * The roster's actions, bound to one `BusClient` + store handle. Returned to `../store.ts`, which
+ * The roster's actions, bound to one `ApplicationClient` + store handle. Returned to `../store.ts`, which
  * hangs them off the store so components dispatch `store.getState().actions.roster.refresh()` (or,
  * in React, a selector-picked action). Held in a `RosterActions` object so the slice's verbs are
  * discoverable in one place and copyable as a unit.
@@ -110,7 +110,7 @@ function toRosterRow(session: CrowSessionDto): RosterRow {
 export interface RosterActions {
   /**
    * Re-pull the roster and ref-swap *only* the `roster` slice. The sole bus caller for crow data.
-   * Idempotent and safe to call on every matching `state.snapshot`; concurrent calls are last-write
+   * Idempotent and safe to call on every matching projection invalidation; concurrent calls are last-write
    * (the latest reply wins), which is correct for a full-snapshot read. Rejections land in
    * `roster.error` and flip `status` to `'error'` — never thrown past the action, so the
    * event-invalidation loop in `../store.ts` stays fire-and-forget.
@@ -126,7 +126,7 @@ export interface RosterActions {
   resetCrow(ticketId: string): Promise<void>;
 }
 
-export function createRosterActions(bus: BusClient, store: StoreApi<AppStore>): RosterActions {
+export function createRosterActions(bus: ApplicationClient, store: StoreApi<AppStore>): RosterActions {
   return {
     ...createRefreshAction(bus, store, {
       key: 'roster',

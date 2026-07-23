@@ -25,8 +25,8 @@ flips ``scheduler_state.mode`` and must emit ``ticket``, never ``queue_row``.
 A negative test asserts set_mode emits no ``queue_row``.
 
 CROSS-PROCESS CAVEAT: in production ``UsageProbeWorker`` runs in a subprocess
-whose ``WorkerCtx`` gets a DB-backed ``Bus`` (wired in ``process_targets.py``);
-``Bus.publish`` persists to the shared ``events`` table before fan-out and the
+whose ``WorkerCtx`` gets a DB-backed ``OrchestrationNotifier`` (wired in ``process_targets.py``);
+``OrchestrationNotifier.publish`` persists to the shared ``events`` table before fan-out and the
 client tails it (``DurableBroker.tail``), so the emit crosses the process
 boundary. These in-process unit tests construct the worker directly and so do
 NOT exercise that subprocess wiring — they prove the emit *fires* with a live
@@ -41,12 +41,7 @@ from pathlib import Path
 
 import pytest
 
-from murder.bus import Bus
-from murder.bus.protocol import (
-    Entity,
-    SchedulerDecisionEvent,
-    StateSnapshotEvent,
-)
+from murder.bus import OrchestrationNotifier
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
@@ -59,24 +54,8 @@ def _ctx(repo_root: Path) -> WorkerCtx:
     conn = get_db(repo_root / ".murder" / "murder.db")
     init_db(conn)
     insert_run(conn, "run-test", "{}")
-    bus = Bus("run-test", conn)
+    bus = OrchestrationNotifier("run-test", conn)
     return WorkerCtx(repo_root=repo_root, db=conn, bus=bus, run_id="run-test")
-
-
-async def _record(sink: list[object], ev: object) -> None:
-    sink.append(ev)
-
-
-def _queue_row_snapshots(
-    captured: list[object], key: str | None = None
-) -> list[StateSnapshotEvent]:
-    return [
-        e
-        for e in captured
-        if isinstance(e, StateSnapshotEvent)
-        and e.entity == Entity.QUEUE_ROW
-        and (key is None or e.key == key)
-    ]
 
 
 # === scheduler decision-cache choke point ====================================
@@ -87,8 +66,6 @@ async def test_evaluate_window_emits_one_key_only_queue_row_snapshot(
     repo_root: Path,
 ) -> None:
     ctx = _ctx(repo_root)
-    captured: list[object] = []
-    ctx.bus.subscribe(lambda ev: _record(captured, ev))
 
     now = datetime.now(timezone.utc)
     window = UsageWindow(
@@ -102,14 +79,12 @@ async def test_evaluate_window_emits_one_key_only_queue_row_snapshot(
     worker = SchedulerWorker()
     await worker._evaluate_window(ctx, "codex", window, now)
 
-    snaps = _queue_row_snapshots(captured, "codex:5h")
-    assert len(snaps) == 1
-    assert snaps[0].payload is None  # key-only by contract
-
-    # The typed event is preserved (not replaced) -- contract is additive.
-    decisions = [e for e in captured if isinstance(e, SchedulerDecisionEvent)]
-    assert len(decisions) == 1
-
+    input_row = ctx.db.execute(
+        "SELECT projection, subject_key, generation FROM projection_inputs "
+        "WHERE projection = 'schedule' AND subject_key = 'decision:codex:5h'"
+    ).fetchone()
+    assert input_row is not None
+    assert input_row["generation"] == 0
 
 # === usage-probe insert choke point ==========================================
 
@@ -117,8 +92,6 @@ async def test_evaluate_window_emits_one_key_only_queue_row_snapshot(
 @pytest.mark.asyncio
 async def test_usage_probe_emits_queue_row_per_sampled_harness(repo_root: Path) -> None:
     ctx = _ctx(repo_root)
-    captured: list[object] = []
-    ctx.bus.subscribe(lambda ev: _record(captured, ev))
 
     async def _sample(
         _ctx: WorkerCtx,
@@ -133,12 +106,14 @@ async def test_usage_probe_emits_queue_row_per_sampled_harness(repo_root: Path) 
         kinds_provider=lambda _ctx, modes=None: ["codex", "claude"],
     )
     from murder.bus.protocol import CommandEvent
+    from murder.runtime.orchestration.commands import OrchestrationCommand
+    from murder.runtime.orchestration.worker_names import WorkerName
 
     cmd = CommandEvent(
         run_id="run-test",
         agent_id="tester",
-        target_worker="usage-probe",
-        kind="state.harness_usage.sample",
+        target_worker=WorkerName.USAGE_PROBE,
+        kind=OrchestrationCommand.STATE_HARNESS_USAGE_SAMPLE,
         payload={},
         correlation_id="c1",
         idempotency_key="k1",
@@ -146,18 +121,15 @@ async def test_usage_probe_emits_queue_row_per_sampled_harness(repo_root: Path) 
     result = await worker.on_command(cmd, ctx)
     assert result["handled"] is True
 
-    codex = _queue_row_snapshots(captured, "codex")
-    claude = _queue_row_snapshots(captured, "claude")
-    assert len(codex) == 1
-    assert len(claude) == 1
-    assert all(e.payload is None for e in (*codex, *claude))
+    inputs = ctx.db.execute(
+        "SELECT subject_key FROM projection_inputs WHERE projection = 'schedule' ORDER BY sequence"
+    ).fetchall()
+    assert [row["subject_key"] for row in inputs] == ["usage:codex", "usage:claude"]
 
 
 @pytest.mark.asyncio
 async def test_usage_probe_does_not_emit_when_nothing_stored(repo_root: Path) -> None:
     ctx = _ctx(repo_root)
-    captured: list[object] = []
-    ctx.bus.subscribe(lambda ev: _record(captured, ev))
 
     async def _sample(
         _ctx: WorkerCtx,
@@ -172,19 +144,23 @@ async def test_usage_probe_does_not_emit_when_nothing_stored(repo_root: Path) ->
         kinds_provider=lambda _ctx, modes=None: ["codex"],
     )
     from murder.bus.protocol import CommandEvent
+    from murder.runtime.orchestration.commands import OrchestrationCommand
+    from murder.runtime.orchestration.worker_names import WorkerName
 
     cmd = CommandEvent(
         run_id="run-test",
         agent_id="tester",
-        target_worker="usage-probe",
-        kind="state.harness_usage.sample",
+        target_worker=WorkerName.USAGE_PROBE,
+        kind=OrchestrationCommand.STATE_HARNESS_USAGE_SAMPLE,
         payload={},
         correlation_id="c2",
         idempotency_key="k2",
     )
     await worker.on_command(cmd, ctx)
 
-    assert _queue_row_snapshots(captured) == []
+    assert ctx.db.execute(
+        "SELECT 1 FROM projection_inputs WHERE projection = 'schedule'"
+    ).fetchone() is None
 
 
 # === negative: mode change is TICKET, not QUEUE_ROW ==========================
@@ -199,15 +175,14 @@ async def test_set_mode_does_not_emit_queue_row(repo_root: Path) -> None:
         "INSERT OR IGNORE INTO scheduler_state(id, mode, updated_at) VALUES (1, 'manual', ?)",
         (now,),
     )
-    captured: list[object] = []
-    ctx.bus.subscribe(lambda ev: _record(captured, ev))
 
     from murder.bus.protocol import CommandEvent
+    from murder.runtime.orchestration.worker_names import WorkerName
 
     cmd = CommandEvent(
         run_id="run-test",
         agent_id="tester",
-        target_worker="scheduler",
+        target_worker=WorkerName.SCHEDULER,
         kind=SchedulerWorker.SET_MODE,
         payload={"mode": "autorun_ready"},
         correlation_id="c3",
@@ -216,5 +191,7 @@ async def test_set_mode_does_not_emit_queue_row(repo_root: Path) -> None:
     worker = SchedulerWorker()
     await worker._handle_set_mode(cmd, ctx)
 
-    # Mode changes are the mode-chunk's TICKET responsibility, not queue_row.
-    assert _queue_row_snapshots(captured) == []
+    rows = ctx.db.execute(
+        "SELECT subject_key FROM projection_inputs WHERE projection = 'schedule'"
+    ).fetchall()
+    assert rows == []

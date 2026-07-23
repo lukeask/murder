@@ -14,13 +14,14 @@ import uuid
 from pathlib import Path
 
 from murder.app.service.command_dispatch import CommandDispatcher
-from murder.bus import Bus, StateSnapshotEvent
-from murder.bus.protocol import Entity
+from murder.bus import OrchestrationNotifier, ErrorEvent
 from murder.observability.advanced_log import (
     NullAdvancedLog,
     open_advanced_log,
     set_current_advanced_log,
 )
+from murder.runtime.orchestration.worker_names import WorkerName
+from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.state.persistence.commands import enqueue_command
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import db_path
@@ -48,14 +49,14 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
         set_current_advanced_log(log)
         try:
             # --- Boundary #3a: the recorder is a bus SUBSCRIBER ---
-            bus = Bus("run-bnd")  # no db_conn: skip persist, exercise publish path
+            bus = OrchestrationNotifier("run-bnd")  # no db_conn: skip persist, exercise publish path
 
             async def _recorder(event):
                 log.record_bus_event(event)
 
             bus.subscribe(_recorder)
             await bus.publish(
-                StateSnapshotEvent(run_id="run-bnd", agent_id="", entity=Entity.AGENT, key="*")
+                ErrorEvent(run_id="run-bnd", agent_id="", message="recorder boundary")
             )
 
             # --- Boundary #4: CommandDispatcher claim + complete -> command_records ---
@@ -67,15 +68,17 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
                 agent_id="agent-1",
                 role=None,
                 ticket_id=None,
-                target_worker="w-crow",
-                kind="noop",
+                target_worker=WorkerName.ORCHESTRATOR,
+                kind=OrchestrationCommand.AGENT_STOP,
                 payload={"hello": "world"},
                 correlation_id="corr-1",
                 idempotency_key="idem-1",
             )
             conn.commit()
             dispatcher = CommandDispatcher(conn=conn, repo_root=repo)
-            claimed = dispatcher.claim_next(target_worker="w-crow", claimed_by="w-crow#0")
+            claimed = dispatcher.claim_next(
+                target_worker=WorkerName.ORCHESTRATOR, claimed_by="orchestrator#0"
+            )
             assert claimed is not None and claimed.command_id == command_id
             dispatcher.complete(command_id, {"ok": True})
         finally:
@@ -91,7 +94,7 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
     events = advconn.execute("SELECT * FROM event_records").fetchall()
     assert len(events) == 1, f"expected 1 event row, got {len(events)}"
     assert events[0]["event_id"] is not None  # log_context stamped the envelope
-    assert '"state.snapshot"' in events[0]["payload"]
+    assert '"error"' in events[0]["payload"]
 
     commands = advconn.execute(
         "SELECT * FROM command_records ORDER BY id"

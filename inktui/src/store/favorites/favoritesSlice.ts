@@ -3,7 +3,7 @@
  *
  * ## Why hand-written, not a `listSlice.ts` factory shell
  *
- * The list-slice factory is for `{ rows, status, error }` re-pulled wholesale on a `state.snapshot`
+ * The list-slice factory is for `{ rows, status, error }` re-pulled wholesale after projection invalidation
  * entity event. Favorites are none of that: the state is a `Set<string>` of starred ids plus a load
  * lifecycle, loaded once via `tui.load_favorites` and persisted via `tui.save_favorites` (never
  * snapshot-invalidated). So — like `conversations` and `ticketDetail` — this is a hand-written slice

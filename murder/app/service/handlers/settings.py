@@ -6,6 +6,8 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.requests import CommandName, QueryName
+
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
 
@@ -749,18 +751,24 @@ def register(host: ServiceHost) -> None:
         # daemon start via apply_llm_env in Config.load.
         return {"ok": True, "settings": _settings_payload(cfg)}
 
-    host.register_rpc_handler("settings.get", _settings_get)
-    host.register_rpc_handler("settings.update", _settings_update)
-    host.register_rpc_handler("llm.settings.set_disabled", _llm_set_disabled)
-    host.register_rpc_handler("llm.provider.create", _llm_provider_create)
-    host.register_rpc_handler("llm.provider.update", _llm_provider_update)
-    host.register_rpc_handler("llm.provider.delete", _llm_provider_delete)
-    host.register_rpc_handler("llm.provider.models.update", _llm_provider_models_update)
-    host.register_rpc_handler("llm.provider.discover_models", _llm_provider_discover_models)
-    host.register_rpc_handler("llm.policy.create", _llm_policy_create)
-    host.register_rpc_handler("llm.policy.update", _llm_policy_update)
-    host.register_rpc_handler("llm.policy.delete", _llm_policy_delete)
-    host.register_rpc_handler("llm.policy.activate", _llm_policy_activate)
-    host.register_rpc_handler("llm.policy.clone", _llm_policy_clone)
-    host.register_rpc_handler("llm.feature_policy.set", _llm_feature_policy_set)
-    host.register_rpc_handler("llm.preview_resolution", _llm_preview_resolution)
+    host.register_application_query(QueryName.SETTINGS_GET, _settings_get)
+    host.register_application_command(CommandName.SETTINGS_UPDATE, _settings_update)
+    host.register_application_command(CommandName.LLM_SETTINGS_SET_DISABLED, _llm_set_disabled)
+    host.register_application_command(CommandName.LLM_PROVIDER_CREATE, _llm_provider_create)
+    host.register_application_command(CommandName.LLM_PROVIDER_UPDATE, _llm_provider_update)
+    host.register_application_command(CommandName.LLM_PROVIDER_DELETE, _llm_provider_delete)
+    host.register_application_command(
+        CommandName.LLM_PROVIDER_MODELS_UPDATE, _llm_provider_models_update
+    )
+    host.register_application_command(
+        CommandName.LLM_PROVIDER_DISCOVER_MODELS, _llm_provider_discover_models
+    )
+    host.register_application_command(CommandName.LLM_POLICY_CREATE, _llm_policy_create)
+    host.register_application_command(CommandName.LLM_POLICY_UPDATE, _llm_policy_update)
+    host.register_application_command(CommandName.LLM_POLICY_DELETE, _llm_policy_delete)
+    host.register_application_command(CommandName.LLM_POLICY_ACTIVATE, _llm_policy_activate)
+    host.register_application_command(CommandName.LLM_POLICY_CLONE, _llm_policy_clone)
+    host.register_application_command(
+        CommandName.LLM_FEATURE_POLICY_SET, _llm_feature_policy_set
+    )
+    host.register_application_command(CommandName.LLM_PREVIEW_RESOLUTION, _llm_preview_resolution)

@@ -1,7 +1,7 @@
 /**
  * Favorites actions tests — the prefs RPC pipeline (rule 3: actions are the only bus path).
  *
- * Drives the favorites slice through a `FakeBusClient`:
+ * Drives the favorites slice through a `FakeApplicationClient`:
  *  - `load()` fires `favorites.get` and fills the slice from the reply.
  *  - `toggle(id)` flips local membership (optimistic) AND fires `favorites.set` with the new id
  *     list — the prefs-persist assertion the C11 DoD requires.
@@ -10,7 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
 
@@ -21,7 +21,7 @@ function errorToasts() {
 }
 
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   // Default stubs so an unrelated load/save resolves; tests override as needed.
   fake.stubQuery('favorites.get', { ok: true, favorites: [] });
   fake.stubCommand('favorites.set', { ok: true, favorites: [] });

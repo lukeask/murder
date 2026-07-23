@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
-from murder.bus import Entity
 from murder.llm.direct import resolve_direct_role_client
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.terminal.session_names import format_session_name
@@ -127,12 +126,6 @@ class PlanOps:
             )
             _write_plan_markdown(path, plan)
         row = _db_get_plan_row(self.rt.db, name) or {}
-        # scaffold_plan writes the plans/plan_revisions rows DIRECTLY (not via
-        # PlanSync.reconcile_file), so the on_plan_change callback never fires for
-        # it. Emit here: a new/refreshed draft -> the plans list changed. Async
-        # path -> await publish_snapshot (closes the 1.5 s poll gap the direct DB
-        # write opens before PlanSync would re-reconcile the materialized file).
-        await self.rt.publish_snapshot(Entity.PLAN, name)
         return {
             "handled": True,
             "name": name,
@@ -325,7 +318,6 @@ class PlanOps:
             # to the archived plan: rename_plan carries its materialized_path
             # through, so its deprecated-dir file is not orphaned.
             archived = _free_superseded_plan_name(self.rt.db, plan_name)
-            await self.rt.publish_snapshot(Entity.PLAN, archived)
         scaffolded = await self.scaffold_plan(plan_name, seed_body)
         name = str(scaffolded.get("name") or plan_name)
         agent_id: str | None = None

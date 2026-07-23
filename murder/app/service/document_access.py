@@ -5,7 +5,6 @@ from __future__ import annotations
 import shlex
 import sqlite3
 import subprocess
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,9 +28,6 @@ class DocumentAccess:
     db: sqlite3.Connection | None = None
     plan_sync: PlanSync | None = None
     note_sync: NoteSync | None = None
-    # F1: emit key-only state.snapshot{note} when ``note_path_for`` ensures a row.
-    # DocumentAccess has no bus handle, so the runtime injects this (-> emit_snapshot).
-    on_note_change: Callable[[str], None] | None = None
 
     async def reconcile_plan(self, name: str) -> None:
         if self.plan_sync is not None:
@@ -48,17 +44,7 @@ class DocumentAccess:
     def note_path_for(self, name: str) -> Path:
         if self.db is None:
             raise RuntimeError("database not available")
-        # ``ensure_note`` creates the row when none exists (a note appears in the
-        # active list). The later ``reconcile_file`` in ``open_note_in_editor`` is
-        # a no-op for that fresh row (file already matches DB), so the creation
-        # would never emit through the NoteSync callback -- emit here instead.
-        # This is the second live ``ensure_note`` path (behind the
-        # ``document.note_path`` RPC) flagged by the F1 audit. Low-rate (a user
-        # opening a note), so per-call emit is fine -- no coalescing needed.
-        existed = notes_db.get_note(self.db, name) is not None
         notes_mod.ensure_note(self.db, self.repo_root, name)
-        if not existed and self.on_note_change is not None:
-            self.on_note_change(name)
         return note_md(self.repo_root, name)
 
     def report_path_for(self, name: str) -> Path:

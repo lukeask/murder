@@ -6,10 +6,10 @@
  *  - `tui.save_favorites { favorites: [id,…] }` → `{ ok, favorites }` — persist it.
  * Both directions are required (the prefs had to leave `.murder/` in both directions). Declared via
  * a `declare module` augmentation of the shared {@link RpcMethods} registry, so the C1/C2 bus files
- * (`BusClient.ts`/`UdsBusClient.ts`) stay byte-identical — the seam (rule 4). The keys here
+ * (`ApplicationClient.ts`/`ApplicationWebSocketClient.ts`) stay byte-identical — the seam (rule 4). The keys here
  * (`tui.load_favorites`/`tui.save_favorites`) are distinct from every other slice's keys.
  *
- * ## Bus status: LIVE
+ * ## Application protocol status: live
  *
  * Both methods are registered on the live bus (`host.py`: `tui.load_favorites` /
  * `tui.save_favorites`). The action routes a rejection into the slice's `error` field (never
@@ -25,7 +25,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 
@@ -33,12 +34,12 @@ import { toastStore } from '../toast/toastStore.js';
  * C11's prefs RPC declarations, augmenting the shared {@link RpcMethods} registry without editing
  * the frozen C1/C2 bus files (rule 4 — the seam). Keys distinct from every other slice's.
  *
- * **Bus status:** both LIVE (registered in `host.py`). Shapes mirror the bus contract's prefs
+ * Both operations are registered in `host.py` through the typed application protocol. Shapes mirror the preferences
  * pair: a flat starred-id list, round-tripped in both directions.
  */
 
 
-/** The favorites actions, bound to one {@link BusClient} + store handle. */
+/** The favorites actions, bound to one {@link ApplicationClient} + store handle. */
 export interface FavoritesActions {
   /**
    * Load the persisted favorites via `tui.load_favorites` (once, at startup). Ref-swaps the slice to
@@ -66,7 +67,7 @@ function toIdSet(favorites: readonly string[] | undefined): Set<string> {
 }
 
 export function createFavoritesActions(
-  bus: BusClient,
+  bus: ApplicationClient,
   store: StoreApi<AppStore>,
 ): FavoritesActions {
   /** Persist the given id set via `tui.save_favorites`. Shared by `toggle`/`setStarred`. */
@@ -97,7 +98,13 @@ export function createFavoritesActions(
       try {
         const reply = await bus.query('favorites.get', {});
         store.setState({
-          favorites: { ids: toIdSet(reply.favorites), status: 'ready', error: null },
+          favorites: {
+            ids: toIdSet(
+              asQueryResult<'favorites.get', { favorites?: readonly string[] }>(reply).favorites,
+            ),
+            status: 'ready',
+            error: null,
+          },
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.protocol.sessions import (
     AcquireWriterLeaseParams,
     ExecuteSessionCommandParams,
@@ -155,11 +156,11 @@ def register(host: ServiceHost) -> None:
         )
         return ExecuteSessionCommandResult(receipt=receipt).model_dump(mode="json")
 
-    host.register_rpc_handler("session.writer.get", _get)
-    host.register_rpc_handler("session.writer.acquire", _acquire)
-    host.register_rpc_handler("session.writer.renew", _renew)
-    host.register_rpc_handler("session.writer.release", _release)
-    host.register_rpc_handler("session.command.execute", _execute)
+    host.register_application_query(QueryName.SESSION_WRITER_GET, _get)
+    host.register_application_command(CommandName.SESSION_WRITER_ACQUIRE, _acquire)
+    host.register_application_command(CommandName.SESSION_WRITER_RENEW, _renew)
+    host.register_application_command(CommandName.SESSION_WRITER_RELEASE, _release)
+    host.register_application_command(CommandName.SESSION_COMMAND_EXECUTE, _execute)
 
 
 __all__ = [

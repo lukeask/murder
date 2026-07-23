@@ -21,6 +21,8 @@ from uuid import uuid4
 import pytest
 
 from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.worker_names import WorkerName
+from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.orchestrator_worker import OrchestratorCommandWorker
@@ -30,8 +32,8 @@ def _spawn_command(payload: dict[str, Any]) -> CommandEvent:
     return CommandEvent(
         id=uuid4(),
         run_id="run",
-        target_worker="orchestrator",
-        kind="crow.spawn_rogue",
+        target_worker=WorkerName.ORCHESTRATOR,
+        kind=OrchestrationCommand.CROW_SPAWN_ROGUE,
         payload=payload,
         correlation_id="c",
         idempotency_key="i",

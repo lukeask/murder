@@ -4,8 +4,8 @@
   is either a real table or ``None`` (explicit opt-out). Adding an event without
   a valid family fails HERE instead of silently never being captured — the
   analogue of the no-sqlite-in-TUI import guard.
-- Bus routing is by family and captures EXACTLY ONCE (no parallel event_records
-  dump), driven through a real ``Bus.publish`` so the correlation ids flow the
+- OrchestrationNotifier routing is by family and captures EXACTLY ONCE (no parallel event_records
+  dump), driven through a real ``OrchestrationNotifier.publish`` so the correlation ids flow the
   production way (gather copies the publish context into the subscriber task).
 - Backpressure is VISIBLE: a shed record bumps a per-family drop counter and a
   ``gap_marker`` row is emitted on the next record that fits.
@@ -18,7 +18,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from murder.bus import Bus
+from murder.bus import OrchestrationNotifier
 from murder.bus.protocol import SchedulerDecisionEvent, _BaseEvent
 from murder.observability.advanced_log import (
     _FAMILY_EXTRA_COLUMNS,
@@ -76,7 +76,7 @@ def test_decision_event_routes_to_its_family_exactly_once(tmp_path):
         log = open_advanced_log(repo, "run-dec", "redacted")
         await log.start()
         set_run_id("run-dec")
-        bus = Bus("run-dec")  # no db: skip persist, exercise fan-out
+        bus = OrchestrationNotifier("run-dec")  # no db: skip persist, exercise fan-out
 
         async def _recorder(event):
             log.record_bus_event(event)

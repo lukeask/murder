@@ -12,7 +12,6 @@
  * Only the row type (with `parent`), the slice key (`plans`), and the invalidating entity differ.
  */
 
-import type { Entity } from '../../bus/protocol.js';
 import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
@@ -40,13 +39,6 @@ export interface PlanRow {
  * part of the contract.
  */
 export type PlansState = ListState<PlanRow>;
-
-/**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice. The service emits
- * `'plan'`-keyed change events; the store re-pulls only the plans slice (see `../store.ts`).
- * `'plan'` already exists in the `Entity` union (protocol.ts) — clean path, no contract gap.
- */
-export const PLANS_INVALIDATING_ENTITY: Entity = 'plan';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
 export const initialPlansState: PlansState = initialListState<PlanRow>();

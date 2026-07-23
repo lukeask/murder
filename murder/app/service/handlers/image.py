@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.requests import CommandName
+
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
 
@@ -20,7 +22,7 @@ def register(host: ServiceHost) -> None:
         # sanitized to the basename charset before being joined into the
         # path, so a traversal attempt (``../../etc/foo``) collapses to a
         # harmless basename. This guard is unconditional (the bus is a local
-        # UDS with only our own TUI as client, but the invariant holds
+        # The application WebSocket is client-authenticated, but the invariant holds
         # regardless).
         import base64
         import re
@@ -60,4 +62,4 @@ def register(host: ServiceHost) -> None:
         fpath.write_bytes(data)
         return {"ok": True, "path": str(fpath)}
 
-    host.register_rpc_handler("image.upload", _image_upload)
+    host.register_application_command(CommandName.IMAGE_UPLOAD, _image_upload)

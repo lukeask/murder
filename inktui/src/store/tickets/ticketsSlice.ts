@@ -11,7 +11,7 @@
  *    three into one list (active first). That flatten is the tickets-specific divergence — it lives
  *    in the injected projection, not in the generic factory (see ticketsActions.ts).
  *  - `pending_dep_ids` carries the non-done dep ids as a string array (the bus DTO replaces
- *    the old `deps_ok: bool` per the Bus contract's DTO note — service B5).
+ *    the old `deps_ok: bool` per the application DTO note — service B5).
  *  - Runtime state (status, schedule_at, attempts) is DB-only, delivered in the row DTO, never
  *    in the ticket body the editor (C8) shows.
  *
@@ -20,11 +20,10 @@
  * shared `{ rows, status, error }` mechanics come from the generic {@link ListState} +
  * {@link createListSlice} factory in `../listSlice.js`.
  *
- * Copy this file to add slice X: rename the row type + its fields for X's DTO, change
- * TICKETS_INVALIDATING_ENTITY to X's Entity key, and pass X's key to `createListSlice`.
+ * Copy this file to add slice X: rename the row type + its fields for X's DTO and pass X's key to
+ * `createListSlice`.
  */
 
-import type { Entity } from '../../bus/protocol.js';
 import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
@@ -33,7 +32,7 @@ import { createListSlice, initialListState, type ListState } from '../listSlice.
  * those are the selector's output (rule 2). `null` mirrors the wire's optional fields exactly.
  *
  * `pendingDepIds` carries the ids of non-done dependencies (replaces the old `deps_ok: bool` —
- * Bus contract DTO note, service B5). An empty array means all deps are done.
+ * application DTO note, service B5). An empty array means all deps are done.
  *
  * CONTRACT GAP: `plan` and `worktree` are ticket *frontmatter* fields (part of the ticket body
  * in the editor), but are not present on `ScheduleTicketRow` from the service's schedule
@@ -66,14 +65,6 @@ export interface TicketRow {
  * contract.
  */
 export type TicketsState = ListState<TicketRow>;
-
-/**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice. Tickets use the
- * `'ticket'` entity key, which is already present in `protocol.ts` — no contract gap unlike
- * the `'report'` entity added in C6. The service emits `'ticket'`-keyed change events when the
- * ticket schedule changes; the store re-pulls only the tickets slice (see `../store.ts`).
- */
-export const TICKETS_INVALIDATING_ENTITY: Entity = 'ticket';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
 export const initialTicketsState: TicketsState = initialListState<TicketRow>();

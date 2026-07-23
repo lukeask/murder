@@ -21,7 +21,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import { selectPlansView } from '../../../src/selectors/plansSelectors.js';
 import type { PlansSnapshotReply } from '../../../src/store/plans/plansActions.js';
 import { createAppStore } from '../../../src/store/store.js';
@@ -32,7 +32,7 @@ import { selectLiveToasts, toastStore } from '../../../src/store/toast/toastStor
 /** Minimal store with the plans stub pre-loaded. The fake wraps stubs in {ok,value} and unwraps
  * them on delivery, modelling the live `state.*` envelope round-trip. */
 function setup(plansReply: PlansSnapshotReply) {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   // crow_snapshot required for store boot
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   fake.stubQuery('plans.list', plansReply);
@@ -190,7 +190,7 @@ describe('plansActions — wire→selector: C11 indentation + recency ordering f
 describe('plansActions — spawnPlanner', () => {
   it('spawns a planning agent with planner.spawn and no follow-up kickoff message', async () => {
     const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
-    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
@@ -200,13 +200,13 @@ describe('plansActions — spawnPlanner', () => {
 
     await store.getState().actions.plans.spawnPlanner('alpha');
 
-    const submits = fake.commandCalls.filter((c) => c.name === 'orchestration.execute');
-    const kinds = submits.map((c) => (c.params as { kind: string }).kind);
+    const submits = fake.commandCalls.filter((c) => c.name === 'planner.spawn');
+    const kinds = submits.map((c) => c.name);
     expect(kinds).toContain('planner.spawn');
     expect(kinds).not.toContain('agent.message');
 
-    const spawn = submits.find((c) => (c.params as { kind: string }).kind === 'planner.spawn');
-    const payload = (spawn?.params as { payload: Record<string, unknown> }).payload;
+    const spawn = submits.find((c) => c.name === 'planner.spawn');
+    const payload = spawn?.params as Record<string, unknown>;
     expect(payload).toMatchObject({
       plan_name: 'alpha',
       harness: 'claude_code',
@@ -222,7 +222,7 @@ describe('plansActions — spawnPlanner', () => {
 
   it('planner.spawn uses the effective harness when a plannerHarness override is set', async () => {
     const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
-    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     fake.stubQuery('command.get', {
       ok: true,
       status: 'done',
@@ -240,16 +240,16 @@ describe('plansActions — spawnPlanner', () => {
     await store.getState().actions.plans.spawnPlanner('beta');
 
     const spawn = fake.commandCalls
-      .filter((c) => c.name === 'orchestration.execute')
-      .find((c) => (c.params as { kind: string }).kind === 'planner.spawn');
-    const payload = (spawn?.params as { payload: Record<string, unknown> }).payload;
+      .filter((c) => c.name === 'planner.spawn')
+      .find((c) => c.name === 'planner.spawn');
+    const payload = spawn?.params as Record<string, unknown>;
     expect(payload).toMatchObject({ plan_name: 'beta', harness: 'codex', effort: 'high' });
     dispose();
   });
 
   it('routes a spawn failure into an error toast (never throws past the action)', async () => {
     const { fake, store, dispose } = setup({ invalidation_key: 'iv', plans: [] });
-    fake.stubCommand('orchestration.execute', { ok: true, command_id: 'cmd-1' });
+    fake.stubAllCommands({ ok: true, command_id: 'cmd-1' });
     fake.stubQuery('command.get', { ok: true, status: 'failed', last_error: 'no capacity' });
     toastStore.getState().clear();
 

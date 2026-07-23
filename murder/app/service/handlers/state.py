@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.requests import QueryName
 from murder.app.service.handlers._common import require_read_model, threaded, value
 
 if TYPE_CHECKING:
@@ -13,9 +14,6 @@ if TYPE_CHECKING:
 def register(host: ServiceHost) -> None:
     def _state_schedule_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
         return value(require_read_model(host).get_schedule_snapshot())
-
-    def _state_crow_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
-        return value(require_read_model(host).get_crow_snapshot())
 
     def _state_conversations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
         return value(require_read_model(host).get_conversations_snapshot())
@@ -66,34 +64,26 @@ def register(host: ServiceHost) -> None:
         return value(require_read_model(host).get_harness_models_snapshot())
 
     # These read-model handlers do blocking sqlite/git/file work and are
-    # offloaded to worker threads via ``threaded`` so the bus socket can
-    # keep answering frontend reads during boot. They are thread-safe
+    # offloaded to worker threads so the application socket can keep answering
+    # frontend reads during boot. They are thread-safe
     # because ``ServiceReadModel`` opens a FRESH per-call sqlite connection
     # (``get_db`` with ``check_same_thread=False``) — no shared connection
     # is touched across threads.
-    host.register_rpc_handler(
-        "state.schedule_snapshot", threaded(_state_schedule_snapshot)
+    host.register_application_query(
+        QueryName.SCHEDULE_GET, threaded(_state_schedule_snapshot)
     )
-    host.register_rpc_handler("state.crow_snapshot", threaded(_state_crow_snapshot))
-    host.register_rpc_handler(
-        "state.conversations_snapshot", threaded(_state_conversations_snapshot)
+    host.register_application_query(
+        QueryName.CONVERSATIONS_GET, threaded(_state_conversations_snapshot)
     )
-    host.register_rpc_handler("state.plans_snapshot", threaded(_state_plans_snapshot))
-    host.register_rpc_handler("state.notes_snapshot", threaded(_state_notes_snapshot))
-    host.register_rpc_handler(
-        "state.reports_snapshot", threaded(_state_reports_snapshot)
-    )
-    host.register_rpc_handler(
-        "state.history_snapshot", threaded(_state_history_snapshot)
-    )
-    host.register_rpc_handler(
-        "state.transit_snapshot", threaded(_state_transit_snapshot)
-    )
-    host.register_rpc_handler("state.ticket_detail", threaded(_state_ticket_detail))
-    host.register_rpc_handler("state.plan_display", threaded(_state_plan_display))
-    host.register_rpc_handler("state.note_display", threaded(_state_note_display))
-    host.register_rpc_handler("state.report_display", threaded(_state_report_display))
-    host.register_rpc_handler(
-        "state.harness_models_snapshot",
-        threaded(_state_harness_models_snapshot),
+    host.register_application_query(QueryName.PLANS_LIST, threaded(_state_plans_snapshot))
+    host.register_application_query(QueryName.NOTES_LIST, threaded(_state_notes_snapshot))
+    host.register_application_query(QueryName.REPORTS_LIST, threaded(_state_reports_snapshot))
+    host.register_application_query(QueryName.HISTORY_LIST, threaded(_state_history_snapshot))
+    host.register_application_query(QueryName.TRANSIT_GET, threaded(_state_transit_snapshot))
+    host.register_application_query(QueryName.TICKET_GET, threaded(_state_ticket_detail))
+    host.register_application_query(QueryName.PLAN_GET, threaded(_state_plan_display))
+    host.register_application_query(QueryName.NOTE_GET, threaded(_state_note_display))
+    host.register_application_query(QueryName.REPORT_GET, threaded(_state_report_display))
+    host.register_application_query(
+        QueryName.HARNESS_MODELS_LIST, threaded(_state_harness_models_snapshot)
     )

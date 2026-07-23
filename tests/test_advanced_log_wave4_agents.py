@@ -3,7 +3,7 @@
 The registry no longer calls ``record_agent`` directly. Its mutations fire an
 ``on_lifecycle`` hook → ``AgentLifecycleEvent`` on the bus → the recorder
 SUBSCRIBER routes it into ``agent_records``. This test drives that REAL path
-(registry hook → real ``Bus.publish`` → recorder subscriber), not a hand-built
+(registry hook → real ``OrchestrationNotifier.publish`` → recorder subscriber), not a hand-built
 record, so it would catch a registry that forgot to fire the hook.
 
 It also pins the carve-outs: ``reap`` emits NO event (nothing reacts to the DEAD
@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from murder.app.service.agent_registry import AgentRegistry
-from murder.bus import AgentStatus, Bus
+from murder.bus import AgentStatus, OrchestrationNotifier
 from murder.bus.protocol import AgentLifecycleEvent
 from murder.observability.advanced_log import (
     NullAdvancedLog,
@@ -67,7 +67,7 @@ def test_registry_lifecycle_rides_bus_into_agent_records(tmp_path):
         await log.start()
         set_current_advanced_log(log)
         set_run_id("run-w4")
-        bus = Bus("run-w4")  # no db: skip persist, exercise fan-out
+        bus = OrchestrationNotifier("run-w4")  # no db: skip persist, exercise fan-out
 
         async def _recorder(event):
             log.record_bus_event(event)

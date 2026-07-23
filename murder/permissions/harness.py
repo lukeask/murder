@@ -2,9 +2,9 @@
 
 Seam (wired from ``StructuredDecisionRouter``):
 
-* **Bus path** — Harness adapters surface a ``PermissionRequestState``.
-  ``StructuredDecisionRouter`` publishes a durable ``HarnessDecisionRequestEvent``
-  for client UX, a human/policy later records a response, and verified control
+* **Decision-record path** — Harness adapters surface a ``PermissionRequestState``.
+  ``StructuredDecisionRouter`` records a durable, identity-bound decision,
+  a human/policy later records a response, and verified control
   answers the dialog via ``answer_verified_permission``. That path never
   executes the underlying tool/file/network side effect; it only resolves the
   UI prompt.

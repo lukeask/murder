@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import {
   applyWorkspaceCount,
@@ -24,7 +24,7 @@ const crowsPaneId = 'crows';
 /** Build the full pipeline store set: the real input-store bundle + a fake-bus app store. */
 function makeStores(count = 3): { stores: WorkspaceStores; dispose: () => void } {
   const input = createInputStores();
-  const { store: app, dispose } = createAppStore(new FakeBusClient());
+  const { store: app, dispose } = createAppStore(new FakeApplicationClient());
   input.workspace.getState().setCount(count);
   const stores: WorkspaceStores = {
     workspace: input.workspace,

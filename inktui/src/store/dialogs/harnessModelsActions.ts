@@ -16,7 +16,8 @@
  * caller falls back to the static last-good map ({@link STATIC_HARNESS_MODELS}).
  */
 
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 
 /** A single selectable model: an id (sent on the wire) + a human label (shown in the list). */
 export interface HarnessModel {
@@ -82,16 +83,19 @@ export interface HarnessModelsActions {
 }
 
 /**
- * Build the harness-models actions bound to one injected {@link BusClient}. No store handle: the
+ * Build the harness-models actions bound to one injected {@link ApplicationClient}. No store handle: the
  * model map is wizard-local closure state (a one-shot pull on open), not a global slice.
  */
-export function createHarnessModelsActions(bus: BusClient): HarnessModelsActions {
+export function createHarnessModelsActions(bus: ApplicationClient): HarnessModelsActions {
   return {
     async fetch(): Promise<Record<string, readonly HarnessModel[]>> {
       try {
         const reply = await bus.query('harness_models.list', {});
         // Merge over the static map so a harness the snapshot omits still shows its last-good list.
-        return { ...STATIC_HARNESS_MODELS, ...reply.models };
+        return {
+          ...STATIC_HARNESS_MODELS,
+          ...asQueryResult<'harness_models.list', HarnessModelsSnapshotReply>(reply).models,
+        };
       } catch {
         // Transport/read-model error — fall back to last-good.
         return STATIC_HARNESS_MODELS;

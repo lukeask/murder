@@ -14,7 +14,7 @@ Design contract:
   (api / tmux / parser / command / artifact / exception / state-mutation) each
   take a frozen record dataclass defined in THIS module — the payload contract
   lives in one place, so call sites construct a value instead of hand-building a
-  dict whose key-shape only a future reader knows. Bus-borne capture rides
+  dict whose key-shape only a future reader knows. OrchestrationNotifier-borne capture rides
   :meth:`AdvancedLog.record_bus_event`, which routes a published event to its
   ``record_family`` table (the bus is the single aspect; see the plan §2.5.A).
   Each method reads the four Phase 1 correlation ids from
@@ -83,7 +83,7 @@ _FAMILY_EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
 # instead of loose kwargs / an ad-hoc dict, so a caller cannot typo a key-shape
 # only a future reader knows. The ON-DISK json payload is unchanged: the writer
 # decides which fields land in the row (e.g. ``dedup_hash`` gates but is not
-# stored). Bus-borne events are their own typed records (pydantic) and route via
+# stored). OrchestrationNotifier-borne events are their own typed records (pydantic) and route via
 # :meth:`AdvancedLog.record_bus_event`, so they need no dataclass here.
 # --------------------------------------------------------------------------- #
 

@@ -3,7 +3,7 @@
  * store against it (`@core/store`), mount the store provider, connect, and render {@link App}.
  *
  * This is the web mirror of inktui's `src/index.tsx` — same store, same provider, different
- * transport (WS instead of unix socket) and different renderer (DOM instead of Ink).
+ * transport (the shared application WebSocket) and different renderer (DOM instead of Ink).
  */
 
 import { AppStoreProvider } from '@core/hooks/useAppStore.js';
@@ -11,8 +11,8 @@ import { createAppStore } from '@core/store/store.js';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
-import { BusProvider } from './bus/BusContext.js';
-import { WsBusClient } from './bus/WsBusClient.js';
+import { ApplicationClientProvider } from './application/ApplicationClientContext.js';
+import { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
 import './styles/theme.css';
 // Design-system token foundation: imported AFTER theme.css (so DS values win on overlapping names
 // like --space-*/--radius/--font-mono) and BEFORE app.css (so the existing app chrome still reads
@@ -38,7 +38,7 @@ import './styles/panels-transit.css';
 import './styles/panels-settings.css';
 import './styles/panels-stage.css';
 
-const bus = new WsBusClient({ logger: console });
+const bus = new ApplicationWebSocketClient({ logger: console });
 const { store } = createAppStore(bus);
 
 // Kick the connection. Requests/streams also lazily connect, but starting here means the header shows
@@ -57,9 +57,9 @@ if (rootEl === null) {
 createRoot(rootEl).render(
   <StrictMode>
     <AppStoreProvider value={store}>
-      <BusProvider value={bus}>
+      <ApplicationClientProvider value={bus}>
         <App bus={bus} />
-      </BusProvider>
+      </ApplicationClientProvider>
     </AppStoreProvider>
   </StrictMode>,
 );

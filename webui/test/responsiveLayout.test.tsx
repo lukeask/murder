@@ -2,17 +2,17 @@
  * Responsive layout switch: the App renders a three-region desktop tree above the mobile breakpoint
  * and a single-pane + tab-bar tree below it. We stub `window.matchMedia` to force each side and
  * assert the structural difference (the one thing CSS alone can't express). Drives a real store via
- * a FakeBusClient; the App's onConnect re-prime is exercised through a minimal fake.
+ * a FakeApplicationClient; the App's onConnect re-prime is exercised through a minimal fake.
  */
 
 import { AppStoreProvider } from '@core/hooks/useAppStore.js';
 import { createAppStore } from '@core/store/store.js';
-import { FakeBusClient } from '@core/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '@core/application/FakeApplicationClient.js';
 import { render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
-import { BusProvider } from '../src/bus/BusContext.js';
-import type { WsBusClient } from '../src/bus/WsBusClient.js';
+import { ApplicationClientProvider } from '../src/application/ApplicationClientContext.js';
+import type { ApplicationWebSocketClient } from '../src/application/ApplicationWebSocketClient.js';
 import { MOBILE_QUERY } from '../src/useMediaQuery.js';
 
 function stubMatchMedia(isMobile: boolean): void {
@@ -28,23 +28,23 @@ function stubMatchMedia(isMobile: boolean): void {
   }));
 }
 
-/** A FakeBusClient extended with the connection-status callbacks the App's header needs (no-ops). */
-function fakeBus(): WsBusClient {
-  const bus = new FakeBusClient() as unknown as Record<string, unknown>;
+/** A FakeApplicationClient extended with the connection-status callbacks the App's header needs (no-ops). */
+function fakeBus(): ApplicationWebSocketClient {
+  const bus = new FakeApplicationClient() as unknown as Record<string, unknown>;
   bus['onConnect'] = () => () => {};
   bus['onDisconnect'] = () => () => {};
   bus['onPermanentError'] = () => () => {};
-  return bus as unknown as WsBusClient;
+  return bus as unknown as ApplicationWebSocketClient;
 }
 
 function renderApp(): HTMLElement {
   const bus = fakeBus();
-  const { store } = createAppStore(bus as unknown as FakeBusClient);
+  const { store } = createAppStore(bus as unknown as FakeApplicationClient);
   const { container } = render(
     <AppStoreProvider value={store}>
-      <BusProvider value={bus}>
+      <ApplicationClientProvider value={bus}>
         <App bus={bus} />
-      </BusProvider>
+      </ApplicationClientProvider>
     </AppStoreProvider>,
   );
   return container;

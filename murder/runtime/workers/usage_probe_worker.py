@@ -4,7 +4,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from murder.bus.protocol import CommandEvent, Entity, StateSnapshotEvent
+from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
+from murder.runtime.scheduler.projection import invalidate_schedule
 from murder.config import Config
 from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,
@@ -36,7 +39,7 @@ async def _missing_sampler(
 
 
 class UsageProbeWorker(Worker):
-    COMMAND_KINDS = ("state.harness_usage.sample",)
+    COMMAND_KINDS = (OrchestrationCommand.STATE_HARNESS_USAGE_SAMPLE,)
 
     def __init__(
         self,
@@ -46,7 +49,7 @@ class UsageProbeWorker(Worker):
     ) -> None:
         super().__init__(
             WorkerSpec(
-                name="usage-probe",
+                name=WorkerName.USAGE_PROBE,
                 accepts=self.COMMAND_KINDS,
                 process_model="subprocess",
                 # Usage sampling is disposable; a hung sample must never delay
@@ -94,30 +97,11 @@ class UsageProbeWorker(Worker):
         modes = _modes_from_payload(command.payload)
         sampled_kinds = self._kinds_provider(ctx, modes=modes)
         stored, failures = await self._sampler(ctx, modes=modes)
-        # F1 (queue_row chunk): the sampler INSERTs into `harness_usage_snapshots`,
-        # the read-model state behind the usage gauges embedded in
-        # `state.schedule_snapshot`. Emit one key-only `state.snapshot{queue_row}`
-        # per sampled harness when at least one snapshot stored -> the client
-        # refetches the usage slice. Async caller with a live `ctx.bus` -> await
-        # bus.publish directly (backbone pattern; no Runtime handle in a worker).
-        # Key = harness (per-harness gauges; no queue_row table -- plan line 322).
-        # CROSS-PROCESS NOTE: `UsageProbeWorker` runs in a subprocess in production
-        # (supervisor `_start_subprocess_runner`), where the parent never injects a
-        # bus. `process_targets.py` now constructs a DB-backed `Bus(run_id, conn)`
-        # in the child; `Bus.publish` persists to the shared `events` table before
-        # fan-out and the client tails that table (DurableBroker.tail), so the emit
-        # reaches subscribers across the process boundary. A `ctx.bus is None`
-        # guard keeps the in-process / test paths safe.
-        if stored > 0 and ctx.bus is not None and ctx.run_id is not None:
+        # Usage rows feed the schedule projection; append durable inputs instead
+        # of publishing a generic runtime notification.
+        if stored > 0 and ctx.db is not None:
             for kind in sampled_kinds:
-                await ctx.bus.publish(
-                    StateSnapshotEvent(
-                        run_id=ctx.run_id,
-                        agent_id=self.name,
-                        entity=Entity.QUEUE_ROW,
-                        key=kind,
-                    )
-                )
+                invalidate_schedule(ctx.db, subject_key=f"usage:{kind}")
         return {
             "handled": True,
             "stored": stored,

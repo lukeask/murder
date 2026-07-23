@@ -14,7 +14,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 // `state.schedule_snapshot` is declared once, by the tickets slice; usage consumes its reply type
 // and the `ScheduleUsageGaugeDto` shape without re-declaring the key (a second `declare module`
 // augmentation with a different `result` would be a TS 2717 collision). Usage data is embedded in
@@ -22,7 +23,7 @@ import type { BusClient } from '../../bus/BusClient.js';
 import { submitCommand } from '../commandSubmit.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
-import type { ScheduleUsageGaugeDto } from '../tickets/ticketsActions.js';
+import type { ScheduleSnapshotReply, ScheduleUsageGaugeDto } from '../tickets/ticketsActions.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { UsageRow } from './usageSlice.js';
 
@@ -40,7 +41,7 @@ function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
 }
 
 /**
- * The usage actions, bound to one `BusClient` + store handle. Returned to `../store.ts`, which
+ * The usage actions, bound to one `ApplicationClient` + store handle. Returned to `../store.ts`, which
  * hangs them off the store so components dispatch `store.getState().actions.usage.refresh()`.
  */
 export interface UsageActions {
@@ -66,11 +67,12 @@ export interface UsageActions {
   setSteering(harness: string, steering: string): Promise<void>;
 }
 
-export function createUsageActions(bus: BusClient, store: StoreApi<AppStore>): UsageActions {
+export function createUsageActions(bus: ApplicationClient, store: StoreApi<AppStore>): UsageActions {
   const { refresh } = createRefreshAction(bus, store, {
     key: 'usage',
     method: 'schedule.get',
-    project: (reply) => reply.usage_gauges.map(toUsageRow),
+    project: (reply) =>
+      asQueryResult<'schedule.get', ScheduleSnapshotReply>(reply).usage_gauges.map(toUsageRow),
   });
   return {
     refresh,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.service.handlers._common import require_orchestrator
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ def register(host: ServiceHost) -> None:
         duration = str(body.get("duration", ""))
         return await require_orchestrator(host).schedule_ticket(ticket_id, duration)
 
-    host.register_rpc_handler("ticket.next_id", _ticket_next_id)
-    host.register_rpc_handler("ticket.exists", _ticket_exists)
-    host.register_rpc_handler("ticket.save_body", _ticket_save_body)
-    host.register_rpc_handler("ticket.schedule", _ticket_schedule)
+    host.register_application_query(QueryName.TICKET_NEXT_ID, _ticket_next_id)
+    host.register_application_query(QueryName.TICKET_EXISTS, _ticket_exists)
+    host.register_application_command(CommandName.TICKET_SAVE_BODY, _ticket_save_body)
+    host.register_application_command(CommandName.TICKET_SCHEDULE, _ticket_schedule)

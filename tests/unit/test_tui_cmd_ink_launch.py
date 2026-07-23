@@ -1,11 +1,11 @@
-"""F8 — `murder` Ink launch path (`murder.app.cli.tui_cmd`).
+"""Ink launch path (`murder.app.cli.tui_cmd`).
 
 Covers the launcher preconditions and entrypoint resolution without spawning Node or the daemon:
 - Node missing / too old → clear `InkLaunchError`, no spawn.
 - Node >= floor → no raise.
 - Dev probe (inktui/src/index.tsx present) selects `tsx`; absent node_modules is a distinct error.
 - Installed probe selects `node <_inktui/index.js>`.
-- The spawn sets `MURDER_BUS_SOCKET` to the resolved absolute path.
+- The spawn sets the sole application WebSocket URL.
 """
 
 from __future__ import annotations
@@ -121,10 +121,10 @@ def test_installed_probe_missing_bundle_raises(repo_root: Path, monkeypatch, tmp
         _resolve_ink_entrypoint(repo_root)
 
 
-# --- spawn sets the socket env --------------------------------------------------------------------
+# --- spawn sets the application endpoint ----------------------------------------------------------
 
 
-def test_spawn_sets_bus_socket_env(monkeypatch):
+def test_spawn_sets_application_websocket_env(monkeypatch):
     captured: dict[str, object] = {}
 
     def _fake_run(argv, *args, **kwargs):
@@ -134,13 +134,12 @@ def test_spawn_sets_bus_socket_env(monkeypatch):
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(tui_cmd.subprocess, "run", _fake_run)
-    socket_path = Path("/run/user/1000/murder/proj-abc/bus.sock")
-    rc = _spawn_ink(["node", "/x/index.js"], None, socket_path, "murder")
+    websocket_url = "ws://127.0.0.1:9001/api/ws"
+    rc = _spawn_ink(["node", "/x/index.js"], None, websocket_url, "murder")
 
     assert rc == 0
     assert captured["argv"] == ["node", "/x/index.js"]
-    assert captured["env"]["MURDER_SERVICE_SOCKET"] == str(socket_path)
-    assert captured["env"]["MURDER_BUS_SOCKET"] == str(socket_path)
+    assert captured["env"]["MURDER_APPLICATION_WS_URL"] == websocket_url
     # The repo name rides along via MURDER_PROJECT for the top-bar branding.
     assert captured["env"]["MURDER_PROJECT"] == "murder"
     assert captured["cwd"] is None
@@ -155,6 +154,6 @@ def test_spawn_passes_cwd_for_dev(monkeypatch):
 
     monkeypatch.setattr(tui_cmd.subprocess, "run", _fake_run)
     expected_rc = 3
-    rc = _spawn_ink(["tsx", "src/index.tsx"], Path("/repo/inktui"), Path("/s.sock"), "murder")
+    rc = _spawn_ink(["tsx", "src/index.tsx"], Path("/repo/inktui"), "ws://127.0.0.1:9001/api/ws", "murder")
     assert rc == expected_rc
     assert captured["cwd"] == "/repo/inktui"

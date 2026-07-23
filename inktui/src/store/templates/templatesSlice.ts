@@ -3,7 +3,7 @@
  *
  * ## Why hand-written, not a `listSlice.ts` factory shell
  *
- * The list-slice factory is for `{ rows, status, error }` re-pulled wholesale on a `state.snapshot`
+ * The list-slice factory is for `{ rows, status, error }` re-pulled wholesale after projection invalidation
  * entity event. Templates are none of that: the state is a list of `{ name, body }` records plus a
  * load lifecycle, loaded once via `tui.load_templates` and persisted via `tui.save_templates` (never
  * snapshot-invalidated). So — like `favorites` and `conversations` — this is a hand-written slice

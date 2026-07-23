@@ -9,6 +9,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from murder.app.protocol.requests import CommandName
 from murder.state.persistence.triggers import enqueue_manual_trigger_fire
 
 if TYPE_CHECKING:
@@ -45,4 +46,4 @@ def register(host: ServiceHost) -> None:
             "occurrence_key": occurrence_key,
         }
 
-    host.register_rpc_handler("trigger.fire", _fire)
+    host.register_application_command(CommandName.TRIGGER_FIRE, _fire)

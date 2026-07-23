@@ -1,17 +1,8 @@
-"""In-process pub/sub broker + back-compat re-exports.
+"""Private in-process orchestration notifications.
 
-The wire contract (event types, envelope, constants) lives in
-``murder.bus.protocol`` — see that module for the frozen schema both
-branches build against during the worker-bus refactor.
-
-This module keeps the in-process ``Bus`` compatibility broker used by the
-current single-process runtime. The broker persists every internal bus message
-to the SQLite ``events`` table before fanning out, so handler crashes never
-lose compatibility traffic. This is not the retained fact log; only
-``murder.facts`` may append public immutable facts. Existing call sites
-continue to import legacy names
-(``Role``, ``TicketStatus``, ``HeartbeatEvent``, …) from
-``murder.bus``; they're re-exported here.
+This mechanism is deliberately non-authoritative: durable product state
+belongs in repositories, facts, and projection inputs. It never crosses the
+application transport.
 """
 
 from __future__ import annotations
@@ -19,66 +10,26 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from murder.bus.protocol import (
-    BUS_EVENT_ADAPTER,
     COMMAND_REAPER_INTERVAL_S,
-    DEFAULT_HEARTBEAT_INTERVAL_S,
     DEFAULT_LEASE_TTL_S,
     DEFAULT_MAX_COMMAND_ATTEMPTS,
-    DEFAULT_RPC_TIMEOUT_S,
-    IDEMPOTENCY_WINDOW_S,
-    PRESENCE_DISCONNECT_DEBOUNCE_S,
-    PRESENCE_USER_KINDS,
-    PROTOCOL_VERSION,
-    SOCKET_BASENAME,
-    SOCKET_RUNTIME_SUBDIR,
-    SUBSCRIBER_QUEUE_DEFAULT,
-    WIRE_MESSAGE_ADAPTER,
-    AckBody,
-    AckMessage,
-    AgentEvent,
     AgentLifecycleEvent,
     AgentStatus,
-    BusEvent,
-    ClientKind,
     CommandEvent,
     CommandStatus,
     CompletionVerdictEvent,
     ConversationBlockEvent,
     ConversationStateEvent,
-    Entity,
-    ErrBody,
-    ErrMessage,
     ErrorEvent,
     EscalationEvent,
-    EventFilter,
-    HarnessDecisionRequestEvent,
-    HarnessDecisionResponseEvent,
     HeartbeatEvent,
-    HelloBody,
-    HelloMessage,
-    HydrateArgs,
-    HydrateMessage,
-    HydrateReplayEvent,
-    HydrateReply,
-    NoteEvent,
-    PresenceEvent,
-    PresenceState,
-    PubMessage,
-    QuestionEvent,
+    OrchestrationEvent,
     Role,
-    RpcArgs,
-    RpcMessage,
-    StateSnapshotEvent,
     StatusChangeEvent,
-    SubArgs,
-    SubMessage,
     SummaryEvent,
-    WakeBody,
-    WakeMessage,
-    WireMessage,
 )
 from murder.observability.log_context import log_context
 from murder.work.tickets.status import TicketStatus
@@ -89,12 +40,12 @@ if TYPE_CHECKING:
 log = logging.getLogger("murder.bus")
 
 
-Handler = Callable[[Any], Awaitable[None]]
+OrchestrationHandler = Callable[[OrchestrationEvent], Awaitable[None]]
 
 
 class SubscriptionHandle:
-    def __init__(self, bus: Bus, token: int) -> None:
-        self._bus = bus
+    def __init__(self, notifier: OrchestrationNotifier, token: int) -> None:
+        self._notifier = notifier
         self._token = token
         self._cancelled = False
 
@@ -102,21 +53,26 @@ class SubscriptionHandle:
         if self._cancelled:
             return
         self._cancelled = True
-        self._bus._subs.pop(self._token, None)
+        self._notifier._subs.pop(self._token, None)
 
 
-class Bus:
-    """In-process pub/sub. Persists every event before fan-out."""
+class OrchestrationNotifier:
+    """Private, best-effort orchestration notification fan-out.
+
+    It has no socket, replay, request/reply, or durable event-log semantics.
+    """
 
     def __init__(self, run_id: str, db_conn: sqlite3.Connection | None = None) -> None:
         self._run_id = run_id
-        self._db = db_conn
-        self._subs: dict[int, tuple[Handler, EventFilter | None]] = {}
+        # Only the command-work repository is retained. General notifications
+        # are never appended to the old events table.
+        self._command_db = db_conn
+        self._subs: dict[int, OrchestrationHandler] = {}
         self._next_token = 0
         self._lock = asyncio.Lock()
 
-    async def publish(self, event: Any) -> None:
-        # The flight recorder is NOT tapped here — it is a normal bus SUBSCRIBER
+    async def publish(self, event: OrchestrationEvent) -> None:
+        # The flight recorder is NOT tapped here — it is a normal subscriber
         # (registered at Runtime.start), so the bus stays unaware it exists. The
         # subscriber handler runs inside this ``log_context`` because ``_publish``
         # fans out via ``asyncio.gather``, which copies the active context into
@@ -126,111 +82,66 @@ class Bus:
         with log_context(event_id=str(event_id) if event_id is not None else None):
             await self._publish(event)
 
-    async def _publish(self, event: Any) -> None:
-        # Persist before fan-out so handler crashes can't lose events.
-        if self._db is not None:
+    async def _publish(self, event: OrchestrationEvent) -> None:
+        # Commands are durable workflow work items, not a replayable event
+        # stream. Their repository is the commands table; all other transient
+        # orchestration notifications remain memory-only.
+        if isinstance(event, CommandEvent) and self._command_db is not None:
             from murder.state.persistence.commands import insert_command_event
-            from murder.state.persistence.event_log import insert_event
 
-            payload = event.model_dump(
-                mode="json",
-                exclude={"run_id", "agent_id", "role", "ticket_id", "ts", "id"},
+            insert_command_event(
+                self._command_db,
+                command_id=str(event.id),
+                run_id=event.run_id,
+                agent_id=event.agent_id,
+                role=None,
+                ticket_id=getattr(event, "ticket_id", None),
+                target_worker=event.target_worker,
+                kind=event.kind,
+                payload=event.payload,
+                correlation_id=event.correlation_id,
+                idempotency_key=event.idempotency_key,
+                status=event.status.value,
+                claimed_by=event.claimed_by,
+                lease_expires_at=event.lease_expires_at,
+                attempt_count=event.attempt_count,
+                retryable=event.retryable,
+                result=event.result,
+                event_type=event.type,
+                event_payload={},
+                ts=event.ts.isoformat(timespec="seconds"),
             )
-            role_value: str | None = None
-            ev_role = getattr(event, "role", None)
-            if ev_role is not None:
-                role_value = ev_role.value if hasattr(ev_role, "value") else str(ev_role)
-            try:
-                if isinstance(event, CommandEvent):
-                    insert_command_event(
-                        self._db,
-                        command_id=str(event.id),
-                        run_id=event.run_id,
-                        agent_id=event.agent_id,
-                        role=role_value,
-                        ticket_id=getattr(event, "ticket_id", None),
-                        target_worker=event.target_worker,
-                        kind=event.kind,
-                        payload=event.payload,
-                        correlation_id=event.correlation_id,
-                        idempotency_key=event.idempotency_key,
-                        status=event.status.value,
-                        claimed_by=event.claimed_by,
-                        lease_expires_at=event.lease_expires_at,
-                        attempt_count=event.attempt_count,
-                        retryable=event.retryable,
-                        result=event.result,
-                        event_type=event.type,
-                        event_payload=payload,
-                        ts=event.ts.isoformat(timespec="seconds"),
-                    )
-                else:
-                    insert_event(
-                        self._db,
-                        run_id=event.run_id,
-                        agent_id=event.agent_id,
-                        role=role_value or "",
-                        ticket_id=getattr(event, "ticket_id", None),
-                        type=event.type,
-                        payload=payload,
-                        ts=event.ts.isoformat(timespec="seconds"),
-                    )
-            except Exception:
-                # Fail closed: the events table is the authoritative transport.
-                # Socket subscribers are DB-poll only, so an event that failed to
-                # persist would reach in-process handlers but NEVER replay to
-                # socket subscribers — a silent split-brain no caller can detect.
-                # The replay architecture (subscribe(since_id=...)) already treats
-                # the table as the source of truth, so an in-process handler acting
-                # on an unpersisted event is itself the corruption. Don't fan out;
-                # raise so the failure is visible and uniform across all consumers.
-                log.exception(
-                    "bus: failed to persist event %s; failing closed (no fan-out)",
-                    event.type,
-                )
-                raise
-
         async with self._lock:
             handlers = list(self._subs.values())
 
         # Fan out concurrently; each handler isolated.
-        async def _dispatch(h: Handler, f: EventFilter | None) -> None:
-            if f is not None and not f.matches(event):
-                return
+        async def _dispatch(h: OrchestrationHandler) -> None:
             try:
                 await h(event)
             except Exception:
                 log.exception("bus: handler raised on %s", event.type)
 
-        await asyncio.gather(*(_dispatch(h, f) for h, f in handlers))
+        await asyncio.gather(*(_dispatch(h) for h in handlers))
 
-    def subscribe(self, handler: Handler, filter: EventFilter | None = None) -> SubscriptionHandle:
+    def subscribe(self, handler: OrchestrationHandler) -> SubscriptionHandle:
         token = self._next_token
         self._next_token += 1
-        self._subs[token] = (handler, filter)
+        self._subs[token] = handler
         return SubscriptionHandle(self, token)
 
 
 __all__ = [
-    # Broker implementation
-    "Bus",
+    # In-process notification fan-out
+    "OrchestrationNotifier",
     "SubscriptionHandle",
-    "Handler",
+    "OrchestrationHandler",
     # Re-exports from protocol
-    "PROTOCOL_VERSION",
     "Role",
     "TicketStatus",
     "AgentStatus",
     "CommandStatus",
-    "Entity",
-    "PresenceState",
-    "ClientKind",
     "HeartbeatEvent",
-    "HarnessDecisionRequestEvent",
-    "HarnessDecisionResponseEvent",
     "SummaryEvent",
-    "QuestionEvent",
-    "NoteEvent",
     "EscalationEvent",
     "StatusChangeEvent",
     "ErrorEvent",
@@ -239,40 +150,8 @@ __all__ = [
     "AgentLifecycleEvent",
     "ConversationBlockEvent",
     "ConversationStateEvent",
-    "StateSnapshotEvent",
-    "PresenceEvent",
-    "BusEvent",
-    "AgentEvent",
-    "BUS_EVENT_ADAPTER",
-    "EventFilter",
-    "HelloBody",
-    "SubArgs",
-    "RpcArgs",
-    "HydrateArgs",
-    "HydrateReplayEvent",
-    "HydrateReply",
-    "AckBody",
-    "ErrBody",
-    "WakeBody",
-    "HelloMessage",
-    "PubMessage",
-    "SubMessage",
-    "RpcMessage",
-    "HydrateMessage",
-    "AckMessage",
-    "ErrMessage",
-    "WakeMessage",
-    "WireMessage",
-    "WIRE_MESSAGE_ADAPTER",
-    "SOCKET_RUNTIME_SUBDIR",
-    "SOCKET_BASENAME",
-    "DEFAULT_RPC_TIMEOUT_S",
-    "DEFAULT_HEARTBEAT_INTERVAL_S",
+    "OrchestrationEvent",
     "DEFAULT_LEASE_TTL_S",
     "DEFAULT_MAX_COMMAND_ATTEMPTS",
-    "PRESENCE_DISCONNECT_DEBOUNCE_S",
-    "PRESENCE_USER_KINDS",
-    "SUBSCRIBER_QUEUE_DEFAULT",
-    "IDEMPOTENCY_WINDOW_S",
     "COMMAND_REAPER_INTERVAL_S",
 ]

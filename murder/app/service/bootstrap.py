@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.runtime.scheduler import SchedulerWorker
@@ -22,26 +22,22 @@ from murder.runtime.workers import (
     WorkerCtx,
 )
 
-if TYPE_CHECKING:
-    from murder.bus.broker import DurableBroker
-
-
 async def start_supervisor_workers(
     *,
     repo_root: Path,
     runtime: Runtime,
     orchestrator: Orchestrator,
-    broker: DurableBroker,
+    bus: Any,
 ) -> Supervisor:
     """Start all service workers on a shared supervisor."""
     worker_ctx = WorkerCtx(
         repo_root=repo_root,
         db=runtime.db,
-        bus=broker,
+        bus=bus,
         run_id=runtime.run_id,
     )
     cmd_dispatcher = (
-        CommandDispatcher(conn=runtime.db, repo_root=repo_root, bus=broker)
+        CommandDispatcher(conn=runtime.db, repo_root=repo_root, bus=bus)
         if runtime.db is not None
         else None
     )

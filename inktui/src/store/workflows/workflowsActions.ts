@@ -9,7 +9,7 @@
  *    — FIRE a saved workflow: the backend materializes the ticket tree + spawns crows. Fire-and-forget
  *    from the UI's view — the materialized tickets/crows arrive via the normal snapshot stream.
  * Declared via a `declare module` augmentation of the shared {@link RpcMethods} registry, so the
- * C1/C2 bus files (`BusClient.ts`/`UdsBusClient.ts`) stay byte-identical — the seam (rule 4). The
+ * C1/C2 bus files (`ApplicationClient.ts`/`ApplicationWebSocketClient.ts`) stay byte-identical — the seam (rule 4). The
  * keys here are distinct from every other slice's keys.
  *
  * ## Optimistic local-first writes
@@ -22,7 +22,9 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import type { CommandParams } from '../../application/ApplicationClient.js';
+import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { WorkflowDef } from './workflowsSlice.js';
@@ -35,7 +37,7 @@ import type { WorkflowDef } from './workflowsSlice.js';
  */
 
 
-/** The workflows actions, bound to one {@link BusClient} + store handle. */
+/** The workflows actions, bound to one {@link ApplicationClient} + store handle. */
 export interface WorkflowsActions {
   /**
    * Load the persisted workflows via `tui.load_workflows` (once, at startup). Ref-swaps the slice to
@@ -69,7 +71,7 @@ function toItems(workflows: readonly WorkflowDef[] | undefined): readonly Workfl
 }
 
 export function createWorkflowsActions(
-  bus: BusClient,
+  bus: ApplicationClient,
   store: StoreApi<AppStore>,
 ): WorkflowsActions {
   /**
@@ -81,9 +83,18 @@ export function createWorkflowsActions(
       workflows: { ...state.workflows, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.command('workflows.set', { workflows: next });
+      const reply = await bus.command(
+        'workflows.set',
+        { workflows: next } as unknown as CommandParams<'workflows.set'>,
+      );
       store.setState({
-        workflows: { items: toItems(reply.workflows), status: 'ready', error: null },
+        workflows: {
+          items: toItems(
+            asCommandResult<'workflows.set', { workflows: readonly WorkflowDef[] }>(reply).workflows,
+          ),
+          status: 'ready',
+          error: null,
+        },
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -101,7 +112,13 @@ export function createWorkflowsActions(
       try {
         const reply = await bus.query('workflows.get', {});
         store.setState({
-          workflows: { items: toItems(reply.workflows), status: 'ready', error: null },
+          workflows: {
+            items: toItems(
+              asQueryResult<'workflows.get', { workflows: readonly WorkflowDef[] }>(reply).workflows,
+            ),
+            status: 'ready',
+            error: null,
+          },
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

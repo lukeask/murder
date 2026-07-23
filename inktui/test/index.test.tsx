@@ -4,19 +4,17 @@
  * use instead — see App.test.tsx); those paths are proven by an actual `node dist/index.js --smoke`
  * run at build time. What this file pins is the pure, load-bearing wiring F7 introduces:
  *
- *   - the socket path is taken from `MURDER_BUS_SOCKET` **verbatim** — the no-rehash invariant: the
- *     TS side never derives the per-project socket path, it only connects to what the launcher hands
- *     it (Open decision #2);
- *   - a missing/empty `MURDER_BUS_SOCKET` is a clear, hard failure rather than a silent bad connect.
+ *   - the application WebSocket URL comes from `MURDER_APPLICATION_WS_URL` verbatim;
+ *   - a missing/empty URL is a clear, hard failure rather than a fallback transport.
  */
 
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { render, Text } from 'ink';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FakeBusClient } from '../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../src/application/FakeApplicationClient.js';
 import { App } from '../src/components/App.js';
-import { forceInkFullRepaint, installResizeClear, resolveSocketPath } from '../src/index.js';
+import { forceInkFullRepaint, installResizeClear, resolveApplicationWebSocketUrl } from '../src/index.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import { createAppStore } from '../src/store/store.js';
 import { inkInstances } from '../src/terminal/inkInstances.js';
@@ -42,29 +40,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('resolveSocketPath', () => {
-  it('prefers MURDER_SERVICE_SOCKET', () => {
-    expect(
-      resolveSocketPath({
-        MURDER_SERVICE_SOCKET: '/tmp/service.sock',
-        MURDER_BUS_SOCKET: '/tmp/legacy.sock',
-      }),
-    ).toBe('/tmp/service.sock');
+describe('resolveApplicationWebSocketUrl', () => {
+  it('uses the launcher-provided application endpoint verbatim', () => {
+    expect(resolveApplicationWebSocketUrl({ MURDER_APPLICATION_WS_URL: 'ws://127.0.0.1:9001/api/ws' })).toBe('ws://127.0.0.1:9001/api/ws');
   });
 
-  it('uses MURDER_BUS_SOCKET as a legacy fallback', () => {
-    const path = '/run/user/1000/murder/repo-abc123def456/bus.sock';
-    expect(resolveSocketPath({ MURDER_BUS_SOCKET: path })).toBe(path);
+  it('throws a clear error when the endpoint is unset or empty', () => {
+    expect(() => resolveApplicationWebSocketUrl({})).toThrow(/MURDER_APPLICATION_WS_URL/);
+    expect(() => resolveApplicationWebSocketUrl({ MURDER_APPLICATION_WS_URL: ' ' })).toThrow(/MURDER_APPLICATION_WS_URL/);
   });
 
-  it('throws a clear error naming the env var when it is unset', () => {
-    expect(() => resolveSocketPath({})).toThrow(/MURDER_SERVICE_SOCKET is not set/);
-  });
-
-  it('throws when both socket env vars are empty or whitespace', () => {
-    expect(() =>
-      resolveSocketPath({ MURDER_SERVICE_SOCKET: ' ', MURDER_BUS_SOCKET: '   ' }),
-    ).toThrow(/MURDER_SERVICE_SOCKET/);
+  it('rejects non-WebSocket endpoint URLs', () => {
+    expect(() => resolveApplicationWebSocketUrl({ MURDER_APPLICATION_WS_URL: 'http://localhost:9001' })).toThrow(/ws:\/\//);
   });
 });
 
@@ -212,7 +199,7 @@ describe('forceInkFullRepaint', () => {
       return true;
     }) as typeof stdout.write;
 
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
     const { store, dispose } = createAppStore(fake);
     const inputStores = createInputStores([]);

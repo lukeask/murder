@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from murder.bus import Bus, CompletionVerdictEvent, Entity
+from murder.bus import OrchestrationNotifier, CompletionVerdictEvent
 from murder.bus import Role as AgentRole
 
 from .checks.base import CheckResult, CheckStatus, CompletionContext
@@ -39,7 +39,7 @@ class CoordinatorHost(Protocol):
 
     repo_root: Path
     db: sqlite3.Connection | None
-    bus: Bus | None
+    bus: OrchestrationNotifier | None
     run_id: str | None
 
     def get_crow(self, ticket_id: str) -> Agent | None: ...
@@ -47,8 +47,6 @@ class CoordinatorHost(Protocol):
     def get_agent(self, agent_id: str) -> Agent | None: ...
 
     # F1: key-only ticket snapshot emit (async choke point; see Runtime).
-    async def publish_snapshot(self, entity: Entity, key: str) -> None: ...
-
 
 EnsurePlanner = Callable[[str], Awaitable[str]]
 
@@ -182,8 +180,7 @@ class CompletionCoordinator:
 
         The event's ``record_family = "decision_records"`` class var lets the
         recorder subscriber route it into the ``decision_records`` store off the
-        one bus aspect. Confirmed TUI consumer — it reads via the key-only
-        ``state.snapshot`` path, so keep this rich event server-side. No-op
+        one bus aspect. This is now server-side forensic data only. No-op
         before the bus / run id exist.
         """
         if self._rt.bus is None or self._rt.run_id is None:
@@ -327,7 +324,6 @@ class CompletionCoordinator:
                 to_status=to_status,
             )
         )
-        await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
 
     def _outcomes(self) -> TicketOutcomeService:
         """Build the shared terminal-transition service, coordinator-flavoured.
@@ -345,7 +341,6 @@ class CompletionCoordinator:
             repo_root=self._rt.repo_root,
             escalations=self._make_escalation_service(),
             emit_status=self._emit_status,
-            emit_snapshot=lambda tid: self._rt.publish_snapshot(Entity.TICKET, tid),
         )
 
     async def _escalate_to_user(self, ticket_id: str, reason: str) -> None:
@@ -359,8 +354,6 @@ class CompletionCoordinator:
         from murder.state.persistence.tickets import update_ticket_status
         update_ticket_status(self._rt.db, ticket_id, TicketStatus.BLOCKED.value)
         self._rt.db.commit()
-        # F1: block has no StatusChangeEvent today; emit the key-only snapshot.
-        await self._rt.publish_snapshot(Entity.TICKET, ticket_id)
 
     def _make_escalation_service(self) -> EscalationService:
         from murder.verdict.escalations.service import EscalationService

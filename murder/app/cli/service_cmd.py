@@ -15,9 +15,6 @@ from pathlib import Path
 import typer
 
 from murder.bus import TicketStatus
-from murder.bus.client import SocketBusClient
-from murder.bus.protocol import ClientKind
-from murder.bus.transport_socket import default_socket_path
 from murder.config import Config
 from murder.state.persistence.escalations import list_pending_escalations
 from murder.state.persistence.schema import get_db, init_db
@@ -120,18 +117,10 @@ def _live_service_sessions() -> list[ServiceSession]:
 
 
 async def _socket_is_connectable(socket_path: Path, *, timeout_s: float = 0.5) -> bool:
-    try:
-        client = SocketBusClient(
-            socket_path,
-            client_kind=ClientKind.CLI_EPHEMERAL,
-            client_id=f"probe-{os.getpid()}",
-        )
-        await asyncio.wait_for(
-            client.request("health.ping", {}, timeout_s=timeout_s),
-            timeout=timeout_s + 0.25,
-        )
-    except Exception:
-        return False
+    # The application boundary is WebSocket-only.  Lifecycle probing is not an
+    # application request and therefore deliberately does not open a client
+    # protocol connection; the lock owner is the service authority.
+    del socket_path, timeout_s
     return True
 
 
@@ -236,7 +225,7 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
         raise typer.Exit(1) from e
 
 
-async def _run_supervisor_only(tcp_port: int | None = None) -> None:
+async def _run_supervisor_only(websocket_port: int = 0) -> None:
     # Configure stderr logging immediately so early-startup records reach the
     # child's stdout/stderr -> supervisor.ndjson. The per-run service.log file
     # handler attaches later in Runtime.start once the run dir exists.
@@ -245,7 +234,7 @@ async def _run_supervisor_only(tcp_port: int | None = None) -> None:
     configure_logging(level=resolve_log_level(), log_path=None)
     repo = _repo_root()
     cfg = Config.load(repo)
-    host = ServiceHost(cfg, repo, socket_path=default_socket_path(repo), tcp_port=tcp_port)
+    host = ServiceHost(cfg, repo, websocket_port=websocket_port)
     async with host:
         try:
             await host.run_until_signal()
@@ -259,11 +248,11 @@ async def _run_supervisor_only(tcp_port: int | None = None) -> None:
 
 
 def cmd_serviced(
-    tcp_port: int = typer.Option(0, "--tcp-port", help="Also listen on TCP; 0 = disabled."),
+    websocket_port: int = typer.Option(0, "--websocket-port", help="Application WebSocket port; 0 = ephemeral."),
 ) -> None:
     """Internal supervisor-only service entrypoint."""
     _raise_fd_soft_limit()
-    _run_async_entry(_run_supervisor_only(tcp_port=tcp_port or None))
+    _run_async_entry(_run_supervisor_only(websocket_port=websocket_port))
 
 
 def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) -> None:
@@ -412,26 +401,13 @@ def cmd_retry(ticket_id: str) -> None:
 
 
 def cmd_replay(run_id: str) -> None:
-    """Print events for a past run as a timeline."""
-    repo = _repo_root()
-    conn = get_db(db_path(repo))
-    init_db(conn)
-    try:
-        rows = conn.execute(
-            "SELECT id, ts, type, agent_id, ticket_id, payload_json FROM events "
-            "WHERE run_id = ? ORDER BY id",
-            (run_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-    if not rows:
-        typer.secho(f"No events for run_id={run_id}", err=True)
-        raise typer.Exit(1)
-    for r in rows:
-        typer.echo(
-            f"{r['ts']} [{r['type']}] agent={r['agent_id']} ticket={r['ticket_id']} "
-            f"payload={r['payload_json'][:200]}"
-        )
+    """Generic event replay was retired with the bus-as-API architecture."""
+    del run_id
+    typer.secho(
+        "Generic event replay is retired. Inspect feature facts, activities, or projections instead.",
+        err=True,
+    )
+    raise typer.Exit(2)
 
 
 def cmd_lint() -> None:

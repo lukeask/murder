@@ -5,22 +5,15 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field
 
 from murder.app.protocol.common import ApplicationModel
 
 
 class TerminalTarget(ApplicationModel):
-    """Exact persisted session identity, with an explicit legacy bridge."""
+    """Exact persisted session identity for a terminal stream."""
 
-    session_id: UUID | None = None
-    legacy_agent_id: str | None = Field(default=None, min_length=1, max_length=200)
-
-    @model_validator(mode="after")
-    def _one_identity(self) -> TerminalTarget:
-        if self.session_id is not None and self.legacy_agent_id is not None:
-            raise ValueError("terminal target cannot mix session_id and legacy_agent_id")
-        return self
+    session_id: UUID
 
 
 class TerminalFrame(ApplicationModel):
@@ -33,8 +26,7 @@ class TerminalFrame(ApplicationModel):
     type: Literal["terminal.frame"] = "terminal.frame"
     subscription_id: str
     sequence: int = Field(ge=1)
-    session_id: UUID | None
-    legacy_agent_id: str | None = None
+    session_id: UUID
     captured_at: AwareDatetime
     columns: int = Field(ge=1)
     rows: int = Field(ge=1)
@@ -54,8 +46,7 @@ class TerminalChunk(ApplicationModel):
 
     type: Literal["terminal.chunk"] = "terminal.chunk"
     subscription_id: str
-    session_id: UUID | None
-    legacy_agent_id: str | None = None
+    session_id: UUID
     sequence: int = Field(ge=1)
     encoding: Literal["utf-8"] = "utf-8"
     data: str
@@ -66,8 +57,7 @@ class TerminalStreamGap(ApplicationModel):
 
     type: Literal["terminal.gap"] = "terminal.gap"
     subscription_id: str
-    session_id: UUID | None
-    legacy_agent_id: str | None = None
+    session_id: UUID
     expected_sequence: int = Field(ge=1)
     next_sequence: int = Field(ge=1)
     snapshot_required: bool = True

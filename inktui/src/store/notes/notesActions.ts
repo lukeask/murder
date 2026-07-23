@@ -6,15 +6,16 @@
  *  - Reply shape mirrors Python `NotesSnapshot` (notes[] with name/char_count/updated_at).
  *  - Projection is `toNoteRow` (name → name, char_count, updated_at as strings).
  *  - Passes the `notes` slice key to `createRefreshAction`.
- *  - `declare module` augments `RpcMethods` with `'state.notes_snapshot'` (distinct from the roster's
- *    `'state.crow_snapshot'` — each slice owns its own key; never redeclare an existing one).
+ *  - `declare module` augments `RpcMethods` with `'state.notes_snapshot'`; each slice owns its
+ *    own key and never redeclares an existing one.
  *
  * The loading→ready/error + ref-swap-only-this-key mechanics come from the shared
  * {@link createRefreshAction} factory in `../listSlice.js`.
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import type { NoteRow } from './notesSlice.js';
@@ -55,7 +56,7 @@ function toNoteRow(dto: NoteDto): NoteRow {
 }
 
 /**
- * The notes actions, bound to one `BusClient` + store handle. Returned to `../store.ts`, which
+ * The notes actions, bound to one `ApplicationClient` + store handle. Returned to `../store.ts`, which
  * hangs them off the store so components dispatch `store.getState().actions.notes.refresh()`.
  */
 export interface NotesActions {
@@ -67,10 +68,10 @@ export interface NotesActions {
   refresh(): Promise<void>;
 }
 
-export function createNotesActions(bus: BusClient, store: StoreApi<AppStore>): NotesActions {
+export function createNotesActions(bus: ApplicationClient, store: StoreApi<AppStore>): NotesActions {
   return createRefreshAction(bus, store, {
     key: 'notes',
     method: 'notes.list',
-    project: (reply) => reply.notes.map(toNoteRow),
+    project: (reply) => asQueryResult<'notes.list', NotesSnapshotReply>(reply).notes.map(toNoteRow),
   });
 }

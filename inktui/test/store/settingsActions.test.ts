@@ -2,7 +2,7 @@
  * Settings actions tests — the `settings.{get,update}` prefs pipeline (rule 3: actions are the only
  * bus path). Mirrors the favorites actions test.
  *
- * Drives the settings slice through a `FakeBusClient`:
+ * Drives the settings slice through a `FakeApplicationClient`:
  *  - `load()` fires `settings.get` and fills the slice from the reply (wire `key_overrides` →
  *     slice `keyOverrides`).
  *  - `update(partial)` overlays the patch locally (optimistic) AND fires `settings.update` with the
@@ -12,7 +12,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import type { SettingsWire } from '../../src/store/settings/settingsActions.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
@@ -50,12 +50,12 @@ function wire(over: Record<string, unknown> = {}): SettingsWire {
 }
 
 function setup() {
-  const fake = new FakeBusClient();
+  const fake = new FakeApplicationClient();
   // Default stubs so an unrelated load/update resolves; tests override as needed. `settings.update`
   // echoes the patch onto the default record, mirroring the server's "reply = full merged payload".
   fake.stubQuery('settings.get', { ok: true, settings: wire() });
   fake.stubCommand('settings.update', (params) => {
-    const partial = (params.settings ?? {}) as Record<string, unknown>;
+    const partial = (params['settings'] ?? {}) as Record<string, unknown>;
     return { ok: true, settings: wire(partial) };
   });
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });

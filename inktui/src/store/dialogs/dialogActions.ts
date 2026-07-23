@@ -13,7 +13,8 @@
  * The RpcMethods augmentation below keeps the C1/C2 bus files byte-identical (rule 4 — the seam).
  */
 
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import { submitCommand } from '../commandSubmit.js';
 
 /**
@@ -90,13 +91,13 @@ export interface DialogActions {
 }
 
 /**
- * Build the dialog actions bound to one injected {@link BusClient}. No store ref needed — these
+ * Build the dialog actions bound to one injected {@link ApplicationClient}. No store ref needed — these
  * are fire-and-resolve operations (not slice invalidations), so they return the result directly
  * to the calling modal intent handler. The modal handles success/failure in its own UI state.
  *
  * Rule 3: these are the ONLY callers of the bus for dialog writes. Components never touch bus.rpc.
  */
-export function createDialogActions(bus: BusClient): DialogActions {
+export function createDialogActions(bus: ApplicationClient): DialogActions {
   return {
     async quickCreateTicket(title: string): Promise<QuickCreateResult> {
       // `ticket.quick_create` is an orchestrator command kind, not a standalone RPC — route it
@@ -110,11 +111,13 @@ export function createDialogActions(bus: BusClient): DialogActions {
     },
 
     async fetchNextTicketId(): Promise<NextIdResult> {
-      return bus.query('ticket.next_id', {});
+      return asQueryResult<'ticket.next_id', NextIdResult>(await bus.query('ticket.next_id', {}));
     },
 
     async ticketExists(handle: string): Promise<ExistsResult> {
-      return bus.query('ticket.exists', { handle });
+      return asQueryResult<'ticket.exists', ExistsResult>(
+        await bus.query('ticket.exists', { handle }),
+      );
     },
 
     async createPlan(input: CreatePlanInput): Promise<PlanCreateResult> {
@@ -131,7 +134,9 @@ export function createDialogActions(bus: BusClient): DialogActions {
             body: input.body,
             ...(input.message !== undefined ? { message: input.message } : {}),
           };
-      return bus.command('plan.create', params);
+      return asCommandResult<'plan.create', PlanCreateResult>(
+        await bus.command('plan.create', params),
+      );
     },
   };
 }

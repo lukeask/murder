@@ -5,7 +5,6 @@ import queue
 from types import SimpleNamespace
 from typing import Any
 
-from murder.bus import Bus
 from murder.bus.protocol import CommandEvent
 from murder.config import Config
 from murder.llm.harnesses.usage_sampling import (
@@ -54,15 +53,10 @@ async def _run_usage_probe_process(
         return harness_kinds_to_sample(sampling, modes=modes)
 
     worker = UsageProbeWorker(sampler=_sample, kinds_provider=_kinds)
-    # F1 (queue_row chunk): give the subprocess its own DB-backed bus so the
-    # usage-snapshot emit in ``UsageProbeWorker.on_command`` actually reaches the
-    # client. The parent supervisor never injects a bus into this subprocess
-    # (``_start_subprocess_runner`` -> fire-and-forget ``runner.dispatch``), and
-    # ``Bus.publish`` persists to the shared ``events`` table before fan-out, which
-    # the client tails (``DurableBroker.tail``) -- so a child-constructed ``Bus``
-    # on the same DB delivers cross-process. Without this, the emit would no-op.
-    bus = Bus(run_id, conn)
-    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id=run_id, bus=bus)
+    # Private orchestration signals deliberately do not cross process
+    # boundaries.  The application socket serves a fresh projection from the
+    # authoritative usage tables, so this worker needs no bus instance.
+    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id=run_id, bus=None)
     dispatcher = CommandDispatcher(conn=conn, repo_root=repo_root)
     try:
         while not stop_event.is_set():

@@ -11,11 +11,9 @@ subclass (singleton, no name/revisions shape).
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from murder.bus.protocol import Entity
 from murder.state.persistence import notes as _notes_db
 from murder.state.persistence import notetaker as _notetaker_db
 from murder.state.storage.filesystem import atomic_write_text
@@ -30,14 +28,10 @@ def NoteSync(
     *,
     poll_s: float = 1.5,
     debounce_s: float = 0.75,
-    on_change: "Callable[[Entity, str], Any] | None" = None,
 ) -> SimpleDocSync:
     """Return a ``SimpleDocSync`` configured for ``.murder/notes/*.md``.
 
-    The old ``on_note_change`` sync-callback parameter is replaced by
-    ``on_change``, which takes ``(Entity, str)`` and is awaited via the F5.1
-    ``notify_changed`` seam.  Pass ``on_change`` from ``FilesystemSyncSupervisor``
-    (which provides ``_emit``).
+    File reconciliation writes the authoritative note rows directly.
     """
     return SimpleDocSync(
         repo_root,
@@ -48,10 +42,8 @@ def NoteSync(
         get_fn=_notes_db.get_note,
         upsert_fn=_notes_db.upsert_note,
         insert_revision_fn=_notes_db.insert_note_revision,
-        entity=Entity.NOTE,
         poll_s=poll_s,
         debounce_s=debounce_s,
-        on_change=on_change,
     )
 
 

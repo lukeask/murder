@@ -10,11 +10,10 @@
  * The shared `{ rows, status, error }` mechanics come from the generic {@link ListState} +
  * {@link createListSlice} factory in `../listSlice.js` — this file is a thin shell over it.
  *
- * Copy this file to add slice X: rename the row type + its fields for X's DTO, change
- * NOTES_INVALIDATING_ENTITY to X's Entity key, and pass X's key to `createListSlice`.
+ * Copy this file to add slice X: rename the row type + its fields for X's DTO and pass X's key to
+ * `createListSlice`.
  */
 
-import type { Entity } from '../../bus/protocol.js';
 import { createListSlice, initialListState, type ListState } from '../listSlice.js';
 
 /**
@@ -36,13 +35,6 @@ export interface NoteRow {
  * contract.
  */
 export type NotesState = ListState<NoteRow>;
-
-/**
- * The {@link Entity} key whose `state.snapshot` events invalidate this slice. The service emits
- * `'note'`-keyed change events when the notes list changes; the store re-pulls only the notes
- * slice (see `../store.ts`).
- */
-export const NOTES_INVALIDATING_ENTITY: Entity = 'note';
 
 /** The initial, pre-fetch slice value. A fresh store has not talked to the bus yet → `idle`. */
 export const initialNotesState: NotesState = initialListState<NoteRow>();

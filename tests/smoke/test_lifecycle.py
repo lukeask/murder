@@ -1,9 +1,9 @@
 """Lifecycle smoke: init → serviced supervisor → connect → snapshot → SIGTERM.
 
 This is the project's proof-of-life for the daemon path: it boots a real
-``murder serviced`` supervisor in a subprocess, connects a headless bus client
-(``SocketBusClient``, the same transport the Ink TUI uses), retries until the
-supervisor accepts connections, fetches a real state snapshot over the bus, then
+``murder serviced`` supervisor in a subprocess, connects a headless application
+WebSocket client, retries until the supervisor accepts connections, fetches a
+real state snapshot, then
 SIGTERMs the supervisor and asserts a clean exit.
 
 Opt-in only: gated behind the ``smoke`` marker AND ``MURDER_MANUAL_SMOKE=1`` so a
@@ -25,9 +25,11 @@ from pathlib import Path
 import pytest
 
 from murder.app.cli.init_cmd import _scaffold_project
-from murder.bus.client import SocketBusClient
-from murder.bus.protocol import ClientKind
-from murder.state.storage.service_registry import socket_path_for_repo
+from murder.state.storage.service_registry import (
+    project_session_name,
+    read_service_session,
+    service_registry_path,
+)
 
 _MANUAL_ENV = "MURDER_MANUAL_SMOKE"
 _STARTUP_TIMEOUT_S = 15.0
@@ -42,15 +44,30 @@ def _skip_unless_manual() -> None:
         pytest.skip(f"set {_MANUAL_ENV}=1 to run the lifecycle smoke test")
 
 
-async def _connect_with_retry(socket_path: Path, *, deadline: float) -> SocketBusClient:
-    """Retry health.ping until the supervisor accepts connections or deadline passes."""
+async def _connect_with_retry(repo: Path, *, deadline: float):
+    """Retry the typed application hello until the supervisor accepts connections."""
+    from aiohttp import ClientSession
+
     last_exc: Exception | None = None
     while time.monotonic() < deadline:
-        client = SocketBusClient(socket_path, client_kind=ClientKind.CLI_EPHEMERAL)
         try:
-            await client.request("health.ping", {}, timeout_s=2.0)
-            return client
-        except Exception as exc:  # supervisor not ready yet / socket absent
+            session = read_service_session(service_registry_path(project_session_name(repo)))
+            if session is None:
+                raise RuntimeError("application service registry is not ready")
+            http = ClientSession()
+            ws = await http.ws_connect(session.websocket_url, timeout=2.0)
+            await ws.send_json(
+                {
+                    "op": "client.hello",
+                    "protocol_version": 1,
+                    "client": {"client_id": "lifecycle-smoke", "client_kind": "cli"},
+                }
+            )
+            hello = await ws.receive_json(timeout=2.0)
+            if hello.get("op") != "server.hello":
+                raise RuntimeError(f"unexpected application hello: {hello!r}")
+            return http, ws
+        except Exception as exc:  # supervisor not ready yet / registry absent
             last_exc = exc
             await asyncio.sleep(_CONNECT_RETRY_S)
     raise TimeoutError(
@@ -58,11 +75,23 @@ async def _connect_with_retry(socket_path: Path, *, deadline: float) -> SocketBu
     ) from last_exc
 
 
-async def _drive(socket_path: Path) -> None:
+async def _drive(repo: Path) -> None:
     deadline = time.monotonic() + _STARTUP_TIMEOUT_S
-    client = await _connect_with_retry(socket_path, deadline=deadline)
-    snapshot = await client.request("state.schedule_snapshot", {}, timeout_s=5.0)
-    assert snapshot is not None
+    http, ws = await _connect_with_retry(repo, deadline=deadline)
+    try:
+        await ws.send_json(
+            {
+                "op": "request",
+                "request_id": "schedule",
+                "request": {"kind": "query", "name": "schedule.get", "params": {}},
+            }
+        )
+        reply = await ws.receive_json(timeout=5.0)
+        assert reply["op"] == "reply"
+        assert reply["result"] is not None
+    finally:
+        await ws.close()
+        await http.close()
 
 
 def test_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,16 +101,13 @@ def test_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo.mkdir()
     _scaffold_project(repo)
 
-    # Route the runtime socket into tmp_path so this test is isolated from any
-    # live instance running against the developer's real repos. Set the var in
-    # our own env too (monkeypatch restores it) so `socket_path_for_repo`
-    # resolves to the same location the subprocess writes its socket to.
+    # Route the runtime registry into tmp_path so this test is isolated from
+    # any live instance running against the developer's real repos.
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     env = {
         **os.environ,
         "XDG_CONFIG_HOME": str(tmp_path / "config"),
     }
-    socket_path = socket_path_for_repo(repo)
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "murder", "serviced"],
@@ -93,7 +119,7 @@ def test_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         start_new_session=True,
     )
     try:
-        asyncio.run(_drive(socket_path))
+        asyncio.run(_drive(repo))
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=_SHUTDOWN_TIMEOUT_S)
         assert proc.returncode in (0, -signal.SIGTERM)

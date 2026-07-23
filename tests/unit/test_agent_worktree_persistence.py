@@ -4,7 +4,7 @@ from pathlib import Path
 
 from murder.state.persistence.agents import upsert_agent
 from murder.state.persistence.schema import get_db, init_db
-from murder.app.service.read_model import ServiceReadModel
+from murder.roster import RosterService
 
 
 def test_agents_persist_worktree_path(repo_root: Path) -> None:
@@ -76,9 +76,9 @@ def test_crow_snapshot_exposes_worktree_path(repo_root: Path) -> None:
         worktree_path=str(worktree_path),
     )
 
-    snapshot = ServiceReadModel(repo_root / ".murder" / "murder.db").get_crow_snapshot()
+    snapshot = RosterService(repo_root / ".murder" / "murder.db").get()
 
-    assert snapshot.sessions[0].worktree_path == str(worktree_path)
+    assert snapshot["sessions"][0]["worktree_path"] == str(worktree_path)
 
 
 def test_rogue_crow_snapshot_exposes_agent_harness(repo_root: Path) -> None:
@@ -95,6 +95,6 @@ def test_rogue_crow_snapshot_exposes_agent_harness(repo_root: Path) -> None:
         status="running",
     )
 
-    snapshot = ServiceReadModel(repo_root / ".murder" / "murder.db").get_crow_snapshot()
+    snapshot = RosterService(repo_root / ".murder" / "murder.db").get()
 
-    assert snapshot.sessions[0].harness == "claude_code"
+    assert snapshot["sessions"][0]["harness"] == "claude_code"

@@ -7,6 +7,7 @@ import logging
 import math
 import sqlite3
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -22,11 +23,14 @@ from murder.bus.protocol import (
 )
 from murder.observability.advanced_log import CommandRecord, current_advanced_log
 from murder.observability.log_context import log_context
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.state.persistence import commands as cmd_db
+from murder.state.persistence.records import CommandRecord as PersistedCommandRecord
 from murder.verdict.escalations.service import EscalationService
 
 if TYPE_CHECKING:
-    from murder.bus.broker import Bus
+    from murder.bus import OrchestrationNotifier
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,12 +45,14 @@ class ClaimedCommand:
 class CommandDispatcher:
     conn: sqlite3.Connection
     repo_root: Path
-    bus: Bus | None = None
+    bus: OrchestrationNotifier | None = None
     lease_ttl_s: float = DEFAULT_LEASE_TTL_S
     max_attempts: int = DEFAULT_MAX_COMMAND_ATTEMPTS
     reaper_interval_s: float = COMMAND_REAPER_INTERVAL_S
 
-    def claim_next(self, *, target_worker: str, claimed_by: str) -> ClaimedCommand | None:
+    def claim_next(
+        self, *, target_worker: WorkerName, claimed_by: str
+    ) -> ClaimedCommand | None:
         lease_expires_at = math.ceil(time.time() + self.lease_ttl_s)
         row = cmd_db.claim_next_command(
             self.conn,
@@ -126,7 +132,7 @@ class CommandDispatcher:
             # Wiring miss: a command was routed to a worker that has no branch
             # for this kind. That is a programming bug, not a runtime condition,
             # so fail loudly at ERROR level.
-            message = f"worker {worker_name!r} did not handle {command.kind!r}"
+            message = f"worker {worker_name!r} did not handle {command.kind.value!r}"
             LOGGER.error(message)
             self.fail(command_id, message, retryable=False)
             return
@@ -134,7 +140,7 @@ class CommandDispatcher:
             # Domain failure: the handler ran fine and hit a normal business
             # error (e.g. "no agent named X"). Surface the handler's own error.
             error = result.get("error")
-            message = str(error) if error else f"command {command.kind!r} failed"
+            message = str(error) if error else f"command {command.kind.value!r} failed"
             self.fail(command_id, message, retryable=False)
             return
         self.complete(command_id, result)
@@ -174,7 +180,7 @@ class CommandDispatcher:
             )
 
 
-def command_from_row(row: dict[str, Any]) -> CommandEvent:
+def command_from_row(row: PersistedCommandRecord | Mapping[str, Any]) -> CommandEvent:
     role = row.get("role")
     status = row.get("status") or CommandStatus.PENDING.value
     try:
@@ -187,8 +193,8 @@ def command_from_row(row: dict[str, Any]) -> CommandEvent:
         agent_id=row.get("agent_id") or "",
         role=Role(role) if role else None,
         ticket_id=row.get("ticket_id"),
-        target_worker=row["target_worker"],
-        kind=row["kind"],
+        target_worker=WorkerName(row["target_worker"]),
+        kind=OrchestrationCommand(row["kind"]),
         payload=json.loads(row.get("payload_json") or "{}"),
         correlation_id=row["correlation_id"],
         idempotency_key=row["idempotency_key"],

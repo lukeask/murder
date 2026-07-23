@@ -17,7 +17,8 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { BusClient } from '../../bus/BusClient.js';
+import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import { asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import type { DocKind } from './docViewSlice.js';
 
@@ -46,7 +47,7 @@ const DISPLAY_METHOD = {
   report: 'report.get',
 } as const satisfies Record<DocKind, import('../../generated/applicationProtocol.js').QueryMethod>;
 
-/** The doc-view actions, bound to one {@link BusClient} + store handle. */
+/** The doc-view actions, bound to one {@link ApplicationClient} + store handle. */
 export interface DocViewActions {
   /**
    * Open a document: ref-swap the slice to show `{ kind, name }` in `loading`, fetch its body via
@@ -63,14 +64,16 @@ export interface DocViewActions {
   close(): void;
 }
 
-export function createDocViewActions(bus: BusClient, store: StoreApi<AppStore>): DocViewActions {
+export function createDocViewActions(bus: ApplicationClient, store: StoreApi<AppStore>): DocViewActions {
   return {
     async open(kind: DocKind, name: string): Promise<void> {
       store.setState({
         docView: { open: { kind, name }, body: null, status: 'loading', error: null },
       });
       try {
-        const reply = await bus.query(DISPLAY_METHOD[kind], { name });
+        const reply = asQueryResult<(typeof DISPLAY_METHOD)[DocKind], DisplaySnapshot>(
+          await bus.query(DISPLAY_METHOD[kind], { name }),
+        );
         store.setState((state) => {
           // Guard against a stale reply: only apply if this doc is still the open one.
           const cur = state.docView.open;

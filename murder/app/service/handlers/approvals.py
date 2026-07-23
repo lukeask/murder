@@ -12,6 +12,7 @@ from murder.app.protocol.permissions import (
     ListApprovalsParams,
     ListPermissionsParams,
 )
+from murder.app.protocol.requests import CommandName, QueryName
 from murder.permissions.persistence import PermissionStore
 from murder.state.persistence.approvals import (
     resolve_approval_request,
@@ -107,10 +108,10 @@ def register(host: ServiceHost) -> None:
             ),
         }
 
-    host.register_rpc_handler("approvals.list", _list)
-    host.register_rpc_handler("approvals.get", _get)
-    host.register_rpc_handler("approval.decide", _decide)
-    host.register_rpc_handler("permissions.list", _list_permissions)
+    host.register_application_query(QueryName.APPROVALS_LIST, _list)
+    host.register_application_query(QueryName.APPROVALS_GET, _get)
+    host.register_application_query(QueryName.PERMISSIONS_LIST, _list_permissions)
+    host.register_application_command(CommandName.APPROVAL_DECIDE, _decide)
 
 
 __all__ = ["register"]

@@ -8,8 +8,6 @@ import pytest
 
 from pydantic import ValidationError
 
-from murder.bus import Bus
-from murder.bus.broker import DurableBroker
 from murder.facts.contracts import (
     AggregateRef,
     FactActor,
@@ -22,6 +20,8 @@ from murder.facts.contracts import (
 )
 from murder.facts.log import (
     FactIdentityConflictError,
+    FactLog,
+    ProjectionInputLog,
     append_fact,
     append_projection_input,
     ensure_fact_schema,
@@ -259,23 +259,8 @@ def _install_rejecting_projection_trigger(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_compatibility_events_are_never_visible_as_public_facts() -> None:
+def test_only_retained_facts_are_visible_as_public_facts() -> None:
     conn = _conn()
-    conn.execute(
-        """
-        INSERT INTO runs(run_id, started_at, config_snapshot)
-        VALUES ('run', ?, '{}')
-        """,
-        (NOW.isoformat(),),
-    )
-    conn.execute(
-        """
-        INSERT INTO events(
-            ts, run_id, agent_id, role, ticket_id, type, schema_version, payload_json
-        ) VALUES (?, 'run', '', '', NULL, 'command', 1, '{}')
-        """,
-        (NOW.isoformat(),),
-    )
     assert replay_facts(conn) == ()
 
 
@@ -283,14 +268,14 @@ def test_fact_cursor_reports_retention_gap_instead_of_reading_compatibility_even
     conn = _conn()
     first, _ = append_fact(conn, _draft(), recorded_at=NOW)
     second, _ = append_fact(conn, _draft(), recorded_at=NOW)
-    broker = DurableBroker(Bus("run", conn), conn)
-    assert broker.is_fact_cursor_retained(0)
+    facts = FactLog(conn)
+    assert facts.is_cursor_retained(0)
     conn.execute(
         "DELETE FROM retained_facts WHERE fact_id = ?",
         (str(first.fact_id),),
     )
-    assert not broker.is_fact_cursor_retained(0)
-    assert broker.is_fact_cursor_retained(second.sequence - 1)
+    assert not facts.is_cursor_retained(0)
+    assert facts.is_cursor_retained(second.sequence - 1)
 
 
 def test_fact_and_projection_retention_are_pruned_independently() -> None:
@@ -317,15 +302,11 @@ def test_fact_and_projection_retention_are_pruned_independently() -> None:
         ),
         created_at=NOW,
     )
-    broker = DurableBroker(
-        Bus("run", conn),
-        conn,
-        retention_min_events=1,
-        retention_max_age_days=1,
-    )
+    facts = FactLog(conn, retention_min_records=1, retention_max_age_days=1)
+    inputs = ProjectionInputLog(conn, retention_min_records=1, retention_max_age_days=1)
 
-    assert broker.prune_projection_inputs(now=NOW + timedelta(days=2)) == 2  # noqa: PLR2004
-    assert broker.prune_retained_facts(now=NOW + timedelta(days=2)) == 1
-    assert not broker.is_projection_cursor_retained(0)
+    assert inputs.prune(now=NOW + timedelta(days=2)) == 2  # noqa: PLR2004
+    assert facts.prune(now=NOW + timedelta(days=2)) == 1
+    assert not inputs.is_cursor_retained(0)
     assert conn.execute("SELECT COUNT(*) AS n FROM projection_inputs").fetchone()["n"] == 1
     assert conn.execute("SELECT COUNT(*) AS n FROM retained_facts").fetchone()["n"] == 1

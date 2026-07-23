@@ -48,7 +48,6 @@ class QueryName(StrEnum):
 
 
 class CommandName(StrEnum):
-    ORCHESTRATION_EXECUTE = "orchestration.execute"
     HARNESS_ANSWER = "harness.answer"
     IMAGE_UPLOAD = "image.upload"
     TICKET_SAVE_BODY = "ticket.save_body"
@@ -82,9 +81,6 @@ class CommandName(StrEnum):
     SESSION_WRITER_RELEASE = "session.writer.release"
     SESSION_COMMAND_EXECUTE = "session.command.execute"
     WORKFLOW_SIGNAL = "workflow.signal"
-
-
-class OrchestrationAction(StrEnum):
     AGENT_INTERRUPT = "agent.interrupt"
     AGENT_MESSAGE = "agent.message"
     AGENT_RESUME_FROM_HISTORY = "agent.resume_from_history"

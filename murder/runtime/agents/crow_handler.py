@@ -259,9 +259,8 @@ class CrowHandler(Daemon):
 
     async def _orchestration_tick(self, pane: str, signals) -> None:
         from murder.state.persistence.tickets import get_ticket_status, checklist_progress
-        from murder.state.persistence.agents import heartbeat_agent, heartbeat_bucket
+        from murder.state.persistence.agents import heartbeat_bucket
         from murder.bus import HeartbeatEvent, SummaryEvent
-        from murder.bus.protocol import Entity
 
         # Stop if ticket reached a terminal state via any path.
         ticket_status = get_ticket_status(self.runtime.db, self.ticket_id)
@@ -317,7 +316,7 @@ class CrowHandler(Daemon):
                     last_message_excerpt=excerpt[:500],
                 )
             )
-        heartbeat_agent(self.runtime.db, self.id)
+        # The update and feature invalidation share the roster transaction.
         # F11 H1: the DB write above always lands, but the key-only `agent`
         # invalidation is coalesced to one emit per HEARTBEAT_EMIT_BUCKET_S so a
         # steady 5Hz heartbeat does not storm the Ink roster refetch. Status
@@ -325,44 +324,26 @@ class CrowHandler(Daemon):
         bucket = heartbeat_bucket(time.monotonic())
         if bucket != self._last_heartbeat_emit_bucket:
             self._last_heartbeat_emit_bucket = bucket
-            await self.runtime.publish_snapshot(Entity.AGENT, self.id)
+            self.runtime.roster.heartbeat_agent(self.runtime.db, self.id, invalidate=True)
+        else:
+            self.runtime.roster.heartbeat_agent(self.runtime.db, self.id, invalidate=False)
 
     async def observe_conversation_changes(self, changes) -> None:
-        """Publish ASK/NOTE markers introduced by newly projected assistant text.
+        """Route ASK markers introduced by newly projected assistant text.
 
         Projection is the assistant-message ingress boundary.  Its block
         changes prevent the polling loop from replaying markers that happen to
         remain visible in later captures.
         """
-        if self.runtime.bus is None or self.runtime.run_id is None:
-            return
-        from murder.bus import NoteEvent, QuestionEvent
         from murder.runtime.orchestration.verified_signals import VerifiedOrchestrationSignals
+
+        route_ask = getattr(self.runtime, "crow_ask_router", None)
 
         for change in changes:
             signals = VerifiedOrchestrationSignals.from_conversation_block_change(change)
             for ask in signals.asks:
-                await self.runtime.bus.publish(
-                    QuestionEvent(
-                        run_id=self.runtime.run_id,
-                        agent_id=self.id,
-                        role=self.role,
-                        ticket_id=self.ticket_id,
-                        question=ask,
-                        crow_session=self.crow_session,
-                        recent_pane=signals.assistant_text,
-                    )
-                )
-            for note in signals.notes:
-                await self.runtime.bus.publish(
-                    NoteEvent(
-                        run_id=self.runtime.run_id,
-                        agent_id=self.id,
-                        role=self.role,
-                        ticket_id=self.ticket_id,
-                        note=note,
-                    )
-                )
+                if route_ask is not None:
+                    await route_ask(self.ticket_id, ask, self.crow_session)
 
     def _latch_done(self) -> None:
         """Record that this crow has emitted ``>>> DONE`` (once)."""

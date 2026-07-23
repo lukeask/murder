@@ -1,7 +1,7 @@
 import { render } from 'ink-testing-library';
 import { act, type JSX } from 'react';
 import { describe, expect, it } from 'vitest';
-import { FakeBusClient } from '../../../src/bus/FakeBusClient.js';
+import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import { DocumentController } from '../../../src/components/panes/DocumentController.js';
 import { AppStoreProvider } from '../../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../../src/hooks/useInputStores.js';
@@ -40,7 +40,7 @@ function Harness({
 
 describe('DocumentController', () => {
   it('scrolls, jumps to goto lines, and handles wheel commands within the document window', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     const { store, dispose } = createAppStore(fake);
     store.setState({
       docView: {
@@ -88,7 +88,7 @@ describe('DocumentController', () => {
   });
 
   it('updates immediately on display-mode changes and clamps the persisted row scroll', async () => {
-    const fake = new FakeBusClient();
+    const fake = new FakeApplicationClient();
     const { store, dispose } = createAppStore(fake);
     const table = [
       '| First heading | Second heading | Third heading | Fourth heading |',

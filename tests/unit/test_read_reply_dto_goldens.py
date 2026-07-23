@@ -25,9 +25,9 @@ the same pattern as the ``conversation.block`` golden (F11 H3,
 The golden shape is the FULL post-envelope, post-serialization wire shape (``{ok, value}``),
 so it doubles as the honesty check for ``FakeBusClient``'s live-wrap.
 
-This complements — does NOT duplicate — Rook's ``tests/unit/test_protocol_agreement.py``
-(commit 317ff16), which checks PROTOCOL_VERSION / Entity set / BusEvent names. That is the
-protocol layer; this is the per-DTO field-shape layer.
+This complements — and does not duplicate — the generated application-protocol
+contract test.
+That test covers the protocol layer; this one covers per-DTO field shape.
 
 Regenerate after an *intentional* shape change with::
 
@@ -237,7 +237,7 @@ def _schedule_snapshot_dto() -> ScheduleSnapshot:
 # (golden filename stem, RPC method the Ink consumer calls, dataclass factory)
 _CASES: list[tuple[str, str, Any]] = [
     ("ticket-detail", "state.ticket_detail", _ticket_detail_dto),
-    ("crow-snapshot", "state.crow_snapshot", _crow_snapshot_dto),
+    ("crow-snapshot", "roster.get", _crow_snapshot_dto),
     ("plans-snapshot", "state.plans_snapshot", _plans_snapshot_dto),
     ("notes-snapshot", "state.notes_snapshot", _notes_snapshot_dto),
     ("reports-snapshot", "state.reports_snapshot", _reports_snapshot_dto),
