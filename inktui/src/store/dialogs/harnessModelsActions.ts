@@ -37,15 +37,7 @@ export interface HarnessModelsSnapshotReply {
  * Declares the live pull-only models RPC via declaration merging (rule 4 — never edit the frozen C1
  * bus files). `state.harness_models_snapshot` pulls the whole map with empty params.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Pull the full per-harness model map. Fetched once on wizard open. */
-    'harness_models.list': {
-      params: Record<string, never>;
-      result: HarnessModelsSnapshotReply;
-    };
-  }
-}
+
 
 /**
  * Static last-good model map — the fallback shown instantly on open before (or instead of) the

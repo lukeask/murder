@@ -42,22 +42,7 @@ export interface SpawnFavorite {
  * **Bus status:** both LIVE (registered in `host.py`). The list round-trips in both directions; the
  * save reply echoes the persisted list back.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Load the persisted spawn-favorites list. Empty params; reply carries the saved favorites. */
-    'spawn_favorites.get': {
-      params: Record<string, never>;
-      result: { ok: boolean; favorites: readonly SpawnFavorite[] };
-    };
-  }
-  interface CommandMethods {
-    /** Persist the spawn-favorites list. Echoes back the saved favorites on success. */
-    'spawn_favorites.set': {
-      params: { favorites: readonly SpawnFavorite[] };
-      result: { ok: boolean; favorites: readonly SpawnFavorite[] };
-    };
-  }
-}
+
 
 /** The spawn-favorites actions, bound to one {@link BusClient}. Wizard-local; no store handle. */
 export interface SpawnFavoritesActions {

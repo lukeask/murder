@@ -23,46 +23,7 @@ import { submitCommand } from '../commandSubmit.js';
  *
  * `ticket.next_id`, `ticket.exists`, and `plan.create` are all LIVE on the bus.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /**
-     * Fetch the next free ticket id (the id the service would assign to a new ticket).
-     * LIVE — registered in `murder/app/service/host.py`.
-     */
-    'ticket.next_id': {
-      params: Record<string, never>;
-      result: NextIdResult;
-    };
-    /**
-     * Check whether a ticket handle already exists.
-     * LIVE — registered in `murder/app/service/host.py`.
-     */
-    'ticket.exists': {
-      params: { handle: string };
-      result: ExistsResult;
-    };
-  }
-  interface CommandMethods {
-    /**
-     * Create a new plan and start its planning agent. LIVE — registered in
-     * `murder/app/service/host.py` (`_plan_create` → `Orchestrator.create_plan`).
-     *
-     * Payload (all optional individually, but one of `plan_name`/`auto_name` is required by the
-     * service): `body` seeds the plan's markdown; `auto_name: true` derives the name from `body` via a
-     * mini-LLM naming call (created under the FINAL name — no rename); a non-empty `message` starts the
-     * planning agent. Returns the FINAL `plan_name` (the auto-named result, when `auto_name`).
-     */
-    'plan.create': {
-      params: {
-        plan_name?: string;
-        body?: string;
-        message?: string;
-        auto_name?: boolean;
-      };
-      result: PlanCreateResult;
-    };
-  }
-}
+
 
 /** Worker reply for the `ticket.quick_create` command kind (via command.submit). */
 export interface QuickCreateResult {

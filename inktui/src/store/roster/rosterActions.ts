@@ -31,16 +31,11 @@ import type { RosterRow } from './rosterSlice.js';
  *
  * `roster.get` is adapted by the application gateway to the internal roster snapshot handler.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Fetch the full crow roster. Re-pulled on each `agent`-entity `state.snapshot`. */
-    'roster.get': { params: Record<string, never>; result: CrowSnapshotReply };
-  }
-}
+
 
 /**
  * The `roster.get` reply, mirroring the service's `CrowSnapshot` DTO (`murder/app/service/
- * client_api.py`). Only the fields the roster projects are typed; the wire may carry more. Optional
+ * protocol/read_models.py`). Only the fields the roster projects are typed; the wire may carry more. Optional
  * fields are `?: T | null` to match the Python `T | None` columns exactly.
  */
 export interface CrowSnapshotReply {
@@ -53,7 +48,7 @@ export interface CrowSnapshotReply {
  * `role` mirrors `murder/bus/protocol.py`'s `Role` enum (`'collaborator' | 'planner' | 'crow' |
  * …`). The slice stores it as a raw string; `crowsSelectors.ts` (C9) uses it for type-grouping.
  *
- * Rich fields added from Python `CrowSessionSummary` (client_api.py:102-116):
+ * Rich fields from Python `CrowSessionSummary`:
  * - `last_seen` / `started_at`: ISO-8601 datetime strings (Python `datetime.isoformat()`), or null.
  * - `open_escalations`: count of open escalations linked to this crow's ticket (default 0).
  * - `max_severity`: max severity across open escalations (default 0).
@@ -68,8 +63,9 @@ export interface CrowSessionDto {
   harness?: string | null;
   model?: string | null;
   status: string;
-  session_name?: string | null;
-  /** Durable HarnessSessionRecord UUID; absent for transitional legacy agents. */
+  /** User-facing agent label; never used as terminal identity. */
+  display_name?: string | null;
+  /** Durable HarnessSessionRecord UUID; absent when no current record exists. */
   session_id?: string | null;
   /** ISO-8601 string from Python datetime.isoformat(), or null. Used for stuck-heartbeat detection. */
   last_seen?: string | null;
@@ -96,7 +92,7 @@ function toRosterRow(session: CrowSessionDto): RosterRow {
     harness: session.harness ?? null,
     model: session.model ?? null,
     status: session.status,
-    session: session.session_name ?? null,
+    session: session.display_name ?? null,
     ...(session.session_id == null ? {} : { sessionId: session.session_id }),
     worktreePath: session.worktree_path ?? null,
     lastSeen: session.last_seen ?? null,

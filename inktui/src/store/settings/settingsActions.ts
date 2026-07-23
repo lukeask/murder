@@ -195,90 +195,7 @@ export interface SettingsPatch {
  * editing the frozen C1/C2 bus files (rule 4 — the seam). Keys distinct from every other slice's.
  * Shapes mirror the Python `settings.{get,update}` handlers in `murder/app/service/host.py`.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Load the persisted TUI preferences. Empty params; reply carries the full settings record. */
-    'settings.get': {
-      params: Record<string, never>;
-      result: { ok: boolean; settings: SettingsWire };
-    };
-  }
-  interface CommandMethods {
-    /** Persist a partial preferences patch; reply echoes the full merged record. */
-    'settings.update': {
-      params: { settings: SettingsPatch };
-      result: { ok: boolean; settings: SettingsWire };
-    };
-    'llm.settings.set_disabled': {
-      params: { disabled: boolean };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.provider.create': {
-      params: { provider: Record<string, unknown> };
-      result: { ok: boolean; provider_id: string; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.provider.update': {
-      params: { provider_id: string; patch: Record<string, unknown> };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.provider.delete': {
-      params: { provider_id: string; confirm: true };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.provider.discover_models': {
-      params: { provider_id: string };
-      result: { ok: boolean; models: readonly { id: string; label: string }[] };
-    };
-    'llm.provider.models.update': {
-      params: { provider_id: string; patch: Record<string, unknown> };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.policy.create': {
-      params: { name: string; policy?: Record<string, unknown> };
-      result: { ok: boolean; policy_id: string; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.policy.update': {
-      params: { policy_id: string; patch: Record<string, unknown> };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.policy.delete': {
-      params: { policy_id: string; confirm: true };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.policy.activate': {
-      params: { policy_id: string };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.policy.clone': {
-      params: { policy_id: string; name: string };
-      result: { ok: boolean; policy_id: string; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.feature_policy.set': {
-      params: { feature_type: string; policy_id: string | null };
-      result: { ok: boolean; llm: LlmWire; settings: SettingsWire };
-    };
-    'llm.preview_resolution': {
-      params: {
-        feature_type: string;
-        required_capabilities?: readonly string[];
-        required_execution_mode?: string | null;
-        min_context_tokens?: number | null;
-      };
-      result: {
-        ok: boolean;
-        status: string;
-        policy_id: string | null;
-        candidates: readonly {
-          provider_id: string;
-          provider_type: string;
-          model_id: string;
-          locality: string;
-          cost_class: string;
-        }[];
-      };
-    };
-  }
-}
+
 
 /** The settings actions, bound to one {@link BusClient} + store handle. */
 export interface SettingsActions {
@@ -534,7 +451,7 @@ export function createSettingsActions(bus: BusClient, store: StoreApi<AppStore>)
       ): Promise<readonly { provider_id: string; model_id: string }[]> {
         try {
           const reply = await bus.command('llm.preview_resolution', { feature_type });
-          return reply.candidates.map(({ provider_id, model_id }) => ({ provider_id, model_id }));
+          return reply.candidates.map(({ provider_id, model_id }: { provider_id: string; model_id: string }) => ({ provider_id, model_id }));
         } catch (error: unknown) {
           llmFailure(error);
           return [];

@@ -2,7 +2,7 @@
  * Per-snapshot cross-language field-shape contract tests for the read-reply DTOs (A-D2 / B-D5).
  *
  * Each Ink slice declares a TypeScript interface that hand-mirrors a Python dataclass in
- * `murder/app/service/client_api.py` with no schema check at the seam — so a rename/type change on
+ * `murder/app/protocol/read_models.py` with no schema check at the seam — so a rename/type change on
  * either side drifts silently (the plans-panel blank-out, sweep Finding 4, was exactly this).
  *
  * This test pins the Ink CONSUMERS against committed goldens produced by the REAL Python producer

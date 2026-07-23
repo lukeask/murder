@@ -2,7 +2,7 @@
  * Notes slice — domain state for the notes list (panel 2).
  *
  * Copied from {@link ../roster/rosterSlice.js} per the copy recipe. Only these change vs. the
- * roster: the row shape mirrors {@link NoteSummary} from `murder/app/service/client_api.py`
+ * roster: the row shape mirrors {@link NoteSummary} from `murder/app/protocol/read_models.py`
  * (name + char_count + updated_at), and the invalidating entity is `'note'` (not `'agent'`).
  * Presentation (sort order, updated_at formatting) stays out of this file — it belongs in the
  * selector (rule 2). The slice holds raw, wire-faithful domain data only.

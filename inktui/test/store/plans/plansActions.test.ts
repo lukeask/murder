@@ -7,7 +7,7 @@
  * Ink consumer to those real field names so blank-row regression is caught at the seam.
  *
  * datetime serialisation finding (logged here, not in Python):
- *   `dto_to_wire` (client_api.py:461-462) hits the `isinstance(datetime)` branch → `.isoformat()`
+ *   `dto_to_wire` hits the `isinstance(datetime)` branch → `.isoformat()`
  *   → ISO-8601 string on the wire. `PlanDto.updated_at` is typed `string`; the selector compares
  *   ISO strings lexicographically for recency ordering — correct because ISO-8601 sorts correctly
  *   as a string. No backend flag needed: `updated_at` IS serialisable, and `read_model.py` sets

@@ -2,8 +2,7 @@
  * Tickets actions — the *only* code that calls the bus for ticket data (rule 3).
  *
  * Copied from {@link ../roster/rosterActions.js} per the copy recipe. Changes vs. the roster:
- *  - RPC is the LIVE `state.schedule_snapshot` (mirrors Python `MurderServiceClient.
- *    get_schedule_snapshot()`; registered in `murder/app/service/host.py`).
+ *  - Query is the live `schedule.get` application-protocol capability.
  *  - Reply shape is {@link ScheduleSnapshotReply} (mirrors Python `ScheduleSnapshot`). The reply
  *    bundles active_tickets / recent_done_tickets / archived_tickets AND `usage_gauges` (the usage
  *    slice consumes the same reply — usage is embedded in the schedule snapshot, not its own RPC).
@@ -33,24 +32,11 @@ import type { TicketRow } from './ticketsSlice.js';
  * Declares the schedule read RPC via declaration merging. `state.schedule_snapshot` is the LIVE
  * server name (registered in `murder/app/service/host.py`; mirrors Python `get_schedule_snapshot()`).
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /**
-     * Fetch the full schedule snapshot (live name `state.schedule_snapshot`). Re-pulled on each
-     * `ticket`-entity `state.snapshot`. The reply is the live `ScheduleSnapshot` DTO and bundles
-     * BOTH the 3 ticket buckets (this slice's domain) AND `usage_gauges` (the usage slice reads the
-     * same reply — usage is embedded in the schedule snapshot, not a separate RPC). This `declare
-     * module` is the SOLE declaration of `state.schedule_snapshot`; the usage slice consumes
-     * {@link ScheduleSnapshotReply} without re-declaring the key (a second augmentation with a
-     * different `result` would be a TS 2717 collision).
-     */
-    'schedule.get': { params: Record<string, never>; result: ScheduleSnapshotReply };
-  }
-}
+
 
 /**
  * The `state.schedule_snapshot` reply, mirroring the live service's `ScheduleSnapshot` DTO from
- * `murder/app/service/client_api.py`. Only the fields the tickets + usage slices project are typed;
+ * `murder/app/protocol/read_models.py`. Only the fields the tickets + usage slices project are typed;
  * the wire may carry more (e.g. scheduler_decisions, calendar fields). Tickets read the 3 buckets;
  * the usage slice reads `usage_gauges`.
  */

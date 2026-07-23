@@ -392,7 +392,7 @@ function makeSmokeBus(): FakeBusClient {
         status: 'idle',
         harness: 'claude',
         model: 'anthropic/claude-opus',
-        session_name: 'collaborator',
+        display_name: 'collaborator',
       },
     ],
   });

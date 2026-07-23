@@ -29,12 +29,7 @@ import type { BusClient } from '../../bus/BusClient.js';
  * The `worktrees.list` query reply shape, declared here via TypeScript declaration merging.
  * The query name comes from the generated application protocol; the feature owns its result shape.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Enumerate the repo's worktrees (main + `.murder/worktrees/*`). */
-    'worktrees.list': { params: Record<string, never>; result: WorktreeListReply };
-  }
-}
+
 
 /** The `worktrees.list` reply, mirroring the service handler (host.py `_worktree_list`). */
 export interface WorktreeListReply {
@@ -46,7 +41,7 @@ export interface WorktreeListReply {
 export interface WorktreeEntryDto {
   readonly path: string;
   readonly branch: string | null;
-  readonly is_main: boolean;
+  readonly is_main?: boolean;
 }
 
 /** Sentinel key: run on the repo's main checkout (no worktree threading). */
@@ -62,6 +57,7 @@ export interface WorktreeOption {
 
 /** An existing (non-main) worktree as it would cross a future wire — path + optional branch. */
 export interface ExistingWorktree {
+  readonly is_main?: boolean;
   readonly path: string;
   readonly branch?: string;
 }
@@ -135,8 +131,8 @@ export function createWorktreeOptionsActions(bus: BusClient): WorktreeOptionsAct
       try {
         const reply = await bus.query('worktrees.list', {});
         const existing: ExistingWorktree[] = reply.entries
-          .filter((entry) => !entry.is_main)
-          .map((entry) => ({
+          .filter((entry: ExistingWorktree) => !entry.is_main)
+          .map((entry: ExistingWorktree) => ({
             path: entry.path,
             ...(entry.branch !== null ? { branch: entry.branch } : {}),
           }));

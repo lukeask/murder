@@ -25,21 +25,11 @@ import type { DocKind } from './docViewSlice.js';
  * The doc-display RPCs, augmenting the shared {@link RpcMethods} registry without editing the frozen
  * C1/C2 bus files. All three are LIVE on the bus (registered in `murder/app/service/host.py`).
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Fetch a plan's display snapshot by name. The service reads the file; the view never touches
-     * disk (pure RPC consumer). */
-    'plan.get': { params: { name: string }; result: DisplaySnapshot };
-    /** Fetch a note's display snapshot by name. */
-    'note.get': { params: { name: string }; result: DisplaySnapshot };
-    /** Fetch a report's display snapshot by name. */
-    'report.get': { params: { name: string }; result: DisplaySnapshot };
-  }
-}
+
 
 /**
  * The `state.{plan,note,report}_display` reply — the live `*DisplaySnapshot` DTO from
- * `murder/app/service/client_api.py`. Carries the document name + its full markdown (NOT a bare
+ * `murder/app/protocol/read_models.py`. Carries the document name + its full markdown (NOT a bare
  * `{ body }`). The wire may carry more metadata in future; only the consumed fields are typed.
  */
 export interface DisplaySnapshot {
@@ -54,7 +44,7 @@ const DISPLAY_METHOD = {
   plan: 'plan.get',
   note: 'note.get',
   report: 'report.get',
-} as const satisfies Record<DocKind, keyof import('../../bus/BusClient.js').QueryMethods>;
+} as const satisfies Record<DocKind, import('../../generated/applicationProtocol.js').QueryMethod>;
 
 /** The doc-view actions, bound to one {@link BusClient} + store handle. */
 export interface DocViewActions {

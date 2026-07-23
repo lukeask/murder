@@ -24,12 +24,7 @@ import type { PlanRow } from './plansSlice.js';
  * Declares the plans read RPC via declaration merging (the C1/C2 bus files stay byte-identical).
  * `state.plans_snapshot` is the bus-contract name (`domain.verb`), registered in `host.py` and live.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Fetch the full plans list (with parent/updated_at/char_count). Re-pulled on each `plan`-entity snapshot. */
-    'plans.list': { params: Record<string, never>; result: PlansSnapshotReply };
-  }
-}
+
 
 /**
  * The `state.plans_snapshot` reply. Mirrors the service's plans-snapshot DTO. Only the fields the

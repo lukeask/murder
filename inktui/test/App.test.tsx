@@ -142,7 +142,7 @@ describe('App shell', () => {
     fake.stubQuery('roster.get', {
       invalidation_key: 'iv',
       sessions: [
-        { agent_id: 'collab-1', role: 'collaborator', status: 'idle', session_name: 'TestCollab' },
+        { agent_id: 'collab-1', role: 'collaborator', status: 'idle', display_name: 'TestCollab' },
       ],
     });
     // F2: chat sends route through orchestration.execute (agent.message command kind), not a direct RPC.
@@ -299,7 +299,7 @@ describe('alt+w — toggle show/hide for the highlighted center-stage pane', () 
     fake.stubQuery('roster.get', {
       invalidation_key: 'iv',
       sessions: [
-        { agent_id: 'collab-1', role: 'collaborator', status: 'idle', session_name: 'TestCollab' },
+        { agent_id: 'collab-1', role: 'collaborator', status: 'idle', display_name: 'TestCollab' },
       ],
     });
     fake.stubQuery('plan.get', { name: 'my-plan', markdown: 'doc body line' });

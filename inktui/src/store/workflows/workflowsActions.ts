@@ -33,33 +33,7 @@ import type { WorkflowDef } from './workflowsSlice.js';
  * Shapes mirror the bus contract: a {@link WorkflowDef} list round-tripped for load/save, and a fire
  * verb returning the materialized ticket ids.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Load the persisted workflow registry. Empty params; reply carries the saved workflows. */
-    'workflows.get': {
-      params: Record<string, never>;
-      result: { ok: boolean; workflows: readonly WorkflowDef[] };
-    };
-  }
-  interface CommandMethods {
-    /** Persist the registry. Echoes back the NORMALIZED list. */
-    'workflows.set': {
-      params: { workflows: readonly WorkflowDef[] };
-      result: { ok: boolean; workflows: readonly WorkflowDef[] };
-    };
-    /** Fire a saved workflow by name: materialize its ticket tree + spawn crows. `args` are the
-     * stage-instruction substitutions (v0: a single `{input}` key — see fireWorkflow.ts). */
-    'workflow.start': {
-      params: { name: string; args: Record<string, string> };
-      result: {
-        ok: boolean;
-        run_ticket_id: string;
-        stage_ticket_ids: Record<string, string>;
-        created_ticket_ids: readonly string[];
-      };
-    };
-  }
-}
+
 
 /** The workflows actions, bound to one {@link BusClient} + store handle. */
 export interface WorkflowsActions {

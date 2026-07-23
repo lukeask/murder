@@ -36,22 +36,7 @@ import { toastStore } from '../toast/toastStore.js';
  * **Bus status:** both LIVE (registered in `host.py`). Shapes mirror the bus contract's prefs
  * pair: a flat starred-id list, round-tripped in both directions.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Load the persisted favorite-id list. Empty params; reply carries the saved ids. */
-    'favorites.get': {
-      params: Record<string, never>;
-      result: { ok: boolean; favorites: readonly string[] };
-    };
-  }
-  interface CommandMethods {
-    /** Persist the favorite-id list. Echoes back the saved ids on success. */
-    'favorites.set': {
-      params: { favorites: readonly string[] };
-      result: { ok: boolean; favorites: readonly string[] };
-    };
-  }
-}
+
 
 /** The favorites actions, bound to one {@link BusClient} + store handle. */
 export interface FavoritesActions {

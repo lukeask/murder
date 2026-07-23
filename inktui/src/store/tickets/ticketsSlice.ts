@@ -2,7 +2,7 @@
  * Tickets slice — domain state for the tickets list (panel 4).
  *
  * Copied from {@link ../roster/rosterSlice.js} per the copy recipe. Changes vs. the roster:
- *  - Row shape mirrors {@link ScheduleTicketRow} from `murder/app/service/client_api.py`
+ *  - Row shape mirrors {@link ScheduleTicketRow} from `murder/app/protocol/read_models.py`
  *    (id, title, status, last_update_at, last_update_label, schedule_at, harness, model,
  *    pending_dep_ids). `plan` and `worktree` are NOT on the wire DTO (contract gap — see
  *    C7 status note in the plan); the selector renders `'—'` for those cells until B13 lands.

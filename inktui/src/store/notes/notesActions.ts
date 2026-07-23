@@ -25,16 +25,11 @@ import type { NoteRow } from './notesSlice.js';
  * `RuntimeClient.get_notes_snapshot`). LIVE — registered in `host.py` as `state.notes_snapshot`,
  * per the contract's "view → service = RPC methods" rule.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Fetch the full notes list. Re-pulled on each `note`-entity `state.snapshot`. */
-    'notes.list': { params: Record<string, never>; result: NotesSnapshotReply };
-  }
-}
+
 
 /**
  * The `state.notes_snapshot` reply, mirroring the service's `NotesSnapshot` DTO from
- * `murder/app/service/client_api.py`. Only the fields the notes slice projects are typed.
+ * `murder/app/protocol/read_models.py`. Only the fields the notes slice projects are typed.
  */
 export interface NotesSnapshotReply {
   notes: readonly NoteDto[];

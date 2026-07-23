@@ -47,25 +47,11 @@ import {
  * `RuntimeClient.get_conversations_snapshot`). Called on connect to prime the transcripts map so a
  * cold-start service (no `conversation.block` events yet) paints populated transcript panes immediately.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /**
-     * Fetch all in-progress agent conversations as a snapshot. Re-pulled on connect (boot-prime);
-     * individual block updates arrive via `conversation.block` events thereafter. The reply is a
-     * list of `ConversationSummary` entries (one per in-progress conversation), each carrying the
-     * agent_id and the full block history (same `ConversationBlockSummary` wire shape as the event
-     * block, so `parseBlock` applies unchanged).
-     */
-    'conversations.get': {
-      params: Record<string, never>;
-      result: ConversationsSnapshotReply;
-    };
-  }
-}
+
 
 /**
  * One block as it appears inside `ConversationSummary.blocks` (the `ConversationBlockSummary` DTO,
- * `murder/app/service/client_api.py`). Same nested shape as `ConversationBlockEvent.block`, so
+ * `murder/app/protocol/read_models.py`).
  * `parseBlock` applies unchanged: `id` is numeric, `payload` is the segment dict with `type`.
  */
 export interface ConversationBlockSummaryDto {
@@ -81,7 +67,7 @@ export interface ConversationBlockSummaryDto {
 
 /**
  * One rolling chunk summary as it arrives inside `ConversationSummary.chunk_summaries[]` (the
- * `ConversationChunkSummary` DTO, `murder/app/service/client_api.py`). `dto_to_wire` preserves the
+ * `ConversationChunkSummary` DTO, `murder/app/protocol/read_models.py`). `dto_to_wire` preserves the
  * Python snake_case field names verbatim, so the wire shape is exactly this. `block_ids` are the
  * explicit attribution pointers into `conversation_blocks.id` (numeric); the Condensed selector
  * replaces exactly those blocks with `summary`. Ordered by `chunk_idx` on the wire.
@@ -95,7 +81,7 @@ export interface ConversationChunkSummaryDto {
 
 /**
  * One conversation entry in the snapshot list (the `ConversationSummary` DTO,
- * `murder/app/service/client_api.py`). Only `in_progress` conversations are included.
+ * `murder/app/protocol/read_models.py`). Only `in_progress` conversations are included.
  *
  * TUIchat-4: the old single `condensed: string | null` scalar was DROPPED on the backend (column
  * removed in migration) and replaced by `chunk_summaries[]` — ordered rolling chunk summaries, each
@@ -118,7 +104,7 @@ export interface ConversationSummaryDto {
 
 /**
  * The `state.conversations_snapshot` reply. Mirrors the service's `ConversationsSnapshot` DTO
- * (`murder/app/service/client_api.py`). `conversations` is a list of `ConversationSummary` entries
+ * (`murder/app/protocol/read_models.py`). `conversations` is a list of `ConversationSummary` entries
  * (only `in_progress` conversations), each carrying the full block history for that agent.
  * Keying is by `agent_id` (CONTRACT ASSUMPTION: one active conversation per agent — same assumption
  * the slice already makes for `conversation.block` events). `parseBlock` applies to each block row

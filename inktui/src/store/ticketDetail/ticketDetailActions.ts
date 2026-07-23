@@ -18,7 +18,6 @@
  *    delivered alongside the doc and shown read-only in the header / schedule row.
  *  - `checklist` (structured `{text, done}[]`) — carried for contract fidelity, NOT rendered; the
  *    body is the single checklist source (C8 line 167).
- *  - `plan_md`/`working_notes_md` — Textual back-compat only; Ink ignores them.
  *
  * Duration grammar (mirrors `murder/work/duration.py`):
  *  Accepted: `1d4h3m`, `1h1m`, `34m`, `1h`, `2d`. Units d/h/m in order, each at most once.
@@ -38,48 +37,13 @@ import type { TicketDetailState, TicketFrontmatter } from './ticketDetailSlice.j
  * `murder/app/service/handlers/state.py`; writes are registered by
  * `murder/app/service/handlers/ticket.py`.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /**
-     * Fetch the detail for one ticket: frontmatter fields + the markdown body.
-     * The service's `get_ticket_detail(ticket_id)` returns `TicketDetailSnapshot | null`. Body
-     * contains `# Checklist` with `[ ]`/`[x]` lines.
-     */
-    'ticket.get': {
-      params: { ticket_id: string };
-      result: TicketDetailReply | null;
-    };
-  }
-  interface CommandMethods {
-    /**
-     * Persist the edited body back to the service. The service writes the ticket markdown and
-     * reconciles it into the DB before returning.
-     */
-    'ticket.save_body': {
-      params: { ticket_id: string; body: string };
-      /**
-       * The service can SOFT-fail: `{handled:true, ok:false, error}` (e.g. ticket not found —
-       * `orchestrator.py` `save_ticket_body`). This resolves the promise (does NOT reject), so the
-       * `ok` flag must be checked or a failed save is mistaken for success (silent data loss).
-       */
-      result: { ok: boolean; error?: string };
-    };
-    /**
-     * Schedule a ticket using a free-form duration string (`1d4h3m`, `34m`).
-     * The service calls `parse_duration(duration)` authoritatively.
-     */
-    'ticket.schedule': {
-      params: { ticket_id: string; duration: string };
-      result: { ok?: boolean; error?: string; schedule_at?: string | null };
-    };
-  }
-}
+
 
 // ── Wire DTO ────────────────────────────────────────────────────────────────────────────────────
 
 /**
  * One structured checklist item from the detail reply (`{text, done}`). Mirrors the Python
- * `ChecklistItem` dataclass (`murder/app/service/client_api.py`). NOTE: the editor does NOT render
+ * `ChecklistItem` dataclass (`murder/app/protocol/read_models.py`). NOTE: the editor does NOT render
  * from this — per newui-inktui C8 (line 167) the checklist **rides inside `body`** under the
  * `# Checklist` heading as `[ ]`/`[x]` lines, and the editor toggles those body lines directly
  * (`toggleChecklist` in `TicketEditorMode.tsx`). This field is carried for contract fidelity with
@@ -93,7 +57,7 @@ export interface ChecklistItem {
 
 /**
  * The `state.ticket_detail` reply — the wire shape of the Python `TicketDetailSnapshot`
- * (`murder/app/service/client_api.py`), unwrapped from the `{ok, value}` read envelope by the
+ * (`murder/app/protocol/read_models.py`), unwrapped from the `{ok, value}` read envelope by the
  * shared bus util before it reaches here. Field-by-field with the dataclass:
  *  - `id`, `title`, `body` — strings (`body` is frontmatter-stripped and INCLUDES the `# Checklist`
  *    `[ ]`/`[x]` section per C8 line 167; it is the editable document).
@@ -105,8 +69,7 @@ export interface ChecklistItem {
  *    schedule row display. NOT the same as the free-form duration the user types (`scheduleInput`).
  *  - `checklist` — structured `{text, done}[]`; carried for contract fidelity, NOT rendered (body
  *    is the single source — see {@link ChecklistItem}).
- * The reply also carries `plan_md`/`working_notes_md`/`as_of`/`invalidation_key` for Textual
- * back-compat — Ink IGNORES those (not declared here).
+ * The reply also carries `as_of`/`invalidation_key` metadata (not declared here).
  */
 export interface TicketDetailReply {
   id: string;

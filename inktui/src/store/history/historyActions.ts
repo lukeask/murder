@@ -26,12 +26,7 @@ import type { HistoryRow, HistoryState } from './historySlice.js';
  * Declares the history read RPC. `state.history_snapshot` is the bus-contract name (mirrors Python
  * `ServiceReadModel.get_history_snapshot`, registered in `host.py`).
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Fetch the full history feed. Re-pulled on each `history`-entity `state.snapshot`. */
-    'history.list': { params: Record<string, never>; result: HistorySnapshotReply };
-  }
-}
+
 
 /** The `state.history_snapshot` reply, mirroring the service's `HistorySnapshot` DTO. */
 export interface HistorySnapshotReply {

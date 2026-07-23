@@ -28,20 +28,7 @@ interface CommandStatusResult {
   readonly command_id?: string;
 }
 
-declare module '../bus/BusClient.js' {
-  interface QueryMethods {
-    'command.get': {
-      params: { command_id: string };
-      result: CommandStatusResult;
-    };
-  }
-  interface CommandMethods {
-    'orchestration.execute': {
-      params: { kind: OrchestrationAction; payload: ApplicationPayload };
-      result: { ok: boolean; command_id: string };
-    };
-  }
-}
+
 
 /**
  * Poll interval (ms) between `command.status` checks. The poll exists because the live bus exposes

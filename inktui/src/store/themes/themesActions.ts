@@ -13,24 +13,7 @@ import { applyThemeRecords, type ThemeRecord } from '../../theme/palettes.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    'themes.get': {
-      params: Record<string, never>;
-      result: { ok: boolean; themes: readonly ThemeRecord[] };
-    };
-  }
-  interface CommandMethods {
-    'themes.set': {
-      params: { themes: readonly ThemeRecord[] };
-      result: { ok: boolean; themes: readonly ThemeRecord[] };
-    };
-    'theme.import': {
-      params: { json: string; id?: string };
-      result: { ok: boolean; themes: readonly ThemeRecord[]; id: string };
-    };
-  }
-}
+
 
 export interface ThemesActions {
   load(): Promise<void>;

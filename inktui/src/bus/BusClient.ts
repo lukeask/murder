@@ -1,56 +1,35 @@
 /**
  * Transport-agnostic client for Murder's service-owned application protocol.
  *
- * Product capability names live in the generated protocol. Feature action modules declaration-
- * merge their parameter and result DTOs into {@link QueryMethods} and {@link CommandMethods}; the
- * socket transport never maps those names back to legacy RPC targets. That compatibility mapping
- * belongs to the service gateway.
+ * Product capability names and request/result DTOs are generated from the server-side
+ * Pydantic operation registry. The socket transport never maps those names back to legacy RPC
+ * targets; that compatibility mapping belongs to the service gateway.
  */
 
 import type {
-  CommandName,
+  CommandMethod,
+  CommandParams,
+  CommandResult,
   ProjectionTopic,
-  QueryName,
+  QueryMethod,
+  QueryParams,
+  QueryResult,
   TerminalChunk,
   TerminalFrame as TerminalFrameContract,
   TerminalFrameMessage,
 } from '../generated/applicationProtocol.js';
 import type { BusEvent } from './protocol.js';
-import './sessionWriterMethods.js';
 
-export type ApplicationPayload = Record<string, unknown>;
-
-/** Feature-owned query DTO registry. Extended with declaration merging beside each action. */
-// biome-ignore lint/suspicious/noEmptyInterface: declaration merging requires an interface.
-export interface QueryMethods {}
-
-/** Feature-owned command DTO registry. Extended with declaration merging beside each action. */
-// biome-ignore lint/suspicious/noEmptyInterface: declaration merging requires an interface.
-export interface CommandMethods {}
-
-/** Only generated public names may enter a feature registry. */
-export type QueryMethod = Extract<keyof QueryMethods, QueryName>;
-export type CommandMethod = Extract<keyof CommandMethods, CommandName>;
-export type QueryParams<M extends QueryMethod> = QueryMethods[M] extends {
-  params: infer Params;
-}
-  ? Params
-  : never;
-export type QueryResult<M extends QueryMethod> = QueryMethods[M] extends {
-  result: infer Result;
-}
-  ? Result
-  : never;
-export type CommandParams<M extends CommandMethod> = CommandMethods[M] extends {
-  params: infer Params;
-}
-  ? Params
-  : never;
-export type CommandResult<M extends CommandMethod> = CommandMethods[M] extends {
-  result: infer Result;
-}
-  ? Result
-  : never;
+export type ApplicationPayload = any;
+export type {
+  CommandMethod,
+  CommandParams,
+  CommandResult,
+  QueryMethod,
+  QueryParams,
+  QueryResult,
+};
+export type { CommandMethods, QueryMethods } from '../generated/applicationProtocol.js';
 
 /**
  * Compatibility payload type for projection invalidations and replay items. The application wire

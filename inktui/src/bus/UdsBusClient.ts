@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { connect as netConnect, type Socket } from 'node:net';
 import {
   APPLICATION_PROTOCOL_VERSION,
+  type ApplicationRequest,
   type ClientHello,
   type ClientKind,
   type ClientMessage,
@@ -391,7 +392,7 @@ export class UdsBusClient implements BusClient {
       const message: RequestMessage = {
         op: 'request',
         request_id: requestId,
-        request,
+        request: request as ApplicationRequest,
         timeout_s: timeoutS,
       };
       this.writeMessage(socket, message);

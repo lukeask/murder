@@ -19,12 +19,7 @@ import type { TransitCommit, TransitLane, TransitState } from './transitSlice.js
  * Declares the transit read RPC. `state.transit_snapshot` is the bus-contract name (mirrors Python
  * `ServiceReadModel.get_transit_snapshot`, registered in `host.py`).
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Fetch the full commit-graph. Re-pulled on each `transit`-entity `state.snapshot`. */
-    'transit.get': { params: Record<string, never>; result: TransitSnapshotReply };
-  }
-}
+
 
 /** One commit as it crosses the wire (Python). Presentation-free, snake_case. */
 export interface TransitCommitDto {

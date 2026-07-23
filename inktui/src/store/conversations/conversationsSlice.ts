@@ -109,7 +109,7 @@ export interface ConversationMeta {
 
 /**
  * One rolling chunk summary for an agent's Condensed view (TUIchat-4). Mirrors the Python
- * `ConversationChunkSummary` DTO (`murder/app/service/client_api.py`); `dto_to_wire` preserves the
+ * `ConversationChunkSummary` DTO (`murder/app/protocol/read_models.py`); `dto_to_wire` preserves the
  * snake_case field names, so the wire shape is `{summary_id, chunk_idx, summary, block_ids}`.
  *
  * Attribution contract (TUIchatpaneupgrade Phase 4, Scope-decisions #3): `summary` stands in for

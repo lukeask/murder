@@ -23,16 +23,11 @@ import type { ReportRow } from './reportsSlice.js';
  * name (`domain.verb`, mirrors Python `RuntimeClient.get_reports_snapshot`). LIVE — registered in
  * `host.py`, per the contract's "view → service = RPC methods" rule.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Fetch the full reports list. Re-pulled on each `report`-entity `state.snapshot`. */
-    'reports.list': { params: Record<string, never>; result: ReportsSnapshotReply };
-  }
-}
+
 
 /**
  * The `state.reports_snapshot` reply, mirroring the service's `ReportsSnapshot` DTO from
- * `murder/app/service/client_api.py`.
+ * `murder/app/protocol/read_models.py`.
  */
 export interface ReportsSnapshotReply {
   reports: readonly ReportDto[];

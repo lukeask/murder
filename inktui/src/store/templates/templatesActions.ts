@@ -31,22 +31,7 @@ import type { TemplateRecord } from './templatesSlice.js';
  * Shapes mirror the bus contract: a `{ name, body }` list, round-tripped in both directions, the
  * save reply carrying the backend-normalized list.
  */
-declare module '../../bus/BusClient.js' {
-  interface QueryMethods {
-    /** Load the persisted template registry. Empty params; reply carries the saved templates. */
-    'templates.get': {
-      params: Record<string, never>;
-      result: { ok: boolean; templates: readonly TemplateRecord[] };
-    };
-  }
-  interface CommandMethods {
-    /** Persist the registry. Echoes back the NORMALIZED (validated/de-duped/sorted) list. */
-    'templates.set': {
-      params: { templates: readonly TemplateRecord[] };
-      result: { ok: boolean; templates: readonly TemplateRecord[] };
-    };
-  }
-}
+
 
 /** The templates actions, bound to one {@link BusClient} + store handle. */
 export interface TemplatesActions {
