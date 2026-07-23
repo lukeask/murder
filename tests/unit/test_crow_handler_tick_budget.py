@@ -19,8 +19,8 @@ from tests.unit.test_harness_adapters import CC_IDLE
 def handler(fake_tmux, tmp_path: Path) -> CrowHandler:
     runtime = MagicMock()
     runtime.db = MagicMock()
-    runtime.bus = MagicMock()
-    runtime.bus.publish = AsyncMock()
+    runtime.orchestration_events = MagicMock()
+    runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     runtime.publish_snapshot = AsyncMock()
@@ -54,7 +54,7 @@ def test_transient_failures_below_budget_do_not_fail_ticket(handler):
     assert handler._terminal_failure is False
     assert handler._consecutive_tick_failures == TICK_FAILURE_BUDGET - 1
     handler.outcome.fail_ticket.assert_not_called()
-    handler.runtime.bus.publish.assert_not_called()
+    handler.runtime.orchestration_events.publish.assert_not_called()
 
 
 def test_reaching_budget_goes_terminal_and_fails_ticket_once(handler):

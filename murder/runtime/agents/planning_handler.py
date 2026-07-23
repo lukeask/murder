@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.runtime.agents.base import Daemon, AgentRole, AgentStatus
 from murder.config import PlannerConfig
 from murder.llm.harnesses.base import HarnessAdapter
+from murder.runtime.agents.base import AgentRole, AgentStatus, Daemon
 
 if TYPE_CHECKING:
     from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
@@ -85,8 +85,8 @@ class PlanningHandler(Daemon):
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         del brief, ctx
         from murder.runtime.orchestration.events import StatusChangeEvent
-        from murder.state.storage.run_id_allocation import open_pane_log
         from murder.runtime.terminal import tmux
+        from murder.state.storage.run_id_allocation import open_pane_log
 
         assert self.runtime.run_id is not None
         self._log_path = open_pane_log(
@@ -102,8 +102,8 @@ class PlanningHandler(Daemon):
         )
         self.status = AgentStatus.RUNNING
         self.runtime.sync_agent(self)
-        if self.runtime.bus and self.runtime.run_id:
-            await self.runtime.bus.publish(
+        if self.runtime.orchestration_events and self.runtime.run_id:
+            await self.runtime.orchestration_events.publish(
                 StatusChangeEvent(
                     run_id=self.runtime.run_id,
                     agent_id=self.id,
@@ -192,11 +192,11 @@ class PlanningHandler(Daemon):
         if self._consecutive_poll_failures != POLL_FAILURE_ESCALATION_THRESHOLD:
             # Only escalate on the threshold-crossing tick; a reset re-arms it.
             return False
-        if not (self.runtime.bus and self.runtime.run_id):
+        if not (self.runtime.orchestration_events and self.runtime.run_id):
             return False
         from murder.runtime.orchestration.events import ErrorEvent
 
-        await self.runtime.bus.publish(
+        await self.runtime.orchestration_events.publish(
             ErrorEvent(
                 run_id=self.runtime.run_id,
                 agent_id=self.id,
@@ -241,20 +241,14 @@ class PlanningHandler(Daemon):
         planner = get_agent(f"planner-{self.plan_name}") if callable(get_agent) else None
         if planner is None:
             raise RuntimeError(f"no live planner for plan {self.plan_name}")
-        previous, was_routed, pending = self._register_pending_ask(
-            ticket_id, ask, crow_session
-        )
+        previous, was_routed, pending = self._register_pending_ask(ticket_id, ask, crow_session)
         try:
             result = await planner.send(body)
         except Exception:
-            self._restore_pending_after_failed_delivery(
-                pending, previous, was_routed
-            )
+            self._restore_pending_after_failed_delivery(pending, previous, was_routed)
             raise
         if not result.ok:
-            self._restore_pending_after_failed_delivery(
-                pending, previous, was_routed
-            )
+            self._restore_pending_after_failed_delivery(pending, previous, was_routed)
             raise RuntimeError(result.message or "planner message delivery failed")
 
     def _register_pending_ask(
@@ -354,7 +348,7 @@ class PlanningHandler(Daemon):
             if marker in self._carved:
                 continue
             try:
-                self._enqueue_carve_ready(ticket_id, spec, form_hash)
+                await self._enqueue_carve_ready(ticket_id, spec, form_hash)
             except Exception as exc:
                 LOGGER.warning(
                     "planning_handler %s failed to enqueue carve-ready for %s: %s",
@@ -365,30 +359,34 @@ class PlanningHandler(Daemon):
                 continue
             self._carved.add(marker)
 
-    def _enqueue_carve_ready(self, ticket_id: str, spec: dict[str, Any], form_hash: str) -> None:
+    async def _enqueue_carve_ready(
+        self, ticket_id: str, spec: dict[str, Any], form_hash: str
+    ) -> None:
         from uuid import uuid4
 
-        from murder.state.persistence.commands import enqueue_command
         from murder.runtime.orchestration.commands import OrchestrationCommand
+        from murder.runtime.orchestration.events import CommandEvent
         from murder.runtime.orchestration.worker_names import WorkerName
 
-        assert self.runtime.db is not None and self.runtime.run_id is not None
-        command_id = str(uuid4())
+        assert self.runtime.command_submitter is not None and self.runtime.run_id is not None
+        command_uuid = uuid4()
+        command_id = str(command_uuid)
         # Idempotency key keyed on the ticket + form content: a re-scan of the
         # SAME form collapses (unique index drops the duplicate), while an edited
         # carve form for the same ticket re-enqueues. The orchestrator apply is
         # itself idempotent against an already-ready row.
         idempotency_key = f"ticket.apply_carve_ready:{self.runtime.run_id}:{ticket_id}:{form_hash}"
-        enqueue_command(
-            self.runtime.db,
-            command_id=command_id,
-            run_id=self.runtime.run_id,
-            agent_id=self.id,
-            role=self.role.value if hasattr(self.role, "value") else str(self.role),
-            ticket_id=ticket_id,
-            target_worker=WorkerName.ORCHESTRATOR,
-            kind=OrchestrationCommand.TICKET_APPLY_CARVE_READY,
-            payload={"ticket_id": ticket_id, "carve": spec},
-            correlation_id=command_id,
-            idempotency_key=idempotency_key,
+        await self.runtime.command_submitter.submit(
+            CommandEvent(
+                id=command_uuid,
+                run_id=self.runtime.run_id,
+                agent_id=self.id,
+                role=self.role,
+                ticket_id=ticket_id,
+                target_worker=WorkerName.ORCHESTRATOR,
+                kind=OrchestrationCommand.TICKET_APPLY_CARVE_READY,
+                payload={"ticket_id": ticket_id, "carve": spec},
+                correlation_id=command_id,
+                idempotency_key=idempotency_key,
+            )
         )

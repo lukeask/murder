@@ -31,7 +31,9 @@ def _last_frame() -> str:
 
 
 def _rogue(conn, bus, tmp_path: Path) -> CrowAgent:
-    runtime = SimpleNamespace(db=conn, bus=bus, run_id="run-1", sync_agent=MagicMock())
+    runtime = SimpleNamespace(
+        db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+    )
     agent = CrowAgent(
         agent_id="claude-rogue-testingpostworker",
         ticket_id=None,
@@ -108,7 +110,9 @@ def test_rogue_project_once_persists_assistant_reply(
 def test_project_once_is_noop_without_producer(fake_tmux: FakeTmux, tmp_path: Path) -> None:
     """No db ⇒ no producer ⇒ project_once does not even touch the pane."""
     bus = SimpleNamespace(publish=AsyncMock())
-    runtime = SimpleNamespace(db=None, bus=bus, run_id="run-1", sync_agent=MagicMock())
+    runtime = SimpleNamespace(
+        db=None, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+    )
     agent = CrowAgent(
         agent_id="claude-rogue-x",
         ticket_id=None,

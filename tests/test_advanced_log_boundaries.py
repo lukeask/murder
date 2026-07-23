@@ -15,7 +15,7 @@ from pathlib import Path
 
 from murder.app.service.command_dispatch import CommandDispatcher
 from murder.runtime.orchestration.events import ErrorEvent
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.observability.advanced_log import (
     NullAdvancedLog,
     open_advanced_log,
@@ -50,10 +50,10 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
         set_current_advanced_log(log)
         try:
             # --- Boundary #3a: the recorder is a bus SUBSCRIBER ---
-            bus = OrchestrationNotifier()  # no db_conn: skip persist, exercise publish path
+            bus = InProcessOrchestrationEventSink()
 
             async def _recorder(event):
-                log.record_bus_event(event)
+                log.record_orchestration_event(event)
 
             bus.subscribe(_recorder)
             await bus.publish(
@@ -76,7 +76,7 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
                 idempotency_key="idem-1",
             )
             conn.commit()
-            dispatcher = CommandDispatcher(conn=conn, repo_root=repo)
+            dispatcher = CommandDispatcher(conn=conn, repo_root=repo, advanced_log=log)
             claimed = dispatcher.claim_next(
                 target_worker=WorkerName.ORCHESTRATOR, claimed_by="orchestrator#0"
             )

@@ -92,8 +92,8 @@ class CrowAgent(HarnessBackedAgent):
         self.start_conversation()
         if self.runtime:
             self.runtime.sync_agent(self)
-            if self.runtime.bus and self.runtime.run_id:
-                await self.runtime.bus.publish(
+            if self.runtime.orchestration_events and self.runtime.run_id:
+                await self.runtime.orchestration_events.publish(
                     StatusChangeEvent(
                         run_id=self.runtime.run_id,
                         agent_id=self.id,
@@ -115,9 +115,7 @@ class CrowAgent(HarnessBackedAgent):
                 await self.interrupt_verified_generation()
             terminated = await self.terminate_verified_session(force=failed)
             control = self.verified_harness_control
-            if not terminated and (
-                control is None or control.session_controller is None
-            ):
+            if not terminated and (control is None or control.session_controller is None):
                 # Startup failures may occur before a controller exists.
                 with contextlib.suppress(Exception):
                     await tmux.kill_session(self.session)

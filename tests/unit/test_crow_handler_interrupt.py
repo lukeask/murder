@@ -27,7 +27,7 @@ def handler(fake_tmux, tmp_path: Path) -> CrowHandler:
     fake_tmux.queue_pane(CC_BUSY)
     runtime = MagicMock()
     runtime.db = MagicMock()
-    runtime.bus = MagicMock()
+    runtime.orchestration_events = MagicMock()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     runtime.publish_snapshot = AsyncMock()

@@ -2,21 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import queue
-from types import SimpleNamespace
 from typing import Any
 
-from murder.runtime.orchestration.events import CommandEvent
+from murder.app.service.command_dispatch import CommandDispatcher
 from murder.config import Config
 from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,
     harness_kinds_to_sample,
     sample_harness_usages,
 )
-from murder.state.persistence.schema import get_db
-from murder.app.service.command_dispatch import CommandDispatcher
-from murder.state.storage.paths import db_path
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.workers.base import WorkerCommand, WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
+from murder.state.persistence.schema import get_db
+from murder.state.storage.paths import db_path
 
 
 def usage_probe_process_target(
@@ -56,7 +55,7 @@ async def _run_usage_probe_process(
     # Private orchestration signals deliberately do not cross process
     # boundaries.  The application socket serves a fresh projection from the
     # authoritative usage tables, so this worker needs no bus instance.
-    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id=run_id, bus=None)
+    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id=run_id)
     dispatcher = CommandDispatcher(conn=conn, repo_root=repo_root)
     try:
         while not stop_event.is_set():

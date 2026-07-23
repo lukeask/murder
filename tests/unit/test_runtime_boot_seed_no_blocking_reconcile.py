@@ -169,7 +169,7 @@ def test_activity_dispatcher_starts_after_reconcile_and_is_cancelled_on_stop(
         order.append("factory")
         assert rt.startup_reconcile_report is not None
         assert rt.run_id is not None
-        assert rt.bus is not None
+        assert rt.orchestration_events is not None
         assert rt._sync is spy
         return dispatcher
 

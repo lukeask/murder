@@ -102,7 +102,12 @@ def test_send_agent_key_can_submit_enter_and_log_user_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent, db = _verified_agent(repo_root, "murder_demo_crow_t001")
-    rt = SimpleNamespace(get_agent=lambda _agent_id: agent, db=db)
+    rt = SimpleNamespace(
+        get_agent=lambda _agent_id: agent,
+        db=db,
+        orchestration_events=None,
+        run_id=None,
+    )
     orch = Orchestrator(rt)
 
     # Physical emission is forbidden until the semantic action and every
@@ -193,7 +198,7 @@ def test_send_agent_message_reports_delivery_failure_without_user_block(
         get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
         get_crow_handler=lambda _ticket_id: None,
         db=db,
-        bus=None,
+        orchestration_events=None,
         run_id=None,
     )
     orch = Orchestrator(rt)
@@ -221,7 +226,7 @@ def test_send_agent_message_records_user_block_after_delivery_acceptance(
         get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
         get_crow_handler=lambda _ticket_id: None,
         db=db,
-        bus=None,
+        orchestration_events=None,
         run_id=None,
     )
     orch = Orchestrator(rt)

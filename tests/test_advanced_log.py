@@ -147,7 +147,7 @@ def test_record_bus_event_enqueues_with_correlation_ids(tmp_path):
         # The recorder reads the ambient correlation context itself — the bus
         # subscriber runs inside the publisher's log_context in production.
         with log_context(run_id="run-corr", agent_id="ag-1", command_id="cmd-1"):
-            log.record_bus_event(_FakeBusEvent())
+            log.record_orchestration_event(_FakeBusEvent())
         await log.stop()
         return log._db_path
 

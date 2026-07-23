@@ -35,7 +35,11 @@ from pathlib import Path
 
 import pytest
 
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.command_repository import (
+    PersistingCommandSubmitter,
+    SqliteCommandRepository,
+)
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
@@ -48,8 +52,20 @@ def _ctx(repo_root: Path) -> WorkerCtx:
     conn = get_db(repo_root / ".murder" / "murder.db")
     init_db(conn)
     insert_run(conn, "run-test", "{}")
-    bus = OrchestrationNotifier(conn)
-    return WorkerCtx(repo_root=repo_root, db=conn, bus=bus, run_id="run-test")
+    events = InProcessOrchestrationEventSink()
+    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id="run-test")
+    ctx.metadata.update(
+        events=events,
+        command_submitter=PersistingCommandSubmitter(SqliteCommandRepository(conn), events),
+    )
+    return ctx
+
+
+def _scheduler(ctx: WorkerCtx) -> SchedulerWorker:
+    return SchedulerWorker(
+        command_submitter=ctx.metadata["command_submitter"],
+        events=ctx.metadata["events"],
+    )
 
 
 # === scheduler decision-cache choke point ====================================
@@ -70,7 +86,7 @@ async def test_evaluate_window_writes_one_queue_row_projection_input(
         ends_at=(now + timedelta(hours=5)).isoformat(),
     )
 
-    worker = SchedulerWorker()
+    worker = _scheduler(ctx)
     await worker._evaluate_window(ctx, "codex", window, now)
 
     input_row = ctx.db.execute(
@@ -79,6 +95,7 @@ async def test_evaluate_window_writes_one_queue_row_projection_input(
     ).fetchone()
     assert input_row is not None
     assert input_row["generation"] == 0
+
 
 # === usage-probe insert choke point ==========================================
 
@@ -152,9 +169,10 @@ async def test_usage_probe_does_not_write_when_nothing_stored(repo_root: Path) -
     )
     await worker.on_command(cmd, ctx)
 
-    assert ctx.db.execute(
-        "SELECT 1 FROM projection_inputs WHERE projection = 'schedule'"
-    ).fetchone() is None
+    assert (
+        ctx.db.execute("SELECT 1 FROM projection_inputs WHERE projection = 'schedule'").fetchone()
+        is None
+    )
 
 
 # === negative: mode change is TICKET, not QUEUE_ROW ==========================
@@ -182,7 +200,7 @@ async def test_set_mode_does_not_write_queue_row(repo_root: Path) -> None:
         correlation_id="c3",
         idempotency_key="k3",
     )
-    worker = SchedulerWorker()
+    worker = _scheduler(ctx)
     await worker._handle_set_mode(cmd, ctx)
 
     rows = ctx.db.execute(

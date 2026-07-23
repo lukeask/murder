@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from murder.app.service.runtime import Runtime
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -42,7 +42,7 @@ def _runtime(repo_root: Path) -> Runtime:
     rt.db = conn
     rt.run_id = "run-test"
     insert_run(conn, rt.run_id, "{}")
-    rt.bus = OrchestrationNotifier(conn)
+    rt.orchestration_events = InProcessOrchestrationEventSink()
     return rt
 
 

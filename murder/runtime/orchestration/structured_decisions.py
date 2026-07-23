@@ -45,13 +45,14 @@ from murder.permissions import (
     request_harness_permission,
 )
 from murder.permissions.contracts import PROPOSED_OPERATION_ADAPTER
+from murder.runtime.orchestration.ports import OrchestrationEventSink
 
 _LOG = logging.getLogger(__name__)
 
 
 class StructuredDecisionHost(Protocol):
     db: Any
-    bus: Any
+    orchestration_events: OrchestrationEventSink | None
     run_id: str | None
 
     def get_agent(self, agent_id: str) -> Any | None: ...
@@ -169,18 +170,20 @@ class StructuredDecisionRouter:
             reopened = key in self._cleared
             self._visible[key] = identity
             self._cleared.discard(key)
-            if previous is None and not reopened and self._has_any_occurrence(
-                agent.id, kind, identity
+            if (
+                previous is None
+                and not reopened
+                and self._has_any_occurrence(agent.id, kind, identity)
             ):
                 # On service restart, the absence edge cannot be invented. A
                 # lingering terminal dialog remains the prior occurrence until
                 # a real absent/different observation is seen.
                 continue
             revision = snapshot.revision
-            occurrence = f"{revision.pane_epoch}:{revision.capture_sequence}:{revision.semantic_sequence}"
-            request_id = str(
-                uuid5(NAMESPACE_URL, f"{agent.id}:{kind}:{identity}:{occurrence}")
+            occurrence = (
+                f"{revision.pane_epoch}:{revision.capture_sequence}:{revision.semantic_sequence}"
             )
+            request_id = str(uuid5(NAMESPACE_URL, f"{agent.id}:{kind}:{identity}:{occurrence}"))
             if kind == "permission":
                 self._bridge_permission_request(agent, request, request_id=request_id)
             self._record_request(
@@ -316,9 +319,7 @@ class StructuredDecisionRouter:
         )
         return {"ok": True} if executed else {"ok": False, "error": "execution_not_verified"}
 
-    async def _resume_recorded_responses(
-        self, agent: Any, snapshot: ObservationSnapshot
-    ) -> None:
+    async def _resume_recorded_responses(self, agent: Any, snapshot: ObservationSnapshot) -> None:
         """Start decisions recorded before a crash when no operation exists yet."""
 
         rows = self._host.db.execute(

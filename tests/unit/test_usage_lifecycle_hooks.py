@@ -40,7 +40,7 @@ def _runtime(conn, tmp_path: Path):
         db=conn,
         config=_config(),
         repo_root=tmp_path,
-        bus=None,
+        orchestration_events=None,
         run_id=None,
         sync_agent=MagicMock(),
         verified_prompt_driver_policy=PromptDriverPolicy(

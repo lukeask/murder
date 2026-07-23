@@ -36,12 +36,6 @@ from murder.app.service.terminal_capture import (
     CapturedTerminalFrame,
     capture_persisted_tmux_frame,
 )
-from murder.runtime.orchestration.events import AgentLifecycleEvent, OrchestrationEvent
-from murder.runtime.orchestration.notifier import (
-    OrchestrationHandler,
-    OrchestrationNotifier,
-    SubscriptionHandle,
-)
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.advanced_log import (
     AdvancedLogBase,
@@ -57,7 +51,19 @@ from murder.observability.logging_setup import (
     resolve_log_level,
     resolve_recorder_mode,
 )
+from murder.roster.service import RosterService
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
+from murder.runtime.orchestration.command_repository import (
+    PersistingCommandSubmitter,
+    SqliteCommandRepository,
+)
+from murder.runtime.orchestration.events import AgentLifecycleEvent, OrchestrationEvent
+from murder.runtime.orchestration.notifier import (
+    InProcessOrchestrationEventSink,
+    OrchestrationHandler,
+    SubscriptionHandle,
+)
+from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEventSink
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
 from murder.runtime.sessions.registry import (
     close_registry_for_connection,
@@ -86,7 +92,6 @@ from murder.state.storage.paths import (
 )
 from murder.state.storage.run_id_allocation import allocate_run_id
 from murder.work.workflows.service import WorkflowRuntime
-from murder.roster.service import RosterService
 
 if TYPE_CHECKING:
     from murder.config import Config
@@ -101,6 +106,7 @@ if TYPE_CHECKING:
 
 ActivityDispatcherFactory = Callable[[sqlite3.Connection], "ActivityDispatcher"]
 TriggerDispatcherFactory = Callable[[sqlite3.Connection], "TriggerDispatcher"]
+
 
 class Runtime:
     """Async context manager owning the murder process lifecycle."""
@@ -123,7 +129,8 @@ class Runtime:
         self._trigger_dispatcher_factory = trigger_dispatcher_factory
         self.activity_dispatcher: ActivityDispatcher | None = None
         self.trigger_dispatcher: TriggerDispatcher | None = None
-        self.bus: OrchestrationNotifier | None = None
+        self.orchestration_events: OrchestrationEventSink | None = None
+        self.command_submitter: CommandSubmitter | None = None
         self.run_id: str | None = None
         self._agents = AgentRegistry()
         self.agents = self._agents
@@ -174,9 +181,7 @@ class Runtime:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logging.getLogger(__name__).exception(
-                    "%s dispatcher tick failed; retrying", name
-                )
+                logging.getLogger(__name__).exception("%s dispatcher tick failed; retrying", name)
             await asyncio.sleep(1)
 
     async def _phase4_activity_loop(self) -> None:
@@ -264,7 +269,11 @@ class Runtime:
                         links={"run_id": self.run_id},
                     )
                 )
-            self.bus = OrchestrationNotifier(self.db)
+            orchestration_events = InProcessOrchestrationEventSink()
+            self.orchestration_events = orchestration_events
+            self.command_submitter = PersistingCommandSubmitter(
+                SqliteCommandRepository(self.db), orchestration_events
+            )
             self.structured_decisions = StructuredDecisionRouter(self)
             # The flight recorder is a normal bus SUBSCRIBER (plan §2.5.A): when
             # on, it captures EVERY event (filter=None) and routes each to its
@@ -272,7 +281,9 @@ class Runtime:
             # early event is missed. Below the `advanced` rung it does not exist
             # — no subscription, no DB, no per-run disk cost.
             if mode != "off":
-                self._recorder_sub = self.bus.subscribe(self._record_bus_event)
+                self._recorder_sub = orchestration_events.subscribe(
+                    self._record_orchestration_event
+                )
                 self._agents.on_lifecycle = self._emit_agent_lifecycle
             self._sync = FilesystemSyncSupervisor.attach(self.repo_root, self.db)
             self.plan_sync = self._sync.plan_sync
@@ -299,14 +310,10 @@ class Runtime:
             reap_expired_reservations(self.db)
             if self._activity_dispatcher_factory is not None:
                 self.activity_dispatcher = self._activity_dispatcher_factory(self.db)
-                self._tasks["phase4-activities"] = asyncio.create_task(
-                    self._phase4_activity_loop()
-                )
+                self._tasks["phase4-activities"] = asyncio.create_task(self._phase4_activity_loop())
             if self._trigger_dispatcher_factory is not None:
                 self.trigger_dispatcher = self._trigger_dispatcher_factory(self.db)
-                self._tasks["phase4-triggers"] = asyncio.create_task(
-                    self._phase4_trigger_loop()
-                )
+                self._tasks["phase4-triggers"] = asyncio.create_task(self._phase4_trigger_loop())
         except BaseException:
             for task in self._tasks.values():
                 task.cancel()
@@ -322,7 +329,8 @@ class Runtime:
                     self.db.close()
             self.db = None
             self.session_controllers = None
-            self.bus = None
+            self.orchestration_events = None
+            self.command_submitter = None
             self.run_id = None
             self._sync = None
             self.structured_decisions = None
@@ -374,7 +382,8 @@ class Runtime:
         self.ticket_sync = None
         self.report_sync = None
         self.documents = DocumentAccess(self.repo_root)
-        self.bus = None
+        self.orchestration_events = None
+        self.command_submitter = None
         self.structured_decisions = None
         self.run_id = None
         if self._lock_fd is not None:
@@ -383,18 +392,22 @@ class Runtime:
             with contextlib.suppress(FileNotFoundError, OSError):
                 lock_path(self.repo_root).unlink()
 
-    async def _record_bus_event(self, event: OrchestrationEvent) -> None:
-        """OrchestrationNotifier-subscriber handler for the flight recorder (plan §2.5.A).
+    async def _record_orchestration_event(self, event: OrchestrationEvent) -> None:
+        """Orchestration-event subscriber handler for the flight recorder.
 
         Enqueue-and-return: the writer copies the correlation ids off the ambient
         ``log_context`` (which ``asyncio.gather`` propagated from the publisher),
         then returns immediately. Do NOT spawn a detached task here — that would
         run outside the publish context and sever the ids.
         """
-        self.advanced_log.record_bus_event(event)
+        self.advanced_log.record_orchestration_event(event)
 
     def _emit_agent_lifecycle(
-        self, *, op: str, agent_id: str, details: dict[str, Any] | None = None,
+        self,
+        *,
+        op: str,
+        agent_id: str,
+        details: dict[str, Any] | None = None,
         reason: str | None = None,
     ) -> None:
         """Schedule an ``AgentLifecycleEvent`` publish from a SYNC registry hook.
@@ -412,7 +425,7 @@ class Runtime:
         """
         if (
             self._recorder_sub is None
-            or self.bus is None
+            or self.orchestration_events is None
             or self.run_id is None
             or self._shutdown.is_set()
         ):
@@ -422,7 +435,7 @@ class Runtime:
         except RuntimeError:
             return
         task = loop.create_task(
-            self.bus.publish(
+            self.orchestration_events.publish(
                 AgentLifecycleEvent(
                     run_id=self.run_id,
                     agent_id=agent_id,
@@ -509,9 +522,10 @@ class Runtime:
         self,
         handler: OrchestrationHandler,
     ) -> AsyncGenerator[SubscriptionHandle, None]:
-        if self.bus is None:
-            raise RuntimeError("Runtime not started (no bus)")
-        handle = self.bus.subscribe(handler)
+        events = self.orchestration_events
+        if not isinstance(events, InProcessOrchestrationEventSink):
+            raise RuntimeError("Runtime not started (no orchestration event fanout)")
+        handle = events.subscribe(handler)
         try:
             yield handle
         finally:

@@ -87,7 +87,7 @@ def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
 
     return SimpleNamespace(
         db=connection,
-        bus=None,
+        orchestration_events=None,
         run_id=None,
         sync_agent=MagicMock(),
         verified_prompt_driver_policy=PromptDriverPolicy(

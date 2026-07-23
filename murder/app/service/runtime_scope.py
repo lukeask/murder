@@ -6,14 +6,14 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.runtime.agents.events import AgentEventSink
+from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEventSink
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from murder.runtime.agents.base import LifecycleParticipant
     from murder.config import Config
+    from murder.runtime.agents.base import LifecycleParticipant
 
 
 class AgentLifecycleHost(Protocol):
@@ -21,7 +21,8 @@ class AgentLifecycleHost(Protocol):
 
     repo_root: Path
     db: sqlite3.Connection | None
-    bus: OrchestrationNotifier | None
+    orchestration_events: OrchestrationEventSink | None
+    command_submitter: CommandSubmitter | None
     run_id: str | None
 
     def sync_agent(self, agent: LifecycleParticipant) -> None: ...

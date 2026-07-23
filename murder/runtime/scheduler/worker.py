@@ -10,17 +10,18 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from murder.state.persistence.tickets import compute_ready
-from murder.state.persistence.commands import enqueue_command
 from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
+from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.events import (
     CommandEvent,
     SchedulerDecisionEvent,
     SchedulerModeEvent,
     UsageResetEvent,
 )
-from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEventSink
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.projection import invalidate_schedule
+from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
 from murder.verdict.policy.scheduler_policy import (
     SchedulerCaps,
     SchedulerInput,
@@ -30,7 +31,6 @@ from murder.verdict.policy.scheduler_policy import (
     decide,
     usage_reset_detected,
 )
-from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
 
 _VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
 _VALID_STEERING = frozenset({"auto", "pause", "prefer"})
@@ -106,7 +106,12 @@ class SchedulerWorker(Worker):
     SET_PARAMS = OrchestrationCommand.SCHEDULER_SET_PARAMS
     SET_STEERING = OrchestrationCommand.SCHEDULER_SET_STEERING
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        command_submitter: CommandSubmitter | None = None,
+        events: OrchestrationEventSink | None = None,
+    ) -> None:
         super().__init__(
             WorkerSpec(
                 name=WorkerName.SCHEDULER,
@@ -118,6 +123,8 @@ class SchedulerWorker(Worker):
         # Track last emitted reset per harness (harness → prev_pct at emit time)
         self._last_reset_prev_pct: dict[str, float] = {}
         self._last_prune_day: str = ""
+        self._command_submitter = command_submitter
+        self._events = events
 
     async def on_start(self, ctx: WorkerCtx) -> None:
         if ctx.db is None:
@@ -165,22 +172,26 @@ class SchedulerWorker(Worker):
         ready = compute_ready(ctx.db)
         if not ready:
             return
-        command_id = str(uuid4())
+        command_uuid = uuid4()
+        command_id = str(command_uuid)
         idempotency_key = f"scheduler.kickoff_ready:{ctx.run_id}:{self._tick_seq}"
+        if self._command_submitter is None:
+            return
         try:
-            enqueue_command(
-                ctx.db,
-                command_id=command_id,
-                run_id=ctx.run_id,
-                agent_id=self.name,
-                role=None,
-                ticket_id=None,
-                target_worker=WorkerName.ORCHESTRATOR,
-                kind=OrchestrationCommand.SCHEDULER_KICKOFF_READY,
-                payload={},
-                correlation_id=command_id,
-                idempotency_key=idempotency_key,
-                retryable=False,
+            await self._command_submitter.submit(
+                CommandEvent(
+                    id=command_uuid,
+                    run_id=ctx.run_id,
+                    agent_id=self.name,
+                    role=None,
+                    ticket_id=None,
+                    target_worker=WorkerName.ORCHESTRATOR,
+                    kind=OrchestrationCommand.SCHEDULER_KICKOFF_READY,
+                    payload={},
+                    correlation_id=command_id,
+                    idempotency_key=idempotency_key,
+                    retryable=False,
+                )
             )
         except sqlite3.IntegrityError:
             pass  # duplicate key — previous tick's command still pending
@@ -252,8 +263,8 @@ class SchedulerWorker(Worker):
                 last = self._last_reset_prev_pct.get(harness)
                 if last != prev_pct:
                     self._last_reset_prev_pct[harness] = prev_pct
-                    if ctx.bus is not None:
-                        await ctx.bus.publish(
+                    if self._events is not None:
+                        await self._events.publish(
                             UsageResetEvent(
                                 run_id=ctx.run_id,
                                 agent_id=self.name,
@@ -442,29 +453,31 @@ class SchedulerWorker(Worker):
         if not should_kick or ticket_id is None:
             return
 
-        command_id = str(uuid4())
+        command_uuid = uuid4()
+        command_id = str(command_uuid)
         # Key on (ticket, ready-state token) rather than tick_seq: a stuck-ready
         # ticket keeps the same key across ticks (IntegrityError → no re-enqueue),
         # but a ticket that transitions out of and back into `ready` gets a new
         # token and a fresh kickoff.
         state_token = ready_state_token.get(ticket_id, "")
-        idempotency_key = (
-            f"scheduler.kickoff_ready:{ctx.run_id}:{ticket_id}:{state_token}"
-        )
+        idempotency_key = f"scheduler.kickoff_ready:{ctx.run_id}:{ticket_id}:{state_token}"
+        if self._command_submitter is None:
+            return
         try:
-            enqueue_command(
-                ctx.db,
-                command_id=command_id,
-                run_id=ctx.run_id,
-                agent_id=self.name,
-                role=None,
-                ticket_id=None,
-                target_worker=WorkerName.ORCHESTRATOR,
-                kind=OrchestrationCommand.SCHEDULER_KICKOFF_READY,
-                payload={"only": ticket_id},
-                correlation_id=command_id,
-                idempotency_key=idempotency_key,
-                retryable=False,
+            await self._command_submitter.submit(
+                CommandEvent(
+                    id=command_uuid,
+                    run_id=ctx.run_id,
+                    agent_id=self.name,
+                    role=None,
+                    ticket_id=None,
+                    target_worker=WorkerName.ORCHESTRATOR,
+                    kind=OrchestrationCommand.SCHEDULER_KICKOFF_READY,
+                    payload={"only": ticket_id},
+                    correlation_id=command_id,
+                    idempotency_key=idempotency_key,
+                    retryable=False,
+                )
             )
         except sqlite3.IntegrityError:
             pass
@@ -556,9 +569,9 @@ class SchedulerWorker(Worker):
         # Forensic capture rides the bus aspect: the SchedulerDecisionEvent below
         # carries exactly these fields and the recorder subscriber routes it into
         # decision_records, so there is no separate record_decision() call here.
-        if ctx.bus is None or ctx.run_id is None:
+        if self._events is None or ctx.run_id is None:
             return
-        await ctx.bus.publish(
+        await self._events.publish(
             SchedulerDecisionEvent(
                 run_id=ctx.run_id,
                 agent_id=self.name,
@@ -608,11 +621,11 @@ class SchedulerWorker(Worker):
             "UPDATE scheduler_state SET mode = ?, updated_at = ? WHERE id = 1",
             (to_mode, now),
         )
-        if ctx.bus is not None and ctx.run_id is not None:
+        if self._events is not None and ctx.run_id is not None:
             changed_by = command.payload.get("changed_by", "user")
             if changed_by not in {"user", "api"}:
                 changed_by = "user"
-            await ctx.bus.publish(
+            await self._events.publish(
                 SchedulerModeEvent(
                     run_id=ctx.run_id,
                     agent_id=self.name,
@@ -666,9 +679,7 @@ class SchedulerWorker(Worker):
         )
         return {"handled": True, "harness": harness, "window_key": window_key}
 
-    async def _handle_set_steering(
-        self, command: CommandEvent, ctx: WorkerCtx
-    ) -> dict[str, Any]:
+    async def _handle_set_steering(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:
         if ctx.db is None:
             raise RuntimeError("SchedulerWorker requires ctx.db")
         raw_harness = command.payload.get("harness")

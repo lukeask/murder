@@ -27,7 +27,13 @@ def test_codebase_map_worker_registered(monkeypatch):
     monkeypatch.setattr(bootstrap_mod, "CommandDispatcher", lambda **k: object())
 
     db = sqlite3.connect(":memory:")
-    runtime = SimpleNamespace(db=db, run_id="run-1", get_agent=lambda *_a: None)
+    runtime = SimpleNamespace(
+        db=db,
+        run_id="run-1",
+        get_agent=lambda *_a: None,
+        advanced_log=object(),
+        command_submitter=object(),
+    )
     orchestrator = SimpleNamespace(
         ensure_collaborator=lambda *_a: None,
     )
@@ -39,11 +45,13 @@ def test_codebase_map_worker_registered(monkeypatch):
         workers_pkg.UsageProbeWorker, "from_worker_ctx", classmethod(lambda cls, ctx: object())
     )
     monkeypatch.setattr(
-        bootstrap_mod, "UsageProbeWorker",
+        bootstrap_mod,
+        "UsageProbeWorker",
         SimpleNamespace(from_worker_ctx=lambda ctx: object()),
     )
     monkeypatch.setattr(
-        bootstrap_mod, "HarnessVersionProbeWorker",
+        bootstrap_mod,
+        "HarnessVersionProbeWorker",
         SimpleNamespace(from_runtime=lambda rt: object()),
     )
 
@@ -52,7 +60,7 @@ def test_codebase_map_worker_registered(monkeypatch):
             repo_root=Path("/repo"),
             runtime=runtime,
             orchestrator=orchestrator,
-                bus=object(),
+            events=object(),
         )
     )
 

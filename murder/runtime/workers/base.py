@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.worker_names import WorkerName
 
 
@@ -38,7 +38,6 @@ class WorkerCommand:
 class WorkerCtx:
     repo_root: Path
     db: sqlite3.Connection | None = None
-    bus: Any | None = None
     run_id: str | None = None
     shutdown: asyncio.Event | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

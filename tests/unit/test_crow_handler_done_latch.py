@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
@@ -73,7 +73,7 @@ def _seed_ticket(db, status: str = "in_progress") -> None:
 def _make_handler(db, tmp_path: Path, coordinator) -> CrowHandler:
     runtime = MagicMock()
     runtime.db = db
-    runtime.bus = OrchestrationNotifier(db)
+    runtime.orchestration_events = InProcessOrchestrationEventSink()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     runtime.publish_snapshot = AsyncMock()
@@ -96,7 +96,7 @@ def _real_coordinator(db, tmp_path: Path) -> CompletionCoordinator:
     rt = MagicMock()
     rt.db = db
     rt.repo_root = tmp_path
-    rt.bus = OrchestrationNotifier(db)
+    rt.orchestration_events = InProcessOrchestrationEventSink()
     rt.run_id = "test-run"
     rt.publish_snapshot = AsyncMock()
     rt.get_crow = MagicMock(return_value=None)

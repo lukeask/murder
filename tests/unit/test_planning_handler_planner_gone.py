@@ -37,8 +37,8 @@ def _insert_planner(conn, plan_name: str, status: str) -> None:
 def _handler(conn) -> PlanningHandler:
     runtime = MagicMock()
     runtime.db = conn
-    runtime.bus = MagicMock()
-    runtime.bus.publish = AsyncMock()
+    runtime.orchestration_events = MagicMock()
+    runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     return PlanningHandler(
@@ -113,7 +113,7 @@ def test_loop_self_terminates_when_planner_gone(fake_tmux):
 
     # Self-terminated quietly: stop() called, no escalation ErrorEvent published.
     handler.stop.assert_awaited()
-    handler.runtime.bus.publish.assert_not_called()
+    handler.runtime.orchestration_events.publish.assert_not_called()
 
 
 def test_loop_grace_sleeps_before_first_tick(fake_tmux, monkeypatch):
@@ -176,4 +176,4 @@ def test_loop_escalates_when_planner_still_live(fake_tmux):
     asyncio.run(handler._loop())
 
     # Escalated exactly once at the threshold (planner is alive, not gone).
-    handler.runtime.bus.publish.assert_awaited_once()
+    handler.runtime.orchestration_events.publish.assert_awaited_once()

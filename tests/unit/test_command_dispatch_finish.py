@@ -189,16 +189,14 @@ def test_command_from_row_raises_on_non_uuid_id() -> None:
 def test_claim_next_quarantines_non_uuid_row() -> None:
     dispatcher, failures = _dispatcher()
 
-    import murder.app.service.command_dispatch as mod
-
-    original = mod.cmd_db.claim_next_command
-    mod.cmd_db.claim_next_command = lambda *a, **k: _row("not-a-uuid")  # type: ignore[assignment]
+    original = command_db.claim_next_command
+    command_db.claim_next_command = lambda *a, **k: _row("not-a-uuid")  # type: ignore[assignment]
     try:
         claimed = dispatcher.claim_next(
             target_worker=WorkerName.ORCHESTRATOR, claimed_by="orchestrator"
         )
     finally:
-        mod.cmd_db.claim_next_command = original  # type: ignore[assignment]
+        command_db.claim_next_command = original  # type: ignore[assignment]
 
     assert claimed is None
     assert failures == [("non-UUID command id", False)]

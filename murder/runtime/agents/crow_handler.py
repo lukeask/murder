@@ -113,8 +113,8 @@ class CrowHandler(Daemon):
         )
         self.status = AgentStatus.RUNNING
         self.runtime.sync_agent(self)
-        if self.runtime.bus and self.runtime.run_id:
-            await self.runtime.bus.publish(
+        if self.runtime.orchestration_events and self.runtime.run_id:
+            await self.runtime.orchestration_events.publish(
                 StatusChangeEvent(
                     run_id=self.runtime.run_id,
                     agent_id=self.id,
@@ -217,7 +217,11 @@ class CrowHandler(Daemon):
             await self._tick()
 
     async def _tick(self) -> None:
-        if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
+        if (
+            self.runtime.db is None
+            or self.runtime.orchestration_events is None
+            or self.runtime.run_id is None
+        ):
             return
         crow = self.runtime.get_crow(self.ticket_id)
         ingested = getattr(crow, "latest_ingested_frame", None) if crow is not None else None
@@ -287,7 +291,7 @@ class CrowHandler(Daemon):
             self._last_summary = summary
             hb_state = _heartbeat_state(state)
             self._log(f"heartbeat state={hb_state} summary={summary or '—'!r}")
-            await self.runtime.bus.publish(
+            await self.runtime.orchestration_events.publish(
                 HeartbeatEvent(
                     run_id=self.runtime.run_id,
                     agent_id=self.id,
@@ -304,7 +308,7 @@ class CrowHandler(Daemon):
             self._tick_count > 0
             and self._tick_count % max(1, self.config.forced_summary_every_n_ticks) == 0
         ):
-            await self.runtime.bus.publish(
+            await self.runtime.orchestration_events.publish(
                 SummaryEvent(
                     run_id=self.runtime.run_id,
                     agent_id=self.id,
@@ -467,8 +471,8 @@ class CrowHandler(Daemon):
         self.status = AgentStatus.FAILED
         self.runtime.sync_agent(self)
         self._fail_idle_waiters(RuntimeError(f"crow_handler tick failed: {error}"))
-        if self.runtime.bus and self.runtime.run_id:
-            await self.runtime.bus.publish(
+        if self.runtime.orchestration_events and self.runtime.run_id:
+            await self.runtime.orchestration_events.publish(
                 StatusChangeEvent(
                     run_id=self.runtime.run_id,
                     agent_id=self.id,
@@ -481,7 +485,7 @@ class CrowHandler(Daemon):
                     reason=error,
                 )
             )
-            await self.runtime.bus.publish(
+            await self.runtime.orchestration_events.publish(
                 ErrorEvent(
                     run_id=self.runtime.run_id,
                     agent_id=self.id,

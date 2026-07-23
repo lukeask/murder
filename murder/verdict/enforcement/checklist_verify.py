@@ -55,7 +55,7 @@ _FILE_LIKE_RE = re.compile(
 )
 
 # Bare-dotted-name reference fallback (e.g.,
-# `murder.runtime.orchestration.notifier.OrchestrationNotifier.publish`).
+# the injected orchestration event sink).
 # Resolves only if the dotted prefix maps to a real file under repo_root.
 _DOTTED_RE = re.compile(r"^[a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)+$")
 

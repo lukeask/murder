@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
@@ -56,7 +56,7 @@ def db(tmp_path: Path):
 def handler(db, tmp_path: Path) -> CrowHandler:
     runtime = MagicMock()
     runtime.db = db
-    runtime.bus = OrchestrationNotifier(db)
+    runtime.orchestration_events = InProcessOrchestrationEventSink()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     runtime.publish_snapshot = AsyncMock()

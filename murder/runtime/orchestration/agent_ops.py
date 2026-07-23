@@ -90,12 +90,12 @@ class AgentOps:
         from murder.state.persistence import conversation
 
         block = conversation.append_user_message(db, agent_id, text)
-        bus = getattr(self.rt, "bus", None)
+        events = self.rt.orchestration_events
         run_id = getattr(self.rt, "run_id", None)
-        if block is None or bus is None or run_id is None:
+        if block is None or events is None or run_id is None:
             return
         agent = self.rt.get_agent(agent_id)
-        await bus.publish(
+        await events.publish(
             ConversationBlockEvent(
                 run_id=str(run_id),
                 agent_id=agent_id,

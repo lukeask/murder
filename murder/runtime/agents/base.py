@@ -182,9 +182,7 @@ class HarnessBackedAgent(LifecycleParticipant):
             outcome = getattr(exc, "outcome", None)
             outcome_name = getattr(outcome, "name", None)
             if isinstance(outcome_name, str):
-                return fail_result(
-                    f"verified prompt submission {outcome_name.lower()}"
-                )
+                return fail_result(f"verified prompt submission {outcome_name.lower()}")
             return fail_result(f"verified prompt submission failed: {exc}")
         else:
             return ok_result()
@@ -568,7 +566,7 @@ class HarnessBackedAgent(LifecycleParticipant):
     async def _publish_conversation_state(self) -> None:
         """Push a ``conversation.state`` event when (live_state, queued) changed."""
         runtime = getattr(self, "runtime", None)
-        if runtime is None or runtime.bus is None or runtime.run_id is None:
+        if runtime is None or runtime.orchestration_events is None or runtime.run_id is None:
             return
         state = (self._current_live_state(), self._queued_message)
         if state == self._last_pushed_conv_state:
@@ -576,7 +574,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         self._last_pushed_conv_state = state
         from murder.runtime.orchestration.events import ConversationStateEvent
 
-        await runtime.bus.publish(
+        await runtime.orchestration_events.publish(
             ConversationStateEvent(
                 run_id=str(runtime.run_id),
                 agent_id=self.id,
@@ -635,11 +633,11 @@ class HarnessBackedAgent(LifecycleParticipant):
 
     async def _publish_conversation_block(self, action: str, block: dict[str, Any]) -> None:
         runtime = getattr(self, "runtime", None)
-        if runtime is None or runtime.bus is None or runtime.run_id is None:
+        if runtime is None or runtime.orchestration_events is None or runtime.run_id is None:
             return
         from murder.runtime.orchestration.events import ConversationBlockEvent
 
-        await runtime.bus.publish(
+        await runtime.orchestration_events.publish(
             ConversationBlockEvent(
                 run_id=str(runtime.run_id),
                 agent_id=self.id,

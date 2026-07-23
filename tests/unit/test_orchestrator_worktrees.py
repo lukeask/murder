@@ -23,7 +23,7 @@ class _Runtime:
     config: Config
     db: object
     event_sink: object | None = None
-    bus: object | None = None
+    orchestration_events: object | None = None
     run_id: str | None = None
 
     def get_crow(self, _ticket_id: str):

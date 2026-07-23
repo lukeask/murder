@@ -34,11 +34,11 @@ async def _no_sleep(_: float) -> None:
     """Keep reconciliation traces deterministic without making them timing tests."""
 
 
-def _runtime(conn: object, *, bus: object | None = None) -> SimpleNamespace:
+def _runtime(conn: object, *, events: object | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         db=conn,
-        bus=bus,
-        run_id="run-1" if bus is not None else None,
+        orchestration_events=events,
+        run_id="run-1" if events is not None else None,
         sync_agent=MagicMock(),
         verified_prompt_driver_policy=PromptDriverPolicy(
             observation_interval=timedelta(), maximum_observations=12
@@ -61,11 +61,11 @@ def _script_acknowledged_submission(fake_tmux: FakeTmux, text: str) -> None:
 
 
 def _new_agent(
-    *, fake_tmux: FakeTmux, tmp_path: Path, conn: object, bus: object | None = None
+    *, fake_tmux: FakeTmux, tmp_path: Path, conn: object, events: object | None = None
 ) -> tuple[CollaboratorAgent, SimpleNamespace]:
     fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
-    runtime = _runtime(conn, bus=bus)
+    runtime = _runtime(conn, events=events)
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -201,7 +201,9 @@ def test_record_user_block_event_publishes_conversation_block(tmp_path: Path) ->
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
     bus = SimpleNamespace(publish=AsyncMock())
-    runtime = SimpleNamespace(db=conn, bus=bus, run_id="run-1", sync_agent=MagicMock())
+    runtime = SimpleNamespace(
+        db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+    )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -229,7 +231,9 @@ def test_stop_clean_sets_conversation_complete_without_legacy_exit_scrape(
     """Clean stop completes the conversation without unowned `/exit` input."""
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
-    runtime = SimpleNamespace(db=conn, bus=None, run_id=None, sync_agent=MagicMock())
+    runtime = SimpleNamespace(
+        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+    )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -257,7 +261,9 @@ def test_stop_preserve_session_leaves_conversation_in_progress(
     so next startup can mark it stale."""
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
-    runtime = SimpleNamespace(db=conn, bus=None, run_id=None, sync_agent=MagicMock())
+    runtime = SimpleNamespace(
+        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+    )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -323,7 +329,9 @@ def test_collaborator_start_failure_records_notice(tmp_path: Path) -> None:
     conn = get_db(tmp_path / "state.db")
     init_db(conn)
     bus = SimpleNamespace(publish=AsyncMock())
-    runtime = SimpleNamespace(db=conn, bus=bus, run_id="run-1", sync_agent=MagicMock())
+    runtime = SimpleNamespace(
+        db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+    )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",

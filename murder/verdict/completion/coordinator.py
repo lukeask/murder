@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.events import CompletionVerdictEvent
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.ports import OrchestrationEventSink
 
 from .checks.base import CheckResult, CheckStatus, CompletionContext
 from .persistence import bump_attempts, get_attempts, reset_attempts, write_check_result
@@ -40,7 +40,7 @@ class CoordinatorHost(Protocol):
 
     repo_root: Path
     db: sqlite3.Connection | None
-    bus: OrchestrationNotifier | None
+    orchestration_events: OrchestrationEventSink | None
     run_id: str | None
 
     def get_crow(self, ticket_id: str) -> Agent | None: ...
@@ -48,6 +48,7 @@ class CoordinatorHost(Protocol):
     def get_agent(self, agent_id: str) -> Agent | None: ...
 
     # F1: key-only ticket snapshot emit (async choke point; see Runtime).
+
 
 EnsurePlanner = Callable[[str], Awaitable[str]]
 
@@ -118,10 +119,14 @@ class CompletionCoordinator:
                 continue
 
             data_json = json.dumps({"message": result.message, "hint": result.hint})
-            write_check_result(conn, ticket_id, check.name, timestamp, result.status.value, data_json)
+            write_check_result(
+                conn, ticket_id, check.name, timestamp, result.status.value, data_json
+            )
             results.append((check.name, result))
 
-        passes = [(name, r) for name, r in results if r is not None and r.status == CheckStatus.PASS]
+        passes = [
+            (name, r) for name, r in results if r is not None and r.status == CheckStatus.PASS
+        ]
         failures = [(name, r) for name, r in results if r is None or r.status == CheckStatus.FAIL]
 
         for name, _ in passes:
@@ -154,7 +159,9 @@ class CompletionCoordinator:
         if not ticket_failed and reprompt_msgs:
             crow = self._rt.get_crow(ticket_id)
             if crow is not None:
-                combined = "The following checks failed. Please fix them:\n\n" + "\n\n".join(reprompt_msgs)
+                combined = "The following checks failed. Please fix them:\n\n" + "\n\n".join(
+                    reprompt_msgs
+                )
                 await crow.send(combined)
 
         failed_check_names = tuple(name for name, _ in failures)
@@ -184,9 +191,9 @@ class CompletionCoordinator:
         one bus aspect. This is now server-side forensic data only. No-op
         before the bus / run id exist.
         """
-        if self._rt.bus is None or self._rt.run_id is None:
+        if self._rt.orchestration_events is None or self._rt.run_id is None:
             return
-        await self._rt.bus.publish(
+        await self._rt.orchestration_events.publish(
             CompletionVerdictEvent(
                 run_id=self._rt.run_id,
                 agent_id="completion",
@@ -310,10 +317,10 @@ class CompletionCoordinator:
         from murder.runtime.orchestration.events import StatusChangeEvent
         from murder.work.tickets.status import TicketStatus
 
-        if self._rt.bus is None or self._rt.run_id is None:
+        if self._rt.orchestration_events is None or self._rt.run_id is None:
             return
         from_s = from_status.value if isinstance(from_status, TicketStatus) else from_status
-        await self._rt.bus.publish(
+        await self._rt.orchestration_events.publish(
             StatusChangeEvent(
                 run_id=self._rt.run_id,
                 agent_id="coordinator",
@@ -353,6 +360,7 @@ class CompletionCoordinator:
             return
         from murder.work.tickets.status import TicketStatus
         from murder.state.persistence.tickets import update_ticket_status
+
         update_ticket_status(self._rt.db, ticket_id, TicketStatus.BLOCKED.value)
         self._rt.db.commit()
 
@@ -363,7 +371,7 @@ class CompletionCoordinator:
         return EscalationService(
             conn=self._rt.db,
             repo_root=self._rt.repo_root,
-            bus=self._rt.bus,
+            events=self._rt.orchestration_events,
             run_id=self._rt.run_id,
             agent_id="coordinator",
             role=AgentRole.COLLABORATOR,

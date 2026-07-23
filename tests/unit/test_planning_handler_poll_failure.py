@@ -20,8 +20,8 @@ from murder.runtime.orchestration.events import ErrorEvent
 @pytest.fixture
 def handler(tmp_path: Path) -> PlanningHandler:
     runtime = MagicMock()
-    runtime.bus = MagicMock()
-    runtime.bus.publish = AsyncMock()
+    runtime.orchestration_events = MagicMock()
+    runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     return PlanningHandler(
@@ -45,7 +45,7 @@ def test_below_threshold_does_not_publish(handler):
         published = asyncio.run(handler._record_poll_failure(RuntimeError("blip")))
         assert published is False
 
-    handler.runtime.bus.publish.assert_not_called()
+    handler.runtime.orchestration_events.publish.assert_not_called()
     assert handler._consecutive_poll_failures == POLL_FAILURE_ESCALATION_THRESHOLD - 1
     # Handler is not terminated by failures.
     assert handler.status.value != "failed"
@@ -55,8 +55,8 @@ def test_threshold_publishes_exactly_one_error_event(handler):
     for _ in range(POLL_FAILURE_ESCALATION_THRESHOLD):
         asyncio.run(handler._record_poll_failure(RuntimeError("blip")))
 
-    handler.runtime.bus.publish.assert_awaited_once()
-    (event,), _kw = handler.runtime.bus.publish.call_args
+    handler.runtime.orchestration_events.publish.assert_awaited_once()
+    (event,), _kw = handler.runtime.orchestration_events.publish.call_args
     assert isinstance(event, ErrorEvent)
     assert event.recoverable is True
     assert event.ticket_id is None
@@ -65,7 +65,7 @@ def test_threshold_publishes_exactly_one_error_event(handler):
 
     # Further failures past the threshold do NOT re-publish.
     asyncio.run(handler._record_poll_failure(RuntimeError("more")))
-    handler.runtime.bus.publish.assert_awaited_once()
+    handler.runtime.orchestration_events.publish.assert_awaited_once()
 
 
 def test_success_resets_counter_and_rearms(handler):
@@ -80,4 +80,4 @@ def test_success_resets_counter_and_rearms(handler):
     for _ in range(POLL_FAILURE_ESCALATION_THRESHOLD - 1):
         published = asyncio.run(handler._record_poll_failure(RuntimeError("blip")))
         assert published is False
-    handler.runtime.bus.publish.assert_not_called()
+    handler.runtime.orchestration_events.publish.assert_not_called()

@@ -19,7 +19,7 @@ import sqlite3
 from pathlib import Path
 
 from murder.runtime.orchestration.events import SchedulerDecisionEvent, _BaseEvent
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.observability.advanced_log import (
     _FAMILY_EXTRA_COLUMNS,
     AdvancedLog,
@@ -76,10 +76,10 @@ def test_decision_event_routes_to_its_family_exactly_once(tmp_path):
         log = open_advanced_log(repo, "run-dec", "redacted")
         await log.start()
         set_run_id("run-dec")
-        bus = OrchestrationNotifier()  # no db: skip persist, exercise fan-out
+        bus = InProcessOrchestrationEventSink()
 
         async def _recorder(event):
-            log.record_bus_event(event)
+            log.record_orchestration_event(event)
 
         bus.subscribe(_recorder)
         await bus.publish(

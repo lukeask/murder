@@ -135,9 +135,7 @@ class Orchestrator:
             rt,
             ensure_planning_agent=lambda *a, **k: self.ensure_planning_agent(*a, **k),
             ensure_collaborator=lambda *a, **k: self.ensure_collaborator(*a, **k),
-            reap_ticket_crow_agents=lambda *a, **k: self.tickets._reap_ticket_crow_agents(
-                *a, **k
-            ),
+            reap_ticket_crow_agents=lambda *a, **k: self.tickets._reap_ticket_crow_agents(*a, **k),
             rogue_slug=_rogue_slug,
             agent_is_live=lambda agent: self._agent_is_live(agent),
         )
@@ -150,7 +148,7 @@ class Orchestrator:
         return EscalationService(
             conn=self.rt.db,
             repo_root=self.rt.repo_root,
-            bus=self.rt.bus,
+            events=self.rt.orchestration_events,
             run_id=self.rt.run_id,
             agent_id="orchestrator",
             role=AgentRole.COLLABORATOR,
@@ -166,7 +164,11 @@ class Orchestrator:
         )
 
     async def kickoff_ready(self, only: str | None = None) -> list[str]:
-        assert self.rt.db is not None and self.rt.bus is not None and self.rt.run_id is not None
+        assert (
+            self.rt.db is not None
+            and self.rt.orchestration_events is not None
+            and self.rt.run_id is not None
+        )
         conn = self.rt.db
         ready = _db_compute_ready(conn)
         if only is not None:
@@ -244,10 +246,10 @@ class Orchestrator:
     async def _emit_ticket_status(
         self, ticket_id: str, from_status: str | TicketStatus, to_status: str
     ) -> None:
-        if self.rt.bus is None or self.rt.run_id is None:
+        if self.rt.orchestration_events is None or self.rt.run_id is None:
             return
         from_s = from_status.value if isinstance(from_status, TicketStatus) else from_status
-        await self.rt.bus.publish(
+        await self.rt.orchestration_events.publish(
             StatusChangeEvent(
                 run_id=self.rt.run_id,
                 agent_id="orchestrator",
@@ -302,9 +304,7 @@ class Orchestrator:
         from murder.state.persistence.tickets import get_ticket_status as _get_ticket_status
 
         if self.rt.get_crow_handler(ticket_id) is not None:
-            LOGGER.info(
-                "reattach_crow: handler for %s already live — skipping reattach", ticket_id
-            )
+            LOGGER.info("reattach_crow: handler for %s already live — skipping reattach", ticket_id)
             return
         if _get_ticket_status(self.rt.db, ticket_id) != TicketStatus.IN_PROGRESS.value:
             LOGGER.info(
@@ -599,8 +599,10 @@ class Orchestrator:
             cfg = self.rt.config.planner
             resolved_harness = (harness or cfg.harness).strip()
             resolved_model = cfg.startup_model if model is None else (model.strip() or None)
-            resolved_effort = cfg.startup_effort if effort is None else (
-                effort.strip() if isinstance(effort, str) and effort.strip() else None
+            resolved_effort = (
+                cfg.startup_effort
+                if effort is None
+                else (effort.strip() if isinstance(effort, str) and effort.strip() else None)
             )
             startup_prompt = self.briefs.build(
                 role=AgentRole.PLANNER,
@@ -764,6 +766,7 @@ class Orchestrator:
 
     async def _retarget_plan_runtime(self, old_name: str, new_name: str) -> None:
         await self.plans._retarget_plan_runtime(old_name, new_name)
+
     async def ensure_startup_rogue(self) -> str | None:
         """Ensure the user's configured Startup Rogue exists (idempotent).
 
@@ -796,9 +799,7 @@ class Orchestrator:
                 with contextlib.suppress(Exception):
                     await tmux.kill_session(row["session"])
                 _db_set_agent_status(self.rt.db, agent_id, "dead")
-        return await self.spawn_rogue(
-            harness_kind, sr.model or "", sr.effort, name="startup"
-        )
+        return await self.spawn_rogue(harness_kind, sr.model or "", sr.effort, name="startup")
 
     async def ensure_collaborator(self) -> str:
         agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
@@ -940,9 +941,7 @@ class Orchestrator:
         body: str | None = None,
         auto_name: bool = False,
     ) -> dict[str, Any]:
-        return await self.plans.create_plan(
-            plan_name, message, body=body, auto_name=auto_name
-        )
+        return await self.plans.create_plan(plan_name, message, body=body, auto_name=auto_name)
 
     async def update_ticket_metadata(
         self, ticket_id: str, payload: dict[str, Any]

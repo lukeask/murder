@@ -36,7 +36,7 @@ def _coordinator(conn, monkeypatch):
     rt = MagicMock()
     rt.db = conn
     rt.repo_root = Path("/tmp")
-    rt.bus = None
+    rt.orchestration_events = None
     rt.run_id = None
     registry = MagicMock()
     coordinator = CompletionCoordinator(rt, registry)

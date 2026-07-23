@@ -32,6 +32,7 @@ from murder.state.storage.service_registry import (
 
 LOGGER = logging.getLogger(__name__)
 
+
 @dataclass
 class ServiceHost:
     """Wires runtime, application services, and the application socket server.
@@ -145,8 +146,12 @@ class ServiceHost:
                 ),
             )
             await self.runtime.start()
-            if self.runtime.db is None or self.runtime.bus is None or self.runtime.run_id is None:
-                raise RuntimeError("runtime failed to initialize db/bus/run_id")
+            if (
+                self.runtime.db is None
+                or self.runtime.orchestration_events is None
+                or self.runtime.run_id is None
+            ):
+                raise RuntimeError("runtime failed to initialize db/events/run_id")
             self.read_model = ServiceReadModel(db_path(self.repo_root))
 
             await self._start_inner()
@@ -156,7 +161,7 @@ class ServiceHost:
             raise
 
     async def _start_inner(self) -> None:
-        assert self.runtime is not None and self.runtime.bus is not None
+        assert self.runtime is not None and self.runtime.orchestration_events is not None
         assert self.runtime.db is not None and self.runtime.run_id is not None
         self.register_application_handlers()
 
@@ -202,9 +207,7 @@ class ServiceHost:
             host=self.websocket_host, port=self.websocket_port
         )
         host, port = self.websocket_bound
-        session = write_service_session(
-            self.repo_root, f"ws://{host}:{port}/api/ws"
-        )
+        session = write_service_session(self.repo_root, f"ws://{host}:{port}/api/ws")
         self._service_session_name = session.name
 
         LOGGER.info("application websocket listener on ws://%s:%d/api/ws", *self.websocket_bound)
@@ -213,7 +216,7 @@ class ServiceHost:
             repo_root=self.repo_root,
             runtime=self.runtime,
             orchestrator=self.orchestrator,
-            bus=self.runtime.bus,
+            events=self.runtime.orchestration_events,
         )
         self.background_tasks = ServiceBackgroundTasks(
             repo_root=self.repo_root,

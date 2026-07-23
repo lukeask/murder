@@ -5,20 +5,17 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.events import EscalationEvent
-from murder.work.tickets.status import TicketStatus
-
-from murder.state.persistence.records import EscalationRecord
-
 from murder.state.persistence import escalations as dbmod
+from murder.state.persistence.records import EscalationRecord
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import escalation_md
 
 if TYPE_CHECKING:
-    from murder.runtime.orchestration.notifier import OrchestrationNotifier
+    from murder.runtime.orchestration.ports import OrchestrationEventSink
 
 
 def _clamp_severity(severity: int) -> int:
@@ -31,7 +28,7 @@ class EscalationService:
 
     conn: sqlite3.Connection
     repo_root: Path
-    bus: OrchestrationNotifier | None = None
+    events: OrchestrationEventSink | None = None
     run_id: str | None = None
     agent_id: str = "orchestrator"
     role: AgentRole = AgentRole.COLLABORATOR
@@ -105,9 +102,9 @@ class EscalationService:
         severity: int,
         to: str,
     ) -> None:
-        if self.bus is None or self.run_id is None:
+        if self.events is None or self.run_id is None:
             return
-        await self.bus.publish(
+        await self.events.publish(
             EscalationEvent(
                 run_id=self.run_id,
                 agent_id=self.agent_id,

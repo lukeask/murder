@@ -21,16 +21,13 @@ from murder.runtime.orchestration.events import (
     CommandEvent,
     CommandStatus,
 )
-from murder.observability.advanced_log import CommandRecord, current_advanced_log
+from murder.observability.advanced_log import CommandRecord, NullAdvancedLog
 from murder.observability.log_context import log_context
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.worker_names import WorkerName
-from murder.state.persistence import commands as cmd_db
-from murder.state.persistence.records import CommandRecord as PersistedCommandRecord
-from murder.verdict.escalations.service import EscalationService
-
 if TYPE_CHECKING:
-    from murder.runtime.orchestration.notifier import OrchestrationNotifier
+    from murder.runtime.orchestration.ports import AdvancedLogSink, OrchestrationEventSink
+    from murder.state.persistence.records import CommandRecord as PersistedCommandRecord
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,14 +42,15 @@ class ClaimedCommand:
 class CommandDispatcher:
     conn: sqlite3.Connection
     repo_root: Path
-    bus: OrchestrationNotifier | None = None
+    events: OrchestrationEventSink | None = None
+    advanced_log: AdvancedLogSink = NullAdvancedLog()
     lease_ttl_s: float = DEFAULT_LEASE_TTL_S
     max_attempts: int = DEFAULT_MAX_COMMAND_ATTEMPTS
     reaper_interval_s: float = COMMAND_REAPER_INTERVAL_S
 
-    def claim_next(
-        self, *, target_worker: WorkerName, claimed_by: str
-    ) -> ClaimedCommand | None:
+    def claim_next(self, *, target_worker: WorkerName, claimed_by: str) -> ClaimedCommand | None:
+        from murder.state.persistence import commands as cmd_db
+
         lease_expires_at = math.ceil(time.time() + self.lease_ttl_s)
         row = cmd_db.claim_next_command(
             self.conn,
@@ -73,7 +71,7 @@ class CommandDispatcher:
                 LOGGER.error("dropping corrupt command row: %s", exc)
                 self.fail(row_id, "non-UUID command id", retryable=False)
                 return None
-            current_advanced_log().record_command(
+            self.advanced_log.record_command(
                 CommandRecord(
                     phase="claim",
                     command_id=row_id,
@@ -86,14 +84,17 @@ class CommandDispatcher:
             )
 
     def complete(self, command_id: str, result: dict[str, Any] | None) -> None:
+        from murder.state.persistence import commands as cmd_db
+
         with log_context(command_id=command_id):
-            current_advanced_log().record_command(
+            self.advanced_log.record_command(
                 CommandRecord(phase="complete", command_id=command_id, result=result)
             )
             cmd_db.complete_command(self.conn, command_id=command_id, result=result)
 
     def renew(self, command_id: str, *, claimed_by: str) -> bool:
         """Keep an actively executing command from becoming re-dispatchable."""
+        from murder.state.persistence import commands as cmd_db
 
         lease_expires_at = math.ceil(time.time() + self.lease_ttl_s)
         return cmd_db.renew_command_lease(
@@ -104,8 +105,10 @@ class CommandDispatcher:
         )
 
     def fail(self, command_id: str, last_error: str, *, retryable: bool = True) -> None:
+        from murder.state.persistence import commands as cmd_db
+
         with log_context(command_id=command_id):
-            current_advanced_log().record_command(
+            self.advanced_log.record_command(
                 CommandRecord(
                     phase="fail",
                     command_id=command_id,
@@ -146,6 +149,8 @@ class CommandDispatcher:
         self.complete(command_id, result)
 
     def reap_stale(self) -> dict[str, list[str]]:
+        from murder.state.persistence import commands as cmd_db
+
         return cmd_db.reap_stale_commands(
             self.conn,
             now_epoch=int(time.time()),
@@ -153,6 +158,8 @@ class CommandDispatcher:
         )
 
     async def escalate_retry_exhaustion(self, command_ids: list[str]) -> None:
+        from murder.verdict.escalations.service import EscalationService
+
         if not command_ids:
             return
         for command_id in command_ids:
@@ -169,7 +176,7 @@ class CommandDispatcher:
             svc = EscalationService(
                 conn=self.conn,
                 repo_root=self.repo_root,
-                bus=self.bus,
+                events=self.events,
                 run_id=str(row["run_id"]),
                 agent_id="supervisor",
             )

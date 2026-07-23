@@ -69,7 +69,7 @@ def test_kickoff_reaps_stale_running_agents_when_ticket_still_ready(
 
     rt = SimpleNamespace(
         db=conn,
-        bus=MagicMock(),
+        orchestration_events=MagicMock(),
         run_id="test-run",
         repo_root=repo_root,
         reap=_reap,
@@ -117,7 +117,7 @@ def test_force_ticket_status_reaps_crow_agents(repo_root: Path) -> None:
     bus.publish = AsyncMock()
     rt = SimpleNamespace(
         db=conn,
-        bus=bus,
+        orchestration_events=bus,
         run_id="test-run",
         repo_root=repo_root,
         reap=_reap,
@@ -146,7 +146,7 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
         ),
     )
     rt = SimpleNamespace(
-        db=conn, repo_root=repo_root, bus=None, run_id=None,
+        db=conn, repo_root=repo_root, orchestration_events=None, run_id=None,
         publish_snapshot=AsyncMock(),
     )
     orch = Orchestrator(rt)
@@ -194,7 +194,7 @@ def test_codex_rogue_reaps_session_on_startup_failure(
 
     rt = SimpleNamespace(
         db=MagicMock(),
-        bus=MagicMock(),
+        orchestration_events=MagicMock(),
         run_id="test-run",
         repo_root=repo_root,
         config=SimpleNamespace(
@@ -231,7 +231,7 @@ def test_transition_done_heals_ready_status(repo_root: Path) -> None:
         ),
     )
     rt = SimpleNamespace(
-        db=conn, repo_root=repo_root, bus=None, run_id=None,
+        db=conn, repo_root=repo_root, orchestration_events=None, run_id=None,
         publish_snapshot=AsyncMock(),
     )
     coordinator = CompletionCoordinator(rt, CheckRegistry())

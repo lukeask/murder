@@ -17,7 +17,11 @@ from uuid import uuid4
 import pytest
 
 from murder.runtime.orchestration.events import CommandEvent
-from murder.runtime.orchestration.notifier import OrchestrationNotifier
+from murder.runtime.orchestration.command_repository import (
+    PersistingCommandSubmitter,
+    SqliteCommandRepository,
+)
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
@@ -34,8 +38,20 @@ def _ctx(repo_root: Path) -> WorkerCtx:
         "INSERT INTO runs(run_id, started_at, config_snapshot) "
         "VALUES ('run-test', '2026-01-01', '{}')"
     )
-    bus = OrchestrationNotifier(conn)
-    return WorkerCtx(repo_root=repo_root, db=conn, bus=bus, run_id="run-test")
+    events = InProcessOrchestrationEventSink()
+    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id="run-test")
+    ctx.metadata.update(
+        events=events,
+        command_submitter=PersistingCommandSubmitter(SqliteCommandRepository(conn), events),
+    )
+    return ctx
+
+
+def _worker(ctx: WorkerCtx) -> SchedulerWorker:
+    return SchedulerWorker(
+        command_submitter=ctx.metadata["command_submitter"],
+        events=ctx.metadata["events"],
+    )
 
 
 async def _record(sink: list[object], ev: object) -> None:
@@ -143,7 +159,7 @@ def test_migrate_scheduler_steering_adds_table_to_old_db() -> None:
 def test_set_steering_upserts_and_emits_key_only_queue_row(repo_root: Path) -> None:
     async def _run() -> None:
         ctx = _ctx(repo_root)
-        worker = SchedulerWorker()
+        worker = _worker(ctx)
 
         res = await worker.on_command(_set_steering_command("codex", "pause"), ctx)
         assert res == {"handled": True, "harness": "codex", "steering": "pause"}
@@ -181,7 +197,7 @@ def test_set_steering_upserts_and_emits_key_only_queue_row(repo_root: Path) -> N
 def test_set_steering_rejects_invalid_value(repo_root: Path) -> None:
     async def _run() -> None:
         ctx = _ctx(repo_root)
-        worker = SchedulerWorker()
+        worker = _worker(ctx)
         with pytest.raises(ValueError):
             await worker.on_command(_set_steering_command("codex", "bogus"), ctx)
         with pytest.raises(ValueError):
@@ -199,8 +215,8 @@ def test_pause_does_not_kick_and_records_paused_decision(repo_root: Path) -> Non
     async def _run() -> None:
         ctx = _ctx(repo_root)
         captured: list[object] = []
-        ctx.bus.subscribe(lambda ev: _record(captured, ev))
-        worker = SchedulerWorker()
+        ctx.metadata["events"].subscribe(lambda ev: _record(captured, ev))
+        worker = _worker(ctx)
         now = datetime.now(timezone.utc)
 
         _add_ready_ticket(ctx, "t-pause", "codex")
@@ -227,7 +243,7 @@ def test_pause_does_not_kick_and_records_paused_decision(repo_root: Path) -> Non
 def test_prefer_reserves_null_harness_tickets_for_preferred(repo_root: Path) -> None:
     async def _run() -> None:
         ctx = _ctx(repo_root)
-        worker = SchedulerWorker()
+        worker = _worker(ctx)
         now = datetime.now(timezone.utc)
 
         # harness A = prefer, harness B = auto. One NULL-harness ready ticket.
@@ -250,7 +266,7 @@ def test_prefer_reserves_null_harness_tickets_for_preferred(repo_root: Path) -> 
 def test_prefer_does_not_block_explicitly_tagged_tickets(repo_root: Path) -> None:
     async def _run() -> None:
         ctx = _ctx(repo_root)
-        worker = SchedulerWorker()
+        worker = _worker(ctx)
         now = datetime.now(timezone.utc)
 
         await worker.on_command(_set_steering_command("hA", "prefer"), ctx)
@@ -274,7 +290,7 @@ def test_auto_missing_and_garbage_behave_like_no_steering(
 ) -> None:
     async def _run() -> None:
         ctx = _ctx(repo_root)
-        worker = SchedulerWorker()
+        worker = _worker(ctx)
         now = datetime.now(timezone.utc)
 
         _add_ready_ticket(ctx, "t-null", None)
@@ -311,7 +327,7 @@ def test_load_steering_fail_soft_on_unknown_value(repo_root: Path) -> None:
     The table's CHECK constraint blocks bad writes via SQL, so this asserts the
     coercion path of _load_steering directly with a monkey-bypassed row."""
     ctx = _ctx(repo_root)
-    worker = SchedulerWorker()
+    worker = _worker(ctx)
     # Insert a valid row, then read with the helper — known-good baseline.
     ctx.db.execute(
         "INSERT INTO scheduler_steering(harness, steering, updated_at) "

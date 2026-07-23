@@ -37,8 +37,8 @@ def agent(fake_tmux, tmp_path: Path) -> CrowAgent:
 
     runtime = SimpleNamespace()
     runtime.db = connection
-    runtime.bus = MagicMock()
-    runtime.bus.publish = AsyncMock()
+    runtime.orchestration_events = MagicMock()
+    runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     runtime.verified_prompt_driver_policy = PromptDriverPolicy(
@@ -90,7 +90,7 @@ def _assert_verified_submission(agent: CrowAgent, fake_tmux) -> None:
 def _published_state_events(agent: CrowAgent) -> list[ConversationStateEvent]:
     return [
         call.args[0]
-        for call in agent.runtime.bus.publish.await_args_list
+        for call in agent.runtime.orchestration_events.publish.await_args_list
         if isinstance(call.args[0], ConversationStateEvent)
     ]
 

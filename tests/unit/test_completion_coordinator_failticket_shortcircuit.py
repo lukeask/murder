@@ -42,7 +42,7 @@ def _make_coordinator(checks):
     rt = MagicMock()
     rt.db = MagicMock()
     rt.repo_root = Path("/tmp")
-    rt.bus = None
+    rt.orchestration_events = None
     rt.run_id = None
     crow = MagicMock()
     crow.send = AsyncMock()

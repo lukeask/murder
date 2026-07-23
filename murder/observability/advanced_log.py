@@ -194,9 +194,7 @@ def _event_envelope(event: Any) -> dict[str, Any]:
 # Module accessor (the non-bus seams reach the writer through this).
 # --------------------------------------------------------------------------- #
 
-_current: ContextVar[Optional["AdvancedLogBase"]] = ContextVar(
-    "current_advanced_log", default=None
-)
+_current: ContextVar[Optional["AdvancedLogBase"]] = ContextVar("current_advanced_log", default=None)
 
 
 def set_current_advanced_log(log: "AdvancedLogBase") -> None:
@@ -347,9 +345,7 @@ class ChangeGate:
 
 def _create_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     if conn.execute("SELECT 1 FROM schema_version").fetchone() is None:
         conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     conn.execute(
@@ -384,9 +380,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             """
         )
         for col in extras:
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS idx_{family}_{col} ON {family}({col})"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{family}_{col} ON {family}({col})")
     conn.commit()
 
 
@@ -433,7 +427,7 @@ class AdvancedLogBase:
     # The bus is the single capture aspect: :meth:`record_bus_event` routes a
     # published event to its ``record_family`` table. The methods below are the
     # irreducible NON-BUS seams (plan §2.5.B), each taking a typed record.
-    def record_bus_event(self, event: Any) -> None:
+    def record_orchestration_event(self, event: Any) -> None:
         return None
 
     def record_api(self, record: ApiRecord) -> None:
@@ -572,9 +566,7 @@ class AdvancedLog(AdvancedLogBase):
         extras = _FAMILY_EXTRA_COLUMNS[family]
         cols = ["ts", *CONTEXT_FIELDS, "capture_level", *extras, "payload"]
         placeholders = ", ".join("?" for _ in cols)
-        self._conn.execute(
-            f"INSERT INTO {family} ({', '.join(cols)}) VALUES ({placeholders})", row
-        )
+        self._conn.execute(f"INSERT INTO {family} ({', '.join(cols)}) VALUES ({placeholders})", row)
 
     def _build_row(self, payload: Any, extras: tuple) -> tuple:
         from murder.observability import log_context as _lc
@@ -662,7 +654,7 @@ class AdvancedLog(AdvancedLogBase):
 
     # -- bus aspect: route a published event to its family table -- #
 
-    def record_bus_event(self, event: Any) -> None:
+    def record_orchestration_event(self, event: Any) -> None:
         """Capture a published orchestration event into its typed record family.
 
         The recorder is registered as a bus SUBSCRIBER (plan §2.5.A); this is
@@ -727,9 +719,7 @@ class AdvancedLog(AdvancedLogBase):
         self._enqueue("state_mutations", dataclasses.asdict(record))
 
     def record_artifact_ref(self, record: ArtifactRefRecord) -> None:
-        self._enqueue(
-            "artifact_refs", dataclasses.asdict(record), extras=(str(record.path),)
-        )
+        self._enqueue("artifact_refs", dataclasses.asdict(record), extras=(str(record.path),))
 
     def record_exception(self, record: ExceptionRecord) -> None:
         exc = record.exc
@@ -743,9 +733,7 @@ class AdvancedLog(AdvancedLogBase):
 # --------------------------------------------------------------------------- #
 
 
-def open_advanced_log(
-    repo_root: Path, run_id: str, mode: AdvancedMode
-) -> AdvancedLogBase:
+def open_advanced_log(repo_root: Path, run_id: str, mode: AdvancedMode) -> AdvancedLogBase:
     """Return a :class:`NullAdvancedLog` when ``mode=="off"``, else an
     :class:`AdvancedLog` over a fresh per-session DB under ``advlogs_dir``.
 
