@@ -1,8 +1,8 @@
 """Service-owned application protocol.
 
-The protocol in this package is the only public client surface.  The legacy
-``murder.bus`` wire remains an internal compatibility mechanism while the
-service is migrated feature by feature.
+The protocol in this package is the only public client surface. Clients use
+the websocket request, subscription, and terminal contracts defined here;
+service implementation details are not client APIs.
 """
 
 from murder.app.protocol.wire import (

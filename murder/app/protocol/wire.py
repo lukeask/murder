@@ -38,8 +38,9 @@ class ServerHello(ApplicationModel):
     op: Literal["server.hello"] = "server.hello"
     protocol_version: int = APPLICATION_PROTOCOL_VERSION
     server_id: str
-    queries: list[QueryName] = Field(default_factory=lambda: list(QueryName))
-    commands: list[CommandName] = Field(default_factory=lambda: list(CommandName))
+    # Populated by the socket from the installed application dispatcher.
+    queries: list[QueryName]
+    commands: list[CommandName]
     subscriptions: list[SubscriptionKind] = Field(default_factory=_subscription_kinds)
     terminal_streams: bool = True
     fact_cursor: int = Field(default=0, ge=0)

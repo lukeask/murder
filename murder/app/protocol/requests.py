@@ -43,6 +43,8 @@ class QueryName(StrEnum):
     APPROVALS_GET = "approvals.get"
     PERMISSIONS_LIST = "permissions.list"
     SESSION_WRITER_GET = "session.writer.get"
+    WORKFLOW_RUNS_LIST = "workflow.runs.list"
+    WORKFLOW_RUNS_GET = "workflow.runs.get"
 
 
 class CommandName(StrEnum):
@@ -78,6 +80,8 @@ class CommandName(StrEnum):
     SESSION_WRITER_ACQUIRE = "session.writer.acquire"
     SESSION_WRITER_RENEW = "session.writer.renew"
     SESSION_WRITER_RELEASE = "session.writer.release"
+    SESSION_COMMAND_EXECUTE = "session.command.execute"
+    WORKFLOW_SIGNAL = "workflow.signal"
 
 
 class OrchestrationAction(StrEnum):

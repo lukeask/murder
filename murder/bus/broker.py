@@ -453,7 +453,7 @@ class DurableBroker:
                 },
             }
         if projection == "schedule":
-            from murder.app.service.client_api import dto_to_wire  # noqa: PLC0415
+            from murder.app.protocol.read_models import dto_to_wire  # noqa: PLC0415
             from murder.app.service.schedule_snapshot import (  # noqa: PLC0415
                 build_schedule_snapshot,
             )

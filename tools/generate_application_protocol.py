@@ -1,5 +1,7 @@
 """Generate the TypeScript application-protocol contract from Pydantic models."""
 
+# ruff: noqa: E501, PLR0911, PLR0912
+
 from __future__ import annotations
 
 import argparse
@@ -19,6 +21,14 @@ from murder.app.protocol.common import (  # noqa: E402
     ClientKind,
     ErrorCode,
 )
+from murder.app.protocol.operations import (  # noqa: E402
+    COMMAND_OPERATIONS,
+    QUERY_OPERATIONS,
+)
+from murder.app.protocol.projections import (  # noqa: E402
+    PROJECTION_EVENT_MODELS,
+    PROJECTION_SNAPSHOT_MODELS,
+)
 from murder.app.protocol.requests import (  # noqa: E402
     CommandName,
     OrchestrationAction,
@@ -37,11 +47,106 @@ def _union(enum: type[Enum]) -> str:
     return " | ".join(json.dumps(member.value) for member in enum)
 
 
+def _ts_type(schema: object, definitions: dict[str, object] | None = None) -> str:
+    """Render the JSON-schema subset emitted by our Pydantic DTOs."""
+    if not isinstance(schema, dict):
+        return "unknown"
+    if "$ref" in schema:
+        ref = schema["$ref"]
+        if isinstance(ref, str) and ref.startswith("#/$defs/") and definitions is not None:
+            return _ts_type(definitions.get(ref.removeprefix("#/$defs/")), definitions)
+        return "unknown"
+    if "const" in schema:
+        return json.dumps(schema["const"])
+    if "enum" in schema:
+        return " | ".join(json.dumps(value) for value in schema["enum"])
+    for union_key in ("anyOf", "oneOf"):
+        if union_key in schema:
+            return " | ".join(_ts_type(item, definitions) for item in schema[union_key])
+    if "allOf" in schema:
+        return " & ".join(_ts_type(item, definitions) for item in schema["allOf"])
+    schema_type = schema.get("type")
+    if schema_type == "string":
+        return "string"
+    if schema_type in {"integer", "number"}:
+        return "number"
+    if schema_type == "boolean":
+        return "boolean"
+    if schema_type == "null":
+        return "null"
+    if schema_type == "array":
+        item = _ts_type(schema.get("items"), definitions)
+        return f"readonly ({item})[]" if " | " in item else f"readonly {item}[]"
+    if schema_type == "object" or "properties" in schema or "additionalProperties" in schema:
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        parts: list[str] = []
+        if isinstance(properties, dict):
+            for name, property_schema in properties.items():
+                optional = "" if name in required else "?"
+                parts.append(
+                    f"readonly {json.dumps(name)}{optional}: {_ts_type(property_schema, definitions)}"
+                )
+        additional = schema.get("additionalProperties")
+        if additional not in (None, False):
+            parts.append(f"readonly [key: string]: {_ts_type(additional, definitions)}")
+        return "{ " + "; ".join(parts) + " }"
+    return "unknown"
+
+
+def _model_ts(model: object) -> str:
+    # Pydantic's TypeAdapter also handles union result models such as the
+    # writer-lease reply, so the generator and runtime validator share exactly
+    # the same model expression.
+    schema = TypeAdapter(model).json_schema()
+    definitions = schema.get("$defs")
+    return _ts_type(schema, definitions if isinstance(definitions, dict) else None)
+
+
+def _operation_maps() -> str:
+    def render_map(name: str, operations: dict[object, object]) -> str:
+        rows = []
+        for operation in operations.values():
+            params = "any" if operation.legacy else _model_ts(operation.params_model)
+            result = "any" if operation.legacy else _model_ts(operation.result_model)
+            rows.append(
+                f"  readonly {json.dumps(operation.name.value)}: {{ readonly params: "
+                f"{params}; readonly result: {result} }};"
+            )
+        return f"export interface {name} {{\n" + "\n".join(rows) + "\n}"
+
+    projection_snapshots = "\n".join(
+        f"  readonly {json.dumps(topic.value)}: {_model_ts(model)};"
+        for topic, model in PROJECTION_SNAPSHOT_MODELS.items()
+    )
+    projection_events = "\n".join(
+        f"  readonly {json.dumps(topic.value)}: {_model_ts(model)};"
+        for topic, model in PROJECTION_EVENT_MODELS.items()
+    )
+    return "\n\n".join(
+        (
+            render_map("QueryMethods", QUERY_OPERATIONS),
+            render_map("CommandMethods", COMMAND_OPERATIONS),
+            "export interface ProjectionSnapshots {\n" + projection_snapshots + "\n}\n"
+            "export interface ProjectionEvents {\n" + projection_events + "\n}\n"
+            "export type ProjectionSnapshot = Partial<ProjectionSnapshots>;\n"
+            "export type ProjectionEvent = ProjectionEvents[keyof ProjectionEvents];",
+            "export type QueryMethod = keyof QueryMethods;\n"
+            "export type CommandMethod = keyof CommandMethods;\n"
+            "export type QueryParams<M extends QueryMethod> = QueryMethods[M]['params'];\n"
+            "export type QueryResult<M extends QueryMethod> = QueryMethods[M]['result'];\n"
+            "export type CommandParams<M extends CommandMethod> = CommandMethods[M]['params'];\n"
+            "export type CommandResult<M extends CommandMethod> = CommandMethods[M]['result'];",
+        )
+    )
+
+
 def render() -> str:
     schema = TypeAdapter(ApplicationWireMessage).json_schema()
     digest = hashlib.sha256(
         json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    operation_maps = _operation_maps()
     return f"""/* eslint-disable */
 // GENERATED by tools/generate_application_protocol.py. DO NOT EDIT.
 // Pydantic application-wire schema sha256: {digest}
@@ -74,10 +179,11 @@ export interface ServerHello {{
   readonly projection_cursor: number;
 }}
 
-export type ApplicationRequest =
-  | {{ readonly kind: 'query'; readonly name: QueryName; readonly params: Record<string, unknown> }}
-  | {{ readonly kind: 'command'; readonly name: CommandName;
-       readonly params: Record<string, unknown> }};
+{operation_maps}
+
+export type QueryRequest = {{ [M in QueryMethod]: {{ readonly kind: 'query'; readonly name: M; readonly params: QueryParams<M> }} }}[QueryMethod];
+export type CommandRequest = {{ [M in CommandMethod]: {{ readonly kind: 'command'; readonly name: M; readonly params: CommandParams<M> }} }}[CommandMethod];
+export type ApplicationRequest = QueryRequest | CommandRequest;
 
 export interface RequestMessage {{
   readonly op: 'request';
@@ -86,11 +192,10 @@ export interface RequestMessage {{
   readonly timeout_s: number;
 }}
 
-export interface ReplyMessage {{
+export type ReplyMessage = {{
   readonly op: 'reply';
   readonly request_id: string;
-  readonly result: Record<string, unknown>;
-}}
+}} & ({{ readonly result: QueryResult<QueryMethod> }} | {{ readonly result: CommandResult<CommandMethod> }});
 
 export type SubscriptionSpec =
   | {{
@@ -121,12 +226,12 @@ export interface UnsubscribeMessage {{
 }}
 
 export interface SubscriptionSnapshot {{
-  readonly snapshots: Record<string, Record<string, unknown>>;
+  readonly snapshots: ProjectionSnapshot;
   readonly cursor: number;
   readonly mode: 'cold' | 'resume' | 'snapshot_fallback';
   readonly replay: readonly {{
     readonly cursor: number;
-    readonly payload: Record<string, unknown>
+    readonly payload: ProjectionEvent | Record<string, unknown>
   }}[];
 }}
 
@@ -140,7 +245,7 @@ export interface SubscriptionEventMessage {{
   readonly op: 'subscription.event';
   readonly subscription_id: string;
   readonly cursor?: number | null;
-  readonly payload: Record<string, unknown>;
+  readonly payload: ProjectionEvent | Record<string, unknown>;
 }}
 
 export interface TerminalAttachMessage {{
