@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
 from murder.app.protocol.permissions import (
     DecideApprovalParams,
@@ -13,22 +13,32 @@ from murder.app.protocol.permissions import (
     ListPermissionsParams,
 )
 from murder.app.protocol.requests import CommandName, QueryName
+from murder.app.protocol.subscriptions import ProjectionTopic
+from murder.app.service.application import ApplicationRegistrar
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.permissions.persistence import PermissionStore
 from murder.state.persistence.approvals import (
     resolve_approval_request,
     resolve_standalone_approval_request,
 )
 
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
+class ApprovalEffects(Protocol):
+    """Runtime capabilities required by approval and grant use cases."""
+
+    db: sqlite3.Connection | None
 
 
-def register(host: ServiceHost) -> None:
+def register(
+    app: ApplicationRegistrar,
+    projections: ProjectionProviderRegistry,
+    effects: ApprovalEffects,
+) -> None:
+    """Register approval use cases and authoritative approval projections."""
     def _db() -> sqlite3.Connection:
-        runtime = host.runtime
-        if runtime is None or runtime.db is None:
+        connection = effects.db
+        if connection is None:
             raise RuntimeError("service not started")
-        return runtime.db
+        return connection
 
     def _list(body: dict[str, Any]) -> dict[str, Any]:
         params = ListApprovalsParams.model_validate(body)
@@ -108,10 +118,12 @@ def register(host: ServiceHost) -> None:
             ),
         }
 
-    host.register_application_query(QueryName.APPROVALS_LIST, _list)
-    host.register_application_query(QueryName.APPROVALS_GET, _get)
-    host.register_application_query(QueryName.PERMISSIONS_LIST, _list_permissions)
-    host.register_application_command(CommandName.APPROVAL_DECIDE, _decide)
+    app.register_application_query(QueryName.APPROVALS_LIST, _list)
+    app.register_application_query(QueryName.APPROVALS_GET, _get)
+    app.register_application_query(QueryName.PERMISSIONS_LIST, _list_permissions)
+    app.register_application_command(CommandName.APPROVAL_DECIDE, _decide)
+    projections.register(ProjectionTopic.APPROVALS, lambda: _list({}))
+    projections.register(ProjectionTopic.PERMISSIONS, lambda: _list_permissions({}))
 
 
-__all__ = ["register"]
+__all__ = ["ApprovalEffects", "register"]

@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import typer
 
-from murder.bus import TicketStatus
+from murder.work.tickets.status import TicketStatus
 from murder.config import project_env_path
 from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.tickets import insert_ticket

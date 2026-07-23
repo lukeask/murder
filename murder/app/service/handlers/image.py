@@ -1,4 +1,4 @@
-"""``image.*`` RPC handlers."""
+"""``image.*`` application handlers."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 def register(host: ServiceHost) -> None:
     def _image_upload(body: dict[str, Any]) -> dict[str, Any]:
         # F9: store a pasted clipboard image under .murder/images and return
-        # the stored path. Bytes ride base64 over JSON-RPC.
+        # the stored path. Bytes ride base64 over the application protocol.
         #
         # The client now mints the filename ``stem`` at paste time and passes
         # it as ``name`` (so the label<->file binding is known instantly,

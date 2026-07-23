@@ -1,4 +1,4 @@
-"""``trigger.*`` RPC handlers."""
+"""``trigger.*`` application handlers."""
 
 from __future__ import annotations
 

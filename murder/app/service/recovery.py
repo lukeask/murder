@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID, uuid5
 
-from murder.bus import TicketStatus
+from murder.work.tickets.status import TicketStatus
 from murder.runtime.sessions.contracts import (
     Correlation,
     PrincipalKind,

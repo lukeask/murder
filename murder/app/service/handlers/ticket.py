@@ -1,4 +1,4 @@
-"""``ticket.*`` RPC handlers."""
+"""``ticket.*`` application handlers."""
 
 from __future__ import annotations
 

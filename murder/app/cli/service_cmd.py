@@ -14,7 +14,7 @@ from pathlib import Path
 
 import typer
 
-from murder.bus import TicketStatus
+from murder.work.tickets.status import TicketStatus
 from murder.config import Config
 from murder.state.persistence.escalations import list_pending_escalations
 from murder.state.persistence.schema import get_db, init_db
@@ -244,7 +244,7 @@ async def _run_supervisor_only(websocket_port: int = 0) -> None:
             # stop agents/tmux.
             with contextlib.suppress(Exception):
                 if host.runtime is not None:
-                    host.runtime._external_stop.clear()
+                    host.runtime.clear_shutdown_signal()
 
 
 def cmd_serviced(

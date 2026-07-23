@@ -7,8 +7,7 @@ import contextlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from murder.runtime.agents.base import AgentRole
-from murder.bus import AgentStatus
+from murder.runtime.agents.types import AgentRole, AgentStatus
 
 if TYPE_CHECKING:
     import sqlite3

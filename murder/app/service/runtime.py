@@ -25,14 +25,23 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from murder.app.service.agent_registry import AgentRegistry
 from murder.app.service.document_access import DocumentAccess
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
-from murder.bus import OrchestrationHandler, OrchestrationNotifier, SubscriptionHandle
-from murder.bus.protocol import AgentLifecycleEvent, OrchestrationEvent
+from murder.app.service.terminal_capture import (
+    CapturedTerminalFrame,
+    capture_persisted_tmux_frame,
+)
+from murder.runtime.orchestration.events import AgentLifecycleEvent, OrchestrationEvent
+from murder.runtime.orchestration.notifier import (
+    OrchestrationHandler,
+    OrchestrationNotifier,
+    SubscriptionHandle,
+)
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.advanced_log import (
     AdvancedLogBase,
@@ -255,7 +264,7 @@ class Runtime:
                         links={"run_id": self.run_id},
                     )
                 )
-            self.bus = OrchestrationNotifier(self.run_id, self.db)
+            self.bus = OrchestrationNotifier(self.db)
             self.structured_decisions = StructuredDecisionRouter(self)
             # The flight recorder is a normal bus SUBSCRIBER (plan §2.5.A): when
             # on, it captures EVERY event (filter=None) and routes each to its
@@ -519,6 +528,30 @@ class Runtime:
             with contextlib.suppress(NotImplementedError):
                 loop.add_signal_handler(sig, _wake)
         await self._external_stop.wait()
+
+    def clear_shutdown_signal(self) -> None:
+        """Make an imminent stop authoritative rather than signal-graceful.
+
+        The service process uses this when its own lifecycle is ending.  It is
+        intentionally a public lifecycle hook instead of leaking the event
+        used internally by ``run_until_signal`` to composition code.
+        """
+        self._external_stop.clear()
+
+    def configure_parse_error_notifier(
+        self,
+        send_message: Callable[[str, str], Awaitable[None]],
+    ) -> None:
+        """Attach the application delivery hook after its orchestrator exists."""
+        if self._sync is None:
+            raise RuntimeError("filesystem sync is unavailable")
+        self._sync.set_parse_error_notifier(send_message)
+
+    async def capture_terminal_frame(self, session_id: UUID) -> CapturedTerminalFrame:
+        """Capture a terminal strictly through a persisted session UUID."""
+        if self.db is None:
+            raise RuntimeError("service database is unavailable")
+        return await capture_persisted_tmux_frame(self.db, session_id)
 
     async def reconcile_plan(self, name: str) -> None:
         await self.documents.reconcile_plan(name)

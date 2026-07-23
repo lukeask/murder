@@ -16,6 +16,19 @@ from murder.app.protocol.requests import CommandName, QueryName
 ApplicationHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
 
 
+class ApplicationRegistrar(Protocol):
+    """Registration boundary exposed to independently composed features.
+
+    Feature modules depend on this small port instead of the service host, so
+    their application use cases can be wired without importing lifecycle or
+    transport concerns.
+    """
+
+    def register_application_query(self, name: QueryName, handler: ApplicationHandler) -> None: ...
+
+    def register_application_command(self, name: CommandName, handler: ApplicationHandler) -> None: ...
+
+
 class ApplicationPort(Protocol):
     """Use-case port consumed by :class:`ApplicationGateway`."""
 
@@ -66,4 +79,9 @@ async def _invoke(handler: ApplicationHandler, params: dict[str, Any]) -> dict[s
     return result
 
 
-__all__ = ["ApplicationDispatcher", "ApplicationHandler", "ApplicationPort"]
+__all__ = [
+    "ApplicationDispatcher",
+    "ApplicationHandler",
+    "ApplicationPort",
+    "ApplicationRegistrar",
+]

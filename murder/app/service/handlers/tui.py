@@ -1,4 +1,4 @@
-"""``tui.*`` RPC handlers (favorites, templates, workflows, spawn favorites)."""
+"""TUI preference and workflow application handlers."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder.app.protocol.requests import CommandName, QueryName
+from murder.app.protocol.subscriptions import ProjectionTopic
 from murder.app.protocol.workflows import (
     GetWorkflowsParams,
     SetWorkflowsParams,
     StartWorkflowParams,
 )
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
@@ -19,7 +21,10 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
-def register(host: ServiceHost) -> None:
+def register(
+    host: ServiceHost,
+    projections: ProjectionProviderRegistry | None = None,
+) -> None:
     def _tui_prefs_file() -> Path:
         from murder.state.storage.paths import tui_prefs_path as _tui_prefs_path
 
@@ -176,3 +181,8 @@ def register(host: ServiceHost) -> None:
     host.register_application_command(CommandName.THEME_IMPORT, _tui_import_theme)
     host.register_application_command(CommandName.WORKFLOWS_SET, _tui_save_workflows)
     host.register_application_command(CommandName.WORKFLOW_START, _tui_run_workflow)
+    if projections is not None:
+        projections.register(ProjectionTopic.FAVORITES, lambda: _tui_load_favorites({}))
+        projections.register(ProjectionTopic.TEMPLATES, lambda: _tui_load_templates({}))
+        projections.register(ProjectionTopic.THEMES, lambda: _tui_load_themes({}))
+        projections.register(ProjectionTopic.WORKFLOWS, lambda: _tui_load_workflows({}))

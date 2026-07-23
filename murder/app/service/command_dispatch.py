@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from murder.bus.protocol import (
+from murder.runtime.agents.types import AgentRole
+from murder.runtime.orchestration.events import (
     COMMAND_REAPER_INTERVAL_S,
     DEFAULT_LEASE_TTL_S,
     DEFAULT_MAX_COMMAND_ATTEMPTS,
     CommandEvent,
     CommandStatus,
-    Role,
 )
 from murder.observability.advanced_log import CommandRecord, current_advanced_log
 from murder.observability.log_context import log_context
@@ -30,7 +30,7 @@ from murder.state.persistence.records import CommandRecord as PersistedCommandRe
 from murder.verdict.escalations.service import EscalationService
 
 if TYPE_CHECKING:
-    from murder.bus import OrchestrationNotifier
+    from murder.runtime.orchestration.notifier import OrchestrationNotifier
 
 LOGGER = logging.getLogger(__name__)
 
@@ -191,7 +191,7 @@ def command_from_row(row: PersistedCommandRecord | Mapping[str, Any]) -> Command
         id=event_id,
         run_id=row["run_id"],
         agent_id=row.get("agent_id") or "",
-        role=Role(role) if role else None,
+        role=AgentRole(role) if role else None,
         ticket_id=row.get("ticket_id"),
         target_worker=WorkerName(row["target_worker"]),
         kind=OrchestrationCommand(row["kind"]),

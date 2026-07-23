@@ -1,4 +1,4 @@
-"""RPC boundary for externally decided verified harness interactions."""
+"""Application boundary for externally decided verified harness interactions."""
 
 from __future__ import annotations
 

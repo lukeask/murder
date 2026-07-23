@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 
 from murder.app.service.command_dispatch import ClaimedCommand, CommandDispatcher
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx
 from murder.runtime.workers.process_runner import SubprocessWorkerRunner

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import sqlite3
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
 from murder.app.protocol.requests import CommandName, QueryName
@@ -15,6 +16,8 @@ from murder.app.protocol.sessions import (
     ReleaseWriterLeaseParams,
     RenewWriterLeaseParams,
 )
+from murder.app.service.application import ApplicationRegistrar
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.contracts.common import request_context
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
@@ -30,8 +33,14 @@ from murder.runtime.sessions.registry import (
 )
 
 if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
     from murder.runtime.sessions.controller import SessionController
+
+
+class SessionEffects(Protocol):
+    """Runtime capabilities required by the session application feature."""
+
+    db: sqlite3.Connection | None
+    session_controllers: SessionControllerRegistry | None
 
 
 def _meta(
@@ -49,19 +58,31 @@ def _reply_json(reply: WriterLeaseReply) -> dict[str, object]:
     return reply.model_dump(mode="json")
 
 
-def register(host: ServiceHost) -> None:
+def register(
+    app: ApplicationRegistrar,
+    projections: ProjectionProviderRegistry,
+    effects: SessionEffects,
+) -> None:
+    """Register session use cases without coupling them to the service host.
+
+    There is no session-list application read model yet, so this feature
+    intentionally owns no ``sessions`` snapshot provider.  Registering an
+    empty provider here would make the subscription look authoritative when it
+    is not.
+    """
+    del projections
+
     def _registry() -> SessionControllerRegistry:
-        runtime = host.runtime
-        registry = getattr(runtime, "session_controllers", None) if runtime is not None else None
+        registry = getattr(effects, "session_controllers", None)
         if not isinstance(registry, SessionControllerRegistry):
             raise RuntimeError("session controller registry is unavailable")
         return registry
 
     def _store() -> SessionStore:
-        runtime = host.runtime
-        if runtime is None or runtime.db is None:
+        connection = getattr(effects, "db", None)
+        if connection is None:
             raise RuntimeError("service not started")
-        return SessionStore(runtime.db)
+        return SessionStore(connection)
 
     async def _controller(session_id: UUID) -> SessionController:
         registry = _registry()
@@ -156,13 +177,14 @@ def register(host: ServiceHost) -> None:
         )
         return ExecuteSessionCommandResult(receipt=receipt).model_dump(mode="json")
 
-    host.register_application_query(QueryName.SESSION_WRITER_GET, _get)
-    host.register_application_command(CommandName.SESSION_WRITER_ACQUIRE, _acquire)
-    host.register_application_command(CommandName.SESSION_WRITER_RENEW, _renew)
-    host.register_application_command(CommandName.SESSION_WRITER_RELEASE, _release)
-    host.register_application_command(CommandName.SESSION_COMMAND_EXECUTE, _execute)
+    app.register_application_query(QueryName.SESSION_WRITER_GET, _get)
+    app.register_application_command(CommandName.SESSION_WRITER_ACQUIRE, _acquire)
+    app.register_application_command(CommandName.SESSION_WRITER_RENEW, _renew)
+    app.register_application_command(CommandName.SESSION_WRITER_RELEASE, _release)
+    app.register_application_command(CommandName.SESSION_COMMAND_EXECUTE, _execute)
 
 
 __all__ = [
+    "SessionEffects",
     "register",
 ]

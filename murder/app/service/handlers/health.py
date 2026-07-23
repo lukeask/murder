@@ -1,4 +1,4 @@
-"""``health.*`` RPC handlers."""
+"""``health.*`` application handlers."""
 
 from __future__ import annotations
 

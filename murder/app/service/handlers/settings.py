@@ -1,4 +1,4 @@
-"""``settings.*`` RPC handlers."""
+"""``settings.*`` application handlers."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from murder.app.protocol.requests import CommandName, QueryName
+from murder.app.protocol.subscriptions import ProjectionTopic
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
@@ -27,7 +29,10 @@ def _deep_merge_settings(base: dict[str, Any], over: dict[str, Any]) -> dict[str
     return out
 
 
-def register(host: ServiceHost) -> None:
+def register(
+    host: ServiceHost,
+    projections: ProjectionProviderRegistry | None = None,
+) -> None:
     def _mask_llm(llm: Any) -> dict[str, Any]:
         # Dump the user llm block, masking every non-empty API key.  Keep this
         # structural rather than tied to the legacy ``providers`` map: provider
@@ -772,3 +777,5 @@ def register(host: ServiceHost) -> None:
         CommandName.LLM_FEATURE_POLICY_SET, _llm_feature_policy_set
     )
     host.register_application_command(CommandName.LLM_PREVIEW_RESOLUTION, _llm_preview_resolution)
+    if projections is not None:
+        projections.register(ProjectionTopic.SETTINGS, lambda: _settings_get({}))

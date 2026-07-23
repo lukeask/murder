@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from murder.bus import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.runtime.agents.events import AgentEventSink
 
 if TYPE_CHECKING:

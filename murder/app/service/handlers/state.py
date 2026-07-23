@@ -1,17 +1,23 @@
-"""``state.*`` read-model snapshot RPC handlers."""
+"""``state.*`` read-model application handlers."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+from murder.app.protocol.read_models import dto_to_wire
 from murder.app.protocol.requests import QueryName
+from murder.app.protocol.subscriptions import ProjectionTopic
 from murder.app.service.handlers._common import require_read_model, threaded, value
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
 
 
-def register(host: ServiceHost) -> None:
+def register(
+    host: ServiceHost,
+    projections: ProjectionProviderRegistry | None = None,
+) -> None:
     def _state_schedule_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
         return value(require_read_model(host).get_schedule_snapshot())
 
@@ -87,3 +93,24 @@ def register(host: ServiceHost) -> None:
     host.register_application_query(
         QueryName.HARNESS_MODELS_LIST, threaded(_state_harness_models_snapshot)
     )
+    if projections is not None:
+        def _conversations_projection() -> dict[str, object]:
+            return cast(
+                dict[str, object],
+                dto_to_wire(require_read_model(host).get_conversations_snapshot()),
+            )
+
+        def _schedule_projection() -> dict[str, object]:
+            return cast(
+                dict[str, object],
+                dto_to_wire(require_read_model(host).get_schedule_snapshot()),
+            )
+
+        projections.register(
+            ProjectionTopic.CONVERSATIONS,
+            _conversations_projection,
+        )
+        projections.register(
+            ProjectionTopic.SCHEDULE,
+            _schedule_projection,
+        )

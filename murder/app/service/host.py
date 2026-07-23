@@ -2,62 +2,35 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
-import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-from uuid import UUID
 
 from murder.app.protocol.requests import CommandName, QueryName
-from murder.app.protocol.subscriptions import ProjectionTopic
 from murder.app.service.application import ApplicationDispatcher, ApplicationHandler
+from murder.app.service.background_tasks import ServiceBackgroundTasks
 from murder.app.service.bootstrap import start_supervisor_workers
 from murder.app.service.gateway import ApplicationGateway
-from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.projection_registry import ProjectionProviderRegistry
+from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.runtime import (
     ActivityDispatcherFactory,
     Runtime,
     TriggerDispatcherFactory,
 )
-from murder.app.service.supervisor import Supervisor
 from murder.app.service.socket_server import ApplicationSocketServer
-from murder.facts.log import FactLog, ProjectionInputLog
+from murder.app.service.supervisor import Supervisor
 from murder.config import Config
-from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
-from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
-from murder.observability.advanced_log import ParserRecord, current_advanced_log
+from murder.facts.log import FactLog, ProjectionInputLog
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from murder.runtime.workers.orchestrator_worker import dispatch_orchestrator_command
 from murder.state.storage.paths import db_path
 from murder.state.storage.service_registry import (
-    project_session_name,
     remove_service_session,
     write_service_session,
 )
-from murder.roster.service import register_projection_provider
-from murder.usage_sample_command import run_service_usage_poll_loop
 
 LOGGER = logging.getLogger(__name__)
-
-# Cadence for the Transit git-graph fingerprint poll (branch HEAD movement).
-TRANSIT_POLL_INTERVAL_S = 4.0
-
-# Caps how many surviving-crow reattaches may poll harness/tmux state at once.
-# Each reattach can block on a ready-poll for up to 240s; gathering every
-# survivor unbounded recreates the boot-time file-descriptor storm the deferred
-# background design exists to avoid, so we throttle to a small handful.
-REATTACH_CONCURRENCY = 4
-
-
-@dataclass(frozen=True)
-class CapturedTerminalFrame:
-    data: str
-    columns: int
-    rows: int
 
 @dataclass
 class ServiceHost:
@@ -83,13 +56,6 @@ class ServiceHost:
     ``register`` seam, so host.py stays shallow-but-small (pure wiring). Adding
     logic here trades a narrow interface for a god class — don't.
 
-    # god-debt: the background loops (_run_projection_poll_loop,
-    # _run_transit_poll_loop, _reattach_surviving_crows,
-    # _ensure_startup_rogue_safely, _persist_catalog_then_write_models_doc) are still
-    # inline. Deferred follow-up (godslayer plan, Phase 1b): move them to a
-    # BackgroundLoops collaborator owned by the host. Left inline because they
-    # have no start/stop test net and are perpetual loops, so the extraction
-    # needs real-boot verification rather than a unit pass.
     """
 
     config: Config
@@ -109,11 +75,7 @@ class ServiceHost:
     supervisor: Supervisor | None = None
     socket_server: ApplicationSocketServer | None = None
     websocket_bound: tuple[str, int] | None = None
-    _usage_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    _projection_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    _transit_poll_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    _model_catalog_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    _reattach_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    background_tasks: ServiceBackgroundTasks | None = field(default=None, repr=False)
     _application_queries: dict[QueryName, ApplicationHandler] = field(
         default_factory=dict, repr=False
     )
@@ -121,55 +83,6 @@ class ServiceHost:
         default_factory=dict, repr=False
     )
     _service_session_name: str | None = field(default=None, repr=False)
-
-    async def _capture_tmux_frame(
-        self,
-        target_id: str | None = None,
-    ) -> CapturedTerminalFrame:
-        """Capture a persisted session UUID, or an explicit legacy agent.
-
-        UUID attachment resolves through ``harness_sessions.transport_ref``;
-        the durable session identity is never treated as a tmux name. Existing
-        agent-id callers remain a deliberate compatibility branch until every
-        live legacy agent is registered. ``None`` selects the supervisor pane.
-        """
-        from murder.runtime.terminal import tmux
-
-        session = project_session_name(self.repo_root)
-        if target_id is not None:
-            if self.runtime is None:
-                raise RuntimeError("service not started")
-            try:
-                persisted_id = UUID(target_id)
-            except ValueError:
-                agent = self.runtime.agents.get_agent(target_id)
-                agent_session = getattr(agent, "session", None)
-                if agent_session is None:
-                    raise ValueError(
-                        f"no live agent session for {target_id!r}"
-                    ) from None
-                session = str(agent_session)
-            else:
-                if self.runtime.db is None:
-                    raise RuntimeError("service database is unavailable")
-                row = self.runtime.db.execute(
-                    """
-                    SELECT transport, transport_ref
-                    FROM harness_sessions
-                    WHERE session_id = ?
-                    """,
-                    (str(persisted_id),),
-                ).fetchone()
-                if row is None:
-                    raise ValueError(f"persisted session {persisted_id} does not exist")
-                if str(row["transport"]) != "tmux":
-                    raise ValueError(
-                        f"session {persisted_id} does not expose a tmux terminal"
-                    )
-                session = str(row["transport_ref"])
-        frame = await tmux.capture_viewport(session, escapes=True)
-        columns, rows = await tmux.pane_dimensions(session)
-        return CapturedTerminalFrame(data=frame, columns=columns, rows=rows)
 
     def register_application_query(self, name: QueryName, handler: ApplicationHandler) -> None:
         """Register a feature use case at the closed application boundary."""
@@ -183,7 +96,13 @@ class ServiceHost:
         """Register feature-owned handlers at the closed application boundary."""
         from murder.app.service.handlers import register_all
 
-        register_all(self)
+        if self.runtime is None:
+            raise RuntimeError("service runtime is unavailable")
+        register_all(
+            self,
+            projections=self.projection_providers,
+            effects=self.runtime,
+        )
 
     async def start(self) -> None:
         from murder.runtime.activity_dispatcher import (  # noqa: PLC0415
@@ -241,32 +160,6 @@ class ServiceHost:
         assert self.runtime.db is not None and self.runtime.run_id is not None
         self.register_application_handlers()
 
-        register_projection_provider(
-            self.projection_providers,
-            self.runtime.roster,
-            self.runtime.db,
-        )
-        assert self.read_model is not None
-        # Composition root wiring only: each provider calls the feature's own
-        # read surface.  The socket server merely asks the registry; it never
-        # switches on projection names or imports feature domains.
-        self.projection_providers.register(
-            ProjectionTopic.CONVERSATIONS,
-            lambda: self.read_model.get_conversations_snapshot().model_dump(mode="json"),
-        )
-        self.projection_providers.register(
-            ProjectionTopic.SCHEDULE,
-            lambda: self.read_model.get_schedule_snapshot().model_dump(mode="json"),
-        )
-        for topic, query in (
-            (ProjectionTopic.FAVORITES, QueryName.FAVORITES_GET),
-            (ProjectionTopic.TEMPLATES, QueryName.TEMPLATES_GET),
-            (ProjectionTopic.THEMES, QueryName.THEMES_GET),
-            (ProjectionTopic.WORKFLOWS, QueryName.WORKFLOWS_GET),
-            (ProjectionTopic.SETTINGS, QueryName.SETTINGS_GET),
-        ):
-            handler = self._application_queries[query]
-            self.projection_providers.register(topic, lambda handler=handler: handler({}))
         self.fact_log = FactLog(self.runtime.db)
         self.projection_input_log = ProjectionInputLog(self.runtime.db)
 
@@ -274,63 +167,23 @@ class ServiceHost:
         self.runtime.crow_ask_router = self.orchestrator.route_crow_ask
         # Route malformed-artifact parse errors back to the owning agent now
         # that the orchestrator (which delivers `agent.message`) exists.
-        if self.runtime._sync is not None:
-            orch = self.orchestrator
+        orchestrator_for_parse_errors = self.orchestrator
 
-            async def _send_parse_error(agent_id: str, message: str) -> None:
-                await orch.send_agent_message(agent_id, message, None, spawn_if_needed=False)
+        async def _send_parse_error(agent_id: str, message: str) -> None:
+            await orchestrator_for_parse_errors.send_agent_message(
+                agent_id,
+                message,
+                None,
+                spawn_if_needed=False,
+            )
 
-            self.runtime._sync.set_parse_error_notifier(_send_parse_error)
+        self.runtime.configure_parse_error_notifier(_send_parse_error)
 
-        orchestrator = self.orchestrator
+        from murder.app.service.handlers import orchestration, scheduler, usage
 
-        orchestrator_commands = (
-            CommandName.AGENT_INTERRUPT,
-            CommandName.AGENT_MESSAGE,
-            CommandName.AGENT_RESUME_FROM_HISTORY,
-            CommandName.AGENT_SEND_KEY,
-            CommandName.AGENT_STOP,
-            CommandName.CROW_RENAME_ROGUE,
-            CommandName.CROW_RESET,
-            CommandName.CROW_SPAWN_ROGUE,
-            CommandName.HISTORY_DISMISS,
-            CommandName.NOTETAKER_CAPTURE_SUBMIT,
-            CommandName.PLAN_RENAME,
-            CommandName.PLANNER_SPAWN,
-            CommandName.TICKET_QUICK_CREATE,
-        )
-        for command_name in orchestrator_commands:
-            async def _execute(body: dict[str, Any], name: CommandName = command_name) -> dict[str, Any]:
-                return await dispatch_orchestrator_command(orchestrator, name, body)
-
-            self.register_application_command(command_name, _execute)
-
-        def _set_scheduler_steering(body: dict[str, Any]) -> dict[str, Any]:
-            from murder.app.service.scheduler_steering import set_steering
-
-            runtime = self.runtime
-            if runtime is None or runtime.db is None:
-                raise RuntimeError("service runtime is unavailable")
-            harness = body.get("harness")
-            steering = body.get("steering")
-            if not isinstance(harness, str) or not isinstance(steering, str):
-                raise ValueError("scheduler.set_steering requires harness and steering strings")
-            return set_steering(runtime.db, harness=harness, steering=steering)
-
-        async def _sample_usage(body: dict[str, Any]) -> dict[str, Any]:
-            from murder.app.service.usage_sampling import sample_usage
-
-            runtime = self.runtime
-            if runtime is None or runtime.db is None:
-                raise RuntimeError("service runtime is unavailable")
-            raw_modes = body.get("modes")
-            if raw_modes is not None and not isinstance(raw_modes, list):
-                raise ValueError("state.harness_usage.sample modes must be a list when provided")
-            modes = {str(mode) for mode in raw_modes} if raw_modes is not None else None
-            return await sample_usage(repo_root=self.repo_root, db=runtime.db, modes=modes)
-
-        self.register_application_command(CommandName.SCHEDULER_SET_STEERING, _set_scheduler_steering)
-        self.register_application_command(CommandName.HARNESS_USAGE_SAMPLE, _sample_usage)
+        orchestration.register(self, self.orchestrator)
+        scheduler.register(self, self.runtime)
+        usage.register(self, self.runtime)
 
         application = ApplicationDispatcher(
             queries=self._application_queries,
@@ -342,7 +195,7 @@ class ServiceHost:
             projection_inputs=self.projection_input_log,
             providers=self.projection_providers,
             run_id=str(self.runtime.run_id),
-            terminal_capture=self._capture_tmux_frame,
+            terminal_capture=self.runtime.capture_terminal_frame,
             assets_dir=(self.repo_root / "webui" / "dist"),
         )
         self.websocket_bound = await self.socket_server.start(
@@ -354,16 +207,6 @@ class ServiceHost:
         )
         self._service_session_name = session.name
 
-        # Startup recovery: reattach handlers to crows whose tmux session
-        # survived a service restart so DONE is consumed and the ticket
-        # finishes. Each reattach can block on a harness ready-poll (up to
-        # 240s), so this runs as a best-effort background task launched AFTER
-        # the socket is open — it must never delay boot — and the reattaches
-        # run concurrently rather than sequentially.
-        self._reattach_task = asyncio.create_task(
-            self._reattach_surviving_crows(), name="crow-reattach"
-        )
-
         LOGGER.info("application websocket listener on ws://%s:%d/api/ws", *self.websocket_bound)
 
         self.supervisor = await start_supervisor_workers(
@@ -372,134 +215,12 @@ class ServiceHost:
             orchestrator=self.orchestrator,
             bus=self.runtime.bus,
         )
-        self._startup_rogue_task = asyncio.create_task(
-            self._ensure_startup_rogue_safely(), name="startup-rogue-ensure"
+        self.background_tasks = ServiceBackgroundTasks(
+            repo_root=self.repo_root,
+            runtime=self.runtime,
+            orchestrator=self.orchestrator,
         )
-        self._model_catalog_task = asyncio.create_task(
-            self._persist_catalog_then_write_models_doc(), name="startup-model-catalog"
-        )
-        self._usage_poll_task = asyncio.create_task(
-            run_service_usage_poll_loop(self.repo_root, self.runtime.db),
-            name="usage-sample-poll",
-        )
-        self._projection_poll_task = asyncio.create_task(
-            self._run_projection_poll_loop(), name="transcript-projection-poll"
-        )
-    async def _ensure_startup_rogue_safely(self) -> None:
-        """Best-effort: spawn the user's configured Startup Rogue on boot.
-
-        Idempotent (the orchestrator reuses a live one); never fatal to startup —
-        a spawn failure is logged and swallowed so the daemon still comes up.
-        """
-        try:
-            await self.orchestrator.ensure_startup_rogue()
-        except Exception:
-            LOGGER.error("ensure_startup_rogue failed", exc_info=True)
-
-    async def _persist_catalog_then_write_models_doc(self) -> None:
-        """Persist configured model catalogs, then write the settings document."""
-        db = self.runtime.db if self.runtime is not None else None
-        await refresh_and_persist_harness_models(self.repo_root, db)
-        write_harnesses_doc(self.repo_root)
-
-    async def _run_projection_poll_loop(self) -> None:
-        """Single service-owned ticker that projects every harness-backed agent's
-        pane into the conversation store. One loop for crows, rogues,
-        collaborators, and planners alike — projection is a universal per-agent
-        concern, decoupled from ticket orchestration (CrowHandler) so ticketless
-        rogues and collaborators are covered too."""
-        from murder.runtime.agents.base import (
-            PROJECTION_INTERVAL_S,
-            HarnessBackedAgent,
-        )
-        from murder.runtime.terminal import tmux
-
-        # First-failure visibility: a projection exception repeating every tick
-        # silently freezes an agent's live_state (and with it queued-message
-        # delivery), so log the FIRST failure per agent at WARNING with the
-        # traceback; subsequent identical-cadence failures stay at DEBUG.
-        warned_agents: set[str] = set()
-        while True:
-            runtime = self.runtime
-            if runtime is not None:
-                for agent in runtime.agents.all_agents():
-                    if not isinstance(agent, HarnessBackedAgent):
-                        continue
-                    try:
-                        await agent.project_once()
-                    except tmux.TmuxError:
-                        LOGGER.debug(
-                            "projection tick: tmux error for %s (session=%s)",
-                            agent.id,
-                            getattr(agent, "session", None),
-                            exc_info=True,
-                        )
-                    except Exception:
-                        if agent.id not in warned_agents:
-                            warned_agents.add(agent.id)
-                            LOGGER.warning(
-                                "projection tick failed for %s (suppressing repeats)",
-                                agent.id,
-                                exc_info=True,
-                            )
-                        else:
-                            LOGGER.debug("projection tick failed for %s", agent.id, exc_info=True)
-                    else:
-                        warned_agents.discard(agent.id)
-                        # Boundary #5b: record the derived projection/live-state
-                        # for the flight recorder. The dedup_hash over
-                        # (live_state, queued) lets the ChangeGate write only
-                        # when an agent's state actually changed since last tick,
-                        # so idle no-op polls are deduped, not one row each.
-                        live_state = agent._current_live_state()
-                        queued = agent.pending_message
-                        choices = ["<choice-prompt>"] if live_state == "awaiting_approval" else None
-                        current_advanced_log().record_parser(
-                            ParserRecord(
-                                session=getattr(agent, "session", None),
-                                live_state=live_state,
-                                parsed={"agent_id": agent.id, "queued": queued},
-                                choices=choices,
-                                dedup_hash=hashlib.sha1(
-                                    f"{agent.id}|{live_state}|{queued}".encode()
-                                ).hexdigest(),
-                            )
-                        )
-            await asyncio.sleep(PROJECTION_INTERVAL_S)
-
-    async def _reattach_surviving_crows(self) -> None:
-        """Best-effort startup recovery, run as a background task after the
-        socket is open so it never delays boot. Reattaches handlers to crows
-        whose tmux session survived a service restart, running the reattaches
-        with bounded concurrency; each can block on a harness ready-poll (up to
-        240s), so we cap the simultaneous polls (REATTACH_CONCURRENCY) to avoid
-        an FD storm at boot, and a single failure must not kill the others or
-        crash boot."""
-        report = getattr(self.runtime, "startup_reconcile_report", None)
-        if not report or not report.crows_to_reattach:
-            return
-
-        # Throttle the ready-polls: only REATTACH_CONCURRENCY reattaches may hold
-        # harness/tmux file descriptors open at any one time.
-        sem = asyncio.Semaphore(REATTACH_CONCURRENCY)
-
-        async def _reattach_one(tid: str, crow_session: str) -> None:
-            async with sem:
-                try:
-                    await self.orchestrator.reattach_crow(tid, crow_session)
-                    LOGGER.info("reattached crow handler for %s (session %s)", tid, crow_session)
-                except Exception:
-                    LOGGER.error("failed to reattach crow for %s", tid, exc_info=True)
-
-        try:
-            await asyncio.gather(
-                *(
-                    _reattach_one(tid, crow_session)
-                    for tid, crow_session in report.crows_to_reattach
-                )
-            )
-        except Exception:
-            LOGGER.error("crow reattach task failed", exc_info=True)
+        self.background_tasks.start()
 
     async def run_until_signal(self) -> None:
         if self.runtime is None:
@@ -507,35 +228,9 @@ class ServiceHost:
         await self.runtime.run_until_signal()
 
     async def stop(self) -> None:
-        if self._usage_poll_task is not None:
-            self._usage_poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._usage_poll_task
-            self._usage_poll_task = None
-
-        if self._projection_poll_task is not None:
-            self._projection_poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._projection_poll_task
-            self._projection_poll_task = None
-
-        if self._transit_poll_task is not None:
-            self._transit_poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._transit_poll_task
-            self._transit_poll_task = None
-
-        if self._model_catalog_task is not None:
-            self._model_catalog_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._model_catalog_task
-            self._model_catalog_task = None
-
-        if self._reattach_task is not None:
-            self._reattach_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._reattach_task
-            self._reattach_task = None
+        if self.background_tasks is not None:
+            await self.background_tasks.stop()
+            self.background_tasks = None
 
         if self.supervisor is not None:
             await self.supervisor.stop_all()
@@ -551,12 +246,7 @@ class ServiceHost:
             self._service_session_name = None
 
         if self.runtime is not None:
-            try:
-                self.runtime._external_stop.clear()
-            except Exception:  # noqa: BLE001
-                LOGGER.debug(
-                    "failed to clear runtime._external_stop during shutdown", exc_info=True
-                )
+            self.runtime.clear_shutdown_signal()
             await self.runtime.stop()
             self.runtime = None
 

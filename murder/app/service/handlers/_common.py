@@ -1,4 +1,4 @@
-"""Shared helpers for the built-in RPC handler modules."""
+"""Shared helpers for built-in application handler modules."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def require_orchestrator(host: ServiceHost) -> Orchestrator:
 
 
 def threaded(fn: Any) -> Any:
-    """Offload a *synchronous*, thread-safe RPC handler to a worker
+    """Offload a *synchronous*, thread-safe application handler to a worker
     thread so its blocking sqlite/git/file work does not starve the
     event loop. The broker awaits returned coroutines on the loop, so
     ``asyncio.to_thread`` runs ``fn`` off-loop and yields the dict. Only

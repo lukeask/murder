@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-from murder.runtime.agents.base import AgentStatus, LifecycleParticipant
+from murder.runtime.agents.base import LifecycleParticipant
+from murder.runtime.agents.types import AgentStatus
 from murder.app.service.agent_registry import AgentRegistry
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import project_session_prefix

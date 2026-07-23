@@ -9,16 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
-from pathlib import Path
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from murder.app.protocol.common import APPLICATION_PROTOCOL_VERSION, ErrorCode
 from murder.app.protocol.projections import validate_event, validate_snapshot
-from murder.app.protocol.subscriptions import FactSubscription, NotificationSubscription, ProjectionSubscription, ProjectionTopic, SubscriptionSnapshot
+from murder.app.protocol.subscriptions import (
+    FactSubscription,
+    ProjectionSubscription,
+    SubscriptionSnapshot,
+)
 from murder.app.protocol.terminal import TerminalFrame, TerminalTarget
 from murder.app.protocol.wire import (
     APPLICATION_WIRE_ADAPTER,
@@ -41,13 +45,11 @@ from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.facts.log import FactLog, ProjectionInputLog, ReplayGapError
 
-TerminalCapture = Callable[[str | None], Awaitable[Any]]
-
+TerminalCapture = Callable[[UUID], Awaitable[Any]]
 
 def _aiohttp() -> Any:
     from aiohttp import WSMsgType, web
     return web, WSMsgType
-
 
 @dataclass
 class ApplicationConnection:
@@ -84,14 +86,6 @@ class SubscriptionCoordinator:
             await self._projections(connection, message.subscription_id, spec)
         elif isinstance(spec, FactSubscription):
             await self._facts_stream(connection, message.subscription_id, spec)
-        elif isinstance(spec, NotificationSubscription):
-            # Notifications are a typed, non-authoritative live channel.  The
-            # old events table is intentionally never replayed into it.
-            await connection.send(SubscriptionReadyMessage(
-                subscription_id=message.subscription_id,
-                snapshot=SubscriptionSnapshot(cursor=0, mode="cold"),
-            ))
-            await asyncio.Event().wait()
         else:
             raise ValueError(f"unsupported application subscription {spec.kind}")
 
@@ -155,7 +149,7 @@ class TerminalStreamCoordinator:
         key = str(target.session_id)
         sequence = max(message.after_sequence, self._sequences.get(key, 0))
         while True:
-            captured = await self._capture(str(target.session_id))
+            captured = await self._capture(target.session_id)
             data = captured.data if hasattr(captured, "data") else str(captured)
             columns = getattr(captured, "columns", max(1, len(data)))
             rows = getattr(captured, "rows", max(1, len(data.splitlines())))
@@ -171,9 +165,17 @@ class TerminalStreamCoordinator:
 class ApplicationSocketServer:
     """WebSocket-only typed application server owned by the service process."""
 
-    def __init__(self, *, gateway: ApplicationGateway, facts: FactLog, projection_inputs: ProjectionInputLog,
-                 providers: ProjectionProviderRegistry, run_id: str, terminal_capture: TerminalCapture | None = None,
-                 assets_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        gateway: ApplicationGateway,
+        facts: FactLog,
+        projection_inputs: ProjectionInputLog,
+        providers: ProjectionProviderRegistry,
+        run_id: str,
+        terminal_capture: TerminalCapture | None = None,
+        assets_dir: Path | None = None,
+    ) -> None:
         self._gateway = gateway
         self._facts = facts
         self._inputs = projection_inputs
@@ -250,7 +252,12 @@ class ApplicationSocketServer:
     async def _dispatch(self, connection: ApplicationConnection, message: object) -> None:
         if isinstance(message, RequestMessage):
             try:
-                result = await self._gateway.request(message.request, timeout_s=message.timeout_s, authenticated_client_id=connection.client_id, wire_request_id=message.request_id)
+                result = await self._gateway.request(
+                    message.request,
+                    timeout_s=message.timeout_s,
+                    authenticated_client_id=connection.client_id,
+                    wire_request_id=message.request_id,
+                )
                 await connection.send(ReplyMessage(request_id=message.request_id, result=result))
             except Exception as exc:
                 await connection.send(ErrorMessage(error={"code": ErrorCode.REQUEST_FAILED, "message": str(exc)}, request_id=message.request_id))

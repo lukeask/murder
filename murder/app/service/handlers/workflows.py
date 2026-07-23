@@ -1,12 +1,13 @@
-"""Typed workflow run inspection and signaling RPC handlers."""
+"""Typed workflow run inspection and signaling application handlers."""
 
 from __future__ import annotations
 
 import sqlite3
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from murder.app.protocol.requests import CommandName, QueryName
+from murder.app.protocol.subscriptions import ProjectionTopic
 from murder.app.protocol.workflows import (
     GetWorkflowRunParams,
     ListWorkflowRunsParams,
@@ -19,16 +20,27 @@ from murder.state.persistence.workflow_runs import (
 )
 from murder.work.workflows.service import WorkflowRuntime
 
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
+from murder.app.service.application import ApplicationRegistrar
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 
 
-def register(host: ServiceHost) -> None:
+class WorkflowEffects(Protocol):
+    """Runtime capabilities required by workflow-run use cases."""
+
+    db: sqlite3.Connection | None
+
+
+def register(
+    app: ApplicationRegistrar,
+    projections: ProjectionProviderRegistry,
+    effects: WorkflowEffects,
+) -> None:
+    """Register workflow-run use cases and their feature-owned snapshot."""
     def _db() -> sqlite3.Connection:
-        runtime = host.runtime
-        if runtime is None or runtime.db is None:
+        connection = effects.db
+        if connection is None:
             raise RuntimeError("service not started")
-        return runtime.db
+        return connection
 
     def _runs_list(body: dict[str, Any]) -> dict[str, Any]:
         params = ListWorkflowRunsParams.model_validate(body)
@@ -74,9 +86,10 @@ def register(host: ServiceHost) -> None:
             "run": run.model_dump(mode="json"),
         }
 
-    host.register_application_query(QueryName.WORKFLOW_RUNS_LIST, _runs_list)
-    host.register_application_query(QueryName.WORKFLOW_RUNS_GET, _runs_get)
-    host.register_application_command(CommandName.WORKFLOW_SIGNAL, _signal)
+    app.register_application_query(QueryName.WORKFLOW_RUNS_LIST, _runs_list)
+    app.register_application_query(QueryName.WORKFLOW_RUNS_GET, _runs_get)
+    app.register_application_command(CommandName.WORKFLOW_SIGNAL, _signal)
+    projections.register(ProjectionTopic.WORKFLOW_RUNS, lambda: _runs_list({}))
 
 
-__all__ = ["register"]
+__all__ = ["WorkflowEffects", "register"]

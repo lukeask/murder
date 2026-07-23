@@ -1,4 +1,4 @@
-"""``worktree.*`` RPC handlers."""
+"""``worktree.*`` application handlers."""
 
 from __future__ import annotations
 

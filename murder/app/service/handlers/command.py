@@ -1,4 +1,4 @@
-"""``command.*`` RPC handlers."""
+"""``command.*`` application handlers."""
 
 from __future__ import annotations
 
