@@ -32,6 +32,10 @@ export interface ProjectionInvalidation {
   readonly source_fact_id?: string | null;
 }
 export type ProjectionInvalidationListener = (invalidation: ProjectionInvalidation) => void;
+/** Delivered for every `subscription.ready` that carries projection snapshots (cold boot and
+ * reconnect `snapshot_fallback`). Distinct from {@link ProjectionInvalidationListener}, which only
+ * sees the invalidation tail. */
+export type ProjectionSnapshotListener = (reply: HydrateReply) => void;
 export type Unsubscribe = () => void;
 
 export type ProjectionTopics = ProjectionTopic | readonly ProjectionTopic[];
@@ -65,11 +69,14 @@ export interface ApplicationClient {
    * @param since - Resume cursor for the projection subscription. `null` forces a cold subscribe
    *   (omit cursor). When omitted, transports that have completed `server.hello` default to
    *   {@link ServerHello.projection_cursor}.
+   * @param snapshotListener - Invoked whenever a ready frame carries snapshots, including
+   *   reconnect `snapshot_fallback` after the initial hydrate promise has already settled.
    */
   hydrate(
     topics: ProjectionTopics,
     invalidationListener?: ProjectionInvalidationListener,
     since?: number | null,
+    snapshotListener?: ProjectionSnapshotListener,
   ): Promise<HydrateResult>;
 
   /**
