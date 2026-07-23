@@ -18,8 +18,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from murder.bus import OrchestrationNotifier
-from murder.bus.protocol import SchedulerDecisionEvent, _BaseEvent
+from murder.runtime.orchestration.events import SchedulerDecisionEvent, _BaseEvent
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.observability.advanced_log import (
     _FAMILY_EXTRA_COLUMNS,
     AdvancedLog,
@@ -37,7 +37,7 @@ def _repo(tmp_path: Path) -> Path:
 
 def _all_event_subclasses() -> set[type]:
     # __subclasses__() only sees classes whose defining module was imported. All
-    # bus events live in murder.bus.protocol, which is imported above, so the
+    # orchestration events live in murder.runtime.orchestration.events, which is imported above, so the
     # walk is complete today. If events ever move to another module, import it
     # here too — the floor assertion below fails loudly if the walk comes back
     # suspiciously empty.
@@ -58,7 +58,7 @@ def test_every_bus_event_declares_a_valid_record_family() -> None:
     # (e.g. an import reshuffle) and the guard below passes vacuously.
     assert len(subclasses) >= 10, (
         f"expected the full bus-event set; only saw {len(subclasses)} — "
-        "is murder.bus.protocol imported?"
+        "is murder.runtime.orchestration.events imported?"
     )
     valid = set(_FAMILY_EXTRA_COLUMNS) | {None}
     offenders = {
@@ -76,7 +76,7 @@ def test_decision_event_routes_to_its_family_exactly_once(tmp_path):
         log = open_advanced_log(repo, "run-dec", "redacted")
         await log.start()
         set_run_id("run-dec")
-        bus = OrchestrationNotifier("run-dec")  # no db: skip persist, exercise fan-out
+        bus = OrchestrationNotifier()  # no db: skip persist, exercise fan-out
 
         async def _recorder(event):
             log.record_bus_event(event)

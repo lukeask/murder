@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from murder.app.service.handlers import sessions as sessions_handlers
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
     Correlation,
@@ -52,8 +53,11 @@ class _FakeHost:
         self.runtime = runtime
         self.handlers: dict[str, object] = {}
 
-    def register_rpc_handler(self, method: str, handler: object) -> None:
-        self.handlers[method] = handler
+    def register_application_query(self, name: object, handler: object) -> None:
+        self.handlers[str(name)] = handler
+
+    def register_application_command(self, name: object, handler: object) -> None:
+        self.handlers[str(name)] = handler
 
 
 def _session_record(session_id):
@@ -83,7 +87,11 @@ def wired_handlers():
         controller_factory=SessionControllerRegistry.trusted_local_controller_factory(store),
     )
     host = _FakeHost(SimpleNamespace(db=connection, session_controllers=registry))
-    sessions_handlers.register(host)  # type: ignore[arg-type]
+    sessions_handlers.register(
+        host,  # type: ignore[arg-type]
+        ProjectionProviderRegistry(),
+        host.runtime,
+    )
     return host, session_id, store, registry
 
 
@@ -237,7 +245,11 @@ async def test_session_writer_requires_live_controller_when_no_backend() -> None
     store.save_session(_session_record(session_id))
     registry = SessionControllerRegistry(store=store)
     host = _FakeHost(SimpleNamespace(db=connection, session_controllers=registry))
-    sessions_handlers.register(host)  # type: ignore[arg-type]
+    sessions_handlers.register(
+        host,  # type: ignore[arg-type]
+        ProjectionProviderRegistry(),
+        host.runtime,
+    )
     holder = PrincipalRef(kind=PrincipalKind.SERVICE, id="trusted-local")
 
     with pytest.raises(RuntimeError, match="no live controller"):

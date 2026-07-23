@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.bus import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
@@ -56,7 +56,7 @@ def _coordinator(db, tmp_path: Path) -> CompletionCoordinator:
     rt = MagicMock()
     rt.db = db
     rt.repo_root = tmp_path
-    rt.bus = OrchestrationNotifier(run_id="test-run", db_conn=db)
+    rt.bus = OrchestrationNotifier(db)
     rt.run_id = "test-run"
     rt.publish_snapshot = AsyncMock()
     rt.get_crow = MagicMock(return_value=None)
@@ -68,7 +68,7 @@ def _coordinator(db, tmp_path: Path) -> CompletionCoordinator:
 def _make_handler(db, tmp_path: Path, coordinator) -> CrowHandler:
     runtime = MagicMock()
     runtime.db = db
-    runtime.bus = OrchestrationNotifier(run_id="test-run", db_conn=db)
+    runtime.bus = OrchestrationNotifier(db)
     runtime.run_id = "test-run"
     runtime.sync_agent = MagicMock()
     runtime.publish_snapshot = AsyncMock()

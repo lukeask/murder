@@ -1056,8 +1056,8 @@ def test_manual_enqueue_tick_starts_workflow() -> None:
     class _Host:
         runtime = type("R", (), {"db": conn})()
 
-        def register_rpc_handler(self, method: str, handler: object) -> None:
-            del method
+        def register_application_command(self, name: object, handler: object) -> None:
+            del name
             self.handler = handler
 
     host = _Host()

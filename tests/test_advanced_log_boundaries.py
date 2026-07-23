@@ -14,7 +14,8 @@ import uuid
 from pathlib import Path
 
 from murder.app.service.command_dispatch import CommandDispatcher
-from murder.bus import OrchestrationNotifier, ErrorEvent
+from murder.runtime.orchestration.events import ErrorEvent
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.observability.advanced_log import (
     NullAdvancedLog,
     open_advanced_log,
@@ -49,7 +50,7 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
         set_current_advanced_log(log)
         try:
             # --- Boundary #3a: the recorder is a bus SUBSCRIBER ---
-            bus = OrchestrationNotifier("run-bnd")  # no db_conn: skip persist, exercise publish path
+            bus = OrchestrationNotifier()  # no db_conn: skip persist, exercise publish path
 
             async def _recorder(event):
                 log.record_bus_event(event)

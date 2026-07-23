@@ -9,7 +9,7 @@ from uuid import UUID
 
 import pytest
 
-from murder.bus import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.llm.harness_control.capabilities.permissions import permission_fingerprint
 from murder.llm.harness_control.capabilities.questions import question_fingerprint
 from murder.llm.harness_control.model import (
@@ -45,7 +45,7 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
         ("run-1", "2026-07-12T00:00:00+00:00", "{}"),
     )
-    bus = OrchestrationNotifier("run-1", db)
+    bus = OrchestrationNotifier(db)
     now = datetime(2026, 7, 12, tzinfo=timezone.utc)
     revision = ObservationRevision(1, 2, 3)
     base = unknown_snapshot(HarnessId("codex"), captured_at=now, revision=revision)
@@ -299,7 +299,7 @@ async def test_permission_observe_and_respond_bridge_permission_service(
         "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
         ("run-perm", "2026-07-12T00:00:00+00:00", "{}"),
     )
-    bus = OrchestrationNotifier("run-perm", db)
+    bus = OrchestrationNotifier(db)
     now = datetime(2026, 7, 12, tzinfo=timezone.utc)
     revision = ObservationRevision(1, 1, 1)
     base = unknown_snapshot(HarnessId("codex"), captured_at=now, revision=revision)

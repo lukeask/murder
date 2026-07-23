@@ -16,8 +16,8 @@ from uuid import uuid4
 
 import pytest
 
-from murder.bus import OrchestrationNotifier
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
@@ -34,7 +34,7 @@ def _ctx(repo_root: Path) -> WorkerCtx:
         "INSERT INTO runs(run_id, started_at, config_snapshot) "
         "VALUES ('run-test', '2026-01-01', '{}')"
     )
-    bus = OrchestrationNotifier("run-test", conn)
+    bus = OrchestrationNotifier(conn)
     return WorkerCtx(repo_root=repo_root, db=conn, bus=bus, run_id="run-test")
 
 

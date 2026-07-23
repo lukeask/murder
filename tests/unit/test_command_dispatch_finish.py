@@ -16,7 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 from murder.app.service.command_dispatch import CommandDispatcher, command_from_row
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.state.persistence import commands as command_db

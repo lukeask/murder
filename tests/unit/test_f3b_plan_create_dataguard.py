@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from murder.app.service.runtime import Runtime
-from murder.bus import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -52,7 +52,7 @@ def _runtime(repo_root: Path) -> Runtime:
     rt.db = conn
     rt.run_id = "run-test"
     insert_run(conn, rt.run_id, "{}")
-    rt.bus = OrchestrationNotifier(rt.run_id, conn)
+    rt.bus = OrchestrationNotifier(conn)
     return rt
 
 

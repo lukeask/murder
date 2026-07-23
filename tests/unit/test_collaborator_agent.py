@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from murder.bus import ConversationBlockEvent
+from murder.runtime.orchestration.events import ConversationBlockEvent
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.results import fail_result

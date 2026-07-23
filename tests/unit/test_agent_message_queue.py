@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.bus import ConversationStateEvent
+from murder.runtime.orchestration.events import ConversationStateEvent
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow import CrowAgent

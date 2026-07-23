@@ -14,7 +14,7 @@ from murder.runtime.agents.planning_handler import (
 )
 from murder.config import PlannerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
-from murder.bus import ErrorEvent
+from murder.runtime.orchestration.events import ErrorEvent
 
 
 @pytest.fixture

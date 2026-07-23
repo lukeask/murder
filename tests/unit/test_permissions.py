@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from murder.app.service.handlers import approvals as approval_handlers
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.facts.log import replay_facts, replay_projection_inputs
 from murder.permissions import (
     ApprovalChoice,
@@ -426,11 +427,18 @@ def test_authenticated_product_handler_resolves_standalone_takeover() -> None:
             self.runtime = SimpleNamespace(db=connection)
             self.handlers: dict[str, Any] = {}
 
-        def register_rpc_handler(self, name: str, handler: Any) -> None:
-            self.handlers[name] = handler
+        def register_application_query(self, name: object, handler: Any) -> None:
+            self.handlers[str(name)] = handler
+
+        def register_application_command(self, name: object, handler: Any) -> None:
+            self.handlers[str(name)] = handler
 
     host = Host()
-    approval_handlers.register(host)  # type: ignore[arg-type]
+    approval_handlers.register(
+        host,  # type: ignore[arg-type]
+        ProjectionProviderRegistry(),
+        host.runtime,
+    )
     result = host.handlers["approval.decide"](
         {
             "approval_id": str(required.value.request.approval_id),

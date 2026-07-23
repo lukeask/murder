@@ -71,7 +71,7 @@ Coverage % is not a goal; sharpness is.
 Cookbook first, edge cases second. Header comments are load-bearing.
 
 ```python
-"""Tests for murder.bus.client.
+"""Tests for murder.runtime.orchestration.notifier.
 
 COOKBOOK = canonical usage, copyable. EDGE CASES = real failure modes.
 """
@@ -80,7 +80,7 @@ COOKBOOK = canonical usage, copyable. EDGE CASES = real failure modes.
 # === COOKBOOK ===============================================
 # ============================================================
 def test_publish_subscribe_roundtrip(): ...
-def test_request_response(): ...
+def test_subscriber_failure_is_isolated(): ...
 
 # ============================================================
 # === EDGE CASES =============================================

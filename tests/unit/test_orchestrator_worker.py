@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.workers.base import WorkerCtx

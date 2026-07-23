@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from murder import usage_sample_command
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker

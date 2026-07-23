@@ -364,7 +364,7 @@ def test_chunk_summarized_publish_constructs_a_valid_bus_event(
     """
     import asyncio
 
-    from murder.bus import ConversationBlockEvent
+    from murder.runtime.orchestration.events import ConversationBlockEvent
 
     class _StubProvider:
         async def summarize(self, prompt: Any) -> str:

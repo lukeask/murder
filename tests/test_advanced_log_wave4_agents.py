@@ -21,8 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from murder.app.service.agent_registry import AgentRegistry
-from murder.bus import AgentStatus, OrchestrationNotifier
-from murder.bus.protocol import AgentLifecycleEvent
+from murder.runtime.agents.types import AgentStatus
+from murder.runtime.orchestration.events import AgentLifecycleEvent
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.observability.advanced_log import (
     NullAdvancedLog,
     open_advanced_log,
@@ -67,7 +68,7 @@ def test_registry_lifecycle_rides_bus_into_agent_records(tmp_path):
         await log.start()
         set_current_advanced_log(log)
         set_run_id("run-w4")
-        bus = OrchestrationNotifier("run-w4")  # no db: skip persist, exercise fan-out
+        bus = OrchestrationNotifier()  # no db: skip persist, exercise fan-out
 
         async def _recorder(event):
             log.record_bus_event(event)

@@ -1401,12 +1401,12 @@ def test_strip_tolerates_smart_quotes_and_rewrapping():
 def test_real_collaborator_brief_is_stripped(tmp_path):
     """Ground the matcher against the *actual* assembled collaborator brief
     (collaborator.md + any repo context docs), not a hand-copied string."""
-    from murder.bus import Role
+    from murder.runtime.agents.types import AgentRole
     from murder.llm.harnesses.capabilities import HarnessCapabilities
     from murder.runtime.orchestration.brief import BriefContext, assembler_for
 
     ctx = BriefContext(
-        role=Role.COLLABORATOR,
+        role=AgentRole.COLLABORATOR,
         repo_root=tmp_path,
         caps=HarnessCapabilities(),
         harness_name="cursor",

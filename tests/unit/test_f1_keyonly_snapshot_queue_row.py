@@ -9,9 +9,8 @@ invalidation key for those gauges) — funnel a single key-only
 ``state.snapshot{entity=queue_row, key=...}`` through the established worker
 choke points.
 
-These are *workers* (not Runtime), so they ``await ctx.bus.publish(
-StateSnapshotEvent(...))`` directly — the backbone's "async callers await
-bus.publish directly" rule. There is no ``Runtime.emit_snapshot`` here.
+These are workers (not Runtime), and they write the schedule projection inputs
+directly. There is no event-bus snapshot path.
 
 Two choke points in scope:
 - ``SchedulerWorker._evaluate_window`` (beside the existing
@@ -24,13 +23,8 @@ NOT in scope (ticket entity, the mode chunk owns it): ``scheduler.set_mode``
 flips ``scheduler_state.mode`` and must emit ``ticket``, never ``queue_row``.
 A negative test asserts set_mode emits no ``queue_row``.
 
-CROSS-PROCESS CAVEAT: in production ``UsageProbeWorker`` runs in a subprocess
-whose ``WorkerCtx`` gets a DB-backed ``OrchestrationNotifier`` (wired in ``process_targets.py``);
-``OrchestrationNotifier.publish`` persists to the shared ``events`` table before fan-out and the
-client tails it (``DurableBroker.tail``), so the emit crosses the process
-boundary. These in-process unit tests construct the worker directly and so do
-NOT exercise that subprocess wiring — they prove the emit *fires* with a live
-bus, not that cross-process delivery is unbroken.
+These in-process tests construct the workers directly and assert the durable
+projection inputs they write; there is no cross-process event replay involved.
 """
 
 from __future__ import annotations
@@ -41,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from murder.bus import OrchestrationNotifier
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
@@ -54,7 +48,7 @@ def _ctx(repo_root: Path) -> WorkerCtx:
     conn = get_db(repo_root / ".murder" / "murder.db")
     init_db(conn)
     insert_run(conn, "run-test", "{}")
-    bus = OrchestrationNotifier("run-test", conn)
+    bus = OrchestrationNotifier(conn)
     return WorkerCtx(repo_root=repo_root, db=conn, bus=bus, run_id="run-test")
 
 
@@ -62,7 +56,7 @@ def _ctx(repo_root: Path) -> WorkerCtx:
 
 
 @pytest.mark.asyncio
-async def test_evaluate_window_emits_one_key_only_queue_row_snapshot(
+async def test_evaluate_window_writes_one_queue_row_projection_input(
     repo_root: Path,
 ) -> None:
     ctx = _ctx(repo_root)
@@ -90,7 +84,7 @@ async def test_evaluate_window_emits_one_key_only_queue_row_snapshot(
 
 
 @pytest.mark.asyncio
-async def test_usage_probe_emits_queue_row_per_sampled_harness(repo_root: Path) -> None:
+async def test_usage_probe_writes_queue_row_per_sampled_harness(repo_root: Path) -> None:
     ctx = _ctx(repo_root)
 
     async def _sample(
@@ -105,7 +99,7 @@ async def test_usage_probe_emits_queue_row_per_sampled_harness(repo_root: Path) 
         sampler=_sample,
         kinds_provider=lambda _ctx, modes=None: ["codex", "claude"],
     )
-    from murder.bus.protocol import CommandEvent
+    from murder.runtime.orchestration.events import CommandEvent
     from murder.runtime.orchestration.commands import OrchestrationCommand
     from murder.runtime.orchestration.worker_names import WorkerName
 
@@ -128,7 +122,7 @@ async def test_usage_probe_emits_queue_row_per_sampled_harness(repo_root: Path) 
 
 
 @pytest.mark.asyncio
-async def test_usage_probe_does_not_emit_when_nothing_stored(repo_root: Path) -> None:
+async def test_usage_probe_does_not_write_when_nothing_stored(repo_root: Path) -> None:
     ctx = _ctx(repo_root)
 
     async def _sample(
@@ -143,7 +137,7 @@ async def test_usage_probe_does_not_emit_when_nothing_stored(repo_root: Path) ->
         sampler=_sample,
         kinds_provider=lambda _ctx, modes=None: ["codex"],
     )
-    from murder.bus.protocol import CommandEvent
+    from murder.runtime.orchestration.events import CommandEvent
     from murder.runtime.orchestration.commands import OrchestrationCommand
     from murder.runtime.orchestration.worker_names import WorkerName
 
@@ -167,7 +161,7 @@ async def test_usage_probe_does_not_emit_when_nothing_stored(repo_root: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_set_mode_does_not_emit_queue_row(repo_root: Path) -> None:
+async def test_set_mode_does_not_write_queue_row(repo_root: Path) -> None:
     ctx = _ctx(repo_root)
     # Seed scheduler_state so set_mode has a from_mode row.
     now = datetime.now(timezone.utc).isoformat()
@@ -176,7 +170,7 @@ async def test_set_mode_does_not_emit_queue_row(repo_root: Path) -> None:
         (now,),
     )
 
-    from murder.bus.protocol import CommandEvent
+    from murder.runtime.orchestration.events import CommandEvent
     from murder.runtime.orchestration.worker_names import WorkerName
 
     cmd = CommandEvent(
