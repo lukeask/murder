@@ -50,6 +50,9 @@ describe('Bars settings rows', () => {
       templates: [],
       themes: [],
       barWidgets: {},
+      codexControlBackend: 'harness_parse',
+      cursorControlBackend: 'harness_parse',
+      claudeControlBackend: 'harness_parse',
     });
     const harnessRows = rows?.filter((row) => row.kind === 'barWidgetHarness') ?? [];
     expect(harnessRows).toHaveLength(5);

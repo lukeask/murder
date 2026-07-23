@@ -36,6 +36,9 @@ function wire(over: Record<string, unknown> = {}): SettingsWire {
     bar_widgets: {},
     default_chat_view_mode: 'verbose',
     document_display_mode: 'plain',
+    codex_control_backend: 'harness_parse',
+    cursor_control_backend: 'harness_parse',
+    claude_control_backend: 'harness_parse',
     startup_rogue: null,
     collaborator_harness: null,
     planner_harness: null,
@@ -178,6 +181,54 @@ describe('settings actions', () => {
     expect(store.getState().settings.documentDisplayMode).toBe('plain');
     const updates = fake.commandCalls.filter((call) => call.name === 'settings.update');
     expect(updates[0]?.params).toEqual({ settings: { document_display_mode: 'plain' } });
+    dispose();
+  });
+
+  it('loads and optimistically persists codex_control_backend', async () => {
+    const { fake, store, dispose } = setup();
+    fake.stubQuery('settings.get', {
+      ok: true,
+      settings: wire({ codex_control_backend: 'app_server' }),
+    });
+    await store.getState().actions.settings.load();
+    expect(store.getState().settings.codexControlBackend).toBe('app_server');
+
+    await store.getState().actions.settings.update({ codex_control_backend: 'harness_parse' });
+    expect(store.getState().settings.codexControlBackend).toBe('harness_parse');
+    const updates = fake.commandCalls.filter((call) => call.name === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { codex_control_backend: 'harness_parse' } });
+    dispose();
+  });
+
+  it('loads and optimistically persists cursor_control_backend', async () => {
+    const { fake, store, dispose } = setup();
+    fake.stubQuery('settings.get', {
+      ok: true,
+      settings: wire({ cursor_control_backend: 'acp' }),
+    });
+    await store.getState().actions.settings.load();
+    expect(store.getState().settings.cursorControlBackend).toBe('acp');
+
+    await store.getState().actions.settings.update({ cursor_control_backend: 'harness_parse' });
+    expect(store.getState().settings.cursorControlBackend).toBe('harness_parse');
+    const updates = fake.commandCalls.filter((call) => call.name === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { cursor_control_backend: 'harness_parse' } });
+    dispose();
+  });
+
+  it('loads and optimistically persists claude_control_backend', async () => {
+    const { fake, store, dispose } = setup();
+    fake.stubQuery('settings.get', {
+      ok: true,
+      settings: wire({ claude_control_backend: 'agent_sdk' }),
+    });
+    await store.getState().actions.settings.load();
+    expect(store.getState().settings.claudeControlBackend).toBe('agent_sdk');
+
+    await store.getState().actions.settings.update({ claude_control_backend: 'harness_parse' });
+    expect(store.getState().settings.claudeControlBackend).toBe('harness_parse');
+    const updates = fake.commandCalls.filter((call) => call.name === 'settings.update');
+    expect(updates[0]?.params).toEqual({ settings: { claude_control_backend: 'harness_parse' } });
     dispose();
   });
 

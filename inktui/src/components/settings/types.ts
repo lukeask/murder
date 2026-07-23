@@ -11,6 +11,9 @@ import type {
   StartupRogueWire,
 } from '../../store/settings/settingsActions.js';
 import type {
+  ClaudeControlBackend,
+  CodexControlBackend,
+  CursorControlBackend,
   DefaultChatViewMode,
   DocumentDisplayMode,
 } from '../../store/settings/settingsSlice.js';
@@ -43,6 +46,21 @@ export type SettingsRow =
   | { readonly id: string; readonly kind: 'vim'; readonly value: boolean }
   | { readonly id: string; readonly kind: 'chatView'; readonly value: DefaultChatViewMode }
   | { readonly id: string; readonly kind: 'documentDisplay'; readonly value: DocumentDisplayMode }
+  | {
+      readonly id: string;
+      readonly kind: 'codexControlBackend';
+      readonly value: CodexControlBackend;
+    }
+  | {
+      readonly id: string;
+      readonly kind: 'cursorControlBackend';
+      readonly value: CursorControlBackend;
+    }
+  | {
+      readonly id: string;
+      readonly kind: 'claudeControlBackend';
+      readonly value: ClaudeControlBackend;
+    }
   | { readonly id: string; readonly kind: 'startupRogue'; readonly field: 'off' }
   | {
       readonly id: string;
@@ -106,6 +124,12 @@ export interface SettingsBuildContext {
   readonly templates: readonly TemplateRecord[];
   readonly themes: readonly ThemeRecord[];
   readonly barWidgets: BarWidgetsConfig;
+  /** Current Codex control-backend selection (radio highlight source for Harnesses). */
+  readonly codexControlBackend: CodexControlBackend;
+  /** Current Cursor control-backend selection (radio highlight source for Harnesses). */
+  readonly cursorControlBackend: CursorControlBackend;
+  /** Current Claude control-backend selection (radio highlight source for Harnesses). */
+  readonly claudeControlBackend: ClaudeControlBackend;
 }
 
 export interface SettingsItem {

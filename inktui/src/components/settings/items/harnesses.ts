@@ -130,4 +130,62 @@ const crowItem: SettingsItem = {
   ],
 };
 
-export const HARNESS_ITEMS: readonly SettingsItem[] = [startupRogueItem, plannerItem, crowItem];
+const CODEX_CONTROL_BACKENDS = ['harness_parse', 'app_server'] as const;
+
+const codexControlBackendItem: SettingsItem = {
+  id: 'harnesses.codexControlBackend',
+  label: 'Codex Control Backend',
+  rows: () => [
+    headerRow(codexControlBackendItem),
+    ...CODEX_CONTROL_BACKENDS.map(
+      (value): SettingsRow => ({
+        id: `harnesses.codexControlBackend:${value}`,
+        kind: 'codexControlBackend',
+        value,
+      }),
+    ),
+  ],
+};
+
+const CURSOR_CONTROL_BACKENDS = ['harness_parse', 'acp'] as const;
+
+const cursorControlBackendItem: SettingsItem = {
+  id: 'harnesses.cursorControlBackend',
+  label: 'Cursor Control Backend',
+  rows: () => [
+    headerRow(cursorControlBackendItem),
+    ...CURSOR_CONTROL_BACKENDS.map(
+      (value): SettingsRow => ({
+        id: `harnesses.cursorControlBackend:${value}`,
+        kind: 'cursorControlBackend',
+        value,
+      }),
+    ),
+  ],
+};
+
+const CLAUDE_CONTROL_BACKENDS = ['harness_parse', 'agent_sdk'] as const;
+
+const claudeControlBackendItem: SettingsItem = {
+  id: 'harnesses.claudeControlBackend',
+  label: 'Claude Control Backend',
+  rows: () => [
+    headerRow(claudeControlBackendItem),
+    ...CLAUDE_CONTROL_BACKENDS.map(
+      (value): SettingsRow => ({
+        id: `harnesses.claudeControlBackend:${value}`,
+        kind: 'claudeControlBackend',
+        value,
+      }),
+    ),
+  ],
+};
+
+export const HARNESS_ITEMS: readonly SettingsItem[] = [
+  startupRogueItem,
+  plannerItem,
+  crowItem,
+  codexControlBackendItem,
+  cursorControlBackendItem,
+  claudeControlBackendItem,
+];

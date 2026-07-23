@@ -115,6 +115,9 @@ def register(
             },
             "default_chat_view_mode": tui.default_chat_view_mode,
             "document_display_mode": tui.document_display_mode,
+            "codex_control_backend": tui.codex_control_backend,
+            "cursor_control_backend": tui.cursor_control_backend,
+            "claude_control_backend": tui.claude_control_backend,
             "startup_rogue": _startup_rogue_payload(tui),
             # --- harness overrides + effective values ---
             "collaborator_harness": collab_override,
@@ -518,6 +521,9 @@ def register(
 
         from murder.user_config import (
             BarWidgetUserConfig,
+            ClaudeControlBackend,
+            CodexControlBackend,
+            CursorControlBackend,
             TuiUserConfig,
             UserHarnessKind,
             UserHarnessRolePatch,
@@ -549,6 +555,9 @@ def register(
             "vim_mode": cfg.tui.vim_mode,
             "default_chat_view_mode": cfg.tui.default_chat_view_mode,
             "document_display_mode": cfg.tui.document_display_mode,
+            "codex_control_backend": cfg.tui.codex_control_backend,
+            "cursor_control_backend": cfg.tui.cursor_control_backend,
+            "claude_control_backend": cfg.tui.claude_control_backend,
             "startup_rogue": (
                 cfg.tui.startup_rogue.model_dump(mode="json")
                 if cfg.tui.startup_rogue is not None
@@ -571,6 +580,30 @@ def register(
         ):
             if key in partial:
                 tui_merged[key] = partial[key]
+        if "codex_control_backend" in partial:
+            value = partial["codex_control_backend"]
+            valid_backends = set(get_args(CodexControlBackend))
+            if value not in valid_backends:
+                raise ValueError(
+                    f"codex_control_backend must be one of {sorted(valid_backends)}; got {value!r}"
+                )
+            tui_merged["codex_control_backend"] = value
+        if "cursor_control_backend" in partial:
+            value = partial["cursor_control_backend"]
+            valid_backends = set(get_args(CursorControlBackend))
+            if value not in valid_backends:
+                raise ValueError(
+                    f"cursor_control_backend must be one of {sorted(valid_backends)}; got {value!r}"
+                )
+            tui_merged["cursor_control_backend"] = value
+        if "claude_control_backend" in partial:
+            value = partial["claude_control_backend"]
+            valid_backends = set(get_args(ClaudeControlBackend))
+            if value not in valid_backends:
+                raise ValueError(
+                    f"claude_control_backend must be one of {sorted(valid_backends)}; got {value!r}"
+                )
+            tui_merged["claude_control_backend"] = value
         if "bar_widgets" in partial:
             incoming = partial["bar_widgets"]
             if not isinstance(incoming, dict):

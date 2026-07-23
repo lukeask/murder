@@ -68,7 +68,13 @@ import type {
   StartupRogueModelWire,
   StartupRogueWire,
 } from '../store/settings/settingsActions.js';
-import type { DefaultChatViewMode, DocumentDisplayMode } from '../store/settings/settingsSlice.js';
+import type {
+  CodexControlBackend,
+  CursorControlBackend,
+  ClaudeControlBackend,
+  DefaultChatViewMode,
+  DocumentDisplayMode,
+} from '../store/settings/settingsSlice.js';
 import type { AppStore } from '../store/store.js';
 import type { TemplateRecord } from '../store/templates/templatesSlice.js';
 import type { ThemeRecord } from '../store/themes/themesSlice.js';
@@ -204,6 +210,11 @@ interface SettingsState {
   defaultChatViewMode: DefaultChatViewMode;
   /** Draft document source interpretation mode, committed immediately. */
   documentDisplayMode: DocumentDisplayMode;
+  /** Draft Codex control-backend selection, committed immediately. */
+  codexControlBackend: CodexControlBackend;
+  /** Draft Cursor control-backend selection, committed immediately. */
+  cursorControlBackend: CursorControlBackend;
+  claudeControlBackend: ClaudeControlBackend;
   /** The draft Startup Rogue (`null` = off). Drives the model/effort sub-rows + persisted on change. */
   startupRogue: StartupRogueWire | null;
   /** Startup Rogue model choices by harness. */
@@ -311,6 +322,9 @@ export function settingsMode(
     readonly barWidgets?: BarWidgetsConfig;
     readonly defaultChatViewMode?: DefaultChatViewMode;
     readonly documentDisplayMode?: DocumentDisplayMode;
+    readonly codexControlBackend?: CodexControlBackend;
+    readonly cursorControlBackend?: CursorControlBackend;
+    readonly claudeControlBackend?: ClaudeControlBackend;
     readonly startupRogue?: StartupRogueWire | null;
     readonly startupRogueModels?: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
     readonly startupRogueEfforts?: Readonly<Record<string, readonly string[]>>;
@@ -354,6 +368,9 @@ export function settingsMode(
     templates: initialTemplates,
     themes: initialThemes,
     barWidgets: current.barWidgets ?? {},
+    codexControlBackend: current.codexControlBackend ?? 'harness_parse',
+    cursorControlBackend: current.cursorControlBackend ?? 'harness_parse',
+    claudeControlBackend: current.claudeControlBackend ?? 'harness_parse',
   });
   const initialCursor = firstSelectableFrom(initialRows, 0);
   const s: SettingsState = {
@@ -374,6 +391,9 @@ export function settingsMode(
     barWidgets: { ...(current.barWidgets ?? {}) },
     defaultChatViewMode: current.defaultChatViewMode ?? 'verbose',
     documentDisplayMode: current.documentDisplayMode ?? 'plain',
+    codexControlBackend: current.codexControlBackend ?? 'harness_parse',
+    cursorControlBackend: current.cursorControlBackend ?? 'harness_parse',
+    claudeControlBackend: current.claudeControlBackend ?? 'harness_parse',
     startupRogue: initialStartupRogue,
     startupRogueModels: initialStartupRogueModels,
     startupRogueEfforts: initialStartupRogueEfforts,
@@ -440,6 +460,9 @@ export function settingsMode(
       templates: s.templates,
       themes: s.themes,
       barWidgets: s.barWidgets,
+      codexControlBackend: s.codexControlBackend,
+      cursorControlBackend: s.cursorControlBackend,
+      claudeControlBackend: s.claudeControlBackend,
     });
   }
 
@@ -642,6 +665,30 @@ export function settingsMode(
   function selectDocumentDisplay(value: DocumentDisplayMode): void {
     s.documentDisplayMode = value;
     void actions.update({ document_display_mode: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft Codex control backend (optimistic update). */
+  function selectCodexControlBackend(value: CodexControlBackend): void {
+    s.codexControlBackend = value;
+    void actions.update({ codex_control_backend: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft Cursor control backend (optimistic update). */
+  function selectCursorControlBackend(value: CursorControlBackend): void {
+    s.cursorControlBackend = value;
+    void actions.update({ cursor_control_backend: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit the draft Claude control backend (optimistic update). */
+  function selectClaudeControlBackend(value: ClaudeControlBackend): void {
+    s.claudeControlBackend = value;
+    void actions.update({ claude_control_backend: value });
     s.notice = null;
     refresh();
   }
@@ -1365,6 +1412,15 @@ export function settingsMode(
         break;
       case 'documentDisplay':
         selectDocumentDisplay(row.value);
+        break;
+      case 'codexControlBackend':
+        selectCodexControlBackend(row.value);
+        break;
+      case 'cursorControlBackend':
+        selectCursorControlBackend(row.value);
+        break;
+      case 'claudeControlBackend':
+        selectClaudeControlBackend(row.value);
         break;
       case 'startupRogue':
         if (row.field === 'off') {
@@ -2322,6 +2378,54 @@ function RowView({
           {cursor}
           {mark}
           {row.value === 'plain' ? 'Plain text' : 'Markdown'}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'codexControlBackend') {
+    const selected = row.value === s.codexControlBackend;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    const label = row.value === 'harness_parse' ? 'Harness parse' : 'App server';
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {label}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'claudeControlBackend') {
+    const selected = row.value === s.claudeControlBackend;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    const label = row.value === 'harness_parse' ? 'Harness parse' : 'Agent SDK';
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {label}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'cursorControlBackend') {
+    const selected = row.value === s.cursorControlBackend;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    const label = row.value === 'harness_parse' ? 'Harness parse' : 'ACP';
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {label}
         </Text>
       </Box>
     );

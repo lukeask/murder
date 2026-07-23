@@ -42,6 +42,12 @@ export type SettingsModifier = 'alt' | 'ctrl' | 'both';
 export type DefaultChatViewMode = 'verbose' | 'condensed';
 /** How document panes interpret their source. Never inferred from a document name or extension. */
 export type DocumentDisplayMode = 'plain' | 'markdown';
+/** How Codex harness control is driven. Mirrors the wire `codex_control_backend`. */
+export type CodexControlBackend = 'harness_parse' | 'app_server';
+/** How Cursor harness control is driven. Mirrors the wire `cursor_control_backend`. */
+export type CursorControlBackend = 'harness_parse' | 'acp';
+/** How Claude Code harness control is driven. Mirrors the wire `claude_control_backend`. */
+export type ClaudeControlBackend = 'harness_parse' | 'agent_sdk';
 
 export const DEFAULT_STARTUP_ROGUE_MODELS: Readonly<
   Record<string, readonly StartupRogueModelWire[]>
@@ -117,6 +123,15 @@ export interface SettingsState {
   readonly defaultChatViewMode: DefaultChatViewMode;
   /** Plain source or native terminal Markdown rendering. */
   readonly documentDisplayMode: DocumentDisplayMode;
+  /** How Codex harness control is driven (`harness_parse` | `app_server`). Mirrors the wire
+   * `codex_control_backend`. */
+  readonly codexControlBackend: CodexControlBackend;
+  /** How Cursor harness control is driven (`harness_parse` | `acp`). Mirrors the wire
+   * `cursor_control_backend`. */
+  readonly cursorControlBackend: CursorControlBackend;
+  /** How Claude Code harness control is driven (`harness_parse` | `agent_sdk`). Mirrors the wire
+   * `claude_control_backend`. */
+  readonly claudeControlBackend: ClaudeControlBackend;
   /** The Startup Rogue auto-spawned on boot, or `null` when none is configured. Mirrors the wire
    * `startup_rogue`. */
   readonly startupRogue: StartupRogueWire | null;
@@ -163,6 +178,9 @@ export const initialSettingsState: SettingsState = {
   barWidgets: {},
   defaultChatViewMode: 'verbose',
   documentDisplayMode: 'plain',
+  codexControlBackend: 'harness_parse',
+  cursorControlBackend: 'harness_parse',
+  claudeControlBackend: 'harness_parse',
   startupRogue: null,
   startupRogueModels: DEFAULT_STARTUP_ROGUE_MODELS,
   startupRogueEfforts: DEFAULT_STARTUP_ROGUE_EFFORTS,

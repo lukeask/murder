@@ -32,6 +32,9 @@ import type { BarWidgetsConfig } from '../../selectors/barWidgetRegistry.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type {
+  CodexControlBackend,
+  CursorControlBackend,
+  ClaudeControlBackend,
   DefaultChatViewMode,
   DocumentDisplayMode,
   SettingsModifier,
@@ -138,6 +141,12 @@ export interface SettingsWire {
   readonly default_chat_view_mode: DefaultChatViewMode;
   /** Document interpretation mode. Optional for compatibility with an older daemon snapshot. */
   readonly document_display_mode?: DocumentDisplayMode;
+  /** How Codex harness control is driven. Mirrors `TuiUserConfig.codex_control_backend`. */
+  readonly codex_control_backend?: CodexControlBackend;
+  /** How Cursor harness control is driven. Mirrors `TuiUserConfig.cursor_control_backend`. */
+  readonly cursor_control_backend?: CursorControlBackend;
+  /** How Claude Code harness control is driven. Mirrors `TuiUserConfig.claude_control_backend`. */
+  readonly claude_control_backend?: ClaudeControlBackend;
   /** The user's Startup Rogue (auto-spawned on boot), or `null` when none is set. */
   readonly startup_rogue: StartupRogueWire | null;
   /** Available Startup Rogue model choices by harness. */
@@ -185,6 +194,9 @@ export interface SettingsPatch {
   bar_widgets?: BarWidgetsConfig;
   default_chat_view_mode?: DefaultChatViewMode;
   document_display_mode?: DocumentDisplayMode;
+  codex_control_backend?: CodexControlBackend;
+  cursor_control_backend?: CursorControlBackend;
+  claude_control_backend?: ClaudeControlBackend;
   /** Set/replace the Startup Rogue, or `null` to clear it. */
   startup_rogue?: StartupRogueWire | null;
   collaborator_harness?: string | null;
@@ -254,6 +266,9 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     barWidgets: wire.bar_widgets ?? prev.barWidgets,
     defaultChatViewMode: wire.default_chat_view_mode ?? prev.defaultChatViewMode,
     documentDisplayMode: wire.document_display_mode ?? prev.documentDisplayMode,
+    codexControlBackend: wire.codex_control_backend ?? prev.codexControlBackend,
+    cursorControlBackend: wire.cursor_control_backend ?? prev.cursorControlBackend,
+    claudeControlBackend: wire.claude_control_backend ?? prev.claudeControlBackend,
     // Nullable on the wire (null = "no startup rogue") — honour `null` via key-presence, not `??`.
     startupRogue: 'startup_rogue' in wire ? wire.startup_rogue : prev.startupRogue,
     startupRogueModels: wire.startup_rogue_models ?? prev.startupRogueModels,
@@ -328,6 +343,15 @@ export function createSettingsActions(bus: ApplicationClient, store: StoreApi<Ap
             : {}),
           ...(partial.document_display_mode !== undefined
             ? { documentDisplayMode: partial.document_display_mode }
+            : {}),
+          ...(partial.codex_control_backend !== undefined
+            ? { codexControlBackend: partial.codex_control_backend }
+            : {}),
+          ...(partial.cursor_control_backend !== undefined
+            ? { cursorControlBackend: partial.cursor_control_backend }
+            : {}),
+          ...(partial.claude_control_backend !== undefined
+            ? { claudeControlBackend: partial.claude_control_backend }
             : {}),
           ...('startup_rogue' in partial ? { startupRogue: partial.startup_rogue ?? null } : {}),
           ...('collaborator_harness' in partial
