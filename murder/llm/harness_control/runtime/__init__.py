@@ -8,6 +8,16 @@ from murder.llm.harness_control.runtime.actuator import (
     OperationAlreadyEmittingError,
     TerminalEffectTransport,
 )
+from murder.llm.harness_control.runtime.acp_frame_observer import AcpFrameObserver
+from murder.llm.harness_control.runtime.acp_transport import (
+    AcpEffectTransport,
+    AcpRpcPort,
+)
+from murder.llm.harness_control.runtime.app_server_frame_observer import AppServerFrameObserver
+from murder.llm.harness_control.runtime.app_server_transport import (
+    AppServerEffectTransport,
+    AppServerRpcPort,
+)
 from murder.llm.harness_control.runtime.controller import HarnessController
 from murder.llm.harness_control.runtime.prompt_driver import (
     FrameObserver,
@@ -31,6 +41,12 @@ from murder.llm.harness_control.runtime.tmux_transport import TmuxTerminalEffect
 __all__ = [
     "ActuatorError",
     "ActuatorState",
+    "AcpEffectTransport",
+    "AcpFrameObserver",
+    "AcpRpcPort",
+    "AppServerEffectTransport",
+    "AppServerFrameObserver",
+    "AppServerRpcPort",
     "HarnessActuator",
     "IntentPriority",
     "OperationAlreadyEmittingError",

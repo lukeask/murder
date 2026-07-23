@@ -24,6 +24,9 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 UserHarnessKind = Literal["cursor", "claude_code", "codex", "pi", "antigravity"]
+CodexControlBackend = Literal["harness_parse", "app_server"]
+CursorControlBackend = Literal["harness_parse", "acp"]
+ClaudeControlBackend = Literal["harness_parse", "agent_sdk"]
 UserLlmProviderKind = Literal[
     "groq",
     "cerebras",
@@ -106,6 +109,13 @@ class TuiUserConfig(BaseModel):
     default_chat_view_mode: Literal["verbose", "condensed"] = "verbose"
     # Document source interpretation is explicit and never inferred from its filename.
     document_display_mode: Literal["plain", "markdown"] = "plain"
+    # How Codex harness control is driven: pane-parse vs the Codex app-server protocol.
+    # Config/UI only for now — runtime backends are selected by later workstreams.
+    codex_control_backend: CodexControlBackend = "harness_parse"
+    # How Cursor harness control is driven: pane-parse vs the Agent Client Protocol (ACP).
+    cursor_control_backend: CursorControlBackend = "harness_parse"
+    # How Claude Code harness control is driven: pane-parse vs Claude Agent SDK.
+    claude_control_backend: ClaudeControlBackend = "harness_parse"
     # The rogue auto-spawned on daemon boot (None = none); see StartupRogueConfig.
     startup_rogue: StartupRogueConfig | None = None
     # Per-widget top/bottom bar configuration (enable + placement). Omitted keys use registry defaults.

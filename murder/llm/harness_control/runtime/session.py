@@ -21,15 +21,22 @@ if TYPE_CHECKING:
     from murder.runtime.sessions.contracts import PrincipalRef, SessionStatus, WriterLease
     from murder.runtime.sessions.controller import SessionController
 
+from murder.llm.harness_control.acp.agents import get_agent_for_harness
+from murder.llm.harness_control.acp.connection import AcpConnection
+from murder.llm.harness_control.adapters.acp import AcpHarnessAdapter
 from murder.llm.harness_control.adapters.antigravity import AntigravityHarnessAdapter
 from murder.llm.harness_control.adapters.base import (
     HarnessActionAdapter,
     HarnessObservationAdapter,
 )
+from murder.llm.harness_control.adapters.claude_agent_sdk import ClaudeAgentSdkHarnessAdapter
 from murder.llm.harness_control.adapters.claude_code import ClaudeCodeAdapter
 from murder.llm.harness_control.adapters.codex import CodexHarnessAdapter
+from murder.llm.harness_control.adapters.codex_app_server import CodexAppServerHarnessAdapter
 from murder.llm.harness_control.adapters.cursor import CursorHarnessAdapter
 from murder.llm.harness_control.adapters.pi import PiHarnessAdapter
+from murder.llm.harness_control.agent_sdk.connection import AgentSdkConnection
+from murder.llm.harness_control.app_server.connection import AppServerConnection
 from murder.llm.harness_control.capabilities.model_discovery import (
     DiscoverModelsOperation,
     DiscoverModelsResult,
@@ -117,7 +124,13 @@ from murder.llm.harness_control.model.operations import (
     SubmitPromptOperation,
     SubmitPromptResult,
 )
+from murder.llm.harness_control.runtime.acp_frame_observer import AcpFrameObserver
+from murder.llm.harness_control.runtime.acp_transport import AcpEffectTransport
 from murder.llm.harness_control.runtime.actuator import HarnessActuator, IntentPriority
+from murder.llm.harness_control.runtime.agent_sdk_frame_observer import AgentSdkFrameObserver
+from murder.llm.harness_control.runtime.agent_sdk_transport import AgentSdkEffectTransport
+from murder.llm.harness_control.runtime.app_server_frame_observer import AppServerFrameObserver
+from murder.llm.harness_control.runtime.app_server_transport import AppServerEffectTransport
 from murder.llm.harness_control.runtime.controller import HarnessController
 from murder.llm.harness_control.runtime.model_discovery_driver import VerifiedModelDiscoveryDriver
 from murder.llm.harness_control.runtime.model_driver import (
@@ -127,6 +140,7 @@ from murder.llm.harness_control.runtime.model_driver import (
 from murder.llm.harness_control.runtime.observer import ObservationStore
 from murder.llm.harness_control.runtime.operation_arbiter import SessionOperationArbiter
 from murder.llm.harness_control.runtime.prompt_driver import (
+    FrameObserver,
     PromptDriverPolicy,
     VerifiedPromptDriver,
 )
@@ -246,7 +260,7 @@ class VerifiedHarnessControlSession:
         self,
         controller: HarnessController,
         prompt_driver: VerifiedPromptDriver,
-        observer: TmuxFrameObserver,
+        observer: FrameObserver,
         model_driver: VerifiedModelSelectionDriver,
         usage_driver: VerifiedUsageDriver,
         *,
@@ -259,6 +273,9 @@ class VerifiedHarnessControlSession:
         structured_decision_timing: StructuredDecisionTimingPolicy = (
             DEFAULT_STRUCTURED_DECISION_TIMING_POLICY
         ),
+        app_server_connection: AppServerConnection | None = None,
+        acp_connection: AcpConnection | None = None,
+        agent_sdk_connection: AgentSdkConnection | None = None,
     ) -> None:
         self.controller = controller
         self._prompt_driver = prompt_driver
@@ -279,6 +296,9 @@ class VerifiedHarnessControlSession:
         self._controller_manual_inputs: dict[UUID, tuple[str, bool, bool, str, str]] = {}
         self.harness_id = harness_id
         self.terminal_session = terminal_session
+        self._app_server_connection = app_server_connection
+        self._acp_connection = acp_connection
+        self._agent_sdk_connection = agent_sdk_connection
 
     @property
     def session_controller_binding(self) -> SessionControllerBinding | None:
@@ -534,6 +554,263 @@ class VerifiedHarnessControlSession:
             connection=connection,
             persistence_session_id=persistence_session_id,
             structured_decision_timing=structured_decision_timing,
+        )
+
+    @classmethod
+    def from_app_server(
+        cls,
+        *,
+        app_server: AppServerConnection,
+        harness_kind: str = "codex",
+        terminal_session: str,
+        connection: sqlite3.Connection,
+        persistence_session_id: str | None = None,
+        pane_epoch: int = 0,
+        observation_adapter: HarnessObservationAdapter | None = None,
+        action_adapter: HarnessActionAdapter | None = None,
+        prompt_policy: PromptDriverPolicy | None = None,
+        prompt_sleep: Callable[[float], Awaitable[None]] | None = None,
+        structured_decision_timing: StructuredDecisionTimingPolicy = (
+            DEFAULT_STRUCTURED_DECISION_TIMING_POLICY
+        ),
+    ) -> VerifiedHarnessControlSession:
+        """Assemble verified control over a live Codex app-server connection.
+
+        ``terminal_session`` remains the Murder tmux session name (placeholder
+        pane). Observation and actuation use JSON-RPC, not tmux capture/keys.
+        """
+
+        harness_id = HarnessId(harness_kind)
+        observation_adapter = observation_adapter or CodexAppServerHarnessAdapter(app_server)
+        action_adapter = action_adapter or observation_adapter
+        if not hasattr(action_adapter, "lower"):
+            raise TypeError(f"verified adapter for {harness_kind!r} cannot lower semantic actions")
+        captured_at = datetime.now(timezone.utc)
+        persisted_snapshot = latest_observation_snapshot(
+            connection,
+            harness_id=str(harness_id),
+            session_id=persistence_session_id,
+        )
+        initial_snapshot = persisted_snapshot or unknown_snapshot(
+            harness_id, captured_at=captured_at
+        )
+        initial_evidence = list_session_evidence(
+            connection,
+            harness_id=str(harness_id),
+            session_id=persistence_session_id,
+            frame_limit=PARSER_HISTORY_FRAME_LIMIT,
+        )
+        effective_pane_epoch = pane_epoch
+        initial_capture_sequence = 0
+        if persisted_snapshot is not None:
+            effective_pane_epoch = max(pane_epoch, persisted_snapshot.revision.pane_epoch)
+            if effective_pane_epoch == persisted_snapshot.revision.pane_epoch:
+                initial_capture_sequence = persisted_snapshot.revision.capture_sequence
+        controller = HarnessController(
+            observation_adapter,
+            action_adapter,
+            ObservationStore(initial_snapshot),
+            HarnessActuator(AppServerEffectTransport(app_server)),
+            SqliteHarnessControlJournal(connection, session_id=persistence_session_id),
+            initial_evidence=initial_evidence,
+        )
+        observer = AppServerFrameObserver(
+            app_server,
+            harness_id,
+            pane_epoch=effective_pane_epoch,
+            capture_sequence=initial_capture_sequence,
+        )
+        return cls(
+            controller,
+            VerifiedPromptDriver(
+                controller,
+                observer,
+                **({"policy": prompt_policy} if prompt_policy is not None else {}),
+                **({"sleep": prompt_sleep} if prompt_sleep is not None else {}),
+            ),
+            observer,
+            VerifiedModelSelectionDriver(controller, observer),
+            VerifiedUsageDriver(controller, observer),
+            model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
+            harness_id=harness_id,
+            terminal_session=terminal_session,
+            connection=connection,
+            persistence_session_id=persistence_session_id,
+            structured_decision_timing=structured_decision_timing,
+            app_server_connection=app_server,
+        )
+
+    @classmethod
+    def from_acp(
+        cls,
+        *,
+        acp: AcpConnection,
+        harness_kind: str,
+        terminal_session: str,
+        connection: sqlite3.Connection,
+        persistence_session_id: str | None = None,
+        pane_epoch: int = 0,
+        observation_adapter: HarnessObservationAdapter | None = None,
+        action_adapter: HarnessActionAdapter | None = None,
+        prompt_policy: PromptDriverPolicy | None = None,
+        prompt_sleep: Callable[[float], Awaitable[None]] | None = None,
+        structured_decision_timing: StructuredDecisionTimingPolicy = (
+            DEFAULT_STRUCTURED_DECISION_TIMING_POLICY
+        ),
+    ) -> VerifiedHarnessControlSession:
+        """Assemble verified control over a live ACP agent connection.
+
+        ``terminal_session`` remains the Murder tmux session name (placeholder
+        pane). Observation and actuation use JSON-RPC, not tmux capture/keys.
+
+        Default adapters are ``AcpHarnessAdapter(acp, profile=…)`` where the
+        profile comes from ``get_agent_for_harness(harness_kind)`` when one is
+        registered (e.g. Cursor). Callers may supply adapters explicitly.
+        """
+
+        harness_id = HarnessId(harness_kind)
+        profile = get_agent_for_harness(harness_kind)
+        observation_adapter = observation_adapter or AcpHarnessAdapter(acp, profile=profile)
+        action_adapter = action_adapter or observation_adapter
+        if not hasattr(action_adapter, "lower"):
+            raise TypeError(f"verified adapter for {harness_kind!r} cannot lower semantic actions")
+        captured_at = datetime.now(timezone.utc)
+        persisted_snapshot = latest_observation_snapshot(
+            connection,
+            harness_id=str(harness_id),
+            session_id=persistence_session_id,
+        )
+        initial_snapshot = persisted_snapshot or unknown_snapshot(
+            harness_id, captured_at=captured_at
+        )
+        initial_evidence = list_session_evidence(
+            connection,
+            harness_id=str(harness_id),
+            session_id=persistence_session_id,
+            frame_limit=PARSER_HISTORY_FRAME_LIMIT,
+        )
+        effective_pane_epoch = pane_epoch
+        initial_capture_sequence = 0
+        if persisted_snapshot is not None:
+            effective_pane_epoch = max(pane_epoch, persisted_snapshot.revision.pane_epoch)
+            if effective_pane_epoch == persisted_snapshot.revision.pane_epoch:
+                initial_capture_sequence = persisted_snapshot.revision.capture_sequence
+        controller = HarnessController(
+            observation_adapter,
+            action_adapter,
+            ObservationStore(initial_snapshot),
+            HarnessActuator(AcpEffectTransport(acp)),
+            SqliteHarnessControlJournal(connection, session_id=persistence_session_id),
+            initial_evidence=initial_evidence,
+        )
+        observer = AcpFrameObserver(
+            acp,
+            harness_id,
+            pane_epoch=effective_pane_epoch,
+            capture_sequence=initial_capture_sequence,
+        )
+        return cls(
+            controller,
+            VerifiedPromptDriver(
+                controller,
+                observer,
+                **({"policy": prompt_policy} if prompt_policy is not None else {}),
+                **({"sleep": prompt_sleep} if prompt_sleep is not None else {}),
+            ),
+            observer,
+            VerifiedModelSelectionDriver(controller, observer),
+            VerifiedUsageDriver(controller, observer),
+            model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
+            harness_id=harness_id,
+            terminal_session=terminal_session,
+            connection=connection,
+            persistence_session_id=persistence_session_id,
+            structured_decision_timing=structured_decision_timing,
+            acp_connection=acp,
+        )
+
+    @classmethod
+    def from_agent_sdk(
+        cls,
+        *,
+        agent_sdk: AgentSdkConnection,
+        harness_kind: str = "claude_code",
+        terminal_session: str,
+        connection: sqlite3.Connection,
+        persistence_session_id: str | None = None,
+        pane_epoch: int = 0,
+        observation_adapter: HarnessObservationAdapter | None = None,
+        action_adapter: HarnessActionAdapter | None = None,
+        prompt_policy: PromptDriverPolicy | None = None,
+        prompt_sleep: Callable[[float], Awaitable[None]] | None = None,
+        structured_decision_timing: StructuredDecisionTimingPolicy = (
+            DEFAULT_STRUCTURED_DECISION_TIMING_POLICY
+        ),
+    ) -> VerifiedHarnessControlSession:
+        """Assemble verified control over a live Claude Agent SDK connection.
+
+        ``terminal_session`` remains the Murder tmux session name (placeholder
+        pane). Observation and actuation use the Agent SDK, not tmux capture/keys.
+        """
+
+        harness_id = HarnessId(harness_kind)
+        observation_adapter = observation_adapter or ClaudeAgentSdkHarnessAdapter(agent_sdk)
+        action_adapter = action_adapter or observation_adapter
+        if not hasattr(action_adapter, "lower"):
+            raise TypeError(f"verified adapter for {harness_kind!r} cannot lower semantic actions")
+        captured_at = datetime.now(timezone.utc)
+        persisted_snapshot = latest_observation_snapshot(
+            connection,
+            harness_id=str(harness_id),
+            session_id=persistence_session_id,
+        )
+        initial_snapshot = persisted_snapshot or unknown_snapshot(
+            harness_id, captured_at=captured_at
+        )
+        initial_evidence = list_session_evidence(
+            connection,
+            harness_id=str(harness_id),
+            session_id=persistence_session_id,
+            frame_limit=PARSER_HISTORY_FRAME_LIMIT,
+        )
+        effective_pane_epoch = pane_epoch
+        initial_capture_sequence = 0
+        if persisted_snapshot is not None:
+            effective_pane_epoch = max(pane_epoch, persisted_snapshot.revision.pane_epoch)
+            if effective_pane_epoch == persisted_snapshot.revision.pane_epoch:
+                initial_capture_sequence = persisted_snapshot.revision.capture_sequence
+        controller = HarnessController(
+            observation_adapter,
+            action_adapter,
+            ObservationStore(initial_snapshot),
+            HarnessActuator(AgentSdkEffectTransport(agent_sdk)),
+            SqliteHarnessControlJournal(connection, session_id=persistence_session_id),
+            initial_evidence=initial_evidence,
+        )
+        observer = AgentSdkFrameObserver(
+            agent_sdk,
+            harness_id,
+            pane_epoch=effective_pane_epoch,
+            capture_sequence=initial_capture_sequence,
+        )
+        return cls(
+            controller,
+            VerifiedPromptDriver(
+                controller,
+                observer,
+                **({"policy": prompt_policy} if prompt_policy is not None else {}),
+                **({"sleep": prompt_sleep} if prompt_sleep is not None else {}),
+            ),
+            observer,
+            VerifiedModelSelectionDriver(controller, observer),
+            VerifiedUsageDriver(controller, observer),
+            model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
+            harness_id=harness_id,
+            terminal_session=terminal_session,
+            connection=connection,
+            persistence_session_id=persistence_session_id,
+            structured_decision_timing=structured_decision_timing,
+            agent_sdk_connection=agent_sdk,
         )
 
     async def submit_prompt(

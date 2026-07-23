@@ -148,6 +148,28 @@ def test_bar_widget_usage_harnesses_round_trip(tmp_path: Path, monkeypatch: pyte
     assert usage.harnesses == ["codex", "claude_code"]
 
 
+def test_cursor_control_backend_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from murder.user_config import TuiUserConfig
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    cfg = UserConfig(tui=TuiUserConfig(cursor_control_backend="acp"))
+    save_user_config(cfg)
+    loaded = load_user_config()
+    assert loaded.tui.cursor_control_backend == "acp"
+    assert loaded.tui.codex_control_backend == "harness_parse"
+
+
+def test_claude_control_backend_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from murder.user_config import TuiUserConfig
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    cfg = UserConfig(tui=TuiUserConfig(claude_control_backend="agent_sdk"))
+    save_user_config(cfg)
+    loaded = load_user_config()
+    assert loaded.tui.claude_control_backend == "agent_sdk"
+    assert loaded.tui.cursor_control_backend == "harness_parse"
+
+
 # --- resolve_tier ---
 
 

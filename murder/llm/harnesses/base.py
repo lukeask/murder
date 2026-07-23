@@ -86,6 +86,12 @@ class HarnessSession:
         self.adapter = adapter
         self.session = session
         self.repo_root = repo_root
+        # Set when start() used the Codex app-server placeholder pane path.
+        self.app_server_ready: bool = False
+        # Set when start() used the Cursor ACP placeholder pane path.
+        self.acp_ready: bool = False
+        # Set when start() used the Claude Agent SDK placeholder pane path.
+        self.agent_sdk_ready: bool = False
 
     async def start(self, spec: HarnessStartSpec | None = None) -> SimpleResult[None]:
         start_spec = spec or HarnessStartSpec(
@@ -116,11 +122,75 @@ class HarnessSession:
             # Validation must precede tmux creation: incompatible selections
             # are input errors, not half-created agent sessions.
             return fail_result(str(exc))
+
+        startup_cmd = self.adapter.startup_cmd(start_spec.cwd)
+        app_server_mode = False
+        acp_mode = False
+        agent_sdk_mode = False
+        if self.adapter.kind == "codex":
+            from murder.user_config import load_user_config
+
+            backend = load_user_config().tui.codex_control_backend
+            if backend == "app_server":
+                from murder.llm.harness_control.app_server.bootstrap import (
+                    APP_SERVER_PLACEHOLDER_CMD,
+                )
+
+                startup_cmd = list(APP_SERVER_PLACEHOLDER_CMD)
+                app_server_mode = True
+        elif self.adapter.kind == "cursor":
+            from murder.user_config import load_user_config
+
+            backend = load_user_config().tui.cursor_control_backend
+            if backend == "acp":
+                from murder.llm.harness_control.acp.agents import get_agent_for_harness
+                from murder.llm.harness_control.acp.bootstrap import (
+                    placeholder_cmd_for_profile,
+                )
+
+                profile = get_agent_for_harness("cursor")
+                if profile is None:
+                    return fail_result("cursor ACP profile is not registered")
+                placeholder = placeholder_cmd_for_profile(profile)
+                if placeholder is None:
+                    return fail_result("cursor ACP profile has no placeholder_cmd")
+                startup_cmd = placeholder
+                acp_mode = True
+        elif self.adapter.kind == "claude_code":
+            from murder.user_config import load_user_config
+
+            backend = load_user_config().tui.claude_control_backend
+            if backend == "agent_sdk":
+                from murder.llm.harness_control.agent_sdk.bootstrap import (
+                    AGENT_SDK_PLACEHOLDER_CMD,
+                )
+
+                startup_cmd = list(AGENT_SDK_PLACEHOLDER_CMD)
+                agent_sdk_mode = True
+
         await tmux.create_session(
             self.session,
             start_spec.cwd,
-            self.adapter.startup_cmd(start_spec.cwd),
+            startup_cmd,
         )
+
+        if app_server_mode:
+            # Placeholder pane is immediately ready; verified control binds the
+            # real app-server process after this returns.
+            self.app_server_ready = True
+            return ok_result()
+
+        if acp_mode:
+            # Placeholder pane is immediately ready; verified control binds the
+            # real ACP process after this returns.
+            self.acp_ready = True
+            return ok_result()
+
+        if agent_sdk_mode:
+            # Placeholder pane is immediately ready; verified control binds the
+            # real Agent SDK process after this returns.
+            self.agent_sdk_ready = True
+            return ok_result()
 
         ready = await self._wait_startup_ready(start_spec)
         if not ready.ok:

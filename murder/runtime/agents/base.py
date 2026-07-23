@@ -122,25 +122,128 @@ class HarnessBackedAgent(LifecycleParticipant):
     # observer.  Orchestration companions consume this shared provenance; they
     # never open a second pane-capture path.
     latest_ingested_frame: Any | None = None
+    # Live Codex app-server JSON-RPC connection when control backend is
+    # ``app_server``. Owned by the agent for shutdown; verified session also
+    # retains a reference.
+    app_server_connection: Any | None = None
+    # Live Cursor ACP JSON-RPC connection when control backend is ``acp``.
+    # Owned by the agent for shutdown; verified session also retains a reference.
+    acp_connection: Any | None = None
+    # Live Claude Agent SDK connection when control backend is ``agent_sdk``.
+    agent_sdk_connection: Any | None = None
 
     async def initialize_verified_harness_control(self) -> None:
         runtime = getattr(self, "runtime", None)
         if runtime is None or runtime.db is None:
             raise RuntimeError("verified harness control requires the service persistence database")
         from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
+        from murder.user_config import load_user_config
 
         options: dict[str, Any] = {}
         if getattr(runtime, "verified_prompt_driver_policy", None) is not None:
             options["prompt_policy"] = runtime.verified_prompt_driver_policy
         if getattr(runtime, "verified_prompt_driver_sleep", None) is not None:
             options["prompt_sleep"] = runtime.verified_prompt_driver_sleep
-        self.verified_harness_control = VerifiedHarnessControlSession.from_tmux(
-            harness_kind=self.harness.kind,
-            terminal_session=self.session,
-            connection=runtime.db,
-            persistence_session_id=self.id,
-            **options,
+        tui = load_user_config().tui
+        use_app_server = self.harness.kind == "codex" and tui.codex_control_backend == "app_server"
+        use_acp = self.harness.kind == "cursor" and tui.cursor_control_backend == "acp"
+        use_agent_sdk = (
+            self.harness.kind == "claude_code" and tui.claude_control_backend == "agent_sdk"
         )
+        if use_app_server:
+            connection = getattr(self, "app_server_connection", None)
+            if connection is None:
+                from murder.llm.harness_control.app_server.bootstrap import (
+                    start_app_server_session,
+                )
+
+                harness_session = getattr(self, "harness_session", None)
+                cwd = (
+                    harness_session.repo_root
+                    if harness_session is not None
+                    else getattr(self, "repo_root", None)
+                )
+                if cwd is None:
+                    raise RuntimeError("app-server bootstrap requires a cwd")
+                connection, _client = await start_app_server_session(
+                    cwd=cwd,
+                    model=getattr(self, "startup_model", None),
+                    effort=getattr(self, "startup_effort", None),
+                )
+                self.app_server_connection = connection
+            self.verified_harness_control = VerifiedHarnessControlSession.from_app_server(
+                app_server=connection,
+                harness_kind=self.harness.kind,
+                terminal_session=self.session,
+                connection=runtime.db,
+                persistence_session_id=self.id,
+                **options,
+            )
+        elif use_acp:
+            connection = getattr(self, "acp_connection", None)
+            if connection is None:
+                from murder.llm.harness_control.acp.bootstrap import start_acp_session
+
+                harness_session = getattr(self, "harness_session", None)
+                cwd = (
+                    harness_session.repo_root
+                    if harness_session is not None
+                    else getattr(self, "repo_root", None)
+                )
+                if cwd is None:
+                    raise RuntimeError("ACP bootstrap requires a cwd")
+                connection, _client = await start_acp_session(
+                    agent="cursor",
+                    cwd=cwd,
+                    model=getattr(self, "startup_model", None),
+                    effort=getattr(self, "startup_effort", None),
+                )
+                self.acp_connection = connection
+            self.verified_harness_control = VerifiedHarnessControlSession.from_acp(
+                acp=connection,
+                harness_kind=self.harness.kind,
+                terminal_session=self.session,
+                connection=runtime.db,
+                persistence_session_id=self.id,
+                **options,
+            )
+        elif use_agent_sdk:
+            connection = getattr(self, "agent_sdk_connection", None)
+            if connection is None:
+                from murder.llm.harness_control.agent_sdk.bootstrap import (
+                    start_agent_sdk_session,
+                )
+
+                harness_session = getattr(self, "harness_session", None)
+                cwd = (
+                    harness_session.repo_root
+                    if harness_session is not None
+                    else getattr(self, "repo_root", None)
+                )
+                if cwd is None:
+                    raise RuntimeError("Agent SDK bootstrap requires a cwd")
+                connection, _client = await start_agent_sdk_session(
+                    cwd=cwd,
+                    model=getattr(self, "startup_model", None),
+                    effort=getattr(self, "startup_effort", None),
+                )
+                self.agent_sdk_connection = connection
+            self.verified_harness_control = VerifiedHarnessControlSession.from_agent_sdk(
+                agent_sdk=connection,
+                harness_kind=self.harness.kind,
+                terminal_session=self.session,
+                connection=runtime.db,
+                persistence_session_id=self.id,
+                **options,
+            )
+        else:
+            self.verified_harness_control = VerifiedHarnessControlSession.from_tmux(
+                harness_kind=self.harness.kind,
+                terminal_session=self.session,
+                connection=runtime.db,
+                persistence_session_id=self.id,
+                **options,
+            )
         repository_root = getattr(runtime, "repo_root", getattr(self, "repo_root", None))
         await self.verified_harness_control.ensure_session_controller(
             repository_key=str(repository_root) if repository_root is not None else None,
