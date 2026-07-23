@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from murder.app.service.client_api import dto_to_wire
+from murder.app.protocol.read_models import dto_to_wire
 from murder.app.service.read_model import ServiceReadModel
 from murder.runtime.orchestration.orchestrator import Orchestrator
 

@@ -26,6 +26,8 @@ from murder.app.protocol.common import (
 from murder.app.protocol.common import (
     ErrorCode as ApplicationErrorCode,
 )
+from murder.app.protocol.projections import validate_event as validate_projection_event
+from murder.app.protocol.projections import validate_snapshot as validate_projection_snapshot
 from murder.app.protocol.subscriptions import (
     FactSubscription,
     NotificationChannel,
@@ -138,6 +140,23 @@ _HYDRATE_SNAPSHOT_TARGETS: dict[str, str] = {
 _HYDRATE_ALL_TOPICS = tuple(_HYDRATE_SNAPSHOT_TARGETS)
 
 
+def _validated_application_snapshots(
+    snapshots: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Validate every emitted projection snapshot through its registry DTO."""
+    return {
+        topic: validate_projection_snapshot(topic, payload) for topic, payload in snapshots.items()
+    }
+
+
+def _validated_application_projection_event(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate retained projection events using the selected topic contract."""
+    projection = payload.get("projection")
+    if not isinstance(projection, str):
+        raise ValueError("projection event is missing its projection topic")
+    return validate_projection_event(projection, payload)
+
+
 def _terminal_frame_geometry(frame: str) -> tuple[int, int]:
     """Return a conservative rendered geometry for a captured tmux snapshot."""
 
@@ -163,6 +182,7 @@ class SocketBusServer:
         broker: DurableBroker,
         *,
         run_id: str,
+        application_gateway: ApplicationGateway | None = None,
         socket_path: Path | None = None,
         disconnect_debounce_s: float = PRESENCE_DISCONNECT_DEBOUNCE_S,
         tmux_frame_capture: TmuxFrameCapture | None = None,
@@ -197,7 +217,7 @@ class SocketBusServer:
         self._accept_backoff_task: asyncio.Task[None] | None = None
         self._prior_exception_handler: Any = None
         self._installed_exception_handler = False
-        self._application_gateway = ApplicationGateway(broker)
+        self._application_gateway = application_gateway
 
     @property
     def socket_path(self) -> Path:
@@ -420,6 +440,16 @@ class SocketBusServer:
                     transport,
                     ApplicationServerHello(
                         server_id=self._run_id,
+                        queries=(
+                            list(self._application_gateway.available_queries)
+                            if self._application_gateway is not None
+                            else []
+                        ),
+                        commands=(
+                            list(self._application_gateway.available_commands)
+                            if self._application_gateway is not None
+                            else []
+                        ),
                         fact_cursor=self._broker.fact_watermark(),
                         projection_cursor=self._broker.projection_watermark(),
                     ),
@@ -542,10 +572,13 @@ class SocketBusServer:
     ) -> None:
         if isinstance(msg, ApplicationRequestMessage):
             try:
+                if self._application_gateway is None:
+                    raise RuntimeError("application service is unavailable")
                 result = await self._application_gateway.request(
                     msg.request,
                     timeout_s=msg.timeout_s,
                     authenticated_client_id=session.client_id,
+                    wire_request_id=msg.request_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 await self._send_application_error(
@@ -756,7 +789,7 @@ class SocketBusServer:
             SubscriptionReadyMessage(
                 subscription_id=msg.subscription_id,
                 snapshot=SubscriptionSnapshot(
-                    snapshots=snapshots,
+                    snapshots=_validated_application_snapshots(snapshots),
                     cursor=reply.cursor,
                     mode=reply.mode,
                     replay=[
@@ -829,7 +862,7 @@ class SocketBusServer:
             SubscriptionReadyMessage(
                 subscription_id=msg.subscription_id,
                 snapshot=SubscriptionSnapshot(
-                    snapshots=snapshots,
+                    snapshots=_validated_application_snapshots(snapshots),
                     cursor=watermark,
                     mode=mode,
                     replay=[
@@ -865,17 +898,19 @@ class SocketBusServer:
                         SubscriptionEventMessage(
                             subscription_id=msg.subscription_id,
                             cursor=item.sequence,
-                            payload={
-                                "type": "projection.invalidate",
-                                "projection": item.projection,
-                                "subject_key": item.subject_key,
-                                "generation": item.generation,
-                                "source_fact_id": (
-                                    str(item.source_fact_id)
-                                    if item.source_fact_id is not None
-                                    else None
-                                ),
-                            },
+                            payload=_validated_application_projection_event(
+                                {
+                                    "type": "projection.invalidate",
+                                    "projection": item.projection,
+                                    "subject_key": item.subject_key,
+                                    "generation": item.generation,
+                                    "source_fact_id": (
+                                        str(item.source_fact_id)
+                                        if item.source_fact_id is not None
+                                        else None
+                                    ),
+                                }
+                            ),
                         ),
                     )
             except ReplayGapError:
@@ -903,13 +938,15 @@ class SocketBusServer:
                         SubscriptionEventMessage(
                             subscription_id=msg.subscription_id,
                             cursor=cursor,
-                            payload={
-                                "type": "projection.invalidate",
-                                "projection": projection,
-                                "subject_key": "*",
-                                "generation": cursor,
-                                "source_fact_id": None,
-                            },
+                            payload=_validated_application_projection_event(
+                                {
+                                    "type": "projection.invalidate",
+                                    "projection": projection,
+                                    "subject_key": "*",
+                                    "generation": cursor,
+                                    "source_fact_id": None,
+                                }
+                            ),
                         ),
                     )
 
@@ -972,9 +1009,7 @@ class SocketBusServer:
         assert isinstance(spec, FactSubscription)
         watermark = self._broker.fact_watermark()
         since_sequence = spec.cursor if spec.cursor is not None else watermark
-        if spec.cursor is not None and not self._broker.is_fact_cursor_retained(
-            since_sequence
-        ):
+        if spec.cursor is not None and not self._broker.is_fact_cursor_retained(since_sequence):
             await self._send_application_error(
                 session.transport,
                 code=ApplicationErrorCode.INVALID_MESSAGE,

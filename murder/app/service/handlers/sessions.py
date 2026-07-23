@@ -1,21 +1,26 @@
-"""Typed session writer-lease query and command handlers."""
+"""Typed session writer-lease and session-command handlers."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from murder.app.protocol.sessions import (
+    AcquireWriterLeaseParams,
+    ExecuteSessionCommandParams,
+    ExecuteSessionCommandResult,
+    GetWriterLeaseParams,
+    GetWriterLeaseResult,
+    ReleaseWriterLeaseParams,
+    RenewWriterLeaseParams,
+)
+from murder.contracts.common import request_context
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
-    Correlation,
-    PrincipalRef,
     ReleaseWriterLease,
     RenewWriterLease,
     RequestMeta,
     WriterLeaseReply,
-    WriterMode,
 )
 from murder.runtime.sessions.persistence import SessionNotFoundError, SessionStore
 from murder.runtime.sessions.registry import (
@@ -28,53 +33,13 @@ if TYPE_CHECKING:
     from murder.runtime.sessions.controller import SessionController
 
 
-class _Params(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class GetWriterLeaseParams(_Params):
-    session_id: UUID
-
-
-class AcquireWriterLeaseParams(_Params):
-    session_id: UUID
-    mode: WriterMode
-    ttl_seconds: int = Field(default=15, ge=3, le=300)
-    force: bool = False
-    request_id: UUID | None = None
-    expected_revision: int | None = None
-    holder: PrincipalRef
-
-
-class RenewWriterLeaseParams(_Params):
-    session_id: UUID
-    lease_id: UUID
-    fence: int = Field(ge=1)
-    ttl_seconds: int = Field(default=15, ge=3, le=300)
-    request_id: UUID | None = None
-    expected_revision: int | None = None
-    holder: PrincipalRef
-
-
-class ReleaseWriterLeaseParams(_Params):
-    session_id: UUID
-    lease_id: UUID
-    fence: int = Field(ge=1)
-    request_id: UUID | None = None
-    expected_revision: int | None = None
-    holder: PrincipalRef
-    reason: str | None = None
-
-
-def _request_meta(
+def _meta(
     request_id: UUID | None,
     *,
     expected_revision: int | None = None,
 ) -> RequestMeta:
-    rid = request_id or uuid4()
-    return RequestMeta(
-        request_id=rid,
-        correlation=Correlation(correlation_id=rid),
+    return request_context(
+        explicit_request_id=request_id,
         expected_revision=expected_revision,
     )
 
@@ -112,19 +77,18 @@ def register(host: ServiceHost) -> None:
         params = GetWriterLeaseParams.model_validate(body)
         store = _store()
         if store.get_session(params.session_id) is None:
-            return {"ok": False, "error": "not_found"}
+            return GetWriterLeaseResult(ok=False, error="not_found").model_dump(mode="json")
         lease = store.active_writer_lease(params.session_id)
-        return {
-            "ok": True,
-            "lease": None if lease is None else lease.model_dump(mode="json"),
-        }
+        return GetWriterLeaseResult(ok=True, lease=lease).model_dump(mode="json")
 
     async def _acquire(body: dict[str, object]) -> dict[str, object]:
         params = AcquireWriterLeaseParams.model_validate(body)
+        if params.holder is None:
+            raise ValueError("session.writer.acquire requires a holder")
         controller = await _controller(params.session_id)
         reply = await controller.acquire_writer_lease(
             AcquireWriterLease(
-                meta=_request_meta(
+                meta=_meta(
                     params.request_id,
                     expected_revision=params.expected_revision,
                 ),
@@ -139,10 +103,12 @@ def register(host: ServiceHost) -> None:
 
     async def _renew(body: dict[str, object]) -> dict[str, object]:
         params = RenewWriterLeaseParams.model_validate(body)
+        if params.holder is None:
+            raise ValueError("session.writer.renew requires a holder")
         controller = await _controller(params.session_id)
         reply = await controller.renew_writer_lease(
             RenewWriterLease(
-                meta=_request_meta(
+                meta=_meta(
                     params.request_id,
                     expected_revision=params.expected_revision,
                 ),
@@ -156,13 +122,15 @@ def register(host: ServiceHost) -> None:
 
     async def _release(body: dict[str, object]) -> dict[str, object]:
         params = ReleaseWriterLeaseParams.model_validate(body)
+        if params.holder is None:
+            raise ValueError("session.writer.release requires a holder")
         controller = await _controller(params.session_id)
         kwargs: dict[str, Any] = {}
         if params.reason is not None:
             kwargs["reason"] = params.reason
         reply = await controller.release_writer_lease(
             ReleaseWriterLease(
-                meta=_request_meta(
+                meta=_meta(
                     params.request_id,
                     expected_revision=params.expected_revision,
                 ),
@@ -174,16 +142,26 @@ def register(host: ServiceHost) -> None:
         )
         return _reply_json(reply)
 
+    async def _execute(body: dict[str, object]) -> dict[str, object]:
+        params = ExecuteSessionCommandParams.model_validate(body)
+        if params.principal is None:
+            raise ValueError("session.command.execute requires a principal")
+        controller = await _controller(params.session_id)
+        receipt = await controller.execute(
+            params.command,
+            principal=params.principal,
+            expected_revision=params.expected_revision,
+            authorization=params.authorization,
+        )
+        return ExecuteSessionCommandResult(receipt=receipt).model_dump(mode="json")
+
     host.register_rpc_handler("session.writer.get", _get)
     host.register_rpc_handler("session.writer.acquire", _acquire)
     host.register_rpc_handler("session.writer.renew", _renew)
     host.register_rpc_handler("session.writer.release", _release)
+    host.register_rpc_handler("session.command.execute", _execute)
 
 
 __all__ = [
-    "AcquireWriterLeaseParams",
-    "GetWriterLeaseParams",
-    "ReleaseWriterLeaseParams",
-    "RenewWriterLeaseParams",
     "register",
 ]

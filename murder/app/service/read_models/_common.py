@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from murder.app.service.client_api import CrowSessionSummary
+from murder.app.protocol.read_models import CrowSessionSummary
 from murder.state.persistence.schema import get_db
 
 LOGGER = logging.getLogger(__name__)

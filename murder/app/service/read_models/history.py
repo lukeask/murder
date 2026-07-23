@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import closing
 from datetime import datetime, timedelta
 
-from murder.app.service.client_api import (
+from murder.app.protocol.read_models import (
     HistoryItemSummary,
     HistorySnapshot,
     InvalidationKeys,

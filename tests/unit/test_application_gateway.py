@@ -40,11 +40,7 @@ from murder.app.protocol.wire import (
     TerminalResyncedMessage,
     TerminalResyncMessage,
 )
-from murder.app.service.gateway import (
-    COMMAND_TARGETS,
-    QUERY_TARGETS,
-    ApplicationGateway,
-)
+from murder.app.service.gateway import ApplicationGateway
 from murder.bus.broker import DurableBroker
 from murder.bus.protocol import ClientKind
 from murder.bus.transport_socket import SocketBusServer, _ClientSession
@@ -52,6 +48,7 @@ from murder.facts.contracts import (
     AggregateRef,
     FactActor,
     FactCorrelation,
+    PrivateFactPayload,
     ProjectionInputRecord,
     RetainedFactDraft,
 )
@@ -94,9 +91,125 @@ def test_terminal_contracts_distinguish_snapshot_increment_and_gap() -> None:
     assert gap.snapshot_required is True
 
 
+def _stub_broker_result(target: str, body: dict[str, object]) -> dict[str, object]:
+    """Return gateway-validatable stubs for typed high-risk capabilities."""
+
+    now = datetime.now(timezone.utc).isoformat()
+    request_id = str(body.get("request_id") or uuid4())
+    session_id = str(body.get("session_id") or uuid4())
+    lease_id = str(body.get("lease_id") or uuid4())
+    holder = body.get("holder") or {"kind": "service", "id": "trusted-local"}
+    if target.startswith("session.writer.") and target != "session.writer.get":
+        return {
+            "type": "session.writer.granted",
+            "request_id": request_id,
+            "lease": {
+                "lease_id": lease_id,
+                "resource": {"type": "harness_session", "session_id": session_id},
+                "holder": holder,
+                "mode": body.get("mode") or "raw_terminal",
+                "fence": int(body.get("fence") or 1),
+                "issued_at": now,
+                "renewed_at": now,
+                "expires_at": now,
+                "revoked_at": None,
+                "revocation_reason": None,
+            },
+        }
+    if target == "session.writer.get":
+        return {"ok": True, "lease": None, "error": None}
+    if target == "session.command.execute":
+        return {
+            "receipt": {
+                "operation_id": str(uuid4()),
+                "session_id": session_id,
+                "revision": 1,
+                "completed_at": now,
+            }
+        }
+    if target == "approval.decide":
+        return {
+            "decision": {
+                "decision_id": str(uuid4()),
+                "approval_id": str(body.get("approval_id") or uuid4()),
+                "operation_digest": body.get("expected_operation_digest")
+                or ("a" * 64),
+                "choice": body.get("choice") or "approve",
+                "reviewer": body.get("reviewer") or holder,
+                "rationale": body.get("rationale") or "ok",
+                "decided_at": now,
+            },
+            "grant": None,
+            "authorization": None,
+        }
+    if target == "approvals.list":
+        return {"approvals": []}
+    if target == "approvals.get":
+        return {"ok": False, "approval": None, "error": "not_found"}
+    if target == "permissions.list":
+        return {"grants": []}
+    if target == "tui.load_workflows":
+        return {"ok": True, "workflows": []}
+    if target == "tui.save_workflows":
+        return {"ok": True, "workflows": body.get("workflows") or []}
+    if target == "tui.run_workflow":
+        return {
+            "ok": True,
+            "run_ticket_id": "run-1",
+            "stage_ticket_ids": {},
+            "created_ticket_ids": [],
+        }
+    if target == "workflow.runs.list":
+        return {"runs": []}
+    if target == "workflow.runs.get":
+        return {"ok": False, "run": None, "waits": [], "error": "not_found"}
+    if target == "workflow.signal":
+        workflow_id = str(body.get("workflow_id") or uuid4())
+        return {
+            "signal": {
+                "signal_id": str(uuid4()),
+                "workflow_id": workflow_id,
+                "deduplication_key": "external:test",
+                "created_at": now,
+                "payload": {
+                    "type": "external",
+                    "name": body.get("name") or "test",
+                    "correlation_key": body.get("correlation_key"),
+                    "payload": body.get("payload") or {},
+                },
+                "consumed_at": None,
+                "consumed_at_revision": None,
+            },
+            "run": {
+                "workflow_id": workflow_id,
+                "definition_name": "demo",
+                "definition_version": 1,
+                "status": "running",
+                "revision": 0,
+                "state": {
+                    "schema_name": "static_dag",
+                    "schema_version": 1,
+                    "value": {},
+                },
+                "created_at": now,
+                "updated_at": now,
+                "started_by": {"kind": "service", "id": "test"},
+                "correlation": {"correlation_id": str(uuid4())},
+                "terminal_reason": None,
+                "parent_ticket_id": None,
+                "definition_snapshot": None,
+                "stage_map": {},
+            },
+        }
+    return {"target": target}
+
+
 class _Broker:
     def __init__(self) -> None:
         self.requests: list[tuple[str, dict[str, object], float]] = []
+        self.application_requests: list[
+            tuple[QueryName | CommandName, dict[str, object]]
+        ] = []
         self.published: list[object] = []
         self.fact_replay_calls = 0
         self.legacy_replay_calls = 0
@@ -116,7 +229,48 @@ class _Broker:
         timeout_s: float,
     ) -> dict[str, object]:
         self.requests.append((target, body, timeout_s))
-        return {"target": target}
+        return _stub_broker_result(target, body)
+
+    async def query(
+        self, name: QueryName, body: dict[str, object]
+    ) -> dict[str, object]:
+        self.application_requests.append((name, body))
+        typed_targets = {
+            QueryName.SESSION_WRITER_GET: "session.writer.get",
+            QueryName.APPROVALS_LIST: "approvals.list",
+            QueryName.APPROVALS_GET: "approvals.get",
+            QueryName.PERMISSIONS_LIST: "permissions.list",
+            QueryName.WORKFLOWS_GET: "tui.load_workflows",
+            QueryName.WORKFLOW_RUNS_LIST: "workflow.runs.list",
+            QueryName.WORKFLOW_RUNS_GET: "workflow.runs.get",
+        }
+        target = typed_targets.get(name)
+        return (
+            _stub_broker_result(target, body)
+            if target is not None
+            else {"capability": name.value}
+        )
+
+    async def command(
+        self, name: CommandName, body: dict[str, object]
+    ) -> dict[str, object]:
+        self.application_requests.append((name, body))
+        typed_targets = {
+            CommandName.SESSION_WRITER_ACQUIRE: "session.writer.acquire",
+            CommandName.SESSION_WRITER_RENEW: "session.writer.renew",
+            CommandName.SESSION_WRITER_RELEASE: "session.writer.release",
+            CommandName.SESSION_COMMAND_EXECUTE: "session.command.execute",
+            CommandName.APPROVAL_DECIDE: "approval.decide",
+            CommandName.WORKFLOWS_SET: "tui.save_workflows",
+            CommandName.WORKFLOW_START: "tui.run_workflow",
+            CommandName.WORKFLOW_SIGNAL: "workflow.signal",
+        }
+        target = typed_targets.get(name)
+        return (
+            _stub_broker_result(target, body)
+            if target is not None
+            else {"capability": name.value}
+        )
 
     def watermark(self) -> int:
         return 0
@@ -235,11 +389,6 @@ def test_application_wire_is_closed_and_rejects_legacy_bus_ops() -> None:
         )
 
 
-def test_every_closed_request_has_an_adapter() -> None:
-    assert set(QUERY_TARGETS) == set(QueryName)
-    assert set(COMMAND_TARGETS) | {CommandName.ORCHESTRATION_EXECUTE} == set(CommandName)
-
-
 @pytest.mark.asyncio
 async def test_gateway_maps_closed_queries_and_hides_worker_address() -> None:
     broker = _Broker()
@@ -249,8 +398,8 @@ async def test_gateway_maps_closed_queries_and_hides_worker_address() -> None:
         QueryRequest(name=QueryName.ROSTER_GET),
         timeout_s=2,
     )
-    assert result == {"target": "state.crow_snapshot"}
-    assert broker.requests[-1] == ("state.crow_snapshot", {}, 2)
+    assert result == {"capability": "roster.get"}
+    assert broker.application_requests[-1] == (QueryName.ROSTER_GET, {})
 
     await gateway.request(
         CommandRequest(
@@ -259,10 +408,9 @@ async def test_gateway_maps_closed_queries_and_hides_worker_address() -> None:
         ),
         timeout_s=ORCHESTRATION_TIMEOUT_S,
     )
-    target, params, timeout = broker.requests[-1]
-    assert target == "command.submit"
-    assert params["target_worker"] == "orchestrator"
-    assert timeout == ORCHESTRATION_TIMEOUT_S
+    capability, params = broker.application_requests[-1]
+    assert capability is CommandName.ORCHESTRATION_EXECUTE
+    assert "target_worker" not in params
 
     with pytest.raises(ValueError):
         await gateway.request(
@@ -274,25 +422,38 @@ async def test_gateway_maps_closed_queries_and_hides_worker_address() -> None:
         )
 
     supplied = {"kind": "service", "id": "forged"}
+    digest = "a" * 64
+    approval_id = str(uuid4())
     await gateway.request(
         CommandRequest(
             name=CommandName.APPROVAL_DECIDE,
             params={
-                "approval_id": "a",
+                "approval_id": approval_id,
+                "expected_operation_digest": digest,
+                "choice": "approve",
+                "rationale": "looks good",
                 "reviewer": supplied,
             },
         ),
         timeout_s=2,
         authenticated_client_id="tui-7",
     )
-    assert broker.requests[-1][0] == "approval.decide"
-    assert broker.requests[-1][1]["reviewer"] == {
+    assert broker.application_requests[-1][0] is CommandName.APPROVAL_DECIDE
+    assert broker.application_requests[-1][1]["reviewer"] == {
         "kind": "client",
         "id": "tui-7",
     }
     with pytest.raises(ValueError, match="authenticated"):
         await gateway.request(
-            CommandRequest(name=CommandName.APPROVAL_DECIDE),
+            CommandRequest(
+                name=CommandName.APPROVAL_DECIDE,
+                params={
+                    "approval_id": approval_id,
+                    "expected_operation_digest": digest,
+                    "choice": "approve",
+                    "rationale": "looks good",
+                },
+            ),
             timeout_s=2,
         )
 
@@ -309,8 +470,8 @@ async def test_gateway_maps_closed_queries_and_hides_worker_address() -> None:
         timeout_s=2,
         authenticated_client_id="tui-9",
     )
-    assert broker.requests[-1][0] == "session.writer.acquire"
-    assert broker.requests[-1][1]["holder"] == {
+    assert broker.application_requests[-1][0] is CommandName.SESSION_WRITER_ACQUIRE
+    assert broker.application_requests[-1][1]["holder"] == {
         "kind": "client",
         "id": "tui-9",
     }
@@ -326,8 +487,8 @@ async def test_gateway_maps_closed_queries_and_hides_worker_address() -> None:
         ),
         timeout_s=2,
     )
-    assert broker.requests[-1][0] == "session.writer.renew"
-    assert broker.requests[-1][1]["holder"] == {
+    assert broker.application_requests[-1][0] is CommandName.SESSION_WRITER_RENEW
+    assert broker.application_requests[-1][1]["holder"] == {
         "kind": "service",
         "id": "trusted-local",
     }
@@ -339,7 +500,76 @@ async def test_gateway_maps_closed_queries_and_hides_worker_address() -> None:
         ),
         timeout_s=2,
     )
-    assert broker.requests[-1][0] == "session.writer.get"
+    assert broker.application_requests[-1][0] is QueryName.SESSION_WRITER_GET
+
+    # Wire request_id (prefixed UUID) seeds domain request_id when params omit it.
+    wire_uuid = "550e8400-e29b-41d4-a716-446655440000"
+    await gateway.request(
+        CommandRequest(
+            name=CommandName.SESSION_WRITER_ACQUIRE,
+            params={
+                "session_id": str(uuid4()),
+                "mode": "structured",
+            },
+        ),
+        timeout_s=2,
+        authenticated_client_id="tui-bridge",
+        wire_request_id=f"request-{wire_uuid}",
+    )
+    assert broker.application_requests[-1][1]["request_id"] == wire_uuid
+    assert broker.application_requests[-1][1]["holder"] == {
+        "kind": "client",
+        "id": "tui-bridge",
+    }
+
+    with pytest.raises(ValueError, match="invalid params"):
+        await gateway.request(
+            CommandRequest(
+                name=CommandName.SESSION_WRITER_ACQUIRE,
+                params={"session_id": "not-a-uuid", "mode": "raw_terminal"},
+            ),
+            timeout_s=2,
+            authenticated_client_id="tui-x",
+        )
+
+    await gateway.request(
+        CommandRequest(
+            name=CommandName.SESSION_COMMAND_EXECUTE,
+            params={
+                "session_id": str(uuid4()),
+                "command": {
+                    "type": "resize_terminal",
+                    "operation_id": str(uuid4()),
+                    "columns": 120,
+                    "rows": 40,
+                },
+            },
+        ),
+        timeout_s=2,
+        authenticated_client_id="tui-cmd",
+    )
+    assert broker.application_requests[-1][0] is CommandName.SESSION_COMMAND_EXECUTE
+    assert broker.application_requests[-1][1]["principal"]["id"] == "tui-cmd"
+
+    await gateway.request(
+        QueryRequest(name=QueryName.WORKFLOW_RUNS_LIST, params={}),
+        timeout_s=2,
+    )
+    assert broker.application_requests[-1][0] is QueryName.WORKFLOW_RUNS_LIST
+
+    await gateway.request(
+        CommandRequest(
+            name=CommandName.WORKFLOW_SIGNAL,
+            params={
+                "workflow_id": str(uuid4()),
+                "name": "manual.resume",
+            },
+        ),
+        timeout_s=2,
+        wire_request_id=wire_uuid,
+    )
+    assert broker.application_requests[-1][0] is CommandName.WORKFLOW_SIGNAL
+    assert broker.application_requests[-1][1]["request_id"] == wire_uuid
 
 
 @pytest.mark.asyncio
@@ -363,6 +593,7 @@ async def test_application_socket_request_reply_and_no_arbitrary_target(  # noqa
         broker,  # type: ignore[arg-type]
         run_id="run-1",
         socket_path=socket_path,
+        application_gateway=ApplicationGateway(broker),  # type: ignore[arg-type]
     )
     try:
         await server.start()
@@ -495,8 +726,8 @@ async def test_application_socket_request_reply_and_no_arbitrary_target(  # noqa
         reply = APPLICATION_WIRE_ADAPTER.validate_json(await reader.readline())
         assert isinstance(reply, ReplyMessage)
         assert reply.request_id == "q-1"
-        assert reply.result == {"target": "health.ping"}
-        assert broker.requests == [("health.ping", {}, 30.0)]
+        assert reply.result == {"capability": "health.get"}
+        assert broker.application_requests == [(QueryName.HEALTH_GET, {})]
 
         # The application adapter rejects an old arbitrary RPC frame instead
         # of forwarding its attacker-chosen target to DurableBroker.
@@ -506,7 +737,7 @@ async def test_application_socket_request_reply_and_no_arbitrary_target(  # noqa
         await writer.drain()
         error = APPLICATION_WIRE_ADAPTER.validate_json(await reader.readline())
         assert isinstance(error, ErrorMessage)
-        assert broker.requests == [("health.ping", {}, 30.0)]
+        assert broker.application_requests == [(QueryName.HEALTH_GET, {})]
         writer.close()
         await writer.wait_closed()
 
@@ -550,6 +781,7 @@ async def test_fact_tail_gap_reanchors_instead_of_closing_connection(
         broker,  # type: ignore[arg-type]
         run_id="run-1",
         socket_path=socket_path,
+        application_gateway=ApplicationGateway(broker),  # type: ignore[arg-type]
     )
     try:
         await server.start()
@@ -661,7 +893,6 @@ async def test_server_hello_exposes_fact_cursor_watermark(tmp_path: Path) -> Non
             conn,
             RetainedFactDraft(
                 fact_id=uuid4(),
-                kind="workflow.completed",
                 occurred_at=datetime.now(timezone.utc),
                 aggregate=AggregateRef(kind="workflow", id=uuid4(), revision=1),
                 actor=FactActor(kind="workflow", id="delivery"),
@@ -670,7 +901,10 @@ async def test_server_hello_exposes_fact_cursor_watermark(tmp_path: Path) -> Non
                     causation_id=uuid4(),
                     trace_id=uuid4(),
                 ),
-                payload={"result": "done"},
+                payload=PrivateFactPayload(
+                    kind="workflow.completed",
+                    data={"result": "done"},
+                ),
             ),
             recorded_at=datetime.now(timezone.utc),
         )

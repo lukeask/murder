@@ -6,7 +6,7 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from murder.app.service.client_api import (
+from murder.app.protocol.read_models import (
     ChecklistItem,
     InvalidationKeys,
     NoteDisplaySnapshot,
@@ -162,8 +162,6 @@ class WorkReadModel(ReadModelBase):
             model=ticket.model,
             worktree=ticket.worktree,
             schedule_at=ticket.schedule_at,
-            plan_md=prose["plan"],
-            working_notes_md=prose["working_notes"],
             as_of=as_of,
             invalidation_key=self.keys.current_key(InvalidationKeys.ticket_detail(ticket_id)),
         )

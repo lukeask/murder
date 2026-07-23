@@ -1,88 +1,25 @@
-"""Application-gateway adapter over transitional service internals.
+"""Application protocol boundary over typed in-process use cases.
 
 Clients can select only the closed capabilities declared in
-``murder.app.protocol.requests``.  The stringly RPC/worker bus remains behind
-this adapter and can be removed without another client protocol change.
+``murder.app.protocol.requests``. The gateway validates and enriches the wire
+request, then invokes an application port without knowing about transports,
+brokers, worker targets, or feature implementation details.
+
+High-risk capabilities validate params (and results) against typed protocol
+contracts. Legacy callers may still pass plain dictionaries; the gateway
+adapts them at this boundary.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
-from murder.app.protocol.requests import (
-    CommandName,
-    CommandRequest,
-    OrchestrationAction,
-    QueryName,
-    QueryRequest,
-)
-from murder.bus.broker import DurableBroker
+from pydantic import TypeAdapter, ValidationError
 
-QUERY_TARGETS: Mapping[QueryName, str] = {
-    QueryName.HEALTH_GET: "health.ping",
-    QueryName.COMMAND_GET: "command.status",
-    QueryName.CONVERSATIONS_GET: "state.conversations_snapshot",
-    QueryName.ROSTER_GET: "state.crow_snapshot",
-    QueryName.SCHEDULE_GET: "state.schedule_snapshot",
-    QueryName.PLANS_LIST: "state.plans_snapshot",
-    QueryName.NOTES_LIST: "state.notes_snapshot",
-    QueryName.REPORTS_LIST: "state.reports_snapshot",
-    QueryName.HISTORY_LIST: "state.history_snapshot",
-    QueryName.TRANSIT_GET: "state.transit_snapshot",
-    QueryName.TICKET_GET: "state.ticket_detail",
-    QueryName.PLAN_GET: "state.plan_display",
-    QueryName.NOTE_GET: "state.note_display",
-    QueryName.REPORT_GET: "state.report_display",
-    QueryName.HARNESS_MODELS_LIST: "state.harness_models_snapshot",
-    QueryName.TICKET_NEXT_ID: "ticket.next_id",
-    QueryName.TICKET_EXISTS: "ticket.exists",
-    QueryName.SETTINGS_GET: "settings.get",
-    QueryName.WORKTREES_LIST: "worktree.list",
-    QueryName.FAVORITES_GET: "tui.load_favorites",
-    QueryName.SPAWN_FAVORITES_GET: "tui.load_spawn_favorites",
-    QueryName.TEMPLATES_GET: "tui.load_templates",
-    QueryName.THEMES_GET: "tui.load_themes",
-    QueryName.WORKFLOWS_GET: "tui.load_workflows",
-    QueryName.APPROVALS_LIST: "approvals.list",
-    QueryName.APPROVALS_GET: "approvals.get",
-    QueryName.PERMISSIONS_LIST: "permissions.list",
-    QueryName.SESSION_WRITER_GET: "session.writer.get",
-}
-
-COMMAND_TARGETS: Mapping[CommandName, str] = {
-    CommandName.HARNESS_ANSWER: "harness_control.answer_structured",
-    CommandName.IMAGE_UPLOAD: "image.upload",
-    CommandName.TICKET_SAVE_BODY: "ticket.save_body",
-    CommandName.TICKET_SCHEDULE: "ticket.schedule",
-    CommandName.PLAN_CREATE: "plan.create",
-    CommandName.SETTINGS_UPDATE: "settings.update",
-    CommandName.LLM_SETTINGS_SET_DISABLED: "llm.settings.set_disabled",
-    CommandName.LLM_PROVIDER_CREATE: "llm.provider.create",
-    CommandName.LLM_PROVIDER_UPDATE: "llm.provider.update",
-    CommandName.LLM_PROVIDER_DELETE: "llm.provider.delete",
-    CommandName.LLM_PROVIDER_MODELS_UPDATE: "llm.provider.models.update",
-    CommandName.LLM_PROVIDER_DISCOVER_MODELS: "llm.provider.discover_models",
-    CommandName.LLM_POLICY_CREATE: "llm.policy.create",
-    CommandName.LLM_POLICY_UPDATE: "llm.policy.update",
-    CommandName.LLM_POLICY_DELETE: "llm.policy.delete",
-    CommandName.LLM_POLICY_ACTIVATE: "llm.policy.activate",
-    CommandName.LLM_POLICY_CLONE: "llm.policy.clone",
-    CommandName.LLM_FEATURE_POLICY_SET: "llm.feature_policy.set",
-    CommandName.LLM_PREVIEW_RESOLUTION: "llm.preview_resolution",
-    CommandName.FAVORITES_SET: "tui.save_favorites",
-    CommandName.SPAWN_FAVORITES_SET: "tui.save_spawn_favorites",
-    CommandName.TEMPLATES_SET: "tui.save_templates",
-    CommandName.THEMES_SET: "tui.save_themes",
-    CommandName.THEME_IMPORT: "tui.import_theme",
-    CommandName.WORKFLOWS_SET: "tui.save_workflows",
-    CommandName.WORKFLOW_START: "tui.run_workflow",
-    CommandName.TRIGGER_FIRE: "trigger.fire",
-    CommandName.APPROVAL_DECIDE: "approval.decide",
-    CommandName.SESSION_WRITER_ACQUIRE: "session.writer.acquire",
-    CommandName.SESSION_WRITER_RENEW: "session.writer.renew",
-    CommandName.SESSION_WRITER_RELEASE: "session.writer.release",
-}
+from murder.app.protocol.operations import command_operation, query_operation
+from murder.app.protocol.requests import CommandName, CommandRequest, QueryName, QueryRequest
+from murder.app.service.application import ApplicationPort
+from murder.contracts.common import domain_request_id
 
 _SESSION_WRITER_COMMANDS = frozenset(
     {
@@ -94,12 +31,34 @@ _SESSION_WRITER_COMMANDS = frozenset(
 
 _TRUSTED_LOCAL_HOLDER = {"kind": "service", "id": "trusted-local"}
 
+_CORRELATED_COMMANDS = frozenset(
+    {
+        CommandName.SESSION_WRITER_ACQUIRE,
+        CommandName.SESSION_WRITER_RENEW,
+        CommandName.SESSION_WRITER_RELEASE,
+        CommandName.SESSION_COMMAND_EXECUTE,
+        CommandName.APPROVAL_DECIDE,
+        CommandName.WORKFLOW_START,
+        CommandName.WORKFLOW_SIGNAL,
+    }
+)
+
 
 class ApplicationGateway:
-    """Dispatch the closed public request union into compatibility handlers."""
+    """Validate the closed public request union and invoke application use cases."""
 
-    def __init__(self, broker: DurableBroker) -> None:
-        self._broker = broker
+    def __init__(self, application: ApplicationPort) -> None:
+        self._application = application
+
+    @property
+    def available_queries(self) -> tuple[QueryName, ...]:
+        names = getattr(self._application, "available_queries", tuple(QueryName))
+        return tuple(sorted(names, key=lambda item: item.value))
+
+    @property
+    def available_commands(self) -> tuple[CommandName, ...]:
+        names = getattr(self._application, "available_commands", tuple(CommandName))
+        return tuple(sorted(names, key=lambda item: item.value))
 
     async def request(
         self,
@@ -107,45 +66,85 @@ class ApplicationGateway:
         *,
         timeout_s: float,
         authenticated_client_id: str | None = None,
+        wire_request_id: str | None = None,
     ) -> dict[str, Any]:
         params = dict(request.params)
         if isinstance(request, QueryRequest):
-            target = QUERY_TARGETS[request.name]
-        elif request.name is CommandName.ORCHESTRATION_EXECUTE:
-            target = "command.submit"
-            params = self._orchestration_command(params)
-        else:
-            target = COMMAND_TARGETS[request.name]
-            if request.name is CommandName.APPROVAL_DECIDE:
-                if authenticated_client_id is None:
-                    raise ValueError("approval.decide requires an authenticated client")
-                params["reviewer"] = {
+            operation = query_operation(request.name)
+            params = self._validate_params(
+                operation.params_model, params, capability=request.name.value
+            )
+            result = await self._application.query(request.name, params)
+            return self._validate_result(
+                operation.result_model, result, capability=request.name.value
+            )
+
+        if request.name is CommandName.ORCHESTRATION_EXECUTE:
+            operation = command_operation(request.name)
+            params = self._validate_params(
+                operation.params_model, params, capability=request.name.value
+            )
+            result = await self._application.command(request.name, params)
+            return self._validate_result(
+                operation.result_model, result, capability=request.name.value
+            )
+
+        if request.name is CommandName.APPROVAL_DECIDE:
+            if authenticated_client_id is None:
+                raise ValueError("approval.decide requires an authenticated client")
+            params["reviewer"] = {
+                "kind": "client",
+                "id": authenticated_client_id,
+            }
+        elif request.name in _SESSION_WRITER_COMMANDS:
+            if authenticated_client_id is not None:
+                params["holder"] = {
                     "kind": "client",
                     "id": authenticated_client_id,
                 }
-            elif request.name in _SESSION_WRITER_COMMANDS:
-                if authenticated_client_id is not None:
-                    params["holder"] = {
-                        "kind": "client",
-                        "id": authenticated_client_id,
-                    }
-                else:
-                    params["holder"] = dict(_TRUSTED_LOCAL_HOLDER)
-        result = await self._broker.request(target, params, timeout_s=timeout_s)
-        return cast(dict[str, Any], result)
+            else:
+                params["holder"] = dict(_TRUSTED_LOCAL_HOLDER)
+        elif request.name is CommandName.SESSION_COMMAND_EXECUTE:
+            if authenticated_client_id is not None:
+                params["principal"] = {
+                    "kind": "client",
+                    "id": authenticated_client_id,
+                }
+            else:
+                params["principal"] = dict(_TRUSTED_LOCAL_HOLDER)
+
+        if request.name in _CORRELATED_COMMANDS and params.get("request_id") is None:
+            params["request_id"] = str(domain_request_id(wire_request_id=wire_request_id))
+
+        operation = command_operation(request.name)
+        params = self._validate_params(
+            operation.params_model, params, capability=request.name.value
+        )
+        result = await self._application.command(request.name, params)
+        return self._validate_result(operation.result_model, result, capability=request.name.value)
 
     @staticmethod
-    def _orchestration_command(params: dict[str, object]) -> dict[str, object]:
-        """Hide the internal worker address from the public command contract."""
+    def _validate_params(
+        model: object,
+        params: dict[str, object],
+        *,
+        capability: str,
+    ) -> dict[str, object]:
+        try:
+            validated = TypeAdapter(model).validate_python(params)
+            return TypeAdapter(model).dump_python(validated, mode="json", exclude_none=False)
+        except ValidationError as exc:
+            raise ValueError(f"invalid params for {capability}: {exc}") from exc
 
-        kind = params.get("kind")
-        payload = params.get("payload", {})
-        if not isinstance(kind, str) or not kind:
-            raise ValueError("orchestration.execute requires a non-empty kind")
-        action = OrchestrationAction(kind)
-        if not isinstance(payload, dict):
-            raise ValueError("orchestration.execute payload must be an object")
-        out = dict(params)
-        out["kind"] = action.value
-        out["target_worker"] = "orchestrator"
-        return out
+    @staticmethod
+    def _validate_result(
+        model: object,
+        result: dict[str, Any],
+        *,
+        capability: str,
+    ) -> dict[str, Any]:
+        try:
+            validated = TypeAdapter(model).validate_python(result)
+            return TypeAdapter(model).dump_python(validated, mode="json", exclude_none=False)
+        except ValidationError as exc:
+            raise ValueError(f"invalid result for {capability}: {exc}") from exc

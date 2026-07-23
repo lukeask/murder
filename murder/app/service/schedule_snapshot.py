@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from murder.app.service.client_api import (
+from murder.app.protocol.read_models import (
     CalendarRunningAgent,
     CalendarScheduledTicket,
     SchedulerDecisionSummary,

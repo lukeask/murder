@@ -9,7 +9,12 @@ from uuid import UUID, uuid4
 import pytest
 
 from murder.app.service.runtime import Runtime
-from murder.facts.contracts import FactActor, FactCorrelation, RetainedFactDraft
+from murder.facts.contracts import (
+    FactActor,
+    FactCorrelation,
+    PrivateFactPayload,
+    RetainedFactDraft,
+)
 from murder.facts.log import append_fact
 from murder.runtime.activity_dispatcher import ActivityDispatcher
 from murder.runtime.admission import (
@@ -946,11 +951,13 @@ def test_default_fact_trigger_observes_retained_facts_and_resumes() -> None:
     append_fact(
         conn,
         RetainedFactDraft(
-            kind="build.completed",
             occurred_at=NOW,
             actor=FactActor(kind="service", id="builder"),
             correlation=FactCorrelation(correlation_id=uuid4()),
-            payload={"result": {"status": "ok"}},
+            payload=PrivateFactPayload(
+                kind="build.completed",
+                data={"result": {"status": "ok"}},
+            ),
         ),
         recorded_at=NOW,
     )

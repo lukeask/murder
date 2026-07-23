@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from murder.app.service.client_api import ScheduleTicketRow, TicketSummary
+from murder.app.protocol.read_models import ScheduleTicketRow, TicketSummary
 from murder.app.service.schedule_snapshot import build_schedule_snapshot
 from murder.state.persistence import tickets as ticket_db
 from murder.state.persistence.schema import get_db, init_db

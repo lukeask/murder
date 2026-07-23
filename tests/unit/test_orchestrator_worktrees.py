@@ -192,7 +192,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
     rt = _Runtime(repo_root=repo_root, config=config, db=conn)
     captured = {}
 
-    async def fake_ensure(_repo: Path, _branch_name: str) -> WorktreeRef:
+    async def fake_ensure(_repo: Path, _branch_name: str, **_kwargs: object) -> WorktreeRef:
         raise AssertionError("worktrees must be opt-in")
 
     async def fake_spawn_agent(spec, *, rt, event_sink):
@@ -249,7 +249,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
     worktree = repo_root / ".murder" / "worktrees" / "feature-c6"
     captured = {}
 
-    async def fake_ensure(repo: Path, branch_name: str) -> WorktreeRef:
+    async def fake_ensure(repo: Path, branch_name: str, **_kwargs: object) -> WorktreeRef:
         captured["ensure"] = (repo, branch_name)
         return WorktreeRef(branch="feature/c6", path=worktree)
 

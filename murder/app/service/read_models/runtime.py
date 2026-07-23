@@ -7,7 +7,7 @@ from collections import defaultdict
 from contextlib import closing
 from datetime import datetime
 
-from murder.app.service.client_api import (
+from murder.app.protocol.read_models import (
     ConversationBlockSummary,
     ConversationChunkSummary,
     ConversationsSnapshot,
@@ -100,7 +100,7 @@ class RuntimeReadModel(ReadModelBase):
                 ticket_id=_optional_str(row["ticket_id"]) or None,
                 ticket_title=str(row["title"] or ""),
                 status=str(row["status"]),
-                session_name=_optional_str(row["session"]),
+                display_name=_optional_str(row["session"]),
                 harness=_optional_str(row["harness"]),
                 last_seen=_parse_datetime(row["last_heartbeat_at"]),
                 started_at=_parse_datetime(row["started_at"]),

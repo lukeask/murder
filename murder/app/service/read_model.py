@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from murder.app.service.client_api import (
+from murder.app.protocol.read_models import (
     ConversationsSnapshot,
     CrowSnapshot,
     HistorySnapshot,

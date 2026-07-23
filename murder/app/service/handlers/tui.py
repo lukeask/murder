@@ -6,6 +6,12 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.workflows import (
+    GetWorkflowsParams,
+    SetWorkflowsParams,
+    StartWorkflowParams,
+)
+
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
 
@@ -65,34 +71,26 @@ def register(host: ServiceHost) -> None:
             raise ValueError("tui.save_templates requires templates list")
         return {"ok": True, "templates": save_templates(templates)}
 
-    def _tui_load_workflows(_body: dict[str, Any]) -> dict[str, Any]:
+    def _tui_load_workflows(body: dict[str, Any]) -> dict[str, Any]:
         from murder.user_config import load_workflows
 
+        GetWorkflowsParams.model_validate(body or {})
         return {"ok": True, "workflows": load_workflows()}
 
     def _tui_save_workflows(body: dict[str, Any]) -> dict[str, Any]:
         from murder.user_config import save_workflows
 
-        workflows = body.get("workflows")
-        if not isinstance(workflows, list):
-            raise ValueError("tui.save_workflows requires workflows list")
+        params = SetWorkflowsParams.model_validate(body)
+        workflows = [item.model_dump(mode="json") for item in params.workflows]
         return {"ok": True, "workflows": save_workflows(workflows)}
 
     async def _tui_run_workflow(body: dict[str, Any]) -> dict[str, Any]:
         from murder.bus import Entity
         from murder.work.workflows.launch import run_workflow_by_name
 
-        name = str(body.get("name", "")).strip()
-        if not name:
-            raise ValueError("tui.run_workflow requires name")
-        raw_args = body.get("args")
-        if raw_args is None:
-            raw_args = {}
-        if not isinstance(raw_args, dict):
-            raise ValueError("tui.run_workflow args must be an object")
-        # Placeholder substitution is string-only; coerce so a numeric/bool
-        # arg from the wire still fills a ``{key}`` token cleanly.
-        args = {str(k): str(v) for k, v in raw_args.items()}
+        params = StartWorkflowParams.model_validate(body)
+        name = params.name
+        args = params.args
 
         # Single start guard covering runtime+db+orchestrator, matching the
         # sibling handlers' message. (orchestrator and runtime are set

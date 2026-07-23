@@ -99,6 +99,8 @@ def test_websocket_speaks_service_application_protocol(tmp_path: Path) -> None:
     from aiohttp import web as aioweb
     from aiohttp.test_utils import TestClient, TestServer
 
+    from murder.app.protocol.requests import CommandName, QueryName
+    from murder.app.service.gateway import ApplicationGateway
     from murder.bus.transport_socket import SocketBusServer
 
     class _Broker:
@@ -106,7 +108,7 @@ def test_websocket_speaks_service_application_protocol(tmp_path: Path) -> None:
             self.published: list[object] = []
 
         async def request(self, target: str, body: dict, *, timeout_s: float) -> dict:
-            return {"target": target, "body": body, "timeout_s": timeout_s}
+            raise AssertionError("application requests must not use broker RPC")
 
         async def publish(self, event: object) -> None:
             self.published.append(event)
@@ -128,6 +130,13 @@ def test_websocket_speaks_service_application_protocol(tmp_path: Path) -> None:
                 await asyncio.sleep(3600)
             yield
 
+    class _Application:
+        async def query(self, name: QueryName, params: dict) -> dict:
+            return {"capability": name.value, "params": params}
+
+        async def command(self, name: CommandName, params: dict) -> dict:
+            return {"capability": name.value, "params": params}
+
     socket_path = tmp_path / "service.sock"
 
     async def _scenario() -> None:
@@ -135,6 +144,7 @@ def test_websocket_speaks_service_application_protocol(tmp_path: Path) -> None:
             _Broker(),  # type: ignore[arg-type]
             run_id="run-web-test",
             socket_path=socket_path,
+            application_gateway=ApplicationGateway(_Application()),  # type: ignore[arg-type]
         )
         try:
             await service.start()
@@ -166,7 +176,7 @@ def test_websocket_speaks_service_application_protocol(tmp_path: Path) -> None:
             reply = await ws.receive_json(timeout=2)
             assert reply["op"] == "reply"
             assert reply["request_id"] == "health-1"
-            assert reply["result"]["target"] == "health.ping"
+            assert reply["result"] == {"capability": "health.get", "params": {}}
             await ws.close()
         finally:
             await client.close()

@@ -183,7 +183,49 @@ def test_session_writer_get_returns_active_lease(wired_handlers) -> None:
     assert result["lease"]["mode"] == "structured"
 
     missing = host.handlers["session.writer.get"]({"session_id": str(uuid4())})
-    assert missing == {"ok": False, "error": "not_found"}
+    assert missing == {"ok": False, "error": "not_found", "lease": None}
+
+
+@pytest.mark.asyncio
+async def test_session_command_execute_round_trip(wired_handlers) -> None:
+    host, session_id, _store, _registry = wired_handlers
+    principal = PrincipalRef(kind=PrincipalKind.SERVICE, id="trusted-local")
+    operation_id = uuid4()
+
+    result = await host.handlers["session.command.execute"](
+        {
+            "session_id": str(session_id),
+            "command": {
+                "type": "send_structured_message",
+                "operation_id": str(operation_id),
+                "text": "hello",
+            },
+            "principal": principal.model_dump(mode="json"),
+        }
+    )
+
+    receipt = result["receipt"]
+    assert receipt["operation_id"] == str(operation_id)
+    assert receipt["session_id"] == str(session_id)
+    assert receipt["revision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_session_command_execute_requires_principal(wired_handlers) -> None:
+    host, session_id, _store, _registry = wired_handlers
+    operation_id = uuid4()
+
+    with pytest.raises(ValueError, match="requires a principal"):
+        await host.handlers["session.command.execute"](
+            {
+                "session_id": str(session_id),
+                "command": {
+                    "type": "send_structured_message",
+                    "operation_id": str(operation_id),
+                    "text": "hello",
+                },
+            }
+        )
 
 
 @pytest.mark.asyncio

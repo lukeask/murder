@@ -1,7 +1,7 @@
 """Per-snapshot cross-language field-shape goldens for the read-reply DTOs (A-D2 / B-D5).
 
 The Ink TUI declares a TypeScript interface per read-reply DTO that *hand-mirrors* a
-Python dataclass in ``murder/app/service/client_api.py`` (``CrowSessionSummary``,
+Python dataclass in ``murder/app/protocol/read_models.py`` (``CrowSessionSummary``,
 ``PlanSummary``, ``NoteSummary``, ``ReportSummary``, ``TicketDetailSnapshot``, plus the
 schedule snapshot's ``ScheduleTicketRow`` / ``UsageGaugeSummary``). There is no schema
 validation at that seam, so a field rename or type change on either side drifts silently —
@@ -46,19 +46,19 @@ from typing import Any
 
 import pytest
 
-from murder.app.service.client_api import (
+from murder.app.protocol.read_models import (
     ChecklistItem,
     CrowSessionSummary,
     CrowSnapshot,
-    NoteSummary,
     NotesSnapshot,
-    PlanSummary,
+    NoteSummary,
     PlansSnapshot,
-    ReportSummary,
+    PlanSummary,
     ReportsSnapshot,
+    ReportSummary,
+    SchedulerDecisionSummary,
     ScheduleSnapshot,
     ScheduleTicketRow,
-    SchedulerDecisionSummary,
     TicketDetailSnapshot,
     UsageGaugeSummary,
     dto_to_wire,
@@ -104,8 +104,6 @@ def _ticket_detail_dto() -> TicketDetailSnapshot:
         model="opus",
         worktree="/wt/t-101",
         schedule_at=None,
-        plan_md="# Body\n\nDo the thing.\n",
-        working_notes_md="started reading\n",
         as_of=AS_OF,
         invalidation_key="ticket_detail:T-101",
     )
@@ -120,7 +118,7 @@ def _crow_snapshot_dto() -> CrowSnapshot:
                 ticket_id="T-101",
                 ticket_title="Wire the detail pane",
                 status="running",
-                session_name="crow-7-sess",
+                display_name="crow-7-sess",
                 harness="cc",
                 last_seen=TS,
                 started_at=AS_OF,
@@ -138,7 +136,7 @@ def _crow_snapshot_dto() -> CrowSnapshot:
                 ticket_id=None,
                 ticket_title=None,
                 status="idle",
-                session_name=None,
+                display_name=None,
                 harness=None,
                 last_seen=None,
                 started_at=None,

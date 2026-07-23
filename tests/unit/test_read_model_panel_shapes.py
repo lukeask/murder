@@ -106,8 +106,8 @@ def test_ticket_detail_carries_body_and_header_fields(repo_root) -> None:
         ("second step", True),
     )
 
-    # Legacy split sections still populated for back-compat consumers.
-    assert detail.plan_md.startswith("Build the thing.")
+    # The unified body is the only prose representation on the wire.
+    assert "Build the thing." in detail.body
 
 
 def test_ticket_detail_body_falls_back_when_no_frontmatter(repo_root) -> None:

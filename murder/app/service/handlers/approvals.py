@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
-from uuid import UUID
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from murder.permissions.contracts import ApprovalChoice, PermissionPrincipal
+from murder.app.protocol.permissions import (
+    DecideApprovalParams,
+    GetApprovalParams,
+    ListApprovalsParams,
+    ListPermissionsParams,
+)
 from murder.permissions.persistence import PermissionStore
 from murder.state.persistence.approvals import (
     resolve_approval_request,
@@ -20,35 +22,6 @@ if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
 
 
-class _Params(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class ListApprovalsParams(_Params):
-    status: Literal[
-        "pending",
-        "approved",
-        "denied",
-        "expired",
-        "cancelled",
-    ] | None = None
-    workflow_id: UUID | None = None
-
-
-class GetApprovalParams(_Params):
-    approval_id: UUID
-
-
-class DecideApprovalParams(_Params):
-    approval_id: UUID
-    workflow_id: UUID | None = None
-    expected_workflow_revision: int | None = Field(default=None, ge=0)
-    expected_operation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    choice: ApprovalChoice
-    rationale: str = Field(min_length=1, max_length=4000)
-    reviewer: PermissionPrincipal
-
-
 def register(host: ServiceHost) -> None:
     def _db() -> sqlite3.Connection:
         runtime = host.runtime
@@ -56,7 +29,7 @@ def register(host: ServiceHost) -> None:
             raise RuntimeError("service not started")
         return runtime.db
 
-    def _list(body: dict[str, object]) -> dict[str, object]:
+    def _list(body: dict[str, Any]) -> dict[str, Any]:
         params = ListApprovalsParams.model_validate(body)
         requests = PermissionStore(_db()).list_approval_requests(
             status=params.status,
@@ -66,22 +39,25 @@ def register(host: ServiceHost) -> None:
             "approvals": [item.model_dump(mode="json") for item in requests],
         }
 
-    def _get(body: dict[str, object]) -> dict[str, object]:
+    def _get(body: dict[str, Any]) -> dict[str, Any]:
         params = GetApprovalParams.model_validate(body)
         request = PermissionStore(_db()).get_approval_request(params.approval_id)
         if request is None:
             return {"ok": False, "error": "not_found"}
         return {"ok": True, "approval": request.model_dump(mode="json")}
 
-    def _list_permissions(body: dict[str, object]) -> dict[str, object]:
-        _Params.model_validate(body)
+    def _list_permissions(body: dict[str, Any]) -> dict[str, Any]:
+        ListPermissionsParams.model_validate(body)
         grants = PermissionStore(_db()).list_grants()
         return {
             "grants": [item.model_dump(mode="json") for item in grants],
         }
 
-    def _decide(body: dict[str, object]) -> dict[str, object]:
+    def _decide(body: dict[str, Any]) -> dict[str, Any]:
         params = DecideApprovalParams.model_validate(body)
+        if params.reviewer is None:
+            raise ValueError("approval.decide requires a reviewer")
+        reviewer = params.reviewer
         connection = _db()
         request = PermissionStore(connection).get_approval_request(params.approval_id)
         if request is None:
@@ -101,7 +77,7 @@ def register(host: ServiceHost) -> None:
                 approval_id=params.approval_id,
                 expected_workflow_revision=params.expected_workflow_revision,
                 expected_operation_digest=params.expected_operation_digest,
-                reviewer=params.reviewer,
+                reviewer=reviewer,
                 choice=params.choice,
                 rationale=params.rationale,
                 decided_at=now,
@@ -116,7 +92,7 @@ def register(host: ServiceHost) -> None:
                 connection,
                 approval_id=params.approval_id,
                 expected_operation_digest=params.expected_operation_digest,
-                reviewer=params.reviewer,
+                reviewer=reviewer,
                 choice=params.choice,
                 rationale=params.rationale,
                 decided_at=now,
@@ -137,9 +113,4 @@ def register(host: ServiceHost) -> None:
     host.register_rpc_handler("permissions.list", _list_permissions)
 
 
-__all__ = [
-    "DecideApprovalParams",
-    "GetApprovalParams",
-    "ListApprovalsParams",
-    "register",
-]
+__all__ = ["register"]

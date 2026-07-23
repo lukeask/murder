@@ -1,7 +1,9 @@
-"""Built-in RPC handlers, grouped by namespace.
+"""Built-in feature handlers, grouped by namespace.
 
 ``register_all(host)`` populates ``host._rpc_handlers`` with every default
-handler, dispatching to one module per RPC namespace.
+handler. The application composition root resolves these functions once into
+enum-keyed direct dispatch; the string registry remains only for old RPC
+consumers during retirement.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from murder.app.service.handlers import (
     ticket,
     trigger,
     tui,
+    workflows,
     worktree,
 )
 
@@ -39,6 +42,7 @@ def register_all(host: ServiceHost) -> None:
     plan.register(host)
     image.register(host)
     tui.register(host)
+    workflows.register(host)
     trigger.register(host)
     settings.register(host)
     worktree.register(host)

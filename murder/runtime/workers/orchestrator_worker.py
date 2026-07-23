@@ -342,6 +342,19 @@ _HANDLERS: dict[str, Handler] = {
 }
 
 
+async def dispatch_orchestrator_command(
+    orchestrator: OrchestratorCommands,
+    kind: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Execute an orchestration use case without publishing a bus command."""
+
+    handler = _HANDLERS.get(kind)
+    if handler is None:
+        raise ValueError(f"unsupported orchestration command {kind!r}")
+    return await handler(orchestrator, payload)
+
+
 class OrchestratorCommandWorker(Worker):
     def __init__(self, orchestrator: OrchestratorCommands) -> None:
         super().__init__(
@@ -357,10 +370,11 @@ class OrchestratorCommandWorker(Worker):
         await stop_event.wait()
 
     async def on_command(self, command: CommandEvent, ctx: WorkerCtx) -> dict[str, Any]:  # noqa: ARG002
-        handler = _HANDLERS.get(command.kind)
-        if handler is None:
+        if command.kind not in _HANDLERS:
             # Wiring-miss signal (plan-command-result-contract): a kind reached
             # this worker with no handler. Keep the three-way contract's "not
             # handled here" return distinct from a domain failure.
             return {"handled": False}
-        return await handler(self._orch, command.payload)
+        return await dispatch_orchestrator_command(
+            self._orch, command.kind, command.payload
+        )

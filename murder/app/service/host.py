@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from murder.app.service.application import ApplicationDispatcher
 from murder.app.service.bootstrap import start_supervisor_workers
+from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.runtime import (
     ActivityDispatcherFactory,
@@ -31,6 +33,7 @@ from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
 from murder.observability.advanced_log import ParserRecord, current_advanced_log
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.runtime.workers.orchestrator_worker import dispatch_orchestrator_command
 from murder.state.storage.paths import db_path
 from murder.state.storage.service_registry import (
     project_session_name,
@@ -55,7 +58,7 @@ RpcHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, An
 
 @dataclass
 class ServiceHost:
-    """Wires runtime, bus broker, socket server, orchestrator, and supervisor.
+    """Wires runtime, application services, socket server, and legacy workers.
 
     Responsibility (keep it this narrow): the process COMPOSITION ROOT and
     lifecycle owner. ``start``/``stop`` wire the collaborators and own the
@@ -160,7 +163,7 @@ class ServiceHost:
         self._rpc_handlers[method] = handler
 
     def register_default_rpc_handlers(self) -> None:
-        """Register all built-in RPC handlers, grouped by namespace under handlers/."""
+        """Register feature handlers for direct and retiring RPC consumers."""
         from murder.app.service.handlers import register_all
 
         register_all(self)
@@ -236,11 +239,28 @@ class ServiceHost:
 
             self.runtime._sync.set_parse_error_notifier(_send_parse_error)
 
+        orchestrator = self.orchestrator
+
+        async def _execute_orchestration(body: dict[str, Any]) -> dict[str, Any]:
+            payload = body.get("payload", {})
+            if not isinstance(payload, dict):
+                raise ValueError("orchestration payload must be an object")
+            return await dispatch_orchestrator_command(
+                orchestrator,
+                str(body["kind"]),
+                payload,
+            )
+
+        application = ApplicationDispatcher.compose(
+            self._rpc_handlers,
+            orchestration=_execute_orchestration,
+        )
         self.socket_server = SocketBusServer(
             self.broker,
             run_id=self.runtime.run_id,
             socket_path=self.socket_path,
             tmux_frame_capture=self._capture_tmux_frame,
+            application_gateway=ApplicationGateway(application),
         )
         await self.socket_server.start()
         session = write_service_session(self.repo_root, self.socket_path)
