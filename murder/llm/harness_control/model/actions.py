@@ -213,6 +213,52 @@ class SleepEffect(TerminalEffect):
     duration: timedelta
 
 
+@dataclass(frozen=True, slots=True)
+class AppServerRpcEffect(TerminalEffect):
+    """JSON-RPC effect for an app-server control backend.
+
+    Outbound calls use ``method`` / ``params`` with ``expects_response`` selecting
+    request vs notify.  Replies to server→client requests (e.g. approvals) set
+    ``response_id`` and send a JSON-RPC response instead of a new request.
+    """
+
+    method: str
+    params: dict[str, object] | None = None
+    expects_response: bool = True
+    response_id: str | int | None = None
+    response_result: dict[str, object] | None = None
+    response_error: dict[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AgentSdkEffect(TerminalEffect):
+    """Effect for the Claude Agent SDK control backend.
+
+    ``op`` selects the connection method. Permission replies use ``request_id``
+    plus ``permission_behavior`` / optional ``updated_input`` / ``message``.
+    """
+
+    op: str  # query | interrupt | set_model | respond_permission
+    params: dict[str, object] | None = None
+    request_id: str | None = None
+    permission_behavior: str | None = None
+    updated_input: dict[str, object] | None = None
+    message: str | None = None
+    interrupt: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AcpRpcEffect(TerminalEffect):
+    """JSON-RPC effect for an ACP control backend."""
+
+    method: str
+    params: dict[str, object] | None = None
+    expects_response: bool = True
+    response_id: str | int | None = None
+    response_result: dict[str, object] | None = None
+    response_error: dict[str, object] | None = None
+
+
 class EmissionStatus(Enum):
     PENDING = auto()
     EMITTED = auto()

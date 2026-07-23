@@ -17,6 +17,9 @@ from enum import IntEnum
 from typing import Protocol
 
 from murder.llm.harness_control.model.actions import (
+    AcpRpcEffect,
+    AgentSdkEffect,
+    AppServerRpcEffect,
     DelayProfile,
     EffectEmission,
     EmissionBatchResult,
@@ -43,11 +46,11 @@ class IntentPriority(IntEnum):
 class TerminalEffectTransport(Protocol):
     """Physical terminal transport used by one actuator/session.
 
-    The production implementation will delegate to tmux.  Keeping this narrow
-    prevents the actuator from importing tmux or adapter-specific behavior.
-    ``inter_key_delay`` is intentionally passed through so the transport can
-    implement harness-approved fast humanized typing without exposing that
-    physical policy to controllers.
+    Production transports may be tmux keystroke emission or app-server JSON-RPC.
+    Keeping this narrow prevents the actuator from importing transport-specific
+    behavior.  ``inter_key_delay`` is intentionally passed through so a tmux
+    transport can implement harness-approved fast humanized typing without
+    exposing that physical policy to controllers.
     """
 
     async def send_literal_keys(
@@ -60,6 +63,12 @@ class TerminalEffectTransport(Protocol):
     async def paste_buffer(self, text: str) -> None: ...
 
     async def send_named_key(self, key: str) -> None: ...
+
+    async def invoke_app_server_rpc(self, effect: AppServerRpcEffect) -> None: ...
+
+    async def invoke_agent_sdk(self, effect: AgentSdkEffect) -> None: ...
+
+    async def invoke_acp_rpc(self, effect: AcpRpcEffect) -> None: ...
 
 
 class ActuatorError(RuntimeError):
@@ -224,6 +233,12 @@ class HarnessActuator:
                 await self._transport.send_named_key(key)
             case SleepEffect(duration=duration):
                 await self._sleep(_seconds(duration))
+            case AppServerRpcEffect():
+                await self._transport.invoke_app_server_rpc(effect)
+            case AgentSdkEffect():
+                await self._transport.invoke_agent_sdk(effect)
+            case AcpRpcEffect():
+                await self._transport.invoke_acp_rpc(effect)
             case _:
                 raise TypeError(f"unsupported terminal effect: {type(effect).__name__}")
 

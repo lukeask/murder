@@ -10,7 +10,12 @@ from __future__ import annotations
 import asyncio
 import random
 
-from murder.llm.harness_control.model.actions import DelayProfile
+from murder.llm.harness_control.model.actions import (
+    AcpRpcEffect,
+    AgentSdkEffect,
+    AppServerRpcEffect,
+    DelayProfile,
+)
 from murder.runtime.terminal import tmux
 
 
@@ -33,6 +38,15 @@ class TmuxTerminalEffectTransport:
 
     async def send_named_key(self, key: str) -> None:
         await tmux.send_keys(self._session, key, literal=False, enter=False)
+
+    async def invoke_app_server_rpc(self, effect: AppServerRpcEffect) -> None:
+        raise TypeError("tmux transport cannot invoke app-server RPC")
+
+    async def invoke_agent_sdk(self, effect: AgentSdkEffect) -> None:
+        raise TypeError("tmux transport cannot invoke Agent SDK effects")
+
+    async def invoke_acp_rpc(self, effect: AcpRpcEffect) -> None:
+        raise TypeError("tmux transport cannot invoke ACP RPC")
 
     def _delay_seconds(self, profile: DelayProfile) -> float:
         low, high = profile.min_delay_ms, profile.max_delay_ms
