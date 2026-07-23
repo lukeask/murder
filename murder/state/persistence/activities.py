@@ -14,10 +14,12 @@ from uuid import UUID, uuid4, uuid5
 from pydantic import TypeAdapter
 
 from murder.facts.contracts import (
+    ActivityOutcomeRecordedPayload,
     ActivityStateChangedPayload,
+    ActivityStateFactType,
     AggregateRef,
     FactActor,
-    FactCorrelation,
+    PrivateFactPayload,
     ProjectionInputDraft,
     RetainedFactDraft,
 )
@@ -590,25 +592,37 @@ def _append_completion_fact(
     kind: str | None = None,
 ) -> None:
     run = require_workflow_run(conn, activity.workflow_id)
+    fact_type = kind or f"activity.{_outcome_status(outcome).value}"
+    outcome_data = _OUTCOME.dump_python(outcome, mode="json")
+    if fact_type in {"activity.succeeded", "activity.failed", "activity.cancelled"}:
+        payload: ActivityOutcomeRecordedPayload | PrivateFactPayload = (
+            ActivityOutcomeRecordedPayload(
+                type=fact_type,  # type: ignore[arg-type]
+                workflow_id=activity.workflow_id,
+                result_id=result_id,
+                attempt=attempt,
+                outcome=outcome_data,
+            )
+        )
+    else:
+        payload = PrivateFactPayload(
+            kind=fact_type,
+            data={
+                "workflow_id": str(activity.workflow_id),
+                "result_id": str(result_id),
+                "attempt": attempt,
+                "outcome": outcome_data,
+            },
+        )
     append_fact(
         conn,
         RetainedFactDraft(
             fact_id=result_id,
-            kind=kind or f"activity.{_outcome_status(outcome).value}",
             occurred_at=timestamp,
             aggregate=AggregateRef(kind="activity", id=activity.activity_id, revision=attempt),
             actor=FactActor(kind=actor_kind, id=actor_id),
-            correlation=FactCorrelation(
-                correlation_id=run.correlation.correlation_id,
-                causation_id=run.correlation.causation_id,
-                trace_id=run.correlation.trace_id,
-            ),
-            payload={
-                "workflow_id": str(activity.workflow_id),
-                "result_id": str(result_id),
-                "attempt": attempt,
-                "outcome": _OUTCOME.dump_python(outcome, mode="json"),
-            },
+            correlation=run.correlation,
+            payload=payload,
         ),
         projection_inputs=(
             ProjectionInputDraft(
@@ -637,10 +651,11 @@ def _append_activity_input(
     timestamp: datetime,
 ) -> None:
     run = require_workflow_run(conn, activity.workflow_id)
+    fact_type: ActivityStateFactType = f"activity.{operation}"  # type: ignore[assignment]
     payload = ActivityStateChangedPayload(
+        type=fact_type,
         activity_id=activity.activity_id,
         workflow_id=activity.workflow_id,
-        operation=operation,
         status=activity.status.value,
         revision=activity.revision,
         attempt=activity.attempts,
@@ -653,7 +668,6 @@ def _append_activity_input(
                 _ACTIVITY_FACT_NAMESPACE,
                 f"state:{activity.activity_id}:{activity.revision}:{operation}",
             ),
-            kind=f"activity.{operation}",
             occurred_at=timestamp,
             aggregate=AggregateRef(
                 kind="activity",
@@ -661,12 +675,8 @@ def _append_activity_input(
                 revision=activity.revision,
             ),
             actor=FactActor(kind="activity", id=str(activity.activity_id)),
-            correlation=FactCorrelation(
-                correlation_id=run.correlation.correlation_id,
-                causation_id=run.correlation.causation_id,
-                trace_id=run.correlation.trace_id,
-            ),
-            payload=payload.model_dump(mode="json"),
+            correlation=run.correlation,
+            payload=payload,
         ),
         projection_inputs=(
             ProjectionInputDraft(

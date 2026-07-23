@@ -225,7 +225,7 @@ def test_chunk_summaries_in_read_model_snapshot(repo_root_tmp_conn=None) -> None
     """The conversations snapshot carries ordered chunk summaries + block ids."""
     import sqlite3
 
-    from murder.app.service.client_api import ConversationChunkSummary
+    from murder.app.protocol.read_models import ConversationChunkSummary
 
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row

@@ -15,19 +15,20 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from uuid import UUID, uuid4, uuid5
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import TypeAdapter
 
 from murder.facts.contracts import (
     AggregateRef as FactAggregateRef,
 )
 from murder.facts.contracts import (
-    FactActor,
-    FactCorrelation,
+    FactPayload,
     ProjectionInputDraft,
     RetainedFactDraft,
     WorkflowStartedPayload,
     WorkflowStateMigratedPayload,
     WorkflowTransitionAppliedPayload,
+    fact_actor,
+    fact_payload_from_storage,
 )
 from murder.facts.log import append_fact
 from murder.work.workflows.runtime import (
@@ -158,8 +159,7 @@ def create_workflow_run(
                 _WORKFLOW_FACT_NAMESPACE,
                 f"{run.workflow_id}:{run.revision}:started",
             ),
-            kind=started_payload.type,
-            payload=started_payload.model_dump(mode="json"),
+            payload=started_payload,
             occurred_at=run.created_at,
             invalidate=True,
         )
@@ -620,8 +620,7 @@ def apply_workflow_state_migration(
                 _WORKFLOW_FACT_NAMESPACE,
                 f"{workflow_id}:{to_revision}:state-migrated",
             ),
-            kind=migrated_payload.type,
-            payload=migrated_payload.model_dump(mode="json"),
+            payload=migrated_payload,
             occurred_at=timestamp,
             invalidate=True,
         )
@@ -716,8 +715,7 @@ def _append_transition_facts(
             _WORKFLOW_FACT_NAMESPACE,
             f"{workflow.workflow_id}:{revision}:transition",
         ),
-        kind=transition_payload.type,
-        payload=transition_payload.model_dump(mode="json"),
+        payload=transition_payload,
         occurred_at=created_at,
         invalidate=True,
     )
@@ -740,8 +738,7 @@ def _append_transition_facts(
                 _WORKFLOW_FACT_NAMESPACE,
                 f"{workflow.workflow_id}:{revision}:{ordinal}",
             ),
-            kind=draft.kind,
-            payload=draft.payload,
+            payload=fact_payload_from_storage(draft.kind, draft.payload),
             occurred_at=created_at,
             aggregate=aggregate,
         )
@@ -753,8 +750,7 @@ def _append_workflow_fact(
     workflow: WorkflowRunRecord,
     revision: int,
     fact_id: UUID,
-    kind: str,
-    payload: dict[str, JsonValue],
+    payload: FactPayload,
     occurred_at: datetime,
     aggregate: FactAggregateRef | None = None,
     invalidate: bool = False,
@@ -763,7 +759,6 @@ def _append_workflow_fact(
         conn,
         RetainedFactDraft(
             fact_id=fact_id,
-            kind=kind,
             occurred_at=occurred_at,
             aggregate=aggregate
             or FactAggregateRef(
@@ -771,15 +766,8 @@ def _append_workflow_fact(
                 id=workflow.workflow_id,
                 revision=revision,
             ),
-            actor=FactActor(
-                kind=workflow.started_by.kind.value,
-                id=workflow.started_by.id,
-            ),
-            correlation=FactCorrelation(
-                correlation_id=workflow.correlation.correlation_id,
-                causation_id=workflow.correlation.causation_id,
-                trace_id=workflow.correlation.trace_id,
-            ),
+            actor=fact_actor(workflow.started_by),
+            correlation=workflow.correlation,
             payload=payload,
         ),
         projection_inputs=(

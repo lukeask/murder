@@ -10,13 +10,21 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from enum import Enum
 from typing import Annotated, Generic, Literal, Protocol, TypeVar
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue
 
+from murder.contracts.common import (
+    Correlation,
+    Principal,
+    PrincipalKind,  # noqa: F401 — re-exported for workflow call sites
+    StrEnum,
+)
 from murder.permissions.contracts import GrantScope, PermissionPrincipal
+
+# Compatibility spelling for workflow call sites.
+PrincipalRef = Principal
 
 
 class WorkflowContract(BaseModel):
@@ -29,31 +37,7 @@ class WorkflowContract(BaseModel):
     )
 
 
-class _StringEnum(str, Enum):
-    def __str__(self) -> str:
-        return str.__str__(self)
-
-
-class PrincipalKind(_StringEnum):
-    USER = "user"
-    CLIENT = "client"
-    WORKFLOW = "workflow"
-    SERVICE = "service"
-    REVIEWER = "reviewer"
-
-
-class PrincipalRef(WorkflowContract):
-    kind: PrincipalKind
-    id: str = Field(min_length=1)
-
-
-class Correlation(WorkflowContract):
-    correlation_id: UUID
-    causation_id: UUID | None = None
-    trace_id: UUID | None = None
-
-
-class WorkflowStatus(_StringEnum):
+class WorkflowStatus(StrEnum):
     RUNNING = "running"
     WAITING = "waiting"
     COMPLETED = "completed"
@@ -115,7 +99,7 @@ class WorkflowStateMigrationRecord(WorkflowContract):
     migrated_at: AwareDatetime
 
 
-class StageStatus(_StringEnum):
+class StageStatus(StrEnum):
     BLOCKED = "blocked"
     READY = "ready"
     REQUESTED = "requested"

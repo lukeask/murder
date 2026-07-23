@@ -11,10 +11,11 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from murder.facts.contracts import (
     AggregateRef,
-    FactActor,
     FactCorrelation,
+    PrivateFactPayload,
     ProjectionInputDraft,
     RetainedFactDraft,
+    fact_actor,
 )
 from murder.facts.log import append_fact
 from murder.permissions.contracts import (
@@ -260,22 +261,24 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
                         NAMESPACE_URL,
                         f"murder:approval-resolved:{approval_id}:{decision.decision_id}",
                     ),
-                    kind="permission.approval.resolved",
                     occurred_at=decided_at,
                     aggregate=AggregateRef(
                         kind="workflow",
                         id=workflow_id,
                         revision=expected_workflow_revision,
                     ),
-                    actor=FactActor(kind=reviewer.kind, id=reviewer.id),
+                    actor=fact_actor(reviewer),
                     correlation=FactCorrelation(correlation_id=decision.decision_id),
-                    payload={
-                        "approval_id": str(approval_id),
-                        "decision_id": str(decision.decision_id),
-                        "operation_digest": expected_operation_digest,
-                        "status": status,
-                        "grant_id": str(grant.grant_id) if grant else None,
-                    },
+                    payload=PrivateFactPayload(
+                        kind="permission.approval.resolved",
+                        data={
+                            "approval_id": str(approval_id),
+                            "decision_id": str(decision.decision_id),
+                            "operation_digest": expected_operation_digest,
+                            "status": status,
+                            "grant_id": str(grant.grant_id) if grant else None,
+                        },
+                    ),
                 ),
                 projection_inputs=(
                     ProjectionInputDraft(
@@ -405,23 +408,25 @@ def resolve_standalone_approval_request(
                         NAMESPACE_URL,
                         f"murder:approval-resolved:{approval_id}:{decision.decision_id}",
                     ),
-                    kind="permission.approval.resolved",
                     occurred_at=decided_at,
                     aggregate=AggregateRef(
                         kind="permission",
                         id=request.policy_decision_id,
                     ),
-                    actor=FactActor(kind=reviewer.kind, id=reviewer.id),
+                    actor=fact_actor(reviewer),
                     correlation=FactCorrelation(
                         correlation_id=decision.decision_id
                     ),
-                    payload={
-                        "approval_id": str(approval_id),
-                        "decision_id": str(decision.decision_id),
-                        "operation_digest": expected_operation_digest,
-                        "status": status,
-                        "grant_id": str(grant.grant_id) if grant else None,
-                    },
+                    payload=PrivateFactPayload(
+                        kind="permission.approval.resolved",
+                        data={
+                            "approval_id": str(approval_id),
+                            "decision_id": str(decision.decision_id),
+                            "operation_digest": expected_operation_digest,
+                            "status": status,
+                            "grant_id": str(grant.grant_id) if grant else None,
+                        },
+                    ),
                 ),
                 projection_inputs=(
                     ProjectionInputDraft(

@@ -6,14 +6,19 @@ from uuid import uuid4
 
 import pytest
 
+from pydantic import ValidationError
+
 from murder.bus import Bus
 from murder.bus.broker import DurableBroker
 from murder.facts.contracts import (
     AggregateRef,
     FactActor,
     FactCorrelation,
+    PrivateFactPayload,
     ProjectionInputDraft,
     RetainedFactDraft,
+    WriterLeaseAcquiredPayload,
+    fact_kind,
 )
 from murder.facts.log import (
     FactIdentityConflictError,
@@ -39,7 +44,6 @@ def _conn() -> sqlite3.Connection:
 def _draft() -> RetainedFactDraft:
     return RetainedFactDraft(
         fact_id=uuid4(),
-        kind="ticket.completed",
         occurred_at=NOW,
         aggregate=AggregateRef(kind="ticket", id=uuid4(), revision=4),
         actor=FactActor(kind="workflow", id="delivery"),
@@ -48,8 +52,46 @@ def _draft() -> RetainedFactDraft:
             causation_id=uuid4(),
             trace_id=uuid4(),
         ),
-        payload={"result": "done"},
+        payload=PrivateFactPayload(
+            kind="ticket.completed",
+            data={"result": "done"},
+        ),
     )
+
+
+def test_retained_fact_draft_derives_kind_from_typed_payload() -> None:
+    lease_payload = WriterLeaseAcquiredPayload(
+        session_id=uuid4(),
+        lease_id=uuid4(),
+        mode="structured",
+        fence=1,
+        expires_at=NOW,
+    )
+    draft = RetainedFactDraft(
+        occurred_at=NOW,
+        actor=FactActor(kind="service", id="sessions"),
+        correlation=FactCorrelation(correlation_id=uuid4()),
+        payload=lease_payload,
+    )
+    assert draft.kind == "session.writer.acquired"
+    assert fact_kind(lease_payload) == draft.kind
+
+    with pytest.raises(ValidationError):
+        RetainedFactDraft.model_validate(
+            {
+                "kind": "workflow.completed",
+                "occurred_at": NOW,
+                "actor": {"kind": "service", "id": "sessions"},
+                "correlation": {"correlation_id": str(uuid4())},
+                "payload": lease_payload.model_dump(mode="json"),
+            }
+        )
+
+    with pytest.raises(ValidationError, match="registered as a public FactPayload"):
+        PrivateFactPayload(
+            kind="session.writer.acquired",
+            data={"session_id": str(uuid4())},
+        )
 
 
 def test_authoritative_fact_schema_supports_independent_projection_inputs() -> None:
@@ -156,7 +198,14 @@ def test_fact_retry_is_idempotent_but_identity_reuse_with_new_content_fails() ->
     with pytest.raises(FactIdentityConflictError):
         append_fact(
             conn,
-            draft.model_copy(update={"payload": {"result": "different"}}),
+            draft.model_copy(
+                update={
+                    "payload": PrivateFactPayload(
+                        kind="ticket.completed",
+                        data={"result": "different"},
+                    )
+                }
+            ),
             recorded_at=NOW,
         )
 

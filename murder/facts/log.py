@@ -17,6 +17,7 @@ from murder.facts.contracts import (
     ProjectionInputRecord,
     RetainedFactDraft,
     RetainedFactRecord,
+    fact_payload_storage,
 )
 
 FACT_SCHEMA_SQL = """
@@ -121,7 +122,7 @@ def append_fact(
                     str(draft.correlation.correlation_id),
                     _optional_uuid(draft.correlation.causation_id),
                     _optional_uuid(draft.correlation.trace_id),
-                    _json(draft.payload),
+                    _json(fact_payload_storage(draft.payload)),
                 ),
             )
             existing = _fact_row(conn, draft.fact_id)
@@ -338,7 +339,7 @@ def _same_fact(row: sqlite3.Row, draft: RetainedFactDraft) -> bool:
         and str(row["correlation_id"]) == str(draft.correlation.correlation_id)
         and row["causation_id"] == _optional_uuid(draft.correlation.causation_id)
         and row["trace_id"] == _optional_uuid(draft.correlation.trace_id)
-        and str(row["payload_json"]) == _json(draft.payload)
+        and str(row["payload_json"]) == _json(fact_payload_storage(draft.payload))
     )
 
 
