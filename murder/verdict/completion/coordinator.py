@@ -11,8 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from murder.bus import OrchestrationNotifier, CompletionVerdictEvent
-from murder.bus import Role as AgentRole
+from murder.runtime.agents.types import AgentRole
+from murder.runtime.orchestration.events import CompletionVerdictEvent
+from murder.runtime.orchestration.notifier import OrchestrationNotifier
 
 from .checks.base import CheckResult, CheckStatus, CompletionContext
 from .persistence import bump_attempts, get_attempts, reset_attempts, write_check_result
@@ -306,7 +307,7 @@ class CompletionCoordinator:
         ``agent_id="coordinator"`` plus the F1 snapshot beside the typed event.
         No-op before the bus / run id exist.
         """
-        from murder.bus import StatusChangeEvent
+        from murder.runtime.orchestration.events import StatusChangeEvent
         from murder.work.tickets.status import TicketStatus
 
         if self._rt.bus is None or self._rt.run_id is None:

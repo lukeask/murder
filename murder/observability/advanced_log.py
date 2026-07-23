@@ -663,7 +663,7 @@ class AdvancedLog(AdvancedLogBase):
     # -- bus aspect: route a published event to its family table -- #
 
     def record_bus_event(self, event: Any) -> None:
-        """Capture a published bus event into the table named by its family.
+        """Capture a published orchestration event into its typed record family.
 
         The recorder is registered as a bus SUBSCRIBER (plan §2.5.A); this is
         its handler body. The destination table is the event class's

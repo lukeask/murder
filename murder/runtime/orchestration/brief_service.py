@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from murder.llm.harnesses import capabilities_for
-from murder.runtime.agents.base import AgentRole
+from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.brief import BriefContext, assembler_for
 
 if TYPE_CHECKING:

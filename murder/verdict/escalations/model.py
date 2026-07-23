@@ -15,7 +15,7 @@ from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import escalation_md
 
 if TYPE_CHECKING:
-    from murder.bus import EscalationEvent
+    from murder.runtime.orchestration.events import EscalationEvent
 
 
 def queue_for_user(conn: sqlite3.Connection, event: EscalationEvent) -> int:

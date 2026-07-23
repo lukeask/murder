@@ -47,7 +47,7 @@ class CrowAgent(HarnessBackedAgent):
         self.harness_session = harness.attach(session, self.repo_root)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.bus import StatusChangeEvent
+        from murder.runtime.orchestration.events import StatusChangeEvent
         from murder.verdict.enforcement import git_diff
 
         # Record the injected system prompt so the transcript parser can drop it

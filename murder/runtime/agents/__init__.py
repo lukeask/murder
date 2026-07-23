@@ -6,12 +6,8 @@ Planning capture: bus `notetaker.capture.submit` → orchestrator →
 `murder.work.notes.submit_capture`.
 """
 
-from murder.runtime.agents.base import LifecycleParticipant, HarnessBackedAgent, Daemon, AgentRole, AgentStatus
-from murder.runtime.agents.collaborator import CollaboratorAgent
-from murder.runtime.agents.crow import CrowAgent
-from murder.runtime.agents.crow_handler import CrowHandler
-from murder.runtime.agents.planning_agent import PlanningAgent
-from murder.runtime.agents.planning_handler import PlanningHandler
+from murder.runtime.agents.base import Daemon, HarnessBackedAgent, LifecycleParticipant
+from murder.runtime.agents.types import AgentRole, AgentStatus
 
 __all__ = [
     "LifecycleParticipant",
@@ -19,9 +15,4 @@ __all__ = [
     "Daemon",
     "AgentRole",
     "AgentStatus",
-    "CollaboratorAgent",
-    "CrowAgent",
-    "CrowHandler",
-    "PlanningAgent",
-    "PlanningHandler",
 ]

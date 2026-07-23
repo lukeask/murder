@@ -51,7 +51,7 @@ class CollaboratorAgent(HarnessBackedAgent):
         self.harness_session = harness.attach(session, self.repo_root)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.bus import StatusChangeEvent
+        from murder.runtime.orchestration.events import StatusChangeEvent
 
         # Record the injected system prompt so the (markerless) transcript parser
         # can recognise and drop it instead of mislabelling its paragraphs as

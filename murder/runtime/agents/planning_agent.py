@@ -51,7 +51,7 @@ class PlanningAgent(HarnessBackedAgent):
         self.harness_session = harness.attach(session, self._cwd)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.bus import StatusChangeEvent
+        from murder.runtime.orchestration.events import StatusChangeEvent
 
         # Record the injected system prompt so the transcript parser can drop it
         # rather than mislabel its paragraphs as chat turns (markerless harnesses).

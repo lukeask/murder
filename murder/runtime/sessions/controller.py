@@ -90,8 +90,9 @@ async def trusted_local_session_authorizer(
 
     Automation principals may use supported commands. A raw-terminal command
     is authorized by its separately validated holder-bound fenced lease.
-    Human/client callers need a policy supplied by their authenticated API
-    boundary for every other command.
+    Human/client callers need a policy supplied by their API boundary for
+    every other command. Under trusted-local deployment that boundary uses a
+    claimed client id, not an authenticated principal.
     """
 
     del record, authorization

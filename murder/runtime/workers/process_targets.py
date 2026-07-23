@@ -5,7 +5,7 @@ import queue
 from types import SimpleNamespace
 from typing import Any
 
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
 from murder.config import Config
 from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,

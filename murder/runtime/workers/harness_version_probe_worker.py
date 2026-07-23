@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.llm.harnesses import REGISTRY

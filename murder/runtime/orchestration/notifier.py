@@ -12,32 +12,16 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from murder.bus.protocol import (
-    COMMAND_REAPER_INTERVAL_S,
-    DEFAULT_LEASE_TTL_S,
-    DEFAULT_MAX_COMMAND_ATTEMPTS,
-    AgentLifecycleEvent,
-    AgentStatus,
-    CommandEvent,
-    CommandStatus,
-    CompletionVerdictEvent,
-    ConversationBlockEvent,
-    ConversationStateEvent,
-    ErrorEvent,
-    EscalationEvent,
-    HeartbeatEvent,
-    OrchestrationEvent,
-    Role,
-    StatusChangeEvent,
-    SummaryEvent,
-)
 from murder.observability.log_context import log_context
-from murder.work.tickets.status import TicketStatus
+from murder.runtime.orchestration.events import (
+    CommandEvent,
+    OrchestrationEvent,
+)
 
 if TYPE_CHECKING:
     import sqlite3
 
-log = logging.getLogger("murder.bus")
+log = logging.getLogger(__name__)
 
 
 OrchestrationHandler = Callable[[OrchestrationEvent], Awaitable[None]]
@@ -62,8 +46,7 @@ class OrchestrationNotifier:
     It has no socket, replay, request/reply, or durable event-log semantics.
     """
 
-    def __init__(self, run_id: str, db_conn: sqlite3.Connection | None = None) -> None:
-        self._run_id = run_id
+    def __init__(self, db_conn: sqlite3.Connection | None = None) -> None:
         # Only the command-work repository is retained. General notifications
         # are never appended to the old events table.
         self._command_db = db_conn
@@ -73,7 +56,7 @@ class OrchestrationNotifier:
 
     async def publish(self, event: OrchestrationEvent) -> None:
         # The flight recorder is NOT tapped here — it is a normal subscriber
-        # (registered at Runtime.start), so the bus stays unaware it exists. The
+        # (registered at Runtime.start), so the notifier stays unaware it exists. The
         # subscriber handler runs inside this ``log_context`` because ``_publish``
         # fans out via ``asyncio.gather``, which copies the active context into
         # each handler task — so the recorder still reads the right correlation
@@ -87,7 +70,7 @@ class OrchestrationNotifier:
         # stream. Their repository is the commands table; all other transient
         # orchestration notifications remain memory-only.
         if isinstance(event, CommandEvent) and self._command_db is not None:
-            from murder.state.persistence.commands import insert_command_event
+            from murder.state.persistence.commands import insert_command_event  # noqa: PLC0415
 
             insert_command_event(
                 self._command_db,
@@ -119,7 +102,7 @@ class OrchestrationNotifier:
             try:
                 await h(event)
             except Exception:
-                log.exception("bus: handler raised on %s", event.type)
+                log.exception("orchestration notifier: handler raised on %s", event.type)
 
         await asyncio.gather(*(_dispatch(h) for h in handlers))
 
@@ -131,27 +114,7 @@ class OrchestrationNotifier:
 
 
 __all__ = [
-    # In-process notification fan-out
+    "OrchestrationHandler",
     "OrchestrationNotifier",
     "SubscriptionHandle",
-    "OrchestrationHandler",
-    # Re-exports from protocol
-    "Role",
-    "TicketStatus",
-    "AgentStatus",
-    "CommandStatus",
-    "HeartbeatEvent",
-    "SummaryEvent",
-    "EscalationEvent",
-    "StatusChangeEvent",
-    "ErrorEvent",
-    "CommandEvent",
-    "CompletionVerdictEvent",
-    "AgentLifecycleEvent",
-    "ConversationBlockEvent",
-    "ConversationStateEvent",
-    "OrchestrationEvent",
-    "DEFAULT_LEASE_TTL_S",
-    "DEFAULT_MAX_COMMAND_ATTEMPTS",
-    "COMMAND_REAPER_INTERVAL_S",
 ]

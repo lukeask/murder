@@ -13,44 +13,23 @@ from enum import Enum
 from typing import Any, ClassVar, Literal
 from uuid import UUID, uuid4
 
-try:
-    from enum import StrEnum
-except ImportError:  # Python <3.11
-
-    class StrEnum(str, Enum):
-        def __str__(self) -> str:
-            return str.__str__(self)
-
-
 from pydantic import BaseModel, Field
 
+from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.worker_names import WorkerName
-from murder.work.tickets.status import TicketStatus
 
 # === Closed enums ============================================================
 
 
-class Role(StrEnum):
-    COLLABORATOR = "collaborator"
-    NOTETAKER = "notetaker"
-    PLANNER = "planner"
-    PLANNING_HANDLER = "planning_handler"
-    CROW_HANDLER = "crow_handler"
-    CROW = "crow"
+class _StringEnum(str, Enum):
+    """Python-3.10-compatible string enum."""
+
+    def __str__(self) -> str:
+        return str.__str__(self)
 
 
-class AgentStatus(StrEnum):
-    IDLE = "idle"
-    RUNNING = "running"
-    BLOCKED = "blocked"
-    ESCALATING = "escalating"
-    DONE = "done"
-    FAILED = "failed"
-    DEAD = "dead"
-
-
-class CommandStatus(StrEnum):
+class CommandStatus(_StringEnum):
     PENDING = "pending"
     IN_FLIGHT = "in_flight"
     DONE = "done"
@@ -67,7 +46,7 @@ class _BaseEvent(BaseModel):
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     run_id: str
     agent_id: str = ""
-    role: Role | None = None
+    role: AgentRole | None = None
     ticket_id: str | None = None
 
     # Flight-recorder routing. The recorder subscribes to the private notifier
@@ -123,7 +102,7 @@ class ErrorEvent(_BaseEvent):
     traceback: str | None = None
 
 
-# --- Types added by the worker-bus refactor ---------------------------------
+# --- Worker wakeups and coordination decisions -------------------------------
 
 
 class CommandEvent(_BaseEvent):
@@ -272,9 +251,6 @@ COMMAND_REAPER_INTERVAL_S = 5.0
 
 
 __all__ = [
-    "Role",
-    "TicketStatus",
-    "AgentStatus",
     "CommandStatus",
     "HeartbeatEvent",
     "SummaryEvent",

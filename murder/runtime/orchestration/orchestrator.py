@@ -23,10 +23,11 @@ from murder.state.persistence.agents import (
     get_active_agent_by_role as _db_get_active_agent_by_role,
     set_agent_status as _db_set_agent_status,
 )
-from murder.runtime.agents.base import AgentRole, AgentStatus
+from murder.runtime.agents.types import AgentRole, AgentStatus
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.agents.planning_handler import PlanningHandler
-from murder.bus import StatusChangeEvent, TicketStatus
+from murder.runtime.orchestration.events import StatusChangeEvent
+from murder.work.tickets.status import TicketStatus
 from murder.llm.direct import resolve_direct_role_client
 from murder.config import (
     Config,

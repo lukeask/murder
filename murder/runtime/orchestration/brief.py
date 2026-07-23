@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from murder.runtime.agents.base import AgentRole
+from murder.runtime.agents.types import AgentRole
 from murder.llm.harnesses.capabilities import HarnessCapabilities
 from murder.state.storage.paths import crow_context_dir, ticket_md
 

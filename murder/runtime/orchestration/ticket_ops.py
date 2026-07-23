@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
-from murder.bus import TicketStatus
+from murder.work.tickets.status import TicketStatus
 from murder.state.persistence.tickets import (
     apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
 )

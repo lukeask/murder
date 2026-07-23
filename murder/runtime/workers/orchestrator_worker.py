@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from murder.app.protocol.requests import CommandName
-from murder.bus.protocol import CommandEvent
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec

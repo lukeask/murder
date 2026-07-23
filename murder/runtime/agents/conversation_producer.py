@@ -45,7 +45,7 @@ class ConversationProducer:
 
     publish(action, block_wire) is called for each ConversationBlockChange
     returned by project_parsed_doc_with_changes; the caller wraps it into
-    the appropriate bus event.
+    the appropriate orchestration notification.
     """
 
     def __init__(

@@ -19,9 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-# Re-export from bus to keep StrEnum definitions in one place.
-from murder.bus import AgentStatus
-from murder.bus import Role as AgentRole
+from murder.runtime.agents.types import AgentRole, AgentStatus
 
 LOGGER = logging.getLogger(__name__)
 
@@ -576,7 +574,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         if state == self._last_pushed_conv_state:
             return
         self._last_pushed_conv_state = state
-        from murder.bus import ConversationStateEvent
+        from murder.runtime.orchestration.events import ConversationStateEvent
 
         await runtime.bus.publish(
             ConversationStateEvent(
@@ -639,7 +637,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         runtime = getattr(self, "runtime", None)
         if runtime is None or runtime.bus is None or runtime.run_id is None:
             return
-        from murder.bus import ConversationBlockEvent
+        from murder.runtime.orchestration.events import ConversationBlockEvent
 
         await runtime.bus.publish(
             ConversationBlockEvent(

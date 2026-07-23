@@ -52,7 +52,7 @@ def apply_carve_ready_spec(
     Idempotent: if the ticket is already ``ready`` (a duplicate carve form on a
     later pane tick), re-applies the payload and returns ``READY`` without error.
 
-    Runs in a single transaction. Emits no bus events (callers do that).
+    Runs in a single transaction. Emits no orchestration notifications.
     """
     payload_id = spec.get("id")
     if payload_id != ticket_id:

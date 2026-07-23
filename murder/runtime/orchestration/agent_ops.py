@@ -10,7 +10,7 @@ from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
 from murder.llm.harness_control.runtime.manual_input import emit_fenced_manual_input
-from murder.runtime.agents.base import AgentRole, AgentStatus
+from murder.runtime.agents.types import AgentRole, AgentStatus
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id
 from murder.runtime.terminal import tmux
 from murder.state.persistence.agents import (
@@ -86,7 +86,7 @@ class AgentOps:
         db = getattr(self.rt, "db", None)
         if db is None:
             return
-        from murder.bus import ConversationBlockEvent
+        from murder.runtime.orchestration.events import ConversationBlockEvent
         from murder.state.persistence import conversation
 
         block = conversation.append_user_message(db, agent_id, text)

@@ -152,7 +152,7 @@ class ConversationBlockChange:
 
 
 def block_to_wire(block: ConversationBlock) -> dict[str, Any]:
-    """JSON-compatible representation used by bus events and snapshot RPCs."""
+    """JSON-compatible representation used by notifications and read models."""
     return {
         "id": block.id,
         "conversation_id": block.conversation_id,

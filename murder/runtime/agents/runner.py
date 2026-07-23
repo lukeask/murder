@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from murder.runtime.agents.base import AgentRole
+from murder.runtime.agents.types import AgentRole
 from murder.runtime.agents.collaborator import CollaboratorAgent
 from murder.runtime.agents.crow import CrowAgent
 from murder.runtime.agents.planning_agent import PlanningAgent

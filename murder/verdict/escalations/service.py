@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from murder.runtime.agents.base import AgentRole
-from murder.bus.protocol import EscalationEvent, TicketStatus
+from murder.runtime.agents.types import AgentRole
+from murder.runtime.orchestration.events import EscalationEvent
+from murder.work.tickets.status import TicketStatus
 
 from murder.state.persistence.records import EscalationRecord
 
@@ -17,7 +18,7 @@ from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import escalation_md
 
 if TYPE_CHECKING:
-    from murder.bus import OrchestrationNotifier
+    from murder.runtime.orchestration.notifier import OrchestrationNotifier
 
 
 def _clamp_severity(severity: int) -> int:
@@ -26,7 +27,7 @@ def _clamp_severity(severity: int) -> int:
 
 @dataclass(slots=True)
 class EscalationService:
-    """Insert escalation rows, optional markdown bodies, and bus events."""
+    """Insert escalation rows, optional markdown bodies, and notifications."""
 
     conn: sqlite3.Connection
     repo_root: Path
