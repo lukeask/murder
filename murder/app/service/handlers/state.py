@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from murder.app.protocol.read_models import dto_to_wire
+from murder.app.protocol.reads import EmptyParams, NamedReadParams, TicketGetParams
 from murder.app.protocol.requests import QueryName
 from murder.app.protocol.subscriptions import ProjectionTopic
 from murder.app.service.handlers._common import require_read_model, threaded, value
@@ -18,55 +19,55 @@ def register(
     host: ServiceHost,
     projections: ProjectionProviderRegistry | None = None,
 ) -> None:
-    def _state_schedule_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_schedule_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_schedule_snapshot())
 
-    def _state_conversations_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_conversations_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_conversations_snapshot())
 
-    def _state_plans_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_plans_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_plans_snapshot())
 
-    def _state_notes_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_notes_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_notes_snapshot())
 
-    def _state_reports_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_reports_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_reports_snapshot())
 
-    def _state_history_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_history_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_history_snapshot())
 
-    def _state_transit_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_transit_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_transit_snapshot())
 
     def _state_ticket_detail(body: dict[str, Any]) -> dict[str, Any]:
-        ticket_id = str(body.get("ticket_id", "")).strip()
-        if not ticket_id:
-            raise ValueError("state.ticket_detail requires ticket_id")
+        params = TicketGetParams.model_validate(body)
         try:
-            return value(require_read_model(host).get_ticket_detail(ticket_id))
+            return value(require_read_model(host).get_ticket_detail(params.ticket_id))
         except KeyError:
             return value(None)
 
     def _state_plan_display(body: dict[str, Any]) -> dict[str, Any]:
-        name = str(body.get("name", "")).strip()
-        if not name:
-            raise ValueError("state.plan_display requires name")
-        return value(require_read_model(host).get_plan_display(name))
+        params = NamedReadParams.model_validate(body)
+        return value(require_read_model(host).get_plan_display(params.name))
 
     def _state_note_display(body: dict[str, Any]) -> dict[str, Any]:
-        name = str(body.get("name", "")).strip()
-        if not name:
-            raise ValueError("state.note_display requires name")
-        return value(require_read_model(host).get_note_display(name))
+        params = NamedReadParams.model_validate(body)
+        return value(require_read_model(host).get_note_display(params.name))
 
     def _state_report_display(body: dict[str, Any]) -> dict[str, Any]:
-        name = str(body.get("name", "")).strip()
-        if not name:
-            raise ValueError("state.report_display requires name")
-        return value(require_read_model(host).get_report_display(name))
+        params = NamedReadParams.model_validate(body)
+        return value(require_read_model(host).get_report_display(params.name))
 
-    def _state_harness_models_snapshot(_body: dict[str, Any]) -> dict[str, Any]:
+    def _state_harness_models_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+        EmptyParams.model_validate(body or {})
         return value(require_read_model(host).get_harness_models_snapshot())
 
     # These read-model handlers do blocking sqlite/git/file work and are

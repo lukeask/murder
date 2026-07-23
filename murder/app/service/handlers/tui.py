@@ -154,15 +154,11 @@ def register(
         return {"ok": True, "themes": save_themes(themes)}
 
     def _tui_import_theme(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.app.protocol.settings import ImportThemeParams
         from murder.user_config import import_theme_from_json
 
-        json_str = body.get("json")
-        if not isinstance(json_str, str) or not json_str.strip():
-            raise ValueError("tui.import_theme requires non-empty json string")
-        theme_id = body.get("id")
-        if theme_id is not None and not isinstance(theme_id, str):
-            raise ValueError("tui.import_theme id must be a string when provided")
-        themes, new_id = import_theme_from_json(json_str, theme_id=theme_id)
+        params = ImportThemeParams.model_validate(body)
+        themes, new_id = import_theme_from_json(params.theme_json, theme_id=params.id)
         return {"ok": True, "themes": themes, "id": new_id}
 
     host.register_application_query(QueryName.FAVORITES_GET, _tui_load_favorites)

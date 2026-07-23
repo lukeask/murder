@@ -37,7 +37,10 @@ async def test_handlers_share_the_persisted_agent_frame_without_capturing(
     crow_harness.detect_done.return_value = False
     crow = CrowHandler.__new__(CrowHandler)
     crow.runtime = SimpleNamespace(
-        db=MagicMock(), bus=MagicMock(), run_id="run", get_crow=lambda _ticket: source
+        db=MagicMock(),
+        orchestration_events=MagicMock(),
+        run_id="run",
+        get_crow=lambda _ticket: source,
     )
     crow.ticket_id = "T-1"
     crow.harness = crow_harness

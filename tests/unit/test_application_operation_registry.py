@@ -67,6 +67,13 @@ def test_legacy_operations_are_explicit_json_object_contracts() -> None:
         assert operation.result_model is not JsonObject
 
 
+def test_compatibility_json_object_surface_is_fully_retired() -> None:
+    assert LEGACY_QUERY_OPERATIONS == frozenset()
+    assert LEGACY_COMMAND_OPERATIONS == frozenset()
+    assert all(not operation.legacy for operation in QUERY_OPERATIONS.values())
+    assert all(not operation.legacy for operation in COMMAND_OPERATIONS.values())
+
+
 def test_gateway_capabilities_come_from_installed_application_handlers() -> None:
     gateway = ApplicationGateway(_Application())
 

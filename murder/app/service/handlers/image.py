@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from murder.app.protocol.lifecycle import ImageUploadParams, ImageUploadResult
 from murder.app.protocol.requests import CommandName
 
 if TYPE_CHECKING:
@@ -29,9 +30,8 @@ def register(host: ServiceHost) -> None:
 
         from murder.state.storage.paths import murder_dir as _murder_dir
 
-        data_b64 = body.get("bytes")
-        if not isinstance(data_b64, str) or not data_b64:
-            raise ValueError("image.upload requires base64 bytes")
+        params = ImageUploadParams.model_validate(body)
+        data_b64 = params.bytes
         # Cap the base64 payload before decoding so a malicious/oversized
         # upload can't be expanded to disk. The TCP listener (optional, see
         # ``start_tcp_listener``) makes this reachable from an
@@ -40,26 +40,38 @@ def register(host: ServiceHost) -> None:
         _MAX_IMAGE_BYTES = 32 * 1024 * 1024
         # base64 is 4/3 the size of the decoded bytes; reject early.
         if len(data_b64) > (_MAX_IMAGE_BYTES * 4) // 3 + 16:
-            return {"ok": False, "error": "image too large"}
+            return ImageUploadResult(
+                ok=False, error="image too large", error_code="image_too_large"
+            ).model_dump(mode="json")
         try:
             data = base64.b64decode(data_b64, validate=True)
         except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"invalid base64: {exc}"}
+            return ImageUploadResult(
+                ok=False,
+                error=f"invalid base64: {exc}",
+                error_code="invalid_base64",
+            ).model_dump(mode="json")
         if len(data) > _MAX_IMAGE_BYTES:
-            return {"ok": False, "error": "image too large"}
+            return ImageUploadResult(
+                ok=False, error="image too large", error_code="image_too_large"
+            ).model_dump(mode="json")
 
         def _sanitize(value: str) -> str:
             return re.sub(r"[^a-zA-Z0-9._-]", "", value)
 
-        stem = _sanitize(str(body.get("name") or ""))
+        stem = _sanitize(params.name)
         if not stem:
-            return {"ok": False, "error": "image.upload requires a non-empty name"}
-        ext = _sanitize(str(body.get("ext") or "png").lstrip(".")) or "png"
+            return ImageUploadResult(
+                ok=False,
+                error="image.upload requires a non-empty name",
+                error_code="empty_name",
+            ).model_dump(mode="json")
+        ext = _sanitize((params.ext or "png").lstrip(".")) or "png"
 
         images_dir = _murder_dir(host.repo_root) / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         fpath = images_dir / f"{stem}.{ext}"
         fpath.write_bytes(data)
-        return {"ok": True, "path": str(fpath)}
+        return ImageUploadResult(ok=True, path=str(fpath)).model_dump(mode="json")
 
     host.register_application_command(CommandName.IMAGE_UPLOAD, _image_upload)

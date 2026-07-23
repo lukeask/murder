@@ -13,11 +13,10 @@ durable cursors; terminal streams have independent identities and monotonic
 replace-frame sequences.
 
 High-risk capabilities validate params and results at the gateway against
-typed models in `sessions.py`, `permissions.py`, and `workflows.py` (writer
-leases, session commands, approvals, permission grants, workflow
-definition/start, run inspection, and external signaling). The gateway accepts
-only protocol request models at the transport boundary; dictionary payloads
-are validated into the capability-specific contracts.
+typed models in `sessions.py`, `permissions.py`, `workflows.py`,
+`lifecycle.py`, `settings.py`, `reads.py`, and `session_control.py`. The
+gateway accepts only protocol request models at the transport boundary;
+dictionary payloads are validated into the capability-specific contracts.
 Wire `request_id` / `subscription_id` / `stream_id` remain opaque transport
 strings; domain correlation uses UUIDs, bridged once via
 `murder.contracts.common.domain_request_id`.
