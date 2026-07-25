@@ -723,6 +723,7 @@ export class ApplicationWebSocketClient implements ApplicationClient {
   }
 
   private sendTerminalAttach(socket: WebSocketLike, terminal: TerminalRegistration): void {
+    if (terminal.sessionId === null) return;
     this.write(socket, {
       op: 'terminal.attach',
       stream_id: terminal.id,

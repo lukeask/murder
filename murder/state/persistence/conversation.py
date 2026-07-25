@@ -929,6 +929,7 @@ def append_user_message(
     *,
     conversation_id: str | None = None,
     received_at: str | None = None,
+    client_message_id: str | None = None,
 ) -> ConversationBlock | None:
     """Record a ground-truth user turn at the send boundary.
 
@@ -942,6 +943,11 @@ def append_user_message(
     The conversation row is upserted on first use so the block always has a
     home. ``conversation_id`` defaults to ``agent_id`` (one live conversation
     per agent). No-op for blank text.
+
+    ``client_message_id`` is an optional end-to-end correlation id from the
+    client (optimistic shadow turns). When present it is stored on the user
+    segment payload so the UI can drop matching pending items once the
+    authoritative snapshot arrives.
     """
     body = (text or "").strip()
     if not body:
@@ -949,7 +955,10 @@ def append_user_message(
     conv_id = conversation_id or agent_id
     ts = received_at or _now()
     upsert_conversation(conn, conversation_id=conv_id, agent_id=agent_id)
-    block = append_block(conn, conv_id, {"type": "user", "text": body}, received_at=ts)
+    payload: dict[str, Any] = {"type": "user", "text": body}
+    if isinstance(client_message_id, str) and client_message_id.strip():
+        payload["client_message_id"] = client_message_id.strip()
+    block = append_block(conn, conv_id, payload, received_at=ts)
     append_agent_message(conn, agent_id, "user", body, captured_at=ts)
     return block
 

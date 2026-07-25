@@ -49,7 +49,12 @@ class OrchestratorCommands(Protocol):
     async def resume_conversation(self, conversation_id: str) -> dict[str, Any]: ...
 
     async def send_agent_message(
-        self, agent_id: str, message: str, ticket_id: str | None
+        self,
+        agent_id: str,
+        message: str,
+        ticket_id: str | None,
+        *,
+        client_message_id: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def send_agent_key(
@@ -151,7 +156,17 @@ async def _agent_message(orch: OrchestratorCommands, payload: dict[str, Any]) ->
     ticket_id = payload.get("ticket_id")
     if ticket_id is not None and not isinstance(ticket_id, str):
         raise ValueError("agent.message ticket_id must be a string or null")
-    return await orch.send_agent_message(agent_id.strip(), message, ticket_id)
+    client_message_id = payload.get("client_message_id")
+    if client_message_id is not None and (
+        not isinstance(client_message_id, str) or not client_message_id.strip()
+    ):
+        raise ValueError("agent.message client_message_id must be a non-empty string or null")
+    return await orch.send_agent_message(
+        agent_id.strip(),
+        message,
+        ticket_id,
+        client_message_id=client_message_id.strip() if isinstance(client_message_id, str) else None,
+    )
 
 
 async def _agent_send_key(orch: OrchestratorCommands, payload: dict[str, Any]) -> dict[str, Any]:

@@ -126,9 +126,35 @@ export interface ChunkSummary {
   readonly blockIds: readonly number[];
 }
 
+/**
+ * Delivery status for an optimistic shadow turn. Kept separate from authoritative
+ * transcript blocks — those only appear after backend acceptance + persistence.
+ *
+ *  - `sending`  — local intent submitted; waiting for command ack
+ *  - `accepted` — command ack; awaiting authoritative snapshot confirmation
+ *  - `queued`   — accepted while harness busy (crow queue)
+ *  - `failed`   — definitive rejection (`ok`/`handled` false)
+ *  - `unknown`  — transport/timeout; may or may not have landed
+ */
+export type PendingStatus = 'sending' | 'accepted' | 'queued' | 'failed' | 'unknown';
+
+/** One locally submitted message not yet confirmed in the authoritative transcript. */
+export interface PendingSend {
+  readonly clientId: string;
+  readonly agentId: string;
+  readonly text: string;
+  readonly createdAt: number;
+  readonly status: PendingStatus;
+}
+
 export interface ConversationsState {
   /** Per-agent block transcript. Only agents with at least one block have an entry. */
   readonly transcripts: Readonly<Record<string, readonly ConversationBlock[]>>;
+  /**
+   * Optimistic shadow turns awaiting authoritative confirmation. Kept deliberately
+   * separate from {@link transcripts} (which are replaced wholesale on refresh).
+   */
+  readonly pendingByAgent: Readonly<Record<string, readonly PendingSend[]>>;
   /** Per-agent liveness ({@link ConversationMeta}); absent entry = unknown (treated as nulls). */
   readonly meta: Readonly<Record<string, ConversationMeta>>;
   /**
@@ -185,6 +211,7 @@ export type ChatViewMode = 'verbose' | 'condensed' | 'tmux';
 /** Initial (empty) state — no transcripts, no active pane. */
 export const initialConversationsState: ConversationsState = {
   transcripts: {},
+  pendingByAgent: {},
   meta: {},
   activePaneAgentId: null,
   paneOverrides: new Map<string, boolean>(),

@@ -1,14 +1,33 @@
 import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
+import type { PendingStatus } from '../../store/conversations/conversationsSlice.js';
 import { type BlockKind, classifyBlocks } from '../../transcript/blocks.js';
 import { wrapTextToRows } from '../../utils/wrapText.js';
 
 export interface ChatLine {
   readonly speaker: TurnSpeaker;
   readonly tone?: ChatTurn['tone'];
+  readonly delivery?: PendingStatus;
   readonly kind: BlockKind | 'blank';
   readonly text: string;
   readonly firstOfTurn: boolean;
   readonly gutter?: 'none';
+}
+
+function deliverySuffix(delivery: PendingStatus | undefined): string {
+  switch (delivery) {
+    case 'sending':
+      return ' …';
+    case 'accepted':
+      return ' ✓';
+    case 'queued':
+      return ' queued';
+    case 'failed':
+      return ' ✗';
+    case 'unknown':
+      return ' ?';
+    default:
+      return '';
+  }
 }
 
 export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
@@ -25,11 +44,13 @@ export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
   }
 
   const tone = turn.tone === undefined ? {} : { tone: turn.tone };
+  const delivery = turn.delivery === undefined ? {} : { delivery: turn.delivery };
   let emittedContentLine = false;
   const pushLine = (kind: BlockKind | 'blank', text: string): void => {
     out.push({
       speaker: turn.speaker,
       ...tone,
+      ...delivery,
       kind,
       text,
       firstOfTurn: kind !== 'blank' && !emittedContentLine,
@@ -73,6 +94,18 @@ export function formatTurnLines(turn: ChatTurn): readonly ChatLine[] {
     plainRun.push(line);
   }
   flushPlain();
+
+  // Append delivery marker on the last content line of pending shadow turns.
+  const suffix = deliverySuffix(turn.delivery);
+  if (suffix !== '' && out.length > 0) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      const line = out[i];
+      if (line !== undefined && line.kind !== 'blank') {
+        out[i] = { ...line, text: `${line.text}${suffix}` };
+        break;
+      }
+    }
+  }
   return out;
 }
 
@@ -119,6 +152,7 @@ export function flattenTurns(turns: readonly ChatTurn[]): readonly ChatLine[] {
       lines.push({
         speaker: turn.speaker,
         ...(turn.tone === undefined ? {} : { tone: turn.tone }),
+        ...(turn.delivery === undefined ? {} : { delivery: turn.delivery }),
         kind: 'blank',
         text: '',
         firstOfTurn: false,

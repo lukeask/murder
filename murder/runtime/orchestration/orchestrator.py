@@ -702,8 +702,16 @@ class Orchestrator:
                 return False
             await asyncio.sleep(interval_s)
 
-    async def _record_user_block(self, agent_id: str, text: str) -> None:
-        await self.agent_ops._record_user_block(agent_id, text)
+    async def _record_user_block(
+        self,
+        agent_id: str,
+        text: str,
+        *,
+        client_message_id: str | None = None,
+    ) -> None:
+        await self.agent_ops._record_user_block(
+            agent_id, text, client_message_id=client_message_id
+        )
 
     async def send_agent_message(
         self,
@@ -712,9 +720,14 @@ class Orchestrator:
         ticket_id: str | None,
         *,
         spawn_if_needed: bool = True,
+        client_message_id: str | None = None,
     ) -> dict[str, Any]:
         return await self.agent_ops.send_agent_message(
-            agent_id, message, ticket_id, spawn_if_needed=spawn_if_needed
+            agent_id,
+            message,
+            ticket_id,
+            spawn_if_needed=spawn_if_needed,
+            client_message_id=client_message_id,
         )
 
     async def send_agent_key(

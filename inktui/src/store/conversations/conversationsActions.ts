@@ -35,9 +35,10 @@ import {
   type ChunkSummary,
   type ConversationBlock,
   type ConversationMeta,
+  type PendingSend,
+  type PendingStatus,
   parseBlock,
 } from './conversationsSlice.js';
-
 /**
  * Declares the conversations read RPC via declaration merging rather than editing the frozen C1 bus
  * files. `state.conversations_snapshot` is the bus-contract name (`domain.verb`, mirrors Python
@@ -146,6 +147,94 @@ export function projectConversationsSnapshot(
   return { transcripts, meta, chunkSummaries };
 }
 
+/** Collect `client_message_id` values from authoritative user blocks. */
+export function confirmedClientMessageIds(
+  transcripts: Readonly<Record<string, readonly ConversationBlock[]>>,
+): ReadonlySet<string> {
+  const confirmed = new Set<string>();
+  for (const blocks of Object.values(transcripts)) {
+    for (const block of blocks) {
+      if (block.type !== 'user') continue;
+      const clientId = block.raw['client_message_id'];
+      if (typeof clientId === 'string' && clientId !== '') {
+        confirmed.add(clientId);
+      }
+    }
+  }
+  return confirmed;
+}
+
+/**
+ * Drop pending items whose `clientId` appears in the authoritative transcript.
+ * Runs independently of command completion — the snapshot can arrive first.
+ */
+export function reconcilePendingByAgent(
+  pendingByAgent: Readonly<Record<string, readonly PendingSend[]>>,
+  confirmedIds: ReadonlySet<string>,
+): Readonly<Record<string, readonly PendingSend[]>> {
+  if (confirmedIds.size === 0) {
+    return pendingByAgent;
+  }
+  let changed = false;
+  const next: Record<string, readonly PendingSend[]> = {};
+  for (const [agentId, pending] of Object.entries(pendingByAgent)) {
+    const kept = pending.filter((item) => !confirmedIds.has(item.clientId));
+    if (kept.length !== pending.length) {
+      changed = true;
+    }
+    if (kept.length > 0) {
+      next[agentId] = kept;
+    } else if (pending.length > 0) {
+      changed = true;
+    }
+  }
+  return changed ? next : pendingByAgent;
+}
+
+function newClientMessageId(): string {
+  const cryptoObj = globalThis.crypto;
+  if (cryptoObj !== undefined && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `pending-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function appendPending(
+  pendingByAgent: Readonly<Record<string, readonly PendingSend[]>>,
+  item: PendingSend,
+): Readonly<Record<string, readonly PendingSend[]>> {
+  const existing = pendingByAgent[item.agentId] ?? [];
+  return { ...pendingByAgent, [item.agentId]: [...existing, item] };
+}
+
+function patchPending(
+  pendingByAgent: Readonly<Record<string, readonly PendingSend[]>>,
+  agentId: string,
+  clientId: string,
+  status: PendingStatus,
+): Readonly<Record<string, readonly PendingSend[]>> {
+  const existing = pendingByAgent[agentId];
+  if (existing === undefined) {
+    return pendingByAgent;
+  }
+  let changed = false;
+  const next = existing.map((item) => {
+    if (item.clientId !== clientId || item.status === status) {
+      return item;
+    }
+    changed = true;
+    return { ...item, status };
+  });
+  if (!changed) {
+    return pendingByAgent;
+  }
+  return { ...pendingByAgent, [agentId]: next };
+}
+
+function isDefinitiveRejection(result: Record<string, unknown>): boolean {
+  return result['ok'] === false || result['handled'] === false;
+}
+
 export function applyConversationsSnapshot(
   store: StoreApi<AppStore>,
   reply: ConversationsSnapshotReply,
@@ -157,6 +246,10 @@ export function applyConversationsSnapshot(
       transcripts: projected.transcripts,
       meta: projected.meta,
       chunkSummaries: projected.chunkSummaries,
+      pendingByAgent: reconcilePendingByAgent(
+        state.conversations.pendingByAgent,
+        confirmedClientMessageIds(projected.transcripts),
+      ),
     },
   }));
 }
@@ -179,12 +272,22 @@ export interface ConversationsActions {
    * resolves the agentId from the discriminated-union identity BEFORE calling this action.
    * No conversation_id parsing, no string-prefix matching — ever.
    *
+   * Optimistically records a pending shadow turn immediately (render-on-keypress), then
+   * updates its delivery status from the command ack. The authoritative transcript block
+   * arrives later via projection refresh; reconciliation drops the pending item by
+   * `client_message_id`.
+   *
    * On success: sets `activePaneAgentId` to `agentId` ("keep pane active" after send).
-   * On failure: the action swallows the rejection (logs — callers treat send as fire-and-forget
-   * from the UI perspective). The bus-level error policy (timeouts) is the implementation's.
+   * On failure: marks the pending item failed/unknown and surfaces a toast.
    */
   send(agentId: string, message: string): Promise<void>;
 
+  /**
+   * Retry a failed/unknown pending send with the same `clientId` (so reconciliation still
+   * matches the eventual authoritative block). No-op if the pending item is absent or still
+   * in flight (`sending` / `accepted` / `queued`).
+   */
+  retryPending(agentId: string, clientId: string): Promise<void>;
   /**
    * Forward one raw key to the agent's harness pane via the `agent.send_key` orchestrator command.
    * The chat input's multiple-choice takeover uses this to drive a live CC choice dialog (arrows /
@@ -272,6 +375,95 @@ function activatePaneReapAges(
   return next;
 }
 
+async function deliverPending(
+  bus: ApplicationClient,
+  store: StoreApi<AppStore>,
+  pending: PendingSend,
+): Promise<void> {
+  const { agentId, clientId, text: message } = pending;
+  try {
+    // `agent.message` is an orchestrator command kind, not a standalone RPC — route it through
+    // the live `command.submit` choke point (F2). The orchestrator worker dispatches on the kind.
+    const result = await submitCommand(bus, 'agent.message', {
+      agent_id: agentId,
+      message,
+      client_message_id: clientId,
+    });
+    // F9 (TODO-T): the send toast is *truth* — pushed here, on the bus ack, not at the keypress
+    // (the keypress already cleared the input optimistically; this confirms the round-trip). The
+    // branches mirror Textual's `_send_chat` (app.py:1370-1392) faithfully:
+    //  - `handled === false` → the agent rejected the message; surface the error and stop (no `→`).
+    //  - `queued` (crow busy) → "message queued (crow busy)".
+    //  - otherwise → "→ {label}", with the agentId as the label (Textual's own fallback when no
+    //    friendly label is threaded; this action only carries agentId — rule 2 keeps labels out).
+    // The `→ collaborator` path is NOT reachable here: collaborator chat goes through a different
+    // command kind absent from this action, so we don't invent it.
+    // `ok: false` is the crow/rogue delivery failure shape; `handled: false` is the
+    // older rejection shape. Either must surface — otherwise the optimistic clear
+    // looks like a successful send while nothing was persisted.
+    if (isDefinitiveRejection(result)) {
+      const errorText = String(result['error'] ?? 'agent did not handle message');
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          pendingByAgent: patchPending(
+            state.conversations.pendingByAgent,
+            agentId,
+            clientId,
+            'failed',
+          ),
+        },
+      }));
+      toastStore.getState().push(errorText, { severity: 'error', ttlMs: 12000 });
+      return;
+    }
+    const status: PendingStatus = result['queued'] === true ? 'queued' : 'accepted';
+    store.setState((state) => {
+      const withStatus = patchPending(
+        state.conversations.pendingByAgent,
+        agentId,
+        clientId,
+        status,
+      );
+      // Reconcile immediately if the authoritative snapshot already landed (race).
+      // A later refresh will also reconcile; this covers the early-event case.
+      const pendingByAgent = reconcilePendingByAgent(
+        withStatus,
+        confirmedClientMessageIds(state.conversations.transcripts),
+      );
+      return {
+        conversations: {
+          ...state.conversations,
+          pendingByAgent,
+        },
+      };
+    });
+    if (status === 'queued') {
+      toastStore.getState().push('message queued (crow busy)', { ttlMs: 6000 });
+    } else {
+      toastStore.getState().push(`→ ${agentId}`, { ttlMs: 4000 });
+    }
+  } catch (error: unknown) {
+    // Surface, do NOT silently swallow: a dropped/timed-out send used to vanish with no signal,
+    // so the user saw "nothing happened" while a message may or may not have gone through. The
+    // round-trip failed from the client's view — say so. Mark `unknown` (not `failed`) because
+    // the message may still land server-side; do not auto-retry.
+    store.setState((state) => ({
+      conversations: {
+        ...state.conversations,
+        pendingByAgent: patchPending(
+          state.conversations.pendingByAgent,
+          agentId,
+          clientId,
+          'unknown',
+        ),
+      },
+    }));
+    const errMessage = error instanceof Error ? error.message : String(error);
+    toastStore.getState().push(`send failed: ${errMessage}`, { severity: 'error', ttlMs: 12000 });
+  }
+}
+
 export function createConversationsActions(
   bus: ApplicationClient,
   store: StoreApi<AppStore>,
@@ -299,48 +491,50 @@ export function createConversationsActions(
     },
 
     async send(agentId: string, message: string): Promise<void> {
-      try {
-        // `agent.message` is an orchestrator command kind, not a standalone RPC — route it through
-        // the live `command.submit` choke point (F2). The orchestrator worker dispatches on the kind.
-        const result = await submitCommand(bus, 'agent.message', { agent_id: agentId, message });
-        // F9 (TODO-T): the send toast is *truth* — pushed here, on the bus ack, not at the keypress
-        // (the keypress already cleared the input optimistically; this confirms the round-trip). The
-        // branches mirror Textual's `_send_chat` (app.py:1370-1392) faithfully:
-        //  - `handled === false` → the agent rejected the message; surface the error and stop (no `→`).
-        //  - `queued` (crow busy) → "message queued (crow busy)".
-        //  - otherwise → "→ {label}", with the agentId as the label (Textual's own fallback when no
-        //    friendly label is threaded; this action only carries agentId — rule 2 keeps labels out).
-        // The `→ collaborator` path is NOT reachable here: collaborator chat goes through a different
-        // command kind absent from this action, so we don't invent it.
-        if (result['handled'] === false) {
-          const errorText = String(result['error'] ?? 'agent did not handle message');
-          toastStore.getState().push(errorText, { severity: 'error', ttlMs: 12000 });
-          return;
-        }
-        if (result['queued'] === true) {
-          toastStore.getState().push('message queued (crow busy)', { ttlMs: 6000 });
-        } else {
-          toastStore.getState().push(`→ ${agentId}`, { ttlMs: 4000 });
-        }
-        // Keep the pane for this agent active after sending.
-        store.setState((state) => ({
-          conversations: {
-            ...state.conversations,
-            activePaneAgentId: agentId,
-            paneReapAges: activatePaneReapAges(
-              state.conversations.paneReapAges,
-              stageTranscriptFocusId(agentId),
-            ),
-          },
-        }));
-      } catch (error: unknown) {
-        // Surface, do NOT silently swallow: a dropped/timed-out send used to vanish with no signal,
-        // so the user saw "nothing happened" while a message may or may not have gone through. The
-        // round-trip failed from the client's view — say so. (The poll loop already resumes through
-        // a transient blip; reaching here means the client gave up or the command genuinely failed.)
-        const message = error instanceof Error ? error.message : String(error);
-        toastStore.getState().push(`send failed: ${message}`, { severity: 'error', ttlMs: 12000 });
+      const clientId = newClientMessageId();
+      const pending: PendingSend = {
+        clientId,
+        agentId,
+        text: message,
+        createdAt: Date.now(),
+        status: 'sending',
+      };
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          pendingByAgent: appendPending(state.conversations.pendingByAgent, pending),
+          activePaneAgentId: agentId,
+          paneReapAges: activatePaneReapAges(
+            state.conversations.paneReapAges,
+            stageTranscriptFocusId(agentId),
+          ),
+        },
+      }));
+      await deliverPending(bus, store, pending);
+    },
+
+    async retryPending(agentId: string, clientId: string): Promise<void> {
+      const pending = store
+        .getState()
+        .conversations.pendingByAgent[agentId]?.find((item) => item.clientId === clientId);
+      if (pending === undefined) {
+        return;
       }
+      if (pending.status !== 'failed' && pending.status !== 'unknown') {
+        return;
+      }
+      store.setState((state) => ({
+        conversations: {
+          ...state.conversations,
+          pendingByAgent: patchPending(
+            state.conversations.pendingByAgent,
+            agentId,
+            clientId,
+            'sending',
+          ),
+        },
+      }));
+      await deliverPending(bus, store, { ...pending, status: 'sending' });
     },
 
     async sendKey(agentId: string, key: string, literal: boolean, enter = false): Promise<void> {

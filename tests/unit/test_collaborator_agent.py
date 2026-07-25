@@ -14,6 +14,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from murder.runtime.orchestration.events import ConversationBlockEvent
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
@@ -22,6 +24,7 @@ from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.collaborator import CollaboratorAgent
 from murder.state.persistence.conversation import read_conversation_blocks, upsert_conversation
 from murder.state.persistence.schema import get_db, init_db
+from murder.user_config import TuiUserConfig, UserConfig
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -279,6 +282,132 @@ def test_stop_preserve_session_leaves_conversation_in_progress(
         "SELECT status FROM conversations WHERE conversation_id = 'collaborator-0'"
     ).fetchone()
     assert row["status"] == "in_progress"
+
+
+def test_destructive_stop_closes_owned_backend_connections(
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+) -> None:
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    runtime = SimpleNamespace(
+        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+    )
+    agent = CollaboratorAgent(
+        agent_id="collaborator-0",
+        session="murder_test_collaborator",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=runtime,
+    )
+    connections = [
+        SimpleNamespace(aclose=AsyncMock()),
+        SimpleNamespace(aclose=AsyncMock()),
+        SimpleNamespace(aclose=AsyncMock()),
+    ]
+    (
+        agent.app_server_connection,
+        agent.acp_connection,
+        agent.agent_sdk_connection,
+    ) = connections
+
+    asyncio.run(agent.stop(failed=False, kill_session=True))
+
+    for connection in connections:
+        connection.aclose.assert_awaited_once()
+    assert agent.app_server_connection is None
+    assert agent.acp_connection is None
+    assert agent.agent_sdk_connection is None
+
+
+def test_preserved_session_keeps_owned_backend_connections_open(
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+) -> None:
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    runtime = SimpleNamespace(
+        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+    )
+    agent = CollaboratorAgent(
+        agent_id="collaborator-0",
+        session="murder_test_collaborator",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=runtime,
+    )
+    connection = SimpleNamespace(aclose=AsyncMock())
+    agent.acp_connection = connection
+
+    asyncio.run(agent.stop(failed=False, kill_session=False))
+
+    connection.aclose.assert_not_awaited()
+    assert agent.acp_connection is connection
+
+
+def test_reinitialize_after_destructive_stop_creates_fresh_backend_connection(
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stop() clears owned backends so the next init bootstraps a new connection."""
+
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    runtime = SimpleNamespace(
+        db=conn,
+        orchestration_events=None,
+        run_id=None,
+        sync_agent=MagicMock(),
+        repo_root=tmp_path,
+        session_controllers=None,
+    )
+    agent = CollaboratorAgent(
+        agent_id="collaborator-0",
+        session="murder_test_collaborator",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=runtime,
+    )
+    monkeypatch.setattr(
+        "murder.user_config.load_user_config",
+        lambda: UserConfig(tui=TuiUserConfig(claude_control_backend="agent_sdk")),
+    )
+    bootstrapped: list[SimpleNamespace] = []
+
+    async def _fake_start_agent_sdk_session(**_kwargs: object) -> tuple[SimpleNamespace, object]:
+        connection = SimpleNamespace(aclose=AsyncMock())
+        bootstrapped.append(connection)
+        return connection, object()
+
+    controller = SimpleNamespace(execute=AsyncMock())
+    verified = SimpleNamespace(
+        ensure_session_controller=AsyncMock(return_value=controller),
+        remove_session_controller=AsyncMock(),
+        session_controller=controller,
+    )
+    monkeypatch.setattr(
+        "murder.llm.harness_control.agent_sdk.bootstrap.start_agent_sdk_session",
+        _fake_start_agent_sdk_session,
+    )
+    monkeypatch.setattr(
+        "murder.llm.harness_control.runtime.session.VerifiedHarnessControlSession.from_agent_sdk",
+        lambda **_kwargs: verified,
+    )
+
+    asyncio.run(agent.initialize_verified_harness_control())
+    first = agent.agent_sdk_connection
+    assert first is bootstrapped[0]
+
+    asyncio.run(agent.stop(failed=False, kill_session=True))
+    first.aclose.assert_awaited_once()
+    assert agent.agent_sdk_connection is None
+
+    asyncio.run(agent.initialize_verified_harness_control())
+    second = agent.agent_sdk_connection
+    assert second is bootstrapped[1]
+    assert second is not first
+    assert len(bootstrapped) == 2
 
 
 # ============================================================

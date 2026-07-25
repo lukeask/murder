@@ -1,8 +1,9 @@
 /**
  * ChatTranscript — the readable chat history for one agent, reskinned onto the DS as real chat bubbles
- * (crow-chat template / chat.jsx). Data wiring is UNCHANGED: maps the `conversations` slice via
- * {@link selectConversationTurns} (display-ready {@link ChatTurn}s); the component only lays out the
- * bubbles by `speaker` and keeps the auto-scroll-on-new-turn affordance (rule 2 — no formatting here).
+ * (crow-chat template / chat.jsx). Data wiring maps the `conversations` slice via
+ * {@link selectMergedConversationTurns} (display-ready {@link ChatTurn}s including optimistic
+ * shadow turns); the component only lays out the bubbles by `speaker` and keeps the
+ * auto-scroll-on-new-turn affordance (rule 2 — no formatting here).
  *
  * Speaker → presentation map:
  *  - user                : right-aligned accent-tinted bubble (row-reverse), bottom-right tucked.
@@ -15,7 +16,7 @@
  */
 
 import {
-  selectConversationTurns,
+  selectMergedConversationTurns,
   type ChatTurn,
   type TurnSpeaker,
 } from '@core/selectors/conversationsSelectors.js';
@@ -30,7 +31,8 @@ const STRUCT_SPEAKERS = new Set<TurnSpeaker>(['tool', 'plan']);
 
 export function ChatTranscript({ agentId }: { readonly agentId: string }): React.JSX.Element {
   const blocks = useAppStore((s) => s.conversations.transcripts[agentId]);
-  const turns = selectConversationTurns(blocks);
+  const pending = useAppStore((s) => s.conversations.pendingByAgent[agentId]);
+  const turns = selectMergedConversationTurns(blocks, pending);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   // Autoscroll to the newest turn whenever the transcript grows (the natural chat affordance).
@@ -50,6 +52,23 @@ export function ChatTranscript({ agentId }: { readonly agentId: string }): React
       <div ref={endRef} />
     </div>
   );
+}
+
+function deliveryLabel(delivery: ChatTurn['delivery']): string | null {
+  switch (delivery) {
+    case 'sending':
+      return 'sending…';
+    case 'accepted':
+      return 'accepted';
+    case 'queued':
+      return 'queued';
+    case 'failed':
+      return 'failed';
+    case 'unknown':
+      return 'unconfirmed';
+    default:
+      return null;
+  }
 }
 
 function Turn({ turn, agentId }: { readonly turn: ChatTurn; readonly agentId: string }): React.JSX.Element {
@@ -72,6 +91,16 @@ function Turn({ turn, agentId }: { readonly turn: ChatTurn; readonly agentId: st
 
   const isUser = turn.speaker === 'user';
   const struct = STRUCT_SPEAKERS.has(turn.speaker);
+  const delivery = turn.delivery;
+  const deliveryClass =
+    delivery === undefined
+      ? ''
+      : delivery === 'failed'
+        ? ' mds-bubble--delivery-failed'
+        : delivery === 'unknown'
+          ? ' mds-bubble--delivery-unknown'
+          : ' mds-bubble--delivery-pending';
+  const label = deliveryLabel(delivery);
 
   return (
     <div className={`mds-msg ${isUser ? 'mds-msg--user' : 'mds-msg--crow'}`}>
@@ -81,9 +110,10 @@ function Turn({ turn, agentId }: { readonly turn: ChatTurn; readonly agentId: st
         <div
           className={`mds-bubble ${isUser ? 'mds-bubble--user' : 'mds-bubble--crow'}${
             struct ? ' mds-bubble--struct' : ''
-          }`}
+          }${deliveryClass}`}
         >
           {turn.text}
+          {label === null ? null : <span className="mds-bubble__delivery">{label}</span>}
         </div>
       </div>
     </div>

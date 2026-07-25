@@ -1,10 +1,11 @@
+import { MouseProvider } from '@ink-tools/ink-mouse';
 import { render } from 'ink-testing-library';
 import { act, type JSX } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
 import { TranscriptController } from '../../../src/components/panes/TranscriptController.js';
-import { AppStoreProvider } from '../../../src/hooks/useAppStore.js';
 import { ApplicationClientProvider } from '../../../src/hooks/useApplicationClient.js';
+import { AppStoreProvider } from '../../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../../src/input/createInputStores.js';
 import { stageTranscriptFocusId } from '../../../src/input/focusIds.js';
@@ -47,18 +48,20 @@ function Harness({
   readonly inputStores: ReturnType<typeof createInputStores>;
 }): JSX.Element {
   return (
-    <ApplicationClientProvider value={bus}>
-      <AppStoreProvider value={store}>
-        <InputStoresProvider value={inputStores}>
-          <TranscriptController
-            presentation={presentation}
-            identity={identity}
-            state={store.getState()}
-            activeRecipientTarget={false}
-          />
-        </InputStoresProvider>
-      </AppStoreProvider>
-    </ApplicationClientProvider>
+    <MouseProvider autoEnable={false}>
+      <ApplicationClientProvider value={bus}>
+        <AppStoreProvider value={store}>
+          <InputStoresProvider value={inputStores}>
+            <TranscriptController
+              presentation={presentation}
+              identity={identity}
+              state={store.getState()}
+              activeRecipientTarget={false}
+            />
+          </InputStoresProvider>
+        </AppStoreProvider>
+      </ApplicationClientProvider>
+    </MouseProvider>
   );
 }
 

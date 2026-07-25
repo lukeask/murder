@@ -75,13 +75,22 @@ class AgentOps:
             return live and await tmux.session_exists(session)
         return live
 
-    async def _record_user_block(self, agent_id: str, text: str) -> None:
+    async def _record_user_block(
+        self,
+        agent_id: str,
+        text: str,
+        *,
+        client_message_id: str | None = None,
+    ) -> None:
         """Record a ground-truth user turn at the send boundary.
 
         Writes directly through the runtime db keyed by ``agent_id`` (the
         conversation id), so the exact text the user sent is stored
         authoritatively instead of re-derived from a noisy pane capture — the
         source of the collaborator corruption. No-op without a db.
+
+        ``client_message_id`` is forwarded into the user segment payload when
+        the client supplied one for optimistic-turn reconciliation.
         """
         db = getattr(self.rt, "db", None)
         if db is None:
@@ -89,7 +98,9 @@ class AgentOps:
         from murder.runtime.orchestration.events import ConversationBlockEvent
         from murder.state.persistence import conversation
 
-        block = conversation.append_user_message(db, agent_id, text)
+        block = conversation.append_user_message(
+            db, agent_id, text, client_message_id=client_message_id
+        )
         events = self.rt.orchestration_events
         run_id = getattr(self.rt, "run_id", None)
         if block is None or events is None or run_id is None:
@@ -114,6 +125,7 @@ class AgentOps:
         ticket_id: str | None,
         *,
         spawn_if_needed: bool = True,
+        client_message_id: str | None = None,
     ) -> dict[str, Any]:
         """Deliver a message to an agent by id.
 
@@ -122,6 +134,10 @@ class AgentOps:
         ``spawn_if_needed=False`` to deliver only to an already-live planner —
         a non-live planner is left dormant (no ``ensure_planning_agent``), so
         system nudges such as plan parse-error notifications never wake it.
+
+        ``client_message_id`` is an optional end-to-end correlation id that is
+        persisted on the user block after delivery acceptance so clients can
+        reconcile optimistic shadow turns.
         """
         del ticket_id
 
@@ -149,26 +165,44 @@ class AgentOps:
             # renders it. This is the sole crow delivery path — a crow with no
             # live agent handle is simply not addressable and falls through to
             # the honest "no agent named" failure below.
+            # Startup (verified model selection / conversation bind) must finish
+            # before chat can be queued or delivered. Otherwise the optimistic TUI
+            # clear has nowhere durable to land.
+            if getattr(agent, "status", None) is not None:
+                status_value = getattr(agent.status, "value", agent.status)
+                producer = getattr(agent, "_producer", None)
+                if status_value == "idle" and producer is None:
+                    return {
+                        "ok": False,
+                        "handled": False,
+                        "error": "agent is still starting; try again shortly",
+                    }
             queue_result = await agent.queue_message(message)
             if queue_result.get("ok") is False:
                 return {
                     "ok": False,
+                    "handled": False,
                     "error": str(queue_result.get("error") or "crow message delivery failed"),
                     **queue_result,
                 }
             # Ground truth: record the user turn once immediate or queued
             # delivery is accepted.
-            await self._record_user_block(agent_id, message)
+            await self._record_user_block(
+                agent_id, message, client_message_id=client_message_id
+            )
             return {"handled": True, **queue_result}
         if agent is None:
-            return {"ok": False, "error": f"no agent named {agent_id}"}
+            return {"ok": False, "handled": False, "error": f"no agent named {agent_id}"}
         send_result = await agent.send(message)
         if send_result is not None and getattr(send_result, "ok", True) is False:
             return {
                 "ok": False,
+                "handled": False,
                 "error": getattr(send_result, "message", None) or "agent message delivery failed",
             }
-        await self._record_user_block(agent_id, message)
+        await self._record_user_block(
+            agent_id, message, client_message_id=client_message_id
+        )
         return {"handled": True, "queued": False}
 
     async def send_agent_key(  # noqa: PLR0911 - each validation failure is an API result

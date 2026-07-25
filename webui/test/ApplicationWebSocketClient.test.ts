@@ -121,4 +121,14 @@ describe('ApplicationWebSocketClient', () => {
     detach();
     client.close();
   });
+
+  it('does not send terminal.attach when sessionId is null', async () => {
+    const { client, socket } = makeClient();
+    await connect(client, socket);
+    const before = socket.sent.length;
+    const detach = client.attachTerminal(null, () => {});
+    expect(socket.sent.slice(before)).toEqual([]);
+    detach();
+    client.close();
+  });
 });

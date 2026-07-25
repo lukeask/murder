@@ -28,12 +28,13 @@ import type {
   ConversationBlock,
   ConversationMeta,
   ConversationsState,
+  PendingSend,
+  PendingStatus,
 } from '../store/conversations/conversationsSlice.js';
 import type { FavoritesState } from '../store/favorites/favoritesSlice.js';
 import type { RosterRow, RosterState } from '../store/roster/rosterSlice.js';
 import { type AgentIdentity, deriveAgentIdentity, isDefaultFavorited } from './agentIdentity.js';
 import { isFavorited } from './favoritesSelectors.js';
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -59,6 +60,12 @@ export interface ChatTurn {
   readonly text: string;
   /** The originating block's id, if any (for keying in React lists). */
   readonly blockId: string | null;
+  /**
+   * Delivery status for optimistic shadow turns. Absent on authoritative blocks
+   * (those are already persisted). Renderers use this for translucent / spinner /
+   * error treatment until the pending item is reconciled away.
+   */
+  readonly delivery?: PendingStatus;
   /**
    * True only for an unanswered `choice_prompt` that is the trailing block of the transcript —
    * i.e. a still-open live multiple-choice dialog the user can answer. Ports the Textual
@@ -480,6 +487,36 @@ export function selectConversationTurns(
   return turns;
 }
 
+/** Map a pending shadow send into a user turn for the view layer. */
+export function selectPendingTurns(pending: readonly PendingSend[] | undefined): readonly ChatTurn[] {
+  if (pending === undefined || pending.length === 0) {
+    return [];
+  }
+  return pending.map((item) => ({
+    speaker: 'user' as const,
+    text: item.text,
+    blockId: `pending:${item.clientId}`,
+    delivery: item.status,
+  }));
+}
+
+/**
+ * Authoritative turns plus trailing optimistic shadow turns. Pending items that
+ * have already been confirmed by `client_message_id` are assumed already filtered
+ * out of `pendingByAgent` by reconciliation.
+ */
+export function selectMergedConversationTurns(
+  blocks: readonly ConversationBlock[] | undefined,
+  pending: readonly PendingSend[] | undefined,
+): readonly ChatTurn[] {
+  const authoritative = selectConversationTurns(blocks);
+  const shadows = selectPendingTurns(pending);
+  if (shadows.length === 0) {
+    return authoritative;
+  }
+  return [...authoritative, ...shadows];
+}
+
 /**
  * Build the full view-model for one agent's conversation.
  *
@@ -487,6 +524,9 @@ export function selectConversationTurns(
  * formatting, so a local `/clear` wipes the view even though the authoritative snapshot re-pulls the
  * old (durably-logged) blocks on reconnect. Blocks with no numeric id are kept (they predate ids /
  * can't be compared — never hide content we can't position). Absent floor = show everything.
+ *
+ * Pending shadow turns are appended after the authoritative stream so the UI renders on keypress
+ * while the backend acceptance + projection round-trip completes.
  */
 export function selectConversationView(
   agentId: string,
@@ -510,7 +550,7 @@ export function selectConversationView(
     viewMode === 'condensed'
       ? collapseToolRuns(condenseBlocks(floored, state.chunkSummaries[agentId]))
       : floored;
-  const turns = selectConversationTurns(blocks);
+  const turns = selectMergedConversationTurns(blocks, state.pendingByAgent[agentId]);
   return { agentId, turns, hasContent: turns.length > 0 };
 }
 
@@ -712,17 +752,19 @@ export function useConversationTurns(
   viewMode: ChatViewMode = 'verbose',
 ): readonly ChatTurn[] {
   const blocks = state.transcripts[agentId];
+  const pending = state.pendingByAgent[agentId];
   const summaries = state.chunkSummaries[agentId];
   const floor = state.clearedFloors[agentId];
   // Memoise on the inputs the view depends on: the transcript ref (changes only on this agent's
-  // applyBlock), the chunk-summaries ref (changes only on this agent's chunk-summary update), the
-  // agentId, the mode, and the /clear floor. Verbose ignores `summaries` but listing it is harmless
-  // (its ref only changes for this agent). Routes through `selectConversationView` so the condensed
-  // attribution-replacement logic lives in exactly one place.
+  // applyBlock), the pending ref (optimistic shadow turns), the chunk-summaries ref (changes only
+  // on this agent's chunk-summary update), the agentId, the mode, and the /clear floor. Verbose
+  // ignores `summaries` but listing it is harmless (its ref only changes for this agent). Routes
+  // through `selectConversationView` so the condensed attribution-replacement logic lives in
+  // exactly one place.
   // biome-ignore lint/correctness/useExhaustiveDependencies: selectConversationView reads exactly these inputs off `state`; the listed deps are complete and minimal
   return useMemo(
     () => selectConversationView(agentId, state, viewMode).turns,
-    [blocks, summaries, agentId, viewMode, floor],
+    [blocks, pending, summaries, agentId, viewMode, floor],
   );
 }
 

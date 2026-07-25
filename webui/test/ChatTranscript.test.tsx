@@ -17,10 +17,14 @@ const AID = 'crowzero';
 function seedBlocks(store: ReturnType<typeof makeStore>['store'], blocks: unknown[]): void {
   seedSlice(store, 'conversations', {
     transcripts: { [AID]: blocks as never },
+    pendingByAgent: {},
     meta: {},
     activePaneAgentId: null,
     paneOverrides: new Map<string, boolean>(),
+    paneReapAges: new Map<string, number>(),
     clearedFloors: {},
+    paneViewModes: {},
+    chunkSummaries: {},
   } as never);
 }
 
@@ -54,5 +58,35 @@ describe('ChatTranscript (DS reskin)', () => {
 
     expect(document.querySelector('.mds-msg--meta .mds-meta-chip')).toBeTruthy();
     expect(screen.getByText('crow spawned')).toBeTruthy();
+  });
+
+  it('renders pending shadow turns as translucent user bubbles', () => {
+    const { store } = makeStore();
+    seedSlice(store, 'conversations', {
+      transcripts: {},
+      pendingByAgent: {
+        [AID]: [
+          {
+            clientId: 'p1',
+            agentId: AID,
+            text: 'optimistic hello',
+            createdAt: 1,
+            status: 'sending',
+          },
+        ],
+      },
+      meta: {},
+      activePaneAgentId: null,
+      paneOverrides: new Map<string, boolean>(),
+      paneReapAges: new Map<string, number>(),
+      clearedFloors: {},
+      paneViewModes: {},
+      chunkSummaries: {},
+    } as never);
+    renderWithStore(<ChatTranscript agentId={AID} />, { store });
+
+    expect(document.querySelector('.mds-bubble--delivery-pending')).toBeTruthy();
+    expect(screen.getByText('optimistic hello')).toBeTruthy();
+    expect(screen.getByText('sending…')).toBeTruthy();
   });
 });

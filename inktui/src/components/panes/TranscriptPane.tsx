@@ -127,6 +127,12 @@ function speakerColor(speaker: TurnSpeaker, theme: ReturnType<typeof useTheme>):
 }
 
 function chatLineColor(line: ChatLine, theme: ReturnType<typeof useTheme>): string {
+  if (line.delivery === 'failed') {
+    return theme.error;
+  }
+  if (line.delivery === 'unknown') {
+    return theme.warning;
+  }
   if (line.tone === 'summary') {
     return theme.accent;
   }
@@ -145,6 +151,10 @@ function ChatHistoryLine({
   const gutterColor = chatLineColor(line, theme);
   const verbatim = line.kind === 'code' || line.kind === 'pre';
   const text = line.text === '' ? ' ' : line.text;
+  const pending =
+    line.delivery === 'sending' ||
+    line.delivery === 'accepted' ||
+    line.delivery === 'queued';
 
   return (
     <Box flexDirection="row" flexShrink={0} width="100%" minWidth={0}>
@@ -153,7 +163,9 @@ function ChatHistoryLine({
           {line.kind === 'blank' && line.gutter === 'none' ? (
             <Text> </Text>
           ) : (
-            <Text color={gutterColor}>{line.firstOfTurn ? GUTTER_HEAD : GUTTER_CONT} </Text>
+            <Text color={gutterColor} dimColor={pending}>
+              {line.firstOfTurn ? GUTTER_HEAD : GUTTER_CONT}{' '}
+            </Text>
           )}
         </Box>
       ) : null}
@@ -165,7 +177,7 @@ function ChatHistoryLine({
             {text}
           </Text>
         ) : (
-          <Text color={gutterColor} wrap="truncate">
+          <Text color={gutterColor} dimColor={pending} wrap="truncate">
             {text}
           </Text>
         )}
