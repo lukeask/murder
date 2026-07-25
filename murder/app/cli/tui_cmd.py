@@ -19,11 +19,16 @@ from murder.app.cli._util import repo_root as _repo_root
 from murder.app.cli.service_cmd import (
     _ensure_supervisor,
     _ensure_supervisor_started,
+    _live_lock_owner_pid,
     _run_async_entry,
     apply_client_log_level,
 )
 from murder.state.storage.paths import lock_path
-from murder.state.storage.service_registry import list_service_sessions, project_session_name
+from murder.state.storage.service_registry import (
+    list_service_sessions,
+    project_session_name,
+    service_registry_dir,
+)
 
 # Node runtime floor (current LTS). Ink 5 needs >=18; 20 is the future-proof floor we ship against.
 MIN_NODE_MAJOR = 20
@@ -116,6 +121,14 @@ async def _launch_tui() -> None:
         None,
     )
     if session is None:
+        owner = _live_lock_owner_pid(repo)
+        if owner is not None:
+            raise InkLaunchError(
+                f"service is running (PID {owner}) but no WebSocket endpoint is published "
+                f"under {service_registry_dir()}. "
+                "The service may have started with a different runtime directory "
+                "(check XDG_RUNTIME_DIR); try `murder down` then `murder up`."
+            )
         raise InkLaunchError("service started without publishing its WebSocket endpoint")
     _spawn_ink(argv, cwd, session.websocket_url, repo.name)
 

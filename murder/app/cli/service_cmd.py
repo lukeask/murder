@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -255,6 +256,10 @@ def cmd_serviced(
     _run_async_entry(_run_supervisor_only(websocket_port=websocket_port))
 
 
+_DOWN_WAIT_S = 5.0
+_DOWN_POLL_S = 0.1
+
+
 def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) -> None:
     # Re-read the live lock pid right before signalling so we don't SIGTERM a
     # recycled, unrelated process: between the session-registry read and here
@@ -279,6 +284,32 @@ def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) ->
         typer.echo(f"Removed stale lock for dead PID {pid}.")
         return
     typer.echo(f"Sent SIGTERM to pid {pid}")
+
+    # Wait for a clean exit; escalate if the supervisor hangs after removing its
+    # session file (clients would otherwise see lock-held-but-no-session).
+    deadline = time.monotonic() + _DOWN_WAIT_S
+    while time.monotonic() < deadline:
+        if not _pid_is_alive(pid):
+            break
+        time.sleep(_DOWN_POLL_S)
+    else:
+        if _pid_is_alive(pid) and read_lock_pid(lock_path(repo)) == pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                typer.echo(f"Sent SIGKILL to pid {pid}")
+            except ProcessLookupError:
+                pass
+            # Brief grace so the kernel reaps before we inspect the lock.
+            kill_deadline = time.monotonic() + 1.0
+            while time.monotonic() < kill_deadline and _pid_is_alive(pid):
+                time.sleep(_DOWN_POLL_S)
+
+    if not _pid_is_alive(pid):
+        with contextlib.suppress(FileNotFoundError):
+            if read_lock_pid(lock_path(repo)) in (None, pid):
+                lock_path(repo).unlink()
+        if session_name is not None:
+            remove_service_session(session_name)
 
 
 def _down_named_session(selector: str) -> None:

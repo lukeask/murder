@@ -31,10 +31,43 @@ class AmbiguousServiceSessionError(ValueError):
         self.matches = matches
 
 
+def _xdg_runtime_dir() -> str | None:
+    """Return XDG_RUNTIME_DIR when set to a non-empty path.
+
+    An empty or whitespace-only value (common in stripped MCP / container envs)
+    is treated as unset so clients do not use ``Path("")`` as a runtime root.
+    """
+    value = (os.environ.get("XDG_RUNTIME_DIR") or "").strip()
+    return value or None
+
+
+def _default_user_runtime_dir() -> Path | None:
+    """Return ``/run/user/<uid>`` when it is a usable directory, else None."""
+    path = Path(f"/run/user/{os.getuid()}")
+    try:
+        if path.is_dir() and os.access(path, os.W_OK | os.X_OK):
+            return path
+    except OSError:
+        return None
+    return None
+
+
 def service_runtime_root() -> Path:
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime_dir:
+    """Per-user directory for the live service session registry.
+
+    Preference order:
+    1. Non-empty ``XDG_RUNTIME_DIR`` (tests and explicit overrides).
+    2. ``/run/user/<uid>/murder`` when that parent exists — so a client with
+       empty/unset ``XDG_RUNTIME_DIR`` still shares the registry with a service
+       started from a normal login shell.
+    3. ``/tmp/murder-<uid>`` as a last resort.
+    """
+    runtime_dir = _xdg_runtime_dir()
+    if runtime_dir is not None:
         return Path(runtime_dir) / RUNTIME_SUBDIR
+    user_runtime = _default_user_runtime_dir()
+    if user_runtime is not None:
+        return user_runtime / RUNTIME_SUBDIR
     return Path(f"/tmp/murder-{os.getuid()}")
 
 
