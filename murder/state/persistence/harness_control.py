@@ -13,7 +13,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, fields, is_dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
@@ -538,6 +538,29 @@ def persist_observation_delta(
         )
         inserted.append(int(cur.lastrowid))
     return inserted
+
+
+def prune_capture_history(conn: sqlite3.Connection, *, captured_before: datetime) -> None:
+    """Delete raw capture history strictly older than ``captured_before``.
+
+    Observations are removed before their supporting frames so an interrupted
+    cleanup cannot leave an observation pointing at evidence that no longer
+    exists. Deleting frames cascades to their evidence envelopes.
+    """
+    cutoff = (
+        captured_before.astimezone(timezone.utc)
+        if captured_before.tzinfo is not None
+        else captured_before
+    )
+    cutoff_iso = cutoff.isoformat()
+    conn.execute(
+        "DELETE FROM harness_control_observations WHERE captured_at < ?",
+        (cutoff_iso,),
+    )
+    conn.execute(
+        "DELETE FROM harness_control_frames WHERE captured_at < ?",
+        (cutoff_iso,),
+    )
 
 
 def latest_observation(

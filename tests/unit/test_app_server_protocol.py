@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -52,6 +53,29 @@ class FakeTransport:
     async def aclose(self) -> None:
         self.closed = True
         self.push_eof()
+
+
+class ShutdownOrderingTransport:
+    """Transport that verifies stdout remains active while shutdown starts."""
+
+    def __init__(self) -> None:
+        self.reader_cancelled = asyncio.Event()
+        self.closed = False
+
+    async def write_line(self, line: str) -> None:
+        del line
+
+    async def readline(self) -> str:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.reader_cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+    async def aclose(self) -> None:
+        assert not self.reader_cancelled.is_set()
+        self.closed = True
 
 
 def test_encode_decode_request_round_trip() -> None:
@@ -116,9 +140,7 @@ def test_connection_resolves_pending_request_and_queues_events() -> None:
         request_id = outbound["id"]
 
         transport.push(
-            json.dumps(
-                {"method": "thread/started", "params": {"thread": {"id": "th1"}}}
-            )
+            json.dumps({"method": "thread/started", "params": {"thread": {"id": "th1"}}})
         )
         transport.push(
             json.dumps(
@@ -196,6 +218,112 @@ def test_connection_raises_rpc_error_on_error_response() -> None:
     asyncio.run(scenario())
 
 
+def test_process_connection_continuously_drains_stderr() -> None:
+    async def scenario() -> None:
+        script = """
+import json
+import sys
+
+sys.stderr.write("x" * (2 * 1024 * 1024))
+sys.stderr.flush()
+request = json.loads(sys.stdin.readline())
+print(json.dumps({"id": request["id"], "result": {"ok": True}}), flush=True)
+"""
+        connection = AppServerConnection(argv=(sys.executable, "-c", script))
+        await connection.start()
+        assert await asyncio.wait_for(connection.request("initialize"), timeout=2.0) == {"ok": True}
+
+        stderr_task = connection._stderr_task
+        await connection.aclose()
+        assert stderr_task is not None and stderr_task.done()
+
+    asyncio.run(scenario())
+
+
+def test_connection_keeps_stdout_reader_running_during_shutdown() -> None:
+    async def scenario() -> None:
+        transport = ShutdownOrderingTransport()
+        connection = AppServerConnection(transport=transport)
+        await connection.start()
+        await asyncio.sleep(0)
+
+        await connection.aclose()
+
+        assert transport.closed
+        assert transport.reader_cancelled.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_connection_eof_fails_pending_rpc_and_flips_liveness() -> None:
+    async def scenario() -> None:
+        transport = FakeTransport()
+        connection = AppServerConnection(transport=transport)
+        await connection.start()
+
+        task = asyncio.create_task(connection.request("thread/start", {"cwd": "/tmp"}))
+        await asyncio.sleep(0)
+        assert connection.started
+
+        transport.push_eof()
+        with pytest.raises(ConnectionError, match="stdout closed"):
+            await asyncio.wait_for(task, timeout=1.0)
+        assert connection.started is False
+
+        with pytest.raises(ConnectionError, match="transport exited"):
+            await connection.request("turn/interrupt", {"threadId": "a", "turnId": "b"})
+        with pytest.raises(ConnectionError, match="transport exited"):
+            await connection.notify("initialized")
+
+        await connection.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_connection_eof_terminates_iter_notifications() -> None:
+    async def scenario() -> None:
+        transport = FakeTransport()
+        connection = AppServerConnection(transport=transport)
+        await connection.start()
+
+        async def consume() -> list[RpcNotification]:
+            return [n async for n in connection.iter_notifications()]
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0)
+        transport.push_eof()
+        assert await asyncio.wait_for(task, timeout=1.0) == []
+        assert connection.started is False
+        await connection.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_connection_eof_after_notification_drains_then_terminates() -> None:
+    async def scenario() -> None:
+        transport = FakeTransport()
+        connection = AppServerConnection(transport=transport)
+        await connection.start()
+
+        async def consume() -> list[RpcNotification]:
+            return [n async for n in connection.iter_notifications()]
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0)
+        transport.push(
+            json.dumps({"method": "thread/started", "params": {"thread": {"id": "th1"}}})
+        )
+        transport.push_eof()
+        notifications = await asyncio.wait_for(task, timeout=1.0)
+        assert notifications == [
+            RpcNotification(method="thread/started", params={"thread": {"id": "th1"}})
+        ]
+        assert connection.started is False
+        await connection.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_client_initialize_handshake_and_thread_helpers() -> None:
     async def scenario() -> None:
         transport = FakeTransport()
@@ -227,16 +355,22 @@ def test_client_initialize_handshake_and_thread_helpers() -> None:
         assert init_result["platformOs"] == "linux"
         assert json.loads(transport.written[1]) == {"method": "initialized"}
 
-        start_task = asyncio.create_task(client.thread_start(cwd="/work", model="gpt-5"))
+        start_task = asyncio.create_task(
+            client.thread_start(cwd="/work", model="gpt-5.6-sol", model_provider="local")
+        )
         await asyncio.sleep(0)
         start_req = json.loads(transport.written[-1])
         assert start_req["method"] == "thread/start"
-        assert start_req["params"] == {"cwd": "/work", "model": "gpt-5"}
+        assert start_req["params"] == {
+            "cwd": "/work",
+            "model": "gpt-5.6-sol",
+            "modelProvider": "local",
+        }
         transport.push(
             json.dumps(
                 {
                     "id": start_req["id"],
-                    "result": {"thread": {"id": "thread-1"}, "model": "gpt-5"},
+                    "result": {"thread": {"id": "thread-1"}, "model": "gpt-5.6-sol"},
                 }
             )
         )
@@ -280,3 +414,162 @@ def test_client_initialize_handshake_and_thread_helpers() -> None:
         await connection.aclose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+async def test_start_app_server_session_closes_connection_when_initialize_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-start handshake failure must aclose the live app-server connection."""
+
+    from murder.llm.harness_control.app_server.bootstrap import start_app_server_session
+
+    closed: list[bool] = []
+
+    class _StartedConnection:
+        desired_model: str | None = None
+        desired_model_provider: str | None = None
+        desired_effort: str | None = None
+
+        async def start(self) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    class _FailingClient:
+        def __init__(self, connection: _StartedConnection) -> None:
+            self.connection = connection
+
+        async def initialize(self, **_kwargs: object) -> None:
+            raise RuntimeError("app-server initialize failed")
+
+    monkeypatch.setattr(
+        "murder.llm.harness_control.app_server.bootstrap.AppServerConnection",
+        lambda **_kwargs: _StartedConnection(),
+    )
+    monkeypatch.setattr(
+        "murder.llm.harness_control.app_server.bootstrap.AppServerClient",
+        _FailingClient,
+    )
+
+    with pytest.raises(RuntimeError, match="app-server initialize failed"):
+        await start_app_server_session(cwd="/tmp")
+    assert closed == [True]
+
+
+def test_read_codex_model_provider_from_top_level_config(tmp_path) -> None:
+    from murder.llm.harness_control.app_server.bootstrap import (
+        read_codex_model_provider,
+        resolve_app_server_model_provider,
+    )
+
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'model = "gpt-5.6-sol"\n'
+        'model_provider = "local"\n'
+        "\n"
+        "[model_providers.local]\n"
+        'name = "Local Inference"\n'
+        'base_url = "http://localhost:54321/v1"\n',
+        encoding="utf-8",
+    )
+    assert read_codex_model_provider(config_path=config) == "local"
+    assert resolve_app_server_model_provider(config_path=config) == "local"
+    assert resolve_app_server_model_provider("openai", config_path=config) == "openai"
+    # Blank Murder override falls through to Codex config.
+    assert resolve_app_server_model_provider("  ", config_path=config) == "local"
+
+
+def test_read_codex_model_provider_missing_or_section_only(tmp_path) -> None:
+    from murder.llm.harness_control.app_server.bootstrap import read_codex_model_provider
+
+    missing = tmp_path / "absent.toml"
+    assert read_codex_model_provider(config_path=missing) is None
+
+    section_only = tmp_path / "section.toml"
+    section_only.write_text(
+        'model = "gpt-5"\n\n[model_providers.local]\nname = "Local"\n',
+        encoding="utf-8",
+    )
+    assert read_codex_model_provider(config_path=section_only) is None
+
+
+@pytest.mark.asyncio
+async def test_start_app_server_session_passes_model_provider_to_thread_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Bootstrap must forward modelProvider on thread/start when known."""
+
+    from murder.llm.harness_control.app_server.bootstrap import start_app_server_session
+
+    thread_starts: list[dict[str, object]] = []
+
+    class _StartedConnection:
+        desired_model: str | None = None
+        desired_model_provider: str | None = None
+        desired_effort: str | None = None
+
+        async def start(self) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            return None
+
+    class _RecordingClient:
+        def __init__(self, connection: _StartedConnection) -> None:
+            self.connection = connection
+
+        async def initialize(self, **_kwargs: object) -> dict[str, object]:
+            return {}
+
+        async def thread_start(self, **kwargs: object) -> dict[str, object]:
+            thread_starts.append(dict(kwargs))
+            return {"thread": {"id": "th-local"}}
+
+    monkeypatch.setattr(
+        "murder.llm.harness_control.app_server.bootstrap.AppServerConnection",
+        lambda **_kwargs: _StartedConnection(),
+    )
+    monkeypatch.setattr(
+        "murder.llm.harness_control.app_server.bootstrap.AppServerClient",
+        _RecordingClient,
+    )
+
+    config = tmp_path / "config.toml"
+    config.write_text('model_provider = "local"\n', encoding="utf-8")
+
+    connection, _client = await start_app_server_session(
+        cwd="/work",
+        model="gpt-5.6-sol",
+        codex_config_path=config,
+    )
+    assert connection.desired_model == "gpt-5.6-sol"
+    assert connection.desired_model_provider == "local"
+    assert thread_starts == [
+        {"cwd": "/work", "model": "gpt-5.6-sol", "model_provider": "local"}
+    ]
+
+    thread_starts.clear()
+    connection, _client = await start_app_server_session(
+        cwd="/work",
+        model="gpt-5",
+        model_provider="openai",
+        codex_config_path=config,
+    )
+    assert connection.desired_model_provider == "openai"
+    assert thread_starts == [
+        {"cwd": "/work", "model": "gpt-5", "model_provider": "openai"}
+    ]
+
+    thread_starts.clear()
+    empty = tmp_path / "empty.toml"
+    empty.write_text('model = "gpt-5"\n', encoding="utf-8")
+    connection, _client = await start_app_server_session(
+        cwd="/work",
+        model="gpt-5",
+        codex_config_path=empty,
+    )
+    assert connection.desired_model_provider is None
+    assert thread_starts == [{"cwd": "/work", "model": "gpt-5"}]

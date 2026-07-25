@@ -68,9 +68,18 @@ class AppServerClient:
         *,
         cwd: str | None = None,
         model: str | None = None,
+        model_provider: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        params = _omit_none({"cwd": cwd, "model": model, **kwargs})
+        """Start a thread. ``model_provider`` maps to schema ``modelProvider``."""
+        params = _omit_none(
+            {
+                "cwd": cwd,
+                "model": model,
+                "modelProvider": model_provider,
+                **kwargs,
+            }
+        )
         result = await self.connection.request("thread/start", params or {})
         self._remember_thread_id(result)
         if not isinstance(result, dict):

@@ -203,3 +203,143 @@ def test_token_usage_notification() -> None:
     )
     assert state.usage is not None
     assert state.usage["total"]["totalTokens"] == 3
+
+
+def test_error_notification_and_failed_turn_preserve_usage_limit() -> None:
+    state = AppServerViewState()
+    apply_notification(
+        state,
+        RpcNotification(
+            method="turn/started",
+            params={
+                "threadId": "th-limit",
+                "turn": {"id": "tu-limit", "status": "inProgress", "items": []},
+            },
+        ),
+    )
+    apply_notification(
+        state,
+        RpcNotification(
+            method="item/started",
+            params={
+                "threadId": "th-limit",
+                "turnId": "tu-limit",
+                "item": {
+                    "id": "u1",
+                    "type": "userMessage",
+                    "text": "hello",
+                },
+            },
+        ),
+    )
+    limit_message = (
+        "You've hit your usage limit. Upgrade to Pro or try again at 5:54 PM."
+    )
+    apply_notification(
+        state,
+        RpcNotification(
+            method="error",
+            params={
+                "threadId": "th-limit",
+                "turnId": "tu-limit",
+                "willRetry": False,
+                "error": {
+                    "message": limit_message,
+                    "codexErrorInfo": "usageLimitExceeded",
+                },
+            },
+        ),
+    )
+    assert state.last_error is not None
+    assert state.last_error["codexErrorInfo"] == "usageLimitExceeded"
+    assert state.last_error["message"] == limit_message
+
+    apply_notification(
+        state,
+        RpcNotification(
+            method="turn/completed",
+            params={
+                "threadId": "th-limit",
+                "turn": {
+                    "id": "tu-limit",
+                    "status": "failed",
+                    "items": [
+                        {"id": "u1", "type": "userMessage", "text": "hello"},
+                    ],
+                    "error": {
+                        "message": limit_message,
+                        "codexErrorInfo": "usageLimitExceeded",
+                    },
+                },
+            },
+        ),
+    )
+    assert state.turn_status == "failed"
+    assert state.last_error is not None
+    assert state.last_error["message"] == limit_message
+
+    snapshot = to_snapshot_dict(state, staged_composer_text="", thread_id=None)
+    assert snapshot["turn"] == {
+        "id": "tu-limit",
+        "status": "failed",
+        "error": {
+            "message": limit_message,
+            "codexErrorInfo": "usageLimitExceeded",
+        },
+    }
+    assert snapshot["items"][0]["text"] == "hello"
+
+    # A subsequent successful turn clears the terminal error.
+    apply_notification(
+        state,
+        RpcNotification(
+            method="turn/started",
+            params={
+                "threadId": "th-limit",
+                "turn": {"id": "tu-next", "status": "inProgress", "items": []},
+            },
+        ),
+    )
+    assert state.last_error is None
+    apply_notification(
+        state,
+        RpcNotification(
+            method="turn/completed",
+            params={
+                "threadId": "th-limit",
+                "turn": {"id": "tu-next", "status": "completed", "items": []},
+            },
+        ),
+    )
+    cleared = to_snapshot_dict(state, staged_composer_text="", thread_id=None)
+    assert cleared["turn"] == {"id": "tu-next", "status": "completed"}
+    assert "error" not in cleared["turn"]
+
+
+def test_rate_limits_updated_merges_into_usage() -> None:
+    state = AppServerViewState()
+    apply_notification(
+        state,
+        RpcNotification(
+            method="account/rateLimits/updated",
+            params={
+                "rateLimits": {
+                    "primary": {"usedPercent": 100, "windowDurationMins": 300},
+                    "secondary": None,
+                    "rateLimitReachedType": "primary",
+                }
+            },
+        ),
+    )
+    assert state.usage is not None
+    assert state.usage["rateLimits"]["primary"]["usedPercent"] == 100
+
+    apply_notification(
+        state,
+        RpcNotification(
+            method="thread/tokenUsage/updated",
+            params={"tokenUsage": {"total": {"totalTokens": 9}}},
+        ),
+    )
+    assert state.usage["total"]["totalTokens"] == 9
+    assert state.usage["rateLimits"]["primary"]["usedPercent"] == 100

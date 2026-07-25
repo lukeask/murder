@@ -96,3 +96,95 @@ async def test_prompt_in_flight_marks_turn_streaming() -> None:
     assert observer.view_state.turn_status == "streaming"
 
     await connection.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pending_stop_reason_clears_streaming_after_prompt() -> None:
+    """session/prompt completion must leave awaiting_input, not stuck working."""
+    transport = _IdleTransport()
+    connection = AcpConnection(transport=transport)
+    await connection.start()
+    connection.session_id = "sess-1"
+    connection.prompt_in_flight = True
+
+    observer = AcpFrameObserver(connection, HarnessId("cursor"))
+    streaming = json.loads((await observer.capture_frame()).raw_text)
+    assert streaming["turn"] == {"status": "streaming"}
+
+    # Transport clears prompt_in_flight and stashes stopReason for the next frame.
+    connection.prompt_in_flight = False
+    connection.pending_stop_reason = "end_turn"
+
+    completed = json.loads((await observer.capture_frame()).raw_text)
+    assert completed["turn"] == {"status": "completed"}
+    assert completed["stop_reason"] == "end_turn"
+    assert connection.pending_stop_reason is None
+    assert observer.view_state.turn_status == "completed"
+
+    await connection.aclose()
+
+
+@pytest.mark.asyncio
+async def test_successful_response_removes_request_from_next_observation() -> None:
+    transport = _IdleTransport()
+    connection = AcpConnection(transport=transport)
+    await connection.start()
+    connection.incoming_requests.put_nowait(
+        RpcRequest(
+            id="question-1",
+            method="cursor/ask_question",
+            params={"questions": [{"question": "Continue?"}]},
+        )
+    )
+    observer = AcpFrameObserver(connection, HarnessId("cursor"))
+
+    first = json.loads((await observer.capture_frame()).raw_text)
+    assert [request["id"] for request in first["pending_requests"]] == ["question-1"]
+
+    await connection.respond("question-1", result={"answers": ["Yes"]})
+
+    second = json.loads((await observer.capture_frame()).raw_text)
+    assert second["pending_requests"] == []
+
+    await connection.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_response_write_leaves_request_pending_and_retryable() -> None:
+    transport = _IdleTransport()
+    connection = AcpConnection(transport=transport)
+    await connection.start()
+    connection.incoming_requests.put_nowait(
+        RpcRequest(
+            id="question-1",
+            method="cursor/ask_question",
+            params={"questions": [{"question": "Continue?"}]},
+        )
+    )
+    observer = AcpFrameObserver(connection, HarnessId("cursor"))
+    assert [request["id"] for request in json.loads((await observer.capture_frame()).raw_text)[
+        "pending_requests"
+    ]] == ["question-1"]
+
+    async def _fail_write(line: str) -> None:
+        del line
+        raise OSError("broken pipe")
+
+    transport.write_line = _fail_write  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="broken pipe"):
+        await connection.respond("question-1", result={"answers": ["Yes"]})
+
+    still_pending = json.loads((await observer.capture_frame()).raw_text)
+    assert [request["id"] for request in still_pending["pending_requests"]] == ["question-1"]
+
+    written: list[str] = []
+
+    async def _ok_write(line: str) -> None:
+        written.append(line)
+
+    transport.write_line = _ok_write  # type: ignore[method-assign]
+    await connection.respond("question-1", result={"answers": ["Yes"]})
+    assert written
+    assert json.loads((await observer.capture_frame()).raw_text)["pending_requests"] == []
+
+    await connection.aclose()

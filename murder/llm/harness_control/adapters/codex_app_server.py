@@ -49,6 +49,7 @@ from murder.llm.harness_control.model.observations import (
     ComposerState,
     GenerationPhase,
     GenerationState,
+    HarnessInfoState,
     Knowledge,
     ModalKind,
     ModalState,
@@ -237,25 +238,49 @@ def _find_pending(
 
 def _usage_windows(usage: Mapping[str, Any]) -> tuple[UsageWindow, ...]:
     windows_raw = usage.get("windows")
-    if not isinstance(windows_raw, list):
-        return ()
-    windows: list[UsageWindow] = []
-    for row in windows_raw:
-        if not isinstance(row, Mapping):
-            continue
-        name = row.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-        percent = row.get("percent_used")
-        windows.append(
-            UsageWindow(
-                name,
-                float(percent) if isinstance(percent, (int, float)) else None,
-                None,
-                str(row["reset_text"]) if isinstance(row.get("reset_text"), str) else None,
+    if isinstance(windows_raw, list):
+        windows: list[UsageWindow] = []
+        for row in windows_raw:
+            if not isinstance(row, Mapping):
+                continue
+            name = row.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            percent = row.get("percent_used")
+            windows.append(
+                UsageWindow(
+                    name,
+                    float(percent) if isinstance(percent, (int, float)) else None,
+                    None,
+                    str(row["reset_text"]) if isinstance(row.get("reset_text"), str) else None,
+                )
             )
-        )
-    return tuple(windows)
+        if windows:
+            return tuple(windows)
+
+    # ChatGPT account/rateLimits/* shape: primary/secondary usedPercent windows.
+    rate_limits = usage.get("rateLimits")
+    if isinstance(rate_limits, Mapping):
+        mapped: list[UsageWindow] = []
+        for key in ("primary", "secondary"):
+            row = rate_limits.get(key)
+            if not isinstance(row, Mapping):
+                continue
+            percent = row.get("usedPercent")
+            resets_at = row.get("resetsAt")
+            reset_text = None
+            if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool):
+                reset_text = f"resetsAt={int(resets_at)}"
+            mapped.append(
+                UsageWindow(
+                    key,
+                    float(percent) if isinstance(percent, (int, float)) else None,
+                    None,
+                    reset_text,
+                )
+            )
+        return tuple(mapped)
+    return ()
 
 
 def _turn_status(turn: object) -> str | None:
@@ -264,9 +289,71 @@ def _turn_status(turn: object) -> str | None:
     return None
 
 
+def _turn_error(turn: object) -> dict[str, Any] | None:
+    if not isinstance(turn, dict):
+        return None
+    error = turn.get("error")
+    return error if isinstance(error, dict) else None
+
+
+def _error_message(error: Mapping[str, Any] | None) -> str | None:
+    if error is None:
+        return None
+    message = error.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    return None
+
+
+def _codex_error_info(error: Mapping[str, Any] | None) -> str | None:
+    if error is None:
+        return None
+    for key in ("codexErrorInfo", "codex_error_info"):
+        value = error.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, Mapping):
+            # Some variants serialize as objects with a discriminant.
+            for nested_key in ("type", "kind", "name"):
+                nested = value.get(nested_key)
+                if isinstance(nested, str) and nested.strip():
+                    return nested.strip()
+    return None
+
+
+def _is_usage_limit_error(error: Mapping[str, Any] | None, message: str | None) -> bool:
+    info = (_codex_error_info(error) or "").casefold().replace("_", "")
+    if "usagelimit" in info:
+        return True
+    if message and "usage limit" in message.casefold():
+        return True
+    return False
+
+
 def _params_dict(request: Mapping[str, Any]) -> dict[str, Any]:
     raw = request.get("params")
     return raw if isinstance(raw, dict) else {}
+
+
+def _append_turn_error_segments(
+    segments: list[dict[str, Any]],
+    *,
+    error: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Project a failed-turn error into a notice segment the conversation UI renders."""
+
+    message = _error_message(error)
+    if message is None:
+        return segments
+    notice = {
+        "type": "notice",
+        "severity": "error",
+        "message": message,
+    }
+    # Avoid duplicating if a prior frame already appended the same notice.
+    if segments and segments[-1] == notice:
+        return segments
+    return [*segments, notice]
 
 
 class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
@@ -304,6 +391,7 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
 
         turn = snapshot.get("turn") if isinstance(snapshot.get("turn"), dict) else None
         status = _turn_status(turn)
+        turn_error = _turn_error(turn)
         composer_raw = (
             snapshot.get("composer") if isinstance(snapshot.get("composer"), dict) else {}
         )
@@ -319,7 +407,8 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
         )
         model = snapshot.get("model") if isinstance(snapshot.get("model"), dict) else {}
         usage = snapshot.get("usage") if isinstance(snapshot.get("usage"), dict) else None
-        segments = _map_items(items)
+        segments = _append_turn_error_segments(_map_items(items), error=turn_error)
+        error_message = _error_message(turn_error)
         transcript = {
             "harness": "codex",
             "state": _transcript_state(status, pending_requests=pending),
@@ -337,6 +426,8 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
             "snapshot": snapshot,
             "thread_id": snapshot.get("thread_id"),
             "turn": turn,
+            "turn_error": turn_error,
+            "notices": [error_message] if error_message else [],
             "composer": {
                 "text": composer_text,
                 "staged": staged,
@@ -392,8 +483,18 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
         ref, now = item.ref(), item.captured_at
         turn = p.get("turn") if isinstance(p.get("turn"), dict) else None
         status = _turn_status(turn)
+        turn_error = (
+            p.get("turn_error")
+            if isinstance(p.get("turn_error"), dict)
+            else _turn_error(turn)
+        )
+        error_message = _error_message(turn_error)
+        usage_limit = (
+            error_message if _is_usage_limit_error(turn_error, error_message) else None
+        )
         streaming = status == "streaming"
-        idle = status in {None, "idle", "completed"}
+        # Failed/interrupted turns are terminal — composer must accept a retry.
+        idle = status in {None, "idle", "completed", "interrupted", "failed"}
         composer = p.get("composer") if isinstance(p.get("composer"), dict) else {}
         composer_text = str(composer.get("text", "")) if composer else ""
         staged = bool(composer.get("staged")) if composer else False
@@ -413,6 +514,13 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
             primary = SurfaceKind.COMPOSER
             modal_kind = None
             modal_title = None
+
+        notices_raw = p.get("notices") if isinstance(p.get("notices"), list) else []
+        notices = tuple(
+            str(item) for item in notices_raw if isinstance(item, str) and item.strip()
+        )
+        if error_message and error_message not in notices:
+            notices = (*notices, error_message)
 
         updates: dict[str, Observed[object]] = {
             "surface": _present(
@@ -451,7 +559,16 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
                 revision,
                 explanation="app-server backend has no TUI session-settings chrome",
             ),
-            "info": _without(Knowledge.ABSENT, ref, now, revision),
+            "info": (
+                _present(
+                    HarnessInfoState(None, None, None, None, notices),
+                    ref,
+                    now,
+                    revision,
+                )
+                if notices
+                else _without(Knowledge.ABSENT, ref, now, revision)
+            ),
             "tool_activity": _without(Knowledge.ABSENT, ref, now, revision),
         }
 
@@ -586,17 +703,22 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
         )
 
         usage = p.get("usage") if isinstance(p.get("usage"), dict) else None
-        if usage is not None:
-            windows = _usage_windows(usage)
+        windows = _usage_windows(usage) if usage is not None else ()
+        if usage is not None or usage_limit is not None:
+            usage_payload = dict(usage) if usage is not None else {}
             updates["usage"] = _present(
                 UsageState(
-                    str(usage["model"]) if isinstance(usage.get("model"), str) else model_id,
-                    str(usage["plan"]) if isinstance(usage.get("plan"), str) else None,
+                    str(usage_payload["model"])
+                    if isinstance(usage_payload.get("model"), str)
+                    else model_id,
+                    str(usage_payload["plan"])
+                    if isinstance(usage_payload.get("plan"), str)
+                    else None,
                     windows,
                     "current",
                     SurfaceKind.COMPOSER,
-                    None,
-                    dict(usage),
+                    usage_limit,
+                    usage_payload or None,
                 ),
                 ref,
                 now,
@@ -607,9 +729,27 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
                 Knowledge.ABSENT, ref, now, revision, explanation="no usage in snapshot"
             )
 
+        events: tuple[dict[str, object], ...] = ()
+        if error_message is not None:
+            event: dict[str, object] = {
+                "type": "codex.turn_failed",
+                "message": error_message,
+                "turn_status": status,
+            }
+            info = _codex_error_info(turn_error)
+            if info is not None:
+                event["codex_error_info"] = info
+            events = (event,)
+            if usage_limit is not None:
+                events = (
+                    *events,
+                    {"type": "codex.usage_limit", "message": usage_limit},
+                )
+
         return ObservationDelta(
             updates=updates,
             evidence_refs=(ref,),
+            semantic_events=events,
             diagnostics=item.diagnostics.messages,
         )
 

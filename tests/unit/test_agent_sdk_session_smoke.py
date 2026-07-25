@@ -139,3 +139,33 @@ async def test_interrupt_emits_over_fake_agent_sdk() -> None:
         assert client.interrupted is True
     finally:
         await connection.aclose()
+
+
+@pytest.mark.asyncio
+async def test_start_agent_sdk_session_closes_connection_when_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bootstrap must aclose the new connection if connect/start fails."""
+
+    from murder.llm.harness_control.agent_sdk.bootstrap import start_agent_sdk_session
+
+    closed: list[bool] = []
+
+    class _FailingConnection:
+        desired_model: str | None = None
+        desired_effort: str | None = None
+
+        async def start(self) -> None:
+            raise RuntimeError("agent-sdk connect failed")
+
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        "murder.llm.harness_control.agent_sdk.bootstrap.AgentSdkConnection",
+        lambda **_kwargs: _FailingConnection(),
+    )
+
+    with pytest.raises(RuntimeError, match="agent-sdk connect failed"):
+        await start_agent_sdk_session(cwd="/tmp")
+    assert closed == [True]

@@ -879,3 +879,111 @@ def test_configuration_action_is_durable_before_picker_effect() -> None:
     assert decision.kind is ControllerDecisionKind.EMIT_ACTION
     assert advanced.configuration_action_id == decision.action.action_id
     assert advanced.configuration_baseline_revision == snapshot.revision
+
+
+def test_rpc_backend_succeeds_when_active_model_already_matches() -> None:
+    """ACP/app-server/Agent SDK: no picker; active readback is authoritative."""
+
+    revision = _revision(1)
+    snapshot = replace(
+        unknown_snapshot("cursor", captured_at=NOW, revision=revision),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.COMPOSER,
+                frozenset({SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}),
+                SurfaceKind.COMPOSER,
+                False,
+                False,
+            ),
+            revision,
+        ),
+        model_configuration=Observed.without_value(
+            Knowledge.UNSUPPORTED,
+            evidence=(),
+            observed_at=NOW,
+            revision=revision,
+            explanation="no keystroke model picker",
+        ),
+        active_model=_observed(
+            ModelState("composer-2.5", None, "composer-2.5"),
+            revision,
+        ),
+    )
+    target = ModelTarget(model_id="composer-2.5")
+    created_op = SelectModelOperation(
+        envelope=OperationEnvelope(
+            operation_id="acp-model-op",
+            capability="select_model",
+            status=OperationStatus.PENDING,
+            phase=ModelSelectionPhase.CREATED,
+            created_at=NOW,
+            updated_at=NOW,
+            deadline=None,
+        ),
+        request=SelectModelRequest(target, timedelta(minutes=2)),
+    )
+    created = reconcile_model_selection(created_op, snapshot, NOW)
+    assert created.kind is ControllerDecisionKind.SUCCEED
+    assert created.next_phase is ModelSelectionPhase.SUCCEEDED
+    assert created.action is None
+
+    ensuring_op = SelectModelOperation(
+        envelope=OperationEnvelope(
+            operation_id="acp-model-op",
+            capability="select_model",
+            status=OperationStatus.RUNNING,
+            phase=ModelSelectionPhase.ENSURING_CONFIGURATION,
+            created_at=NOW,
+            updated_at=NOW,
+            deadline=None,
+        ),
+        request=SelectModelRequest(target, timedelta(minutes=2)),
+    )
+    ensuring = reconcile_model_selection(ensuring_op, snapshot, NOW)
+    assert ensuring.kind is ControllerDecisionKind.SUCCEED
+    assert ensuring.action is None
+
+
+def test_rpc_backend_stages_select_model_when_active_mismatches() -> None:
+    revision = _revision(1)
+    snapshot = replace(
+        unknown_snapshot("cursor", captured_at=NOW, revision=revision),
+        surface=_observed(
+            SurfaceState(
+                SurfaceKind.COMPOSER,
+                frozenset({SurfaceKind.COMPOSER, SurfaceKind.TRANSCRIPT}),
+                SurfaceKind.COMPOSER,
+                False,
+                False,
+            ),
+            revision,
+        ),
+        model_configuration=Observed.without_value(
+            Knowledge.UNSUPPORTED,
+            evidence=(),
+            observed_at=NOW,
+            revision=revision,
+            explanation="no keystroke model picker",
+        ),
+        active_model=_observed(ModelState("other-model", None, "other-model"), revision),
+    )
+    target = ModelTarget(model_id="composer-2.5")
+    op = SelectModelOperation(
+        envelope=OperationEnvelope(
+            operation_id="acp-model-op",
+            capability="select_model",
+            status=OperationStatus.RUNNING,
+            phase=ModelSelectionPhase.ENSURING_CONFIGURATION,
+            created_at=NOW,
+            updated_at=NOW,
+            deadline=None,
+        ),
+        request=SelectModelRequest(target, timedelta(minutes=2)),
+    )
+    decision = reconcile_model_selection(op, snapshot, NOW)
+    assert decision.kind is ControllerDecisionKind.EMIT_ACTION
+    assert decision.next_phase is ModelSelectionPhase.AWAITING_ACTIVE_READBACK
+    assert isinstance(decision.action, SelectModel)
+    assert decision.action.model_id == "composer-2.5"
+    advanced = advance_model_selection(op, decision, snapshot, NOW)
+    assert advanced.activation_action_id == decision.action.action_id

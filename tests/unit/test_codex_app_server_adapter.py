@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +31,12 @@ from murder.llm.harness_control.model.observations import (
     Knowledge,
     unknown_snapshot,
 )
+from murder.state.persistence.conversation import (
+    append_user_message,
+    project_parsed_doc_with_changes,
+    read_conversation_blocks,
+)
+from murder.state.persistence.schema import get_db, init_db
 
 NOW = datetime(2026, 7, 20, tzinfo=timezone.utc)
 
@@ -209,3 +217,85 @@ def test_invalid_frame_json_emits_diagnostic() -> None:
     assert evidence[0].diagnostics.messages
     assert "invalid" in evidence[0].diagnostics.messages[0]
     assert evidence[0].payload["transcript"]["segments"] == []
+
+
+def _failed_usage_limit() -> dict[str, object]:
+    message = "You've hit your usage limit. Upgrade to Pro or try again at 5:54 PM."
+    return {
+        "v": 1,
+        "thread_id": "thread-limit",
+        "turn": {
+            "id": "turn-limit",
+            "status": "failed",
+            "error": {
+                "message": message,
+                "codexErrorInfo": "usageLimitExceeded",
+            },
+        },
+        "composer": {"text": "", "staged": False},
+        "items": [{"id": "u1", "type": "userMessage", "text": "do the thing"}],
+        "pending_requests": [],
+        "model": {"id": "gpt-5", "effort": None},
+        "usage": None,
+    }
+
+
+def test_usage_limit_failed_turn_projects_notice_and_usage_advisory() -> None:
+    adapter = CodexAppServerHarnessAdapter()
+    evidence = adapter.parse_evidence(_frame(_failed_usage_limit()), ())
+    payload = evidence[0].payload
+    assert payload["transcript"]["state"] == "awaiting_input"
+    segments = payload["transcript"]["segments"]
+    assert segments[0]["type"] == "user"
+    assert segments[0]["text"] == "do the thing"
+    assert segments[1]["type"] == "notice"
+    assert segments[1]["severity"] == "error"
+    assert "usage limit" in segments[1]["message"].casefold()
+
+    delta = adapter.project_observations(
+        evidence, unknown_snapshot(HarnessId("codex"), captured_at=NOW)
+    )
+    assert delta.updates["generation"].value.phase is GenerationPhase.STOPPED
+    composer = delta.updates["composer"].value
+    assert composer.actionability is ComposerActionability.ACTIONABLE
+    assert composer.accepts_submission is True
+
+    info = delta.updates["info"]
+    assert info.knowledge is Knowledge.PRESENT
+    assert info.value is not None
+    assert any("usage limit" in notice.casefold() for notice in info.value.notices)
+
+    usage = delta.updates["usage"]
+    assert usage.knowledge is Knowledge.PRESENT
+    assert usage.value is not None
+    assert usage.value.advisory_text is not None
+    assert "usage limit" in usage.value.advisory_text.casefold()
+
+    event_types = {event.get("type") for event in delta.semantic_events}
+    assert "codex.turn_failed" in event_types
+    assert "codex.usage_limit" in event_types
+
+
+def test_usage_limit_notice_lands_in_conversation_blocks(tmp_path: Path) -> None:
+    """Adapter notice segment must become a crow-chat ``notice`` block."""
+
+    adapter = CodexAppServerHarnessAdapter()
+    transcript = adapter.parse_evidence(_frame(_failed_usage_limit()), ())[0].payload[
+        "transcript"
+    ]
+    assert isinstance(transcript, dict)
+
+    conn: sqlite3.Connection = get_db(tmp_path / "usage-limit.db")
+    init_db(conn)
+    append_user_message(conn, "crow-limit", "do the thing")
+    _merged, changes = project_parsed_doc_with_changes(conn, "crow-limit", transcript)
+
+    blocks = read_conversation_blocks(conn, "crow-limit")
+    kinds = [block.kind for block in blocks]
+    assert "user" in kinds
+    assert "notice" in kinds
+    notice = next(block for block in blocks if block.kind == "notice")
+    assert notice.payload["type"] == "notice"
+    assert notice.payload["severity"] == "error"
+    assert "usage limit" in str(notice.payload.get("message", "")).casefold()
+    assert any(change.action == "block-appended" and change.block.kind == "notice" for change in changes)

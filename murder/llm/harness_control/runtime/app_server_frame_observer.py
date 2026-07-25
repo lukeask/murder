@@ -11,6 +11,7 @@ from murder.llm.harness_control.app_server.state import (
     AppServerViewState,
     apply_notification,
     apply_server_request,
+    remove_pending_request,
     to_snapshot_dict,
 )
 from murder.llm.harness_control.model.evidence import FrameId, HarnessId, TerminalFrame
@@ -53,6 +54,16 @@ class AppServerFrameObserver:
             apply_notification(self._view_state, notification)
         for request in self._connection.drain_incoming_requests():
             apply_server_request(self._view_state, request)
+        for request_id in self._connection.drain_resolved_request_ids():
+            remove_pending_request(self._view_state, request_id)
+
+        # Merge a fresh account/rateLimits/read snapshot when the transport stashed one.
+        rate_limits = getattr(self._connection, "latest_rate_limits", None)
+        if isinstance(rate_limits, dict):
+            usage = dict(self._view_state.usage) if isinstance(self._view_state.usage, dict) else {}
+            usage["rateLimits"] = rate_limits
+            self._view_state.usage = usage
+            self._connection.latest_rate_limits = None
 
         # Keep connection ids in sync for adapter.lower() (interrupt / turn/start).
         if self._view_state.thread_id is not None:

@@ -116,14 +116,18 @@ class AcpConnection:
         self._transport: AcpTransport | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
         self._write_lock = asyncio.Lock()
         self._pending: dict[RequestId, asyncio.Future[Any]] = {}
         self._next_id = 1
         self._started = False
         self._closed = False
+        self._transport_exit: str | None = None
+        self._lifecycle_done = asyncio.Event()
 
         self.notifications: asyncio.Queue[RpcNotification] = asyncio.Queue()
         self.incoming_requests: asyncio.Queue[RpcRequest] = asyncio.Queue()
+        self.resolved_request_ids: asyncio.Queue[RequestId] = asyncio.Queue()
 
         # Connection-local staged state shared with observer / adapter.
         self.session_id: str | None = None
@@ -131,6 +135,9 @@ class AcpConnection:
         self.desired_model: str | None = None
         self.desired_effort: str | None = None
         self.prompt_in_flight: bool = False
+        # Set by AcpEffectTransport when session/prompt returns (or cancel fires);
+        # consumed by AcpFrameObserver on the next capture_frame.
+        self.pending_stop_reason: str | None = None
 
     @property
     def started(self) -> bool:
@@ -154,6 +161,10 @@ class AcpConnection:
             )
             self._process = process
             self._transport = _ProcessTransport(process)
+            self._stderr_task = asyncio.create_task(
+                self._drain_stderr(process),
+                name="acp-stderr-drainer",
+            )
         self._reader_task = asyncio.create_task(self._read_loop(), name="acp-reader")
         self._started = True
 
@@ -211,6 +222,7 @@ class AcpConnection:
             await self._send(RpcResponse(id=request_id, error=rpc_error))
         else:
             await self._send(RpcResponse(id=request_id, result=result))
+            self.resolved_request_ids.put_nowait(request_id)
 
     def drain_notifications(self) -> list[RpcNotification]:
         drained: list[RpcNotification] = []
@@ -228,10 +240,44 @@ class AcpConnection:
             except asyncio.QueueEmpty:
                 return drained
 
+    def drain_resolved_request_ids(self) -> list[RequestId]:
+        """Return agent request ids successfully answered by this client."""
+
+        drained: list[RequestId] = []
+        while True:
+            try:
+                drained.append(self.resolved_request_ids.get_nowait())
+            except asyncio.QueueEmpty:
+                return drained
+
     async def iter_notifications(self) -> AsyncIterator[RpcNotification]:
-        while self.started or not self.notifications.empty():
-            notification = await self.notifications.get()
-            yield notification
+        while True:
+            if not self.started and self.notifications.empty():
+                return
+            get_task = asyncio.create_task(self.notifications.get())
+            done_task = asyncio.create_task(self._lifecycle_done.wait())
+            try:
+                finished, _pending_tasks = await asyncio.wait(
+                    (get_task, done_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for task in (get_task, done_task):
+                    if not task.done():
+                        task.cancel()
+                for task in (get_task, done_task):
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            if get_task in finished and not get_task.cancelled():
+                yield get_task.result()
+                continue
+            while True:
+                try:
+                    yield self.notifications.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
 
     async def close(self) -> None:
         await self.aclose()
@@ -241,28 +287,40 @@ class AcpConnection:
             return
         self._closed = True
         self._started = False
+        self._lifecycle_done.set()
 
         reader = self._reader_task
         self._reader_task = None
-        if reader is not None:
-            reader.cancel()
-            try:
-                await reader
-            except asyncio.CancelledError:
-                pass
 
         transport = self._transport
         self._transport = None
-        if transport is not None:
-            try:
-                await transport.aclose()
-            except Exception:  # noqa: BLE001 — shutdown must continue
-                logger.debug("ACP transport close failed", exc_info=True)
+        try:
+            if transport is not None:
+                try:
+                    await transport.aclose()
+                except Exception:  # noqa: BLE001 — shutdown must continue
+                    logger.debug("ACP transport close failed", exc_info=True)
+        finally:
+            # Keep reading stdout while process shutdown waits so a noisy child
+            # cannot fill that pipe and deadlock its own termination.
+            if reader is not None:
+                reader.cancel()
+                try:
+                    await reader
+                except asyncio.CancelledError:
+                    pass
 
-        for future in list(self._pending.values()):
-            if not future.done():
-                future.set_exception(ConnectionError("ACP connection closed"))
-        self._pending.clear()
+        stderr_task = self._stderr_task
+        self._stderr_task = None
+        if stderr_task is not None:
+            try:
+                await stderr_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 — stderr must not break shutdown
+                logger.debug("ACP stderr drainer exited with error", exc_info=True)
+
+        self._fail_pending(ConnectionError("ACP connection closed"))
 
     async def __aenter__(self) -> AcpConnection:
         await self.start()
@@ -272,10 +330,25 @@ class AcpConnection:
         await self.aclose()
 
     def _ensure_started(self) -> None:
-        if not self._started or self._transport is None:
-            raise RuntimeError("AcpConnection is not started")
         if self._closed:
             raise RuntimeError("AcpConnection is closed")
+        if self._transport_exit is not None:
+            raise ConnectionError(self._transport_exit)
+        if not self._started or self._transport is None:
+            raise RuntimeError("AcpConnection is not started")
+
+    def _fail_pending(self, exc: BaseException) -> None:
+        for future in list(self._pending.values()):
+            if not future.done():
+                future.set_exception(exc)
+        self._pending.clear()
+
+    def _stdout_closed_error(self) -> ConnectionError:
+        message = "ACP stdout closed"
+        process = self._process
+        if process is not None and process.returncode is not None:
+            message = f"{message} (process returncode={process.returncode})"
+        return ConnectionError(message)
 
     def _allocate_id(self) -> int:
         request_id = self._next_id
@@ -306,10 +379,22 @@ class AcpConnection:
         except Exception:  # noqa: BLE001
             logger.debug("ACP reader exited with error", exc_info=True)
         finally:
-            for future in list(self._pending.values()):
-                if not future.done():
-                    future.set_exception(ConnectionError("ACP stdout closed"))
-            self._pending.clear()
+            exit_error = self._stdout_closed_error()
+            self._fail_pending(exit_error)
+            self._started = False
+            if self._reader_task is asyncio.current_task():
+                self._reader_task = None
+            if not self._closed and self._transport_exit is None:
+                self._transport_exit = (
+                    f"AcpConnection transport exited: {exit_error}"
+                )
+            self._lifecycle_done.set()
+
+    async def _drain_stderr(self, process: asyncio.subprocess.Process) -> None:
+        """Continuously discard child stderr so it cannot block the RPC process."""
+        assert process.stderr is not None
+        while await process.stderr.read(64 * 1024):
+            pass
 
     def _route_message(self, message: RpcMessage) -> None:
         if isinstance(message, RpcResponse):

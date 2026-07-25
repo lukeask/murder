@@ -207,6 +207,7 @@ def test_send_agent_message_reports_delivery_failure_without_user_block(
 
     assert result == {
         "ok": False,
+        "handled": False,
         "error": "Harness not awaiting input in time: session=crow-t001",
     }
     assert get_agent_messages(db, "crow-t001") == []
@@ -236,3 +237,43 @@ def test_send_agent_message_records_user_block_after_delivery_acceptance(
     assert result == {"handled": True, "queued": False}
     messages = get_agent_messages(db, "crow-t001")
     assert [m["body"] for m in messages] == ["hello"]
+
+
+def test_send_agent_message_persists_client_message_id_on_user_block(
+    repo_root: Path,
+) -> None:
+    db = get_db(repo_root / ".murder" / "murder.db")
+    init_db(db)
+
+    class _Agent:
+        async def send(self, _message: str):
+            return ok_result()
+
+    rt = SimpleNamespace(
+        get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
+        get_crow_handler=lambda _ticket_id: None,
+        db=db,
+        orchestration_events=None,
+        run_id=None,
+    )
+    orch = Orchestrator(rt)
+
+    result = asyncio.run(
+        orch.send_agent_message(
+            "crow-t001",
+            "hello",
+            None,
+            client_message_id="client-abc",
+        )
+    )
+
+    assert result == {"handled": True, "queued": False}
+    from murder.state.persistence.conversation import read_conversation_blocks
+
+    blocks = read_conversation_blocks(db, "crow-t001")
+    assert len(blocks) == 1
+    assert blocks[0].payload == {
+        "type": "user",
+        "text": "hello",
+        "client_message_id": "client-abc",
+    }

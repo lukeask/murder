@@ -85,10 +85,20 @@ class AcpEffectTransport:
             if is_prompt and hasattr(self._connection, "prompt_in_flight"):
                 self._connection.prompt_in_flight = True
             try:
-                await self._connection.request(effect.method, effect.params)
+                result = await self._connection.request(effect.method, effect.params)
             finally:
                 if is_prompt and hasattr(self._connection, "prompt_in_flight"):
                     self._connection.prompt_in_flight = False
+            # session/prompt's result carries stopReason when the turn ends.
+            # Stash it for AcpFrameObserver so turn_status leaves "streaming"
+            # (otherwise the crow stays working/running forever after SUCCEEDED).
+            if is_prompt:
+                stop_reason = "end_turn"
+                if isinstance(result, dict):
+                    raw = result.get("stopReason")
+                    if isinstance(raw, str) and raw:
+                        stop_reason = raw
+                self._connection.pending_stop_reason = stop_reason  # type: ignore[attr-defined]
             return
         await self._connection.notify(effect.method, effect.params)
         # session/cancel has no agent reply; signal the frame observer to end the turn.

@@ -168,6 +168,7 @@ class HarnessBackedAgent(LifecycleParticipant):
                 connection, _client = await start_app_server_session(
                     cwd=cwd,
                     model=getattr(self, "startup_model", None),
+                    model_provider=getattr(self, "startup_model_provider", None),
                     effort=getattr(self, "startup_effort", None),
                 )
                 self.app_server_connection = connection
@@ -441,6 +442,38 @@ class HarnessBackedAgent(LifecycleParticipant):
             return False
         await self.verified_harness_control.remove_session_controller()
         return True
+
+    async def close_backend_connections(self) -> None:
+        """Close structured-control connections owned by this agent.
+
+        A destructive agent shutdown terminates the logical harness session,
+        but that command alone does not stop a JSON-RPC connection's reader
+        tasks, subprocess, or pending RPC futures.  Connections are retained
+        on the agent rather than the verified session, so lifecycle shutdown
+        owns their final close.
+        """
+
+        seen: set[int] = set()
+        for attribute in (
+            "app_server_connection",
+            "acp_connection",
+            "agent_sdk_connection",
+        ):
+            connection = getattr(self, attribute, None)
+            if connection is None or id(connection) in seen:
+                setattr(self, attribute, None)
+                continue
+            seen.add(id(connection))
+            try:
+                await connection.aclose()
+            except Exception:  # noqa: BLE001 — one backend must not block shutdown
+                LOGGER.exception(
+                    "failed to close %s for agent %s",
+                    attribute,
+                    self.id,
+                )
+            finally:
+                setattr(self, attribute, None)
 
     async def _usage_sampling_context(self) -> Any | None:
         runtime = getattr(self, "runtime", None)

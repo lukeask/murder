@@ -11,6 +11,7 @@ from murder.llm.harness_control.agent_sdk.state import (
     AgentSdkViewState,
     apply_event,
     apply_permission_request,
+    remove_pending_request,
     to_snapshot_dict,
 )
 from murder.llm.harness_control.model.evidence import FrameId, HarnessId, TerminalFrame
@@ -48,6 +49,8 @@ class AgentSdkFrameObserver:
             apply_event(self._view_state, event)
         for request in self._connection.drain_incoming_requests():
             apply_permission_request(self._view_state, request)
+        for request_id in self._connection.drain_resolved_request_ids():
+            remove_pending_request(self._view_state, request_id)
 
         if self._view_state.session_id is not None:
             self._connection.session_id = self._view_state.session_id

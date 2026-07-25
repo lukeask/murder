@@ -13,6 +13,7 @@ from murder.llm.harness_control.acp.state import (
     apply_server_request,
     apply_stop_reason,
     mark_prompt_started,
+    remove_pending_request,
     to_snapshot_dict,
 )
 from murder.llm.harness_control.model.evidence import FrameId, HarnessId, TerminalFrame
@@ -55,6 +56,8 @@ class AcpFrameObserver:
             apply_notification(self._view_state, notification)
         for request in self._connection.drain_incoming_requests():
             apply_server_request(self._view_state, request)
+        for request_id in self._connection.drain_resolved_request_ids():
+            remove_pending_request(self._view_state, request_id)
 
         # Keep connection ids in sync for adapter.lower() (cancel / prompt).
         if self._view_state.session_id is not None:

@@ -30,6 +30,8 @@ class AppServerViewState:
     model_id: str | None = None
     effort: str | None = None
     usage: dict[str, Any] | None = None
+    # Last turn/server error (usage limits, upstream failures). Cleared on a new turn.
+    last_error: dict[str, Any] | None = None
 
 
 def apply_notification(state: AppServerViewState, notification: RpcNotification) -> None:
@@ -56,8 +58,9 @@ def apply_notification(state: AppServerViewState, notification: RpcNotification)
             if isinstance(turn_id, str) and turn_id:
                 state.turn_id = turn_id
             state.turn_status = "streaming"
-            # New turn: reset item accumulation for this turn.
+            # New turn: reset item accumulation and prior terminal error.
             state.items = []
+            state.last_error = None
             turn_items = turn.get("items")
             if isinstance(turn_items, list):
                 for raw in turn_items:
@@ -75,12 +78,42 @@ def apply_notification(state: AppServerViewState, notification: RpcNotification)
             if isinstance(turn_id, str) and turn_id:
                 state.turn_id = turn_id
             state.turn_status = _map_turn_status(turn.get("status"))
+            error = _coerce_error_payload(turn.get("error"))
+            if error is not None:
+                state.last_error = error
+            elif state.turn_status != "failed":
+                # Successful / interrupted completion clears a prior mid-turn error.
+                state.last_error = None
             turn_items = turn.get("items")
             if isinstance(turn_items, list) and turn_items:
                 # Prefer authoritative completed turn items when provided.
                 state.items = [
                     _normalize_item(raw) for raw in turn_items if isinstance(raw, dict)
                 ]
+        return
+
+    if method == "error":
+        # Mid-turn server error (quota, upstream, etc.). Same error object shape as
+        # turn.status == "failed". May precede turn/completed.
+        error = _coerce_error_payload(params.get("error"))
+        if error is None:
+            error = _coerce_error_payload(params)
+        if error is not None:
+            state.last_error = error
+            thread_id = params.get("threadId")
+            if isinstance(thread_id, str) and thread_id:
+                state.thread_id = thread_id
+            turn_id = params.get("turnId")
+            if isinstance(turn_id, str) and turn_id:
+                state.turn_id = turn_id
+        return
+
+    if method == "account/rateLimits/updated":
+        rate_limits = params.get("rateLimits")
+        if isinstance(rate_limits, dict):
+            usage = dict(state.usage) if isinstance(state.usage, dict) else {}
+            usage["rateLimits"] = copy.deepcopy(rate_limits)
+            state.usage = usage
         return
 
     if method == "item/started":
@@ -155,7 +188,14 @@ def apply_notification(state: AppServerViewState, notification: RpcNotification)
     if method == "thread/tokenUsage/updated":
         usage = params.get("tokenUsage")
         if isinstance(usage, dict):
-            state.usage = copy.deepcopy(usage)
+            merged = copy.deepcopy(usage)
+            # Preserve account rate-limit snapshot alongside token usage.
+            prior_limits = (
+                state.usage.get("rateLimits") if isinstance(state.usage, dict) else None
+            )
+            if isinstance(prior_limits, dict):
+                merged["rateLimits"] = copy.deepcopy(prior_limits)
+            state.usage = merged
         return
 
     # Unknown methods: ignore safely.
@@ -194,7 +234,7 @@ def to_snapshot_dict(
 
     effective_thread_id = thread_id if thread_id is not None else state.thread_id
     turn: dict[str, Any] | None
-    if state.turn_id is None and state.turn_status is None:
+    if state.turn_id is None and state.turn_status is None and state.last_error is None:
         turn = None
     else:
         status: TurnStatus = state.turn_status or "idle"
@@ -202,6 +242,8 @@ def to_snapshot_dict(
             "id": state.turn_id or "",
             "status": status,
         }
+        if state.last_error is not None:
+            turn["error"] = copy.deepcopy(state.last_error)
 
     composer_text = staged_composer_text
     return {
@@ -220,6 +262,19 @@ def to_snapshot_dict(
         },
         "usage": copy.deepcopy(state.usage),
     }
+
+
+def _coerce_error_payload(raw: Any) -> dict[str, Any] | None:
+    """Normalize an app-server TurnError object for snapshot persistence."""
+
+    if not isinstance(raw, dict):
+        return None
+    message = raw.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    error = copy.deepcopy(raw)
+    error["message"] = message.strip()
+    return error
 
 
 def _map_turn_status(raw: Any) -> TurnStatus:

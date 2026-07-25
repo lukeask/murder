@@ -90,3 +90,127 @@ async def test_capture_frame_drains_queues_and_emits_stable_json() -> None:
     assert again.capture_sequence == frame.capture_sequence + 1
 
     await connection.aclose()
+
+
+@pytest.mark.asyncio
+async def test_successful_response_removes_request_from_next_observation() -> None:
+    transport = _IdleTransport()
+    connection = AppServerConnection(transport=transport)
+    await connection.start()
+    connection.incoming_requests.put_nowait(
+        RpcRequest(
+            id="permission-1",
+            method="item/commandExecution/requestApproval",
+            params={"command": "git status"},
+        )
+    )
+    observer = AppServerFrameObserver(connection, HarnessId("codex"))
+
+    first = json.loads((await observer.capture_frame()).raw_text)
+    assert [request["id"] for request in first["pending_requests"]] == ["permission-1"]
+
+    await connection.respond("permission-1", result={"decision": "accept"})
+
+    second = json.loads((await observer.capture_frame()).raw_text)
+    assert second["pending_requests"] == []
+
+    await connection.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_response_write_leaves_request_pending_and_retryable() -> None:
+    transport = _IdleTransport()
+    connection = AppServerConnection(transport=transport)
+    await connection.start()
+    connection.incoming_requests.put_nowait(
+        RpcRequest(
+            id="permission-1",
+            method="item/commandExecution/requestApproval",
+            params={"command": "git status"},
+        )
+    )
+    observer = AppServerFrameObserver(connection, HarnessId("codex"))
+    assert [request["id"] for request in json.loads((await observer.capture_frame()).raw_text)[
+        "pending_requests"
+    ]] == ["permission-1"]
+
+    async def _fail_write(line: str) -> None:
+        del line
+        raise OSError("broken pipe")
+
+    transport.write_line = _fail_write  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="broken pipe"):
+        await connection.respond("permission-1", result={"decision": "accept"})
+
+    still_pending = json.loads((await observer.capture_frame()).raw_text)
+    assert [request["id"] for request in still_pending["pending_requests"]] == ["permission-1"]
+
+    written: list[str] = []
+
+    async def _ok_write(line: str) -> None:
+        written.append(line)
+
+    transport.write_line = _ok_write  # type: ignore[method-assign]
+    await connection.respond("permission-1", result={"decision": "accept"})
+    assert written
+    assert json.loads((await observer.capture_frame()).raw_text)["pending_requests"] == []
+
+    await connection.aclose()
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_error_lands_in_frame_snapshot() -> None:
+    transport = _IdleTransport()
+    connection = AppServerConnection(transport=transport)
+    await connection.start()
+
+    limit_message = "You've hit your usage limit. Try again later."
+    connection.notifications.put_nowait(
+        RpcNotification(
+            method="turn/started",
+            params={
+                "threadId": "th-err",
+                "turn": {"id": "tu-err", "status": "inProgress", "items": []},
+            },
+        )
+    )
+    connection.notifications.put_nowait(
+        RpcNotification(
+            method="error",
+            params={
+                "threadId": "th-err",
+                "turnId": "tu-err",
+                "willRetry": False,
+                "error": {
+                    "message": limit_message,
+                    "codexErrorInfo": "usageLimitExceeded",
+                },
+            },
+        )
+    )
+    connection.notifications.put_nowait(
+        RpcNotification(
+            method="turn/completed",
+            params={
+                "threadId": "th-err",
+                "turn": {
+                    "id": "tu-err",
+                    "status": "failed",
+                    "items": [{"id": "u1", "type": "userMessage", "text": "ping"}],
+                    "error": {
+                        "message": limit_message,
+                        "codexErrorInfo": "usageLimitExceeded",
+                    },
+                },
+            },
+        )
+    )
+
+    observer = AppServerFrameObserver(connection, HarnessId("codex"))
+    payload = json.loads((await observer.capture_frame()).raw_text)
+    assert payload["turn"]["status"] == "failed"
+    assert payload["turn"]["error"]["codexErrorInfo"] == "usageLimitExceeded"
+    assert payload["turn"]["error"]["message"] == limit_message
+    assert payload["items"][0]["text"] == "ping"
+
+    await connection.aclose()

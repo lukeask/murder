@@ -119,6 +119,7 @@ class CrowAgent(HarnessBackedAgent):
                 # Startup failures may occur before a controller exists.
                 with contextlib.suppress(Exception):
                     await tmux.kill_session(self.session)
+            await self.close_backend_connections()
         if failed or self.status == AgentStatus.FAILED:
             self.status = AgentStatus.FAILED
         else:

@@ -173,6 +173,12 @@ async def test_submit_prompt_emits_session_prompt_over_fake_acp() -> None:
             "prompt": [{"type": "text", "text": "ping"}],
         }
         assert acp.staged_composer_text == ""
+        # Prompt result stopReason must clear streaming so the crow can go idle.
+        assert acp.prompt_in_flight is False
+        frame = await session._observer.capture_frame()
+        payload = json.loads(frame.raw_text)
+        assert payload["turn"] == {"status": "completed"}
+        assert payload["stop_reason"] == "end_turn"
     finally:
         await acp.aclose()
 

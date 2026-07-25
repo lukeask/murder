@@ -74,7 +74,15 @@ class AppServerEffectTransport:
             )
             return
         if effect.expects_response:
-            await self._connection.request(effect.method, effect.params)
+            result = await self._connection.request(effect.method, effect.params)
+            if effect.method == "account/rateLimits/read":
+                rate_limits = None
+                if isinstance(result, dict):
+                    candidate = result.get("rateLimits")
+                    rate_limits = candidate if isinstance(candidate, dict) else result
+                if isinstance(rate_limits, dict):
+                    # Stash for AppServerFrameObserver → view-state usage.
+                    setattr(self._connection, "latest_rate_limits", rate_limits)
             return
         await self._connection.notify(effect.method, effect.params)
 

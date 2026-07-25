@@ -134,6 +134,7 @@ class CollaboratorAgent(HarnessBackedAgent):
                 # Startup failures may occur before a controller exists.
                 with contextlib.suppress(Exception):
                     await tmux.kill_session(self.session)
+            await self.close_backend_connections()
         self.status = AgentStatus.FAILED if failed else AgentStatus.DONE
         if self.runtime:
             self.runtime.sync_agent(self)

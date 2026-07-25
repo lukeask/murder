@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -54,6 +55,29 @@ class FakeTransport:
     async def aclose(self) -> None:
         self.closed = True
         self.push_eof()
+
+
+class ShutdownOrderingTransport:
+    """Transport that verifies stdout remains active while shutdown starts."""
+
+    def __init__(self) -> None:
+        self.reader_cancelled = asyncio.Event()
+        self.closed = False
+
+    async def write_line(self, line: str) -> None:
+        del line
+
+    async def readline(self) -> str:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.reader_cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+    async def aclose(self) -> None:
+        assert not self.reader_cancelled.is_set()
+        self.closed = True
 
 
 def test_encode_decode_request_round_trip_includes_jsonrpc() -> None:
@@ -258,6 +282,125 @@ def test_connection_raises_rpc_error_on_error_response() -> None:
         with pytest.raises(AcpRpcError, match="missing session") as raised:
             await asyncio.wait_for(task, timeout=1.0)
         assert raised.value.error.code == error_code
+        await connection.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_process_connection_continuously_drains_stderr() -> None:
+    async def scenario() -> None:
+        script = """
+import json
+import sys
+
+sys.stderr.write("x" * (2 * 1024 * 1024))
+sys.stderr.flush()
+request = json.loads(sys.stdin.readline())
+print(
+    json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": {"ok": True}}),
+    flush=True,
+)
+"""
+        connection = AcpConnection(argv=(sys.executable, "-c", script))
+        await connection.start()
+        assert await asyncio.wait_for(connection.request("initialize"), timeout=2.0) == {"ok": True}
+
+        stderr_task = connection._stderr_task
+        await connection.aclose()
+        assert stderr_task is not None and stderr_task.done()
+
+    asyncio.run(scenario())
+
+
+def test_connection_keeps_stdout_reader_running_during_shutdown() -> None:
+    async def scenario() -> None:
+        transport = ShutdownOrderingTransport()
+        connection = AcpConnection(transport=transport)
+        await connection.start()
+        await asyncio.sleep(0)
+
+        await connection.aclose()
+
+        assert transport.closed
+        assert transport.reader_cancelled.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_connection_eof_fails_pending_rpc_and_flips_liveness() -> None:
+    async def scenario() -> None:
+        transport = FakeTransport()
+        connection = AcpConnection(transport=transport)
+        await connection.start()
+
+        task = asyncio.create_task(
+            connection.request("session/new", {"cwd": "/tmp", "mcpServers": []})
+        )
+        await asyncio.sleep(0)
+        assert connection.started
+
+        transport.push_eof()
+        with pytest.raises(ConnectionError, match="stdout closed"):
+            await asyncio.wait_for(task, timeout=1.0)
+        assert connection.started is False
+
+        with pytest.raises(ConnectionError, match="transport exited"):
+            await connection.request("session/cancel", {"sessionId": "s1"})
+        with pytest.raises(ConnectionError, match="transport exited"):
+            await connection.notify("session/cancel", {"sessionId": "s1"})
+
+        await connection.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_connection_eof_terminates_iter_notifications() -> None:
+    async def scenario() -> None:
+        transport = FakeTransport()
+        connection = AcpConnection(transport=transport)
+        await connection.start()
+
+        async def consume() -> list[RpcNotification]:
+            return [n async for n in connection.iter_notifications()]
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0)
+        transport.push_eof()
+        assert await asyncio.wait_for(task, timeout=1.0) == []
+        assert connection.started is False
+        await connection.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_connection_eof_after_notification_drains_then_terminates() -> None:
+    async def scenario() -> None:
+        transport = FakeTransport()
+        connection = AcpConnection(transport=transport)
+        await connection.start()
+
+        async def consume() -> list[RpcNotification]:
+            return [n async for n in connection.iter_notifications()]
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0)
+        transport.push(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "sess-1",
+                        "update": {"sessionUpdate": "agent_message_chunk"},
+                    },
+                }
+            )
+        )
+        transport.push_eof()
+        notifications = await asyncio.wait_for(task, timeout=1.0)
+        assert len(notifications) == 1
+        assert notifications[0].method == "session/update"
+        assert connection.started is False
         await connection.aclose()
 
     asyncio.run(scenario())

@@ -67,6 +67,7 @@ class AgentSdkConnection:
 
     messages: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     incoming_requests: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
+    resolved_request_ids: asyncio.Queue[str] = field(default_factory=asyncio.Queue)
 
     session_id: str | None = None
     staged_composer_text: str = ""
@@ -144,6 +145,7 @@ class AgentSdkConnection:
         )
         if not pending.future.done():
             pending.future.set_result(result)
+            self.resolved_request_ids.put_nowait(request_id)
 
     def drain_messages(self) -> list[dict[str, Any]]:
         drained: list[dict[str, Any]] = []
@@ -158,6 +160,16 @@ class AgentSdkConnection:
         while True:
             try:
                 drained.append(self.incoming_requests.get_nowait())
+            except asyncio.QueueEmpty:
+                return drained
+
+    def drain_resolved_request_ids(self) -> list[str]:
+        """Return permission/question request ids successfully answered by the client."""
+
+        drained: list[str] = []
+        while True:
+            try:
+                drained.append(self.resolved_request_ids.get_nowait())
             except asyncio.QueueEmpty:
                 return drained
 

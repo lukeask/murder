@@ -58,9 +58,14 @@ class RecordingTransport:
 class RecordingRpcPort:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object, object | None]] = []
+        self.prompt_in_flight = False
+        self.pending_stop_reason: str | None = None
+        self.prompt_result: object = {"stopReason": "end_turn"}
 
     async def request(self, method: str, params: dict[str, object] | None = None) -> object:
         self.calls.append(("request", method, params))
+        if method == "session/prompt":
+            return self.prompt_result
         return {"ok": True}
 
     async def notify(self, method: str, params: dict[str, object] | None = None) -> None:
@@ -332,6 +337,54 @@ def test_acp_effect_transport_routes_request_notify_and_respond() -> None:
                 },
             ),
         ]
+        # Prompt completion + cancel both stash stop reasons for the frame observer.
+        assert port.prompt_in_flight is False
+        assert port.pending_stop_reason == "cancelled"
+
+    asyncio.run(scenario())
+
+
+def test_acp_effect_transport_stashes_prompt_stop_reason() -> None:
+    async def scenario() -> None:
+        port = RecordingRpcPort()
+        port.prompt_result = {"stopReason": "max_tokens"}
+        transport = AcpEffectTransport(port)
+        result = await HarnessActuator(transport).emit(
+            "acp",
+            [
+                AcpRpcEffect(
+                    "rpc:prompt",
+                    "session/prompt",
+                    {"sessionId": "s1", "prompt": []},
+                    expects_response=True,
+                )
+            ],
+        )
+        assert result.ok
+        assert port.prompt_in_flight is False
+        assert port.pending_stop_reason == "max_tokens"
+
+    asyncio.run(scenario())
+
+
+def test_acp_effect_transport_defaults_missing_prompt_stop_reason() -> None:
+    async def scenario() -> None:
+        port = RecordingRpcPort()
+        port.prompt_result = {"ok": True}
+        transport = AcpEffectTransport(port)
+        result = await HarnessActuator(transport).emit(
+            "acp",
+            [
+                AcpRpcEffect(
+                    "rpc:prompt",
+                    "session/prompt",
+                    {"sessionId": "s1"},
+                    expects_response=True,
+                )
+            ],
+        )
+        assert result.ok
+        assert port.pending_stop_reason == "end_turn"
 
     asyncio.run(scenario())
 

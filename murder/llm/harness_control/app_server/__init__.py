@@ -5,7 +5,7 @@ Public surface for later workstreams (W3–W5):
 - :class:`AppServerConnection` — ``request`` / ``notify`` / ``respond`` /
   ``start`` / ``close``, plus ``notifications``, ``incoming_requests``,
   ``thread_id``, ``staged_composer_text``, ``current_turn_id``,
-  ``desired_model``, ``desired_effort``
+  ``desired_model``, ``desired_model_provider``, ``desired_effort``
 - :class:`AppServerClient` — initialize handshake and thread/turn helpers
 - :mod:`~murder.llm.harness_control.app_server.protocol` — encode/decode
 - :mod:`~murder.llm.harness_control.app_server.state` — view-state application
@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from murder.llm.harness_control.app_server.bootstrap import (
     APP_SERVER_PLACEHOLDER_CMD,
+    default_codex_config_path,
+    read_codex_model_provider,
+    resolve_app_server_model_provider,
     start_app_server_session,
     uses_codex_app_server_backend,
 )
@@ -83,13 +86,16 @@ __all__ = [
     "apply_server_request",
     "decode_line",
     "decode_object",
+    "default_codex_config_path",
     "encode_message",
     "is_error_response",
     "is_notification",
     "is_request",
     "is_response",
     "message_kind",
+    "read_codex_model_provider",
     "remove_pending_request",
+    "resolve_app_server_model_provider",
     "start_app_server_session",
     "text_user_input",
     "to_snapshot_dict",

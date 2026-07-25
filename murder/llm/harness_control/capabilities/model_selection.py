@@ -484,19 +484,51 @@ def reconcile_model_selection(  # noqa: PLR0911, PLR0912, PLR0915 -- typed phase
 
     configured = model_configuration_matches(op.request.target, snapshot)
     active = active_model_matches(op.request.target, snapshot)
+    # ACP / app-server / Agent SDK backends have no keystroke model picker.
+    # They advertise model_configuration as UNSUPPORTED and stage the target via
+    # SelectModel (desired_model) with independent active-model readback.
+    rpc_backend = snapshot.model_configuration.knowledge is Knowledge.UNSUPPORTED
 
     if phase is ModelSelectionPhase.CREATED:
-        if configured.value is TruthValue.TRUE and active.value is TruthValue.TRUE:
+        if active.value is TruthValue.TRUE and (
+            configured.value is TruthValue.TRUE or rpc_backend
+        ):
             return ControllerDecision(
                 ControllerDecisionKind.SUCCEED,
                 ModelSelectionPhase.SUCCEEDED,
                 None,
-                "target configuration already active",
+                (
+                    "target already active on RPC backend"
+                    if rpc_backend and configured.value is not TruthValue.TRUE
+                    else "target configuration already active"
+                ),
                 (configured, active),
             )
         return _observe(ModelSelectionPhase.ENSURING_CONFIGURATION, "begin model selection")
 
     if phase is ModelSelectionPhase.ENSURING_CONFIGURATION:
+        if rpc_backend:
+            if active.value is TruthValue.TRUE:
+                return ControllerDecision(
+                    ControllerDecisionKind.SUCCEED,
+                    ModelSelectionPhase.SUCCEEDED,
+                    None,
+                    "RPC backend active-model readback matches target",
+                    (configured, active),
+                )
+            if op.activation_action_id is not None:
+                return _observe(
+                    ModelSelectionPhase.AWAITING_ACTIVE_READBACK,
+                    "RPC model stage emitted; await active-model readback",
+                    active,
+                )
+            return ControllerDecision(
+                ControllerDecisionKind.EMIT_ACTION,
+                ModelSelectionPhase.AWAITING_ACTIVE_READBACK,
+                _select_action(op),
+                "stage requested model on RPC backend (no picker)",
+                (configured, active),
+            )
         if configured.value is TruthValue.TRUE:
             if active.value is TruthValue.TRUE:
                 if _model_picker_is_active(snapshot):

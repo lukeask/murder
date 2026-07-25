@@ -468,6 +468,8 @@ CREATE TABLE IF NOT EXISTS harness_control_frames (
 
 CREATE INDEX IF NOT EXISTS idx_harness_control_frames_session
     ON harness_control_frames(harness_id, session_id, pane_epoch, capture_sequence);
+CREATE INDEX IF NOT EXISTS idx_harness_control_frames_captured_at
+    ON harness_control_frames(captured_at);
 
 CREATE TABLE IF NOT EXISTS harness_control_evidence (
     evidence_id         TEXT PRIMARY KEY,
@@ -504,6 +506,8 @@ CREATE TABLE IF NOT EXISTS harness_control_observations (
 CREATE INDEX IF NOT EXISTS idx_harness_control_observations_latest
     ON harness_control_observations(harness_id, session_id, pane_epoch DESC,
                                     capture_sequence DESC, semantic_sequence DESC);
+CREATE INDEX IF NOT EXISTS idx_harness_control_observations_captured_at
+    ON harness_control_observations(captured_at);
 
 CREATE TABLE IF NOT EXISTS harness_control_semantic_events (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
