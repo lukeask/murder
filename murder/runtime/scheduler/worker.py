@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from murder.state.persistence.tickets import compute_ready
-from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.events import (
     CommandEvent,
@@ -22,6 +20,9 @@ from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEv
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.projection import invalidate_schedule
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.state.persistence.harness_control import prune_capture_history
+from murder.state.persistence.tickets import compute_ready
+from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
 from murder.verdict.policy.scheduler_policy import (
     SchedulerCaps,
     SchedulerInput,
@@ -35,6 +36,7 @@ from murder.verdict.policy.scheduler_policy import (
 _VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
 _VALID_STEERING = frozenset({"auto", "pause", "prefer"})
 _TICK_INTERVAL_S = 10.0
+_HARNESS_CAPTURE_RETENTION = timedelta(days=5)
 _WINDOW_NAME_RE = re.compile(r"^(\d+)(h|d)$", re.IGNORECASE)
 _WINDOW_NAME_MINUTES = {"h": 60.0, "d": 1440.0}
 
@@ -146,18 +148,25 @@ class SchedulerWorker(Worker):
                 self._tick_seq += 1
                 await self._tick(ctx)
 
-    def _prune_old_snapshots(self, db: sqlite3.Connection) -> None:
+    def _prune_old_snapshots(self, db: sqlite3.Connection, *, now: datetime | None = None) -> None:
+        current_time = now or datetime.now(timezone.utc)
+        prune_capture_history(
+            db,
+            captured_before=current_time - _HARNESS_CAPTURE_RETENTION,
+        )
         db.execute(
             "DELETE FROM harness_usage_snapshots WHERE fetched_at < datetime('now', '-60 days')"
         )
 
     async def _tick(self, ctx: WorkerCtx) -> None:
-        if ctx.db is None or ctx.run_id is None:
+        if ctx.db is None:
             return
         today = datetime.now(timezone.utc).date().isoformat()
         if today != self._last_prune_day:
             self._prune_old_snapshots(ctx.db)
             self._last_prune_day = today
+        if ctx.run_id is None:
+            return
         row = ctx.db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
         if row is None:
             return
