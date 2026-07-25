@@ -13,6 +13,7 @@ from murder.app.service.handlers import (
     harness_control,
     health,
     image,
+    llm_settings,
     plan,
     roster,
     sessions,
@@ -72,4 +73,5 @@ def register_all(
     )
     trigger.register(legacy_host)
     settings.register(legacy_host, projections)
+    llm_settings.register(legacy_host)
     worktree.register(legacy_host)
