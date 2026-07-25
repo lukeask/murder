@@ -16,6 +16,7 @@ from murder.llm.harness_control.acp.agents.cursor import PROFILE as CURSOR_PROFI
 from murder.llm.harness_control.acp.bootstrap import (
     placeholder_cmd_for_profile,
     resolve_agent_profile,
+    start_acp_session,
     uses_acp_backend,
 )
 
@@ -86,3 +87,42 @@ def test_uses_acp_backend_for_cursor() -> None:
 def test_resolve_agent_profile() -> None:
     assert resolve_agent_profile("cursor") is CURSOR_PROFILE
     assert resolve_agent_profile(CURSOR_PROFILE) is CURSOR_PROFILE
+
+
+@pytest.mark.asyncio
+async def test_start_acp_session_closes_connection_when_initialize_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-start handshake failure must aclose the live ACP connection."""
+
+    closed: list[bool] = []
+
+    class _StartedConnection:
+        desired_model: str | None = None
+        desired_effort: str | None = None
+
+        async def start(self) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    class _FailingClient:
+        def __init__(self, connection: _StartedConnection) -> None:
+            self.connection = connection
+
+        async def initialize(self, **_kwargs: object) -> None:
+            raise RuntimeError("acp initialize failed")
+
+    monkeypatch.setattr(
+        "murder.llm.harness_control.acp.bootstrap.AcpConnection",
+        lambda **_kwargs: _StartedConnection(),
+    )
+    monkeypatch.setattr(
+        "murder.llm.harness_control.acp.bootstrap.AcpClient",
+        _FailingClient,
+    )
+
+    with pytest.raises(RuntimeError, match="acp initialize failed"):
+        await start_acp_session(agent="cursor", cwd="/tmp")
+    assert closed == [True]

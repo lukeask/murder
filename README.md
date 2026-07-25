@@ -15,7 +15,7 @@
 
 It gives your project its own `.murder/` workspace for your agent generated files, prompts and worktrees; tmux-backed agent sessions, runtime state, a terminal UI that lets you watch the flock work without juggling a dozen separate shells, and an optional mobile friendly web UI to check in on your agents while on the go.
 
-Use it to run Claude Code, Codex, Cursor, Pi, and Antigravity,  side-by-side, managing your usage across harnesses. (Other harness support coming soon!)
+Use it to run Claude Code, Codex, Cursor, Pi, and Antigravity side-by-side, managing your usage across harnesses — plus additional agents via experimental ACP profiles.
 
 ## Why is Murder?
 
@@ -98,15 +98,36 @@ The core workflow is usable, but the project is still moving quickly. TUI suppor
 
 ## Supported harnesses
 
-Current adapters include:
+Murder integrates coding agents as **harnesses** — one adapter per vendor CLI.
 
-- Claude Code
-- Codex
-- Cursor
-- Pi
-- Antigravity
+### Verified
+
+These harnesses are tested in Murder’s day-to-day workflow:
+
+- **Claude Code**
+- **Codex**
+- **Cursor** (tmux or [ACP](https://agentclientprotocol.com/) control backend)
+- **Pi**
+- **Antigravity**
 
 Configure which harnesses and models to use in `.murder/roles.yaml` or in the TUI settings menu.
+
+### ACP (untested)
+
+Murder also ships [Agent Client Protocol](https://agentclientprotocol.com/) spawn profiles for additional agents. They follow the same ACP control-backend pattern as Cursor and *should* work, but **none have been verified in Murder yet**:
+
+- Gemini CLI
+- Cline
+- Goose
+- OpenCode
+- OpenHands
+- Qwen Code
+- Kimi CLI
+- Mistral Vibe
+- Factory Droid
+- GitHub Copilot
+
+Profiles live in `murder/llm/harness_control/acp/agents/`. Per-harness ACP research notes are in `.murder/reports/`.
 
 ## Requirements
 
