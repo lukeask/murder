@@ -19,13 +19,14 @@ dependencies = [
     "httpx>=0.27,<1.0",
     "anyio>=4.3,<5.0",
     "watchfiles>=0.21,<2.0",  # cross-platform inotify-ish watcher (D5)
+    # Application WebSocket server (`/api/ws`) — required for supervisor startup.
+    "aiohttp>=3.9,<4.0",
     # TODO(M0): tiktoken for D17 if/when context-cap enforcement lands
 ]
 
 [project.optional-dependencies]
-# The web/mobile bridge (`murder web`) — aiohttp serves the React frontend and
-# relays a WebSocket to the unix bus. Optional so the core CLI/TUI install stays
-# slim; `murder web` raises a friendly error pointing here when it's absent.
+# Kept for backwards-compatible `murder[web]` installs; aiohttp is now a core dep
+# (application WebSocket at `/api/ws`), so this extra is a no-op alias.
 web = ["aiohttp>=3.9,<4.0"]
 # Claude Agent SDK control backend for Claude Code (`claude_control_backend=agent_sdk`).
 agent_sdk = ["claude-agent-sdk>=0.1.0"]
