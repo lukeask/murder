@@ -1,3 +1,4 @@
+import { MouseProvider } from '@ink-tools/ink-mouse';
 import { render } from 'ink-testing-library';
 import { act, type JSX } from 'react';
 import { describe, expect, it } from 'vitest';
@@ -30,11 +31,13 @@ function Harness({
   readonly inputStores: ReturnType<typeof createInputStores>;
 }): JSX.Element {
   return (
-    <AppStoreProvider value={store}>
-      <InputStoresProvider value={inputStores}>
-        <DocumentController presentation={presentation} open={{ kind: 'plan', name: 'scroll' }} />
-      </InputStoresProvider>
-    </AppStoreProvider>
+    <MouseProvider autoEnable={false}>
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <DocumentController presentation={presentation} open={{ kind: 'plan', name: 'scroll' }} />
+        </InputStoresProvider>
+      </AppStoreProvider>
+    </MouseProvider>
   );
 }
 

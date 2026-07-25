@@ -9,6 +9,7 @@
 
 import { Box, Text } from 'ink';
 import { memo } from 'react';
+import { claimMouseClick } from '../../input/mouseClick.js';
 import type { Theme } from '../../theme/buildTheme.js';
 import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
@@ -284,6 +285,8 @@ export interface NotesSurfaceProps {
   readonly emptyText?: string;
   readonly status?: 'ready' | 'loading' | 'error';
   readonly error?: string | null;
+  /** Left-click a list row (absolute index). Opens/toggles the matching document when wired. */
+  readonly onRowClick?: (index: number) => void;
 }
 
 export const NotesSurface = memo(function NotesSurface({
@@ -296,6 +299,7 @@ export const NotesSurface = memo(function NotesSurface({
   emptyText = 'no notes',
   status = 'ready',
   error = null,
+  onRowClick,
 }: NotesSurfaceProps): React.JSX.Element {
   const padding = paneHorizontalPaddingForWidth(width);
   const mode = layout(width, height);
@@ -349,6 +353,14 @@ export const NotesSurface = memo(function NotesSurface({
         renderEntry={(row, ctx) => renderNotesEntry(row, ctx, mode, innerW)}
         {...(hasHeader ? { header: () => renderNotesHeader(mode, innerW, innerH) } : {})}
         rowKey={(row) => row.name}
+        {...(onRowClick !== undefined
+          ? {
+              onRowClick: (_row: ResourceRowFields, index: number, event) => {
+                claimMouseClick(event);
+                onRowClick(index);
+              },
+            }
+          : {})}
       />
     );
   })();

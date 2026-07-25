@@ -9,6 +9,7 @@
 
 import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import type { CommandParams } from '../../application/ApplicationClient.js';
 import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import { applyThemeRecords, type ThemeRecord } from '../../theme/palettes.js';
 import type { AppStore } from '../store.js';
@@ -34,7 +35,10 @@ export function createThemesActions(bus: ApplicationClient, store: StoreApi<AppS
       themes: { ...state.themes, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.command('themes.set', { themes: next });
+      const reply = await bus.command(
+        'themes.set',
+        { themes: next } as unknown as CommandParams<'themes.set'>,
+      );
       const saved = toItems(
         asCommandResult<'themes.set', { themes?: readonly ThemeRecord[] }>(reply).themes,
       );

@@ -26,6 +26,7 @@
  */
 
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import type { CommandParams } from '../../application/ApplicationClient.js';
 import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 
 /** A named bundle of the wizard's first-step choices, re-spawnable in one pick. */
@@ -82,7 +83,10 @@ export function createSpawnFavoritesActions(bus: ApplicationClient): SpawnFavori
 
     async save(favorites: readonly SpawnFavorite[]): Promise<SpawnFavorite[]> {
       // Let a rejection propagate — the wizard catches it to toast (intentional vs `load`).
-      const reply = await bus.command('spawn_favorites.set', { favorites });
+      const reply = await bus.command(
+        'spawn_favorites.set',
+        { favorites } as unknown as CommandParams<'spawn_favorites.set'>,
+      );
       return [
         ...asCommandResult<'spawn_favorites.set', { favorites: readonly SpawnFavorite[] }>(reply)
           .favorites,

@@ -26,16 +26,36 @@ import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
+import { singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
+import { reduceEditor } from '../input/textEditor/operations.js';
+import { plainTextProjection } from '../input/textEditor/projection.js';
+import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
+import { plainTextTopology } from '../input/textEditor/topology.js';
 import type { DialogActions } from '../store/dialogs/dialogActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
 import { useTheme } from '../theme/themeStore.js';
-import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
+import { TextEditorDisplay } from './TextEditorDisplay.js';
+
+/** Content width shared by the title field renderer and visual-motion geometry. */
+const TITLE_EDITOR_WIDTH = 54;
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
 import '../input/dispatcher.js';
 
 /** Intent union for the new-ticket dialog — special key actions only. */
-type NewTicketIntent = 'backspace' | 'deleteAll' | 'submit' | 'dismiss';
+type NewTicketIntent =
+  | 'backspace'
+  | 'deleteForward'
+  | 'moveLeft'
+  | 'moveRight'
+  | 'moveUp'
+  | 'moveDown'
+  | 'home'
+  | 'end'
+  | 'deleteAll'
+  | 'submit'
+  | 'dismiss';
 
 /** Options passed to the mode factory. */
 export interface NewTicketModeOptions {
@@ -50,7 +70,7 @@ export const NEW_TICKET_MODE_ID = 'new-ticket';
 
 /** Mutable local state inside the mode closure. Not React state — the mode is plain data. */
 interface NewTicketState {
-  title: string;
+  title: TextEditorState;
   error: string | null;
 }
 
@@ -72,7 +92,7 @@ export function newTicketMode(
 
   // Mutable local state in the closure — not React state.
   const s: NewTicketState = {
-    title: '',
+    title: editorAtEnd(),
     error: null,
   };
 
@@ -91,6 +111,13 @@ export function newTicketMode(
     keymap: [
       // Backspace: delete last char.
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
+      { chord: { key: { delete: true } }, intent: 'deleteForward', description: 'delete' },
+      { chord: { key: { leftArrow: true } }, intent: 'moveLeft', description: 'left' },
+      { chord: { key: { rightArrow: true } }, intent: 'moveRight', description: 'right' },
+      { chord: { key: { upArrow: true } }, intent: 'moveUp', description: 'up' },
+      { chord: { key: { downArrow: true } }, intent: 'moveDown', description: 'down' },
+      { chord: { key: { home: true } }, intent: 'home', description: 'line start' },
+      { chord: { key: { end: true } }, intent: 'end', description: 'line end' },
       // Alt+U: clear field.
       {
         chord: { input: 'u', key: { meta: true } },
@@ -105,24 +132,52 @@ export function newTicketMode(
     onIntent(intent) {
       switch (intent) {
         case 'backspace': {
-          s.title = deleteLastChar(s.title);
+          s.title = editTicket(s.title, { type: 'backspace' });
           refresh();
           break;
         }
+        case 'deleteForward':
+          s.title = editTicket(s.title, { type: 'deleteForward' });
+          refresh();
+          break;
+        case 'moveLeft':
+          s.title = editTicket(s.title, { type: 'moveLeft' });
+          refresh();
+          break;
+        case 'moveRight':
+          s.title = editTicket(s.title, { type: 'moveRight' });
+          refresh();
+          break;
+        case 'moveUp':
+          s.title = editTicket(s.title, { type: 'moveVisualUp' });
+          refresh();
+          break;
+        case 'moveDown':
+          s.title = editTicket(s.title, { type: 'moveVisualDown' });
+          refresh();
+          break;
+        case 'home':
+          s.title = editTicket(s.title, { type: 'moveLineStart' });
+          refresh();
+          break;
+        case 'end':
+          s.title = editTicket(s.title, { type: 'moveLineEnd' });
+          refresh();
+          break;
         case 'deleteAll': {
-          s.title = '';
+          s.title = editorAtEnd();
           refresh();
           break;
         }
         case 'submit': {
-          if (s.title.trim().length === 0) {
+          if (s.title.text.trim().length === 0) {
             s.error = 'Ticket title is required.';
             refresh();
             break;
           }
           // Exit-then-act: exit (restores focus) before the async RPC.
           modes.getState().exit(id);
-          const title = s.title.trim();
+          const title = s.title.text.trim();
           void actions
             .quickCreateTicket(title)
             .then((result) => {
@@ -147,12 +202,18 @@ export function newTicketMode(
           return intent satisfies never;
       }
     },
-    // onUncaptured: handle printable characters (C12 dispatcher extension).
+    // onUncaptured: shared decoder rejects Tab/Esc and maps printables to insert commands.
     onUncaptured(input: string, key: Key): boolean {
-      if (input.length === 0 || key.ctrl || key.meta || key.escape) {
-        return false;
-      }
-      s.title = insertChar(s.title, input);
+      const transition = applyEditorKey(s.title, input, key, {
+        policy: singleLineEditorPolicy,
+        environment: {
+          width: TITLE_EDITOR_WIDTH,
+          topology: plainTextTopology,
+          projection: plainTextProjection,
+        },
+      });
+      if (transition === null) return false;
+      s.title = transition.state;
       s.error = null;
       refresh();
       return true;
@@ -163,12 +224,23 @@ export function newTicketMode(
   return mode;
 }
 
+function editTicket(
+  state: TextEditorState,
+  command: import('../input/textEditor/commands.js').EditorCommand,
+): TextEditorState {
+  return reduceEditor(state, command, {
+    width: TITLE_EDITOR_WIDTH,
+    topology: plainTextTopology,
+    projection: plainTextProjection,
+  }).state;
+}
+
 /** The dialog's presentation — a pure function of its props (rule 1). No store/bus knowledge. */
 function NewTicketDialog({
   title,
   error,
 }: {
-  readonly title: string;
+  readonly title: TextEditorState;
   readonly error: string | null;
 }): JSX.Element {
   const theme = useTheme();
@@ -186,7 +258,12 @@ function NewTicketDialog({
       </Text>
       <Box marginTop={1} flexDirection="column">
         <Text>Title:</Text>
-        <TextInput value={title} placeholder="Short description of the work…" focused={true} />
+        <TextEditorDisplay
+          state={title}
+          width={TITLE_EDITOR_WIDTH}
+          placeholder="Short description of the work…"
+          focused
+        />
       </Box>
       {error !== null && (
         <Box marginTop={1}>

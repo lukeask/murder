@@ -8,15 +8,21 @@
  * Enabled top-bar widgets (Phase 3.1) render in the remaining right-side space before the connection
  * badge; they truncate/drop rather than wrap so the bar stays exactly one line.
  *
+ * Clicking a panel label toggles that pane the same way the digit shortcut does (show+focus when
+ * hidden; hide when visible).
+ *
  * `project` is the current project/repo name, threaded from the entrypoint (the launcher hands it
  * over via `MURDER_PROJECT`; see index.tsx). When unknown (smoke/tests) only the `murder` mark shows.
  */
 
-import { Box, Text } from 'ink';
-import { memo, useMemo } from 'react';
+import { useOnClick } from '@ink-tools/ink-mouse';
+import { Box, type DOMElement, Text } from 'ink';
+import { memo, useMemo, useRef } from 'react';
 import { useAppStore } from '../hooks/useAppStore.js';
-import { usePanelStore, useWorkspaceStore } from '../hooks/useInputStores.js';
+import { useInputStores, usePanelStore, useWorkspaceStore } from '../hooks/useInputStores.js';
+import { togglePanelFromShortcut } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
+import type { PanelId } from '../input/panels.js';
 import {
   connectionBadgeWidth,
   estimateTopBarLeftWidth,
@@ -45,6 +51,37 @@ function TopBarWidgetCluster({
       {segments.map((segment) => (
         <TextRuns key={segment.widgetId} runs={segment.runs} />
       ))}
+    </Box>
+  );
+}
+
+function TopBarPanelLabel({
+  id,
+  text,
+  active,
+  dividerBefore,
+  theme,
+}: {
+  readonly id: PanelId;
+  readonly text: string;
+  readonly active: boolean;
+  readonly dividerBefore?: boolean;
+  readonly theme: Theme;
+}): React.JSX.Element {
+  const { panels, focus } = useInputStores();
+  const ref = useRef<DOMElement>(null);
+  useOnClick(ref, (event) => {
+    if (event.button !== 'left') {
+      return;
+    }
+    togglePanelFromShortcut(id, panels, focus);
+  });
+  return (
+    <Box ref={ref} flexDirection="row" columnGap={1}>
+      {dividerBefore === true && <Text color={theme.muted}>·</Text>}
+      <Text bold={active} color={active ? theme.active : theme.inactive}>
+        {text}
+      </Text>
     </Box>
   );
 }
@@ -91,12 +128,14 @@ export const TopBar = memo(function TopBar({
         </Box>
         <Box flexDirection="row" columnGap={1}>
           {labels.map((label) => (
-            <Box key={label.id} flexDirection="row" columnGap={1}>
-              {label.dividerBefore === true && <Text color={theme.muted}>·</Text>}
-              <Text bold={label.active} color={label.active ? theme.active : theme.inactive}>
-                {label.text}
-              </Text>
-            </Box>
+            <TopBarPanelLabel
+              key={label.id}
+              id={label.id}
+              text={label.text}
+              active={label.active}
+              {...(label.dividerBefore === true ? { dividerBefore: true } : {})}
+              theme={theme}
+            />
           ))}
         </Box>
       </Box>

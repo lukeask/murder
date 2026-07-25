@@ -69,6 +69,7 @@
  *  - j/k movement is the PANEL's keymap; Ledger only reflects `cursor`. The panel owns cursor state.
  */
 
+import { type InkMouseEvent, useOnClick } from '@ink-tools/ink-mouse';
 import { Box, type DOMElement, measureElement } from 'ink';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTheme } from '../theme/themeStore.js';
@@ -116,6 +117,12 @@ export interface LedgerProps<Row> {
    * below = `rows.length - win.end`). Fired only when the window value actually changes.
    */
   readonly onWindow?: (win: LedgerWindow) => void;
+  /**
+   * Optional row click handler (left button). Absolute row index (not window-local). The handler
+   * should {@link ../input/mouseClick.js claimMouseClick} when it consumes the click so a parent
+   * pane-focus handler can skip.
+   */
+  readonly onRowClick?: (row: Row, index: number, event: InkMouseEvent) => void;
 }
 
 /** Approximate terminal columns one field needs before Ledger drops to fewer columns. */
@@ -208,8 +215,22 @@ export function computeWindow(
  * One entry row. `flexShrink={0}` keeps Yoga from sampling lines within the window. Selection gives
  * the row `width="100%"` + a full-width background; otherwise alternating parity supplies the subtle
  * shade (selection overrides alt-bg). Highlight only when `focused`.
+ *
+ * Clickable and static variants are separate components so `useOnClick` (requires MouseProvider) is
+ * only mounted when a row handler is wired — fixtures can still render Ledgers without a provider.
  */
-function LedgerRow<Row>({
+function rowBackground(
+  selected: boolean,
+  index: number,
+  theme: { readonly rowSelectedBg: string | undefined; readonly rowAltBg: string | undefined },
+): string | undefined {
+  if (selected) {
+    return theme.rowSelectedBg;
+  }
+  return index % 2 === 1 ? theme.rowAltBg : undefined;
+}
+
+function StaticLedgerRow<Row>({
   row,
   index,
   ledgerCursor,
@@ -226,14 +247,46 @@ function LedgerRow<Row>({
 }): React.JSX.Element {
   const theme = useTheme();
   const selected = focused && index === ledgerCursor;
-  // Selection background spans the full width; otherwise alternating parity (by absolute index).
-  const backgroundColor = selected
-    ? theme.rowSelectedBg
-    : index % 2 === 1
-      ? theme.rowAltBg
-      : undefined;
   return (
-    <Box flexShrink={0} width="100%" backgroundColor={backgroundColor}>
+    <Box flexShrink={0} width="100%" backgroundColor={rowBackground(selected, index, theme)}>
+      {renderEntry(row, { selected, focused, columns })}
+    </Box>
+  );
+}
+
+function ClickableLedgerRow<Row>({
+  row,
+  index,
+  ledgerCursor,
+  focused,
+  columns,
+  renderEntry,
+  onRowClick,
+}: {
+  readonly row: Row;
+  readonly index: number;
+  readonly ledgerCursor: number;
+  readonly focused: boolean;
+  readonly columns: number;
+  readonly renderEntry: (row: Row, ctx: LedgerEntryContext) => React.ReactNode;
+  readonly onRowClick: (row: Row, index: number, event: InkMouseEvent) => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  const ref = useRef<DOMElement>(null);
+  const selected = focused && index === ledgerCursor;
+  useOnClick(ref, (event) => {
+    if (event.button !== 'left') {
+      return;
+    }
+    onRowClick(row, index, event);
+  });
+  return (
+    <Box
+      ref={ref}
+      flexShrink={0}
+      width="100%"
+      backgroundColor={rowBackground(selected, index, theme)}
+    >
       {renderEntry(row, { selected, focused, columns })}
     </Box>
   );
@@ -262,6 +315,7 @@ export function Ledger<Row>({
   header,
   rowKey,
   onWindow,
+  onRowClick,
 }: LedgerProps<Row>): React.JSX.Element {
   const boxRef = useRef<DOMElement | null>(null);
   // Measured inner dims; 0 means "not measured yet" (first paint / sizeless non-TTY render).
@@ -330,9 +384,24 @@ export function Ledger<Row>({
       {showHeader ? <Box flexShrink={0}>{header(columns)}</Box> : null}
       {visible.map((row, i) => {
         const index = win.start + i;
+        const key = rowKey?.(row, index) ?? String(index);
+        if (onRowClick !== undefined) {
+          return (
+            <ClickableLedgerRow
+              key={key}
+              row={row}
+              index={index}
+              ledgerCursor={cursor}
+              focused={focused}
+              columns={columns}
+              renderEntry={renderEntry}
+              onRowClick={onRowClick}
+            />
+          );
+        }
         return (
-          <LedgerRow
-            key={rowKey?.(row, index) ?? String(index)}
+          <StaticLedgerRow
+            key={key}
             row={row}
             index={index}
             ledgerCursor={cursor}

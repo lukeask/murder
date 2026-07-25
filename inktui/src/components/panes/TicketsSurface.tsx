@@ -6,8 +6,10 @@
  * {@link ../TicketsSurface.tsx} multi-column Ledger layout at large sizes.
  */
 
+import type { InkMouseEvent } from '@ink-tools/ink-mouse';
 import { Box, Text } from 'ink';
 import { memo } from 'react';
+import { claimMouseClick } from '../../input/mouseClick.js';
 import type { Theme } from '../../theme/buildTheme.js';
 import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
@@ -63,6 +65,8 @@ export interface TicketsSurfaceProps {
   readonly cursor?: number;
   readonly status?: 'ready' | 'loading' | 'error';
   readonly error?: string | null;
+  /** Left-click a list row (absolute index). Opens the ticket editor when wired. */
+  readonly onRowClick?: (index: number) => void;
 }
 
 function innerWidth(width: number): number {
@@ -410,6 +414,7 @@ function TicketsList({
   status,
   error,
   theme,
+  onRowClick,
 }: {
   readonly rows: readonly TicketsSurfaceRow[];
   readonly cursor: number;
@@ -420,11 +425,21 @@ function TicketsList({
   readonly status: 'ready' | 'loading' | 'error';
   readonly error: string | null;
   readonly theme: Theme;
+  readonly onRowClick?: (index: number) => void;
 }): React.JSX.Element {
   const innerW = innerWidth(width);
   const innerH = innerHeight(height);
   const multiCol = shouldUseMultiColumnLedger(displayMode, innerW);
   const maxColumns = maxColumnsForMode(displayMode);
+  const rowClickProps =
+    onRowClick !== undefined
+      ? {
+          onRowClick: (_row: TicketsSurfaceRow, index: number, event: InkMouseEvent) => {
+            claimMouseClick(event);
+            onRowClick(index);
+          },
+        }
+      : {};
 
   if (status === 'error') {
     return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
@@ -457,6 +472,7 @@ function TicketsList({
         availableHeight={innerH}
         rowKey={(row) => row.id}
         renderEntry={(row, ctx) => renderTinyEntry(row, ctx, innerW, theme)}
+        {...rowClickProps}
       />
     );
   }
@@ -475,6 +491,7 @@ function TicketsList({
         header={(columns) => renderTicketsHeader(columns, displayMode)}
         rowKey={(row) => row.id}
         renderEntry={(row, ctx) => renderTicketEntry(row, ctx, theme, innerW)}
+        {...rowClickProps}
       />
     );
   }
@@ -492,6 +509,7 @@ function TicketsList({
       header={() => renderPriorityHeader(displayMode, innerW)}
       rowKey={(row) => row.id}
       renderEntry={(row, ctx) => renderPriorityTicketEntry(row, ctx, innerW, displayMode, theme)}
+      {...rowClickProps}
     />
   );
 }
@@ -505,6 +523,7 @@ export const TicketsSurface = memo(function TicketsSurface({
   cursor: cursorProp,
   status = 'ready',
   error = null,
+  onRowClick,
 }: TicketsSurfaceProps): React.JSX.Element {
   const baseMode = layout(width, height);
   const padding = paneHorizontalPaddingForWidth(width);
@@ -544,6 +563,7 @@ export const TicketsSurface = memo(function TicketsSurface({
           status={status}
           error={error}
           theme={theme}
+          {...(onRowClick !== undefined ? { onRowClick } : {})}
         />
       </Pane>
     </Box>

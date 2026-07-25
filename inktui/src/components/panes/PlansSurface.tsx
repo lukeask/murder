@@ -9,6 +9,7 @@
 
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
+import { claimMouseClick } from '../../input/mouseClick.js';
 import type { Theme } from '../../theme/buildTheme.js';
 import { computeWindow, Ledger } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
@@ -75,6 +76,8 @@ export interface PlansSurfaceProps {
   readonly emptyText?: string;
   readonly status?: 'ready' | 'loading' | 'error';
   readonly error?: string | null;
+  /** Left-click a list row (absolute index). Opens/toggles the matching document when wired. */
+  readonly onRowClick?: (index: number) => void;
 }
 
 export const PlansSurface = memo(function PlansSurface({
@@ -87,6 +90,7 @@ export const PlansSurface = memo(function PlansSurface({
   emptyText = 'no plans',
   status = 'ready',
   error = null,
+  onRowClick,
 }: PlansSurfaceProps): React.JSX.Element {
   const padding = paneHorizontalPaddingForWidth(width);
   const innerW = innerWidth(width);
@@ -122,6 +126,14 @@ export const PlansSurface = memo(function PlansSurface({
         renderEntry={(row, ctx) => renderPlansEntry(row, ctx, innerW, rowLayout)}
         {...(hasHeader ? { header: () => renderPlansHeader(rowLayout) } : {})}
         rowKey={(row) => row.name}
+        {...(onRowClick !== undefined
+          ? {
+              onRowClick: (_row: ResourceRowFields, index: number, event) => {
+                claimMouseClick(event);
+                onRowClick(index);
+              },
+            }
+          : {})}
       />
     );
   })();

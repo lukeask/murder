@@ -33,17 +33,41 @@ import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { useStore } from 'zustand';
-import { deleteLastChar, MultiLineText, TextInput } from '../../components/TextInput.js';
+import { TextEditorDisplay } from '../../components/TextEditorDisplay.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../../input/modeStore.js';
+import { applyEditorKey } from '../../input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '../../input/textEditor/commands.js';
+import {
+  multilineEditorPolicy,
+  singleLineEditorPolicy,
+} from '../../input/textEditor/keyDecoder.js';
+import { reduceEditor } from '../../input/textEditor/operations.js';
+import { plainTextProjection } from '../../input/textEditor/projection.js';
+import { plainTextTopology } from '../../input/textEditor/topology.js';
 import { useTheme } from '../../theme/themeStore.js';
 import type { NoteCaptureStoreApi } from './noteCaptureStore.js';
+
+/** Content width shared by the capture surface and visual-motion geometry. */
+const NOTE_EDITOR_WIDTH = 58;
 
 // Bring the dispatcher's `onUncaptured` augmentation of `Mode` into scope (declared in dispatcher.ts).
 import '../../input/dispatcher.js';
 
 /** The note-capture mode's declared-chord intent union. `u`/printable are NOT here — they flow
  * through `onUncaptured` (see the module doc). */
-type NoteCaptureIntent = 'escape' | 'submit' | 'newline' | 'switchField' | 'backspace';
+type NoteCaptureIntent =
+  | 'escape'
+  | 'submit'
+  | 'newline'
+  | 'switchField'
+  | 'backspace'
+  | 'deleteForward'
+  | 'left'
+  | 'right'
+  | 'up'
+  | 'down'
+  | 'home'
+  | 'end';
 
 /** Stable mode id so a re-enter is idempotent (the modeStore pattern). */
 export const NOTE_CAPTURE_MODE_ID = 'note-capture';
@@ -119,6 +143,13 @@ export function noteCaptureMode(
       // Tab toggles between the draft and the title field.
       { chord: { key: { tab: true } }, intent: 'switchField', description: 'title' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
+      { chord: { key: { delete: true } }, intent: 'deleteForward', description: 'delete' },
+      { chord: { key: { leftArrow: true } }, intent: 'left', description: 'left' },
+      { chord: { key: { rightArrow: true } }, intent: 'right', description: 'right' },
+      { chord: { key: { upArrow: true } }, intent: 'up', description: 'up' },
+      { chord: { key: { downArrow: true } }, intent: 'down', description: 'down' },
+      { chord: { key: { home: true } }, intent: 'home', description: 'line start' },
+      { chord: { key: { end: true } }, intent: 'end', description: 'line end' },
     ],
     onIntent(intent) {
       switch (intent) {
@@ -132,7 +163,7 @@ export function noteCaptureMode(
         case 'newline': {
           // Shift+Enter: a literal newline in the draft (a no-op while the title is focused).
           if (field === 'draft') {
-            store.getState().setDraft(`${store.getState().draftText}\n`);
+            applyEdit(store, field, { type: 'insertNewline' });
           }
           return;
         }
@@ -142,14 +173,30 @@ export function noteCaptureMode(
           return;
         }
         case 'backspace': {
-          const state = store.getState();
-          if (field === 'title') {
-            state.setTitle(deleteLastChar(state.titleText));
-          } else {
-            state.setDraft(deleteLastChar(state.draftText));
-          }
+          applyEdit(store, field, { type: 'backspace' });
           return;
         }
+        case 'deleteForward':
+          applyEdit(store, field, { type: 'deleteForward' });
+          return;
+        case 'left':
+          applyEdit(store, field, { type: 'moveLeft' });
+          return;
+        case 'right':
+          applyEdit(store, field, { type: 'moveRight' });
+          return;
+        case 'up':
+          applyEdit(store, field, { type: 'moveVisualUp' });
+          return;
+        case 'down':
+          applyEdit(store, field, { type: 'moveVisualDown' });
+          return;
+        case 'home':
+          applyEdit(store, field, { type: 'moveLineStart' });
+          return;
+        case 'end':
+          applyEdit(store, field, { type: 'moveLineEnd' });
+          return;
         case 'submit': {
           // Snapshot the fields BEFORE reset so onSubmit sees the text. Reset ONLY on a confirmed
           // submit (item 10) — a captured note never leaks into the next capture.
@@ -170,26 +217,51 @@ export function noteCaptureMode(
     // onUncaptured: the context-sensitive keys + ordinary text entry. The dispatcher calls this when
     // the declared keymap has no match (the C12 hook).
     onUncaptured(input: string, key: Key): boolean {
-      // Ignore modified/special non-character events — not ours; let the dispatcher swallow them.
-      if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return || key.tab) {
-        return false;
-      }
       const state = store.getState();
       // Title field: plain text entry only (no ESC-chord behavior — those belong to the draft).
       if (field === 'title') {
-        state.setTitle(state.titleText + input);
+        const transition = applyEditorKey(state.titleEditor, input, key, {
+          policy: singleLineEditorPolicy,
+          environment: {
+            width: NOTE_EDITOR_WIDTH,
+            topology: plainTextTopology,
+            projection: plainTextProjection,
+          },
+        });
+        if (transition === null) return false;
+        state.setTitleEditor(transition.state);
         return true;
       }
       // `u` undoes the last delete ONLY if there is a snapshot — else it is a literal `u`.
-      if (input === 'u' && state.pressUndo()) {
+      if (input === 'u' && !key.ctrl && !key.meta && !key.tab && state.pressUndo()) {
         return true;
       }
-      // Ordinary character: append to the draft (plain text entry never arms ESC).
-      state.setDraft(state.draftText + input);
+      const transition = applyEditorKey(state.draftEditor, input, key, {
+        policy: multilineEditorPolicy,
+        environment: {
+          width: NOTE_EDITOR_WIDTH,
+          topology: plainTextTopology,
+          projection: plainTextProjection,
+        },
+      });
+      if (transition === null) return false;
+      state.setDraftEditor(transition.state);
       return true;
     },
     render: () => <NoteCaptureSurface store={store} field={field} />,
   };
+}
+
+function applyEdit(store: NoteCaptureStoreApi, field: CaptureField, command: EditorCommand): void {
+  const state = store.getState();
+  const current = field === 'draft' ? state.draftEditor : state.titleEditor;
+  const editor = reduceEditor(current, command, {
+    width: NOTE_EDITOR_WIDTH,
+    topology: plainTextTopology,
+    projection: plainTextProjection,
+  }).state;
+  if (field === 'draft') state.setDraftEditor(editor);
+  else state.setTitleEditor(editor);
 }
 
 /** The capture surface — draft box + optional title field (no recent-notes table/preview, item 10).
@@ -202,8 +274,8 @@ function NoteCaptureSurface({
   readonly field: CaptureField;
 }): ReactNode {
   const theme = useTheme();
-  const draft = useStore(store, (s) => s.draftText);
-  const title = useStore(store, (s) => s.titleText);
+  const draft = useStore(store, (s) => s.draftEditor);
+  const title = useStore(store, (s) => s.titleEditor);
   return (
     <Box
       flexDirection="column"
@@ -219,8 +291,9 @@ function NoteCaptureSurface({
 
       <Box marginTop={1} flexDirection="column">
         <Text color={field === 'title' ? theme.text : theme.muted}>Title (optional):</Text>
-        <TextInput
-          value={title}
+        <TextEditorDisplay
+          state={title}
+          width={NOTE_EDITOR_WIDTH}
           placeholder="leave empty to auto-title"
           focused={field === 'title'}
           color={field === 'title' ? theme.text : theme.muted}
@@ -229,8 +302,9 @@ function NoteCaptureSurface({
 
       <Box marginTop={1} flexDirection="column">
         <Text color={field === 'draft' ? theme.text : theme.muted}>Note:</Text>
-        <MultiLineText
-          value={draft}
+        <TextEditorDisplay
+          state={draft}
+          width={NOTE_EDITOR_WIDTH}
           placeholder="capture a thought…"
           focused={field === 'draft'}
           color={field === 'draft' ? theme.text : theme.muted}

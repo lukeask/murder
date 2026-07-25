@@ -201,8 +201,9 @@ export async function setupTerminal(
 
   // SGR mouse reporting — INDEPENDENT of the kitty keyboard gate below. We enable it whenever stdout
   // is a real TTY so the mouse wheel sends SGR reports (`CSI < 64/65 ; x ; y M`) the shim lifts into
-  // `wheel` events. Without this, kitty's alternate-scroll feature downgrades the wheel to Up/Down
-  // arrow keys (which read as chat-history navigation in the input) — the bug this fixes. Mode 1000 is
+  // `wheel` events, and press/release reports are forwarded for `@ink-tools/ink-mouse` click hit-
+  // testing. Without this, kitty's alternate-scroll feature downgrades the wheel to Up/Down arrow
+  // keys (which read as chat-history navigation in the input) — the bug this fixes. Mode 1000 is
   // button-press tracking only (no motion spam); 1006 is the SGR extended-coordinate encoding. The
   // tradeoff: the terminal hands click-drag to us, so native text selection needs Shift+drag.
   const MOUSE_ON = '\x1b[?1000h\x1b[?1006h';

@@ -53,15 +53,8 @@ function setup() {
   const stores = createInputStores(['tickets'], 'tickets');
   const bus = new FakeApplicationClient();
 
-  // F2: `ticket.quick_create` is an orchestrator command kind routed through `direct application command` +
-  // `command.get` (not a standalone RPC). Status returns `'done'` on the first poll with the
-  // worker reply JSON-encoded in `result_json` (matching the live `command.get` shape).
-  bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
-  bus.stubQuery('command.get', {
-    ok: true,
-    status: 'done',
-    result_json: JSON.stringify({ handled: true, ticket_id: 't-001', title: 'my ticket' }),
-  });
+  // `ticket.quick_create` returns its result directly from `command.submit` (no command.get poll).
+  bus.stubAllCommands({ ok: true, handled: true, ticket_id: 't-001', title: 'my ticket' });
 
   const actions = createDialogActions(bus);
   const enter = (opts = {}) =>

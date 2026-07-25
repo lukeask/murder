@@ -10,6 +10,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { MouseProvider } from '@ink-tools/ink-mouse';
 import { render as inkRender } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
@@ -30,11 +31,13 @@ const { store } = createAppStore(new FakeApplicationClient());
 function Harness(): JSX.Element {
   const stores = createInputStores(['plans'], 'plans');
   return (
-    <AppStoreProvider value={store}>
-      <InputStoresProvider value={stores}>
-        <TopBar project="demo" />
-      </InputStoresProvider>
-    </AppStoreProvider>
+    <MouseProvider autoEnable={false}>
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={stores}>
+          <TopBar project="demo" />
+        </InputStoresProvider>
+      </AppStoreProvider>
+    </MouseProvider>
   );
 }
 

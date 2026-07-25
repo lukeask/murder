@@ -8,6 +8,7 @@
 
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
+import { claimMouseClick } from '../../input/mouseClick.js';
 import { HEALTH_EDGE_COLOR, type Health } from '../../selectors/crowHealthSelectors.js';
 import type { Theme } from '../../theme/buildTheme.js';
 import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
@@ -51,6 +52,8 @@ export interface CrowsSurfaceProps {
   readonly expanded?: boolean;
   readonly status?: CrowsSurfaceStatus;
   readonly error?: string | null;
+  /** Left-click a crow row (crow-list index, not ledger index). Toggles transcript when wired. */
+  readonly onRowClick?: (index: number) => void;
 }
 
 type CrowLedgerRow =
@@ -280,6 +283,7 @@ function CrowsList({
   status,
   error,
   theme,
+  onRowClick,
 }: {
   readonly rows: readonly CrowsSurfaceRow[];
   readonly cursor: number;
@@ -291,6 +295,7 @@ function CrowsList({
   readonly status: CrowsSurfaceStatus;
   readonly error: string | null;
   readonly theme: Theme;
+  readonly onRowClick?: (index: number) => void;
 }): React.JSX.Element {
   const innerW = contentWidth(width);
   const innerH = contentHeight(height);
@@ -311,6 +316,16 @@ function CrowsList({
     [rows, includeHeaders],
   );
   const ledgerCursor = crowToFlat[Math.min(cursor, Math.max(crowToFlat.length - 1, 0))] ?? 0;
+  const flatToCrow = useMemo(() => {
+    const map = new Map<number, number>();
+    for (let crowIndex = 0; crowIndex < crowToFlat.length; crowIndex += 1) {
+      const flatIndex = crowToFlat[crowIndex];
+      if (flatIndex !== undefined) {
+        map.set(flatIndex, crowIndex);
+      }
+    }
+    return map;
+  }, [crowToFlat]);
 
   if (status === 'error') {
     return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
@@ -339,6 +354,21 @@ function CrowsList({
       renderEntry={(ledgerRow, ctx) =>
         renderCrowEntry(ledgerRow, ctx, displayMode, showMeta, innerW)
       }
+      {...(onRowClick !== undefined
+        ? {
+            onRowClick: (ledgerRow: CrowLedgerRow, flatIndex: number, event) => {
+              if (ledgerRow.kind !== 'crow') {
+                return;
+              }
+              const crowIndex = flatToCrow.get(flatIndex);
+              if (crowIndex === undefined) {
+                return;
+              }
+              claimMouseClick(event);
+              onRowClick(crowIndex);
+            },
+          }
+        : {})}
     />
   );
 }
@@ -353,6 +383,7 @@ export const CrowsSurface = memo(function CrowsSurface({
   expanded = true,
   status = 'idle',
   error = null,
+  onRowClick,
 }: CrowsSurfaceProps): React.JSX.Element {
   const padding = paneHorizontalPaddingForWidth(width);
   const displayMode = layout(width, height);
@@ -402,6 +433,7 @@ export const CrowsSurface = memo(function CrowsSurface({
           status={status}
           error={error}
           theme={theme}
+          {...(onRowClick !== undefined ? { onRowClick } : {})}
         />
       </Pane>
     </Box>

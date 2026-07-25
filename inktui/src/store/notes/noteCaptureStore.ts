@@ -17,6 +17,7 @@
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import { editorAtEnd, type TextEditorState } from '../../input/textEditor/state.js';
 
 /** The outcome of an {@link NoteCaptureState.pressEscape}, so the mode's `onIntent` knows what to do
  * after the verb mutates the FSM: `commit` = the mode should dismiss without submitting. */
@@ -24,6 +25,9 @@ export type EscapeOutcome = 'commit';
 
 /** The note-capture FSM state plus its transition verbs. */
 export interface NoteCaptureState {
+  /** Durable editor states persist text, cursor, and sticky visual-column intent. */
+  readonly draftEditor: TextEditorState;
+  readonly titleEditor: TextEditorState;
   /** The draft text. The capture surface's TextArea mirrors this; the FSM clears/restores it on the
    * delete and undo chords. (Ordinary character entry appends here, via the mode's `onUncaptured`.) */
   readonly draftText: string;
@@ -36,9 +40,11 @@ export interface NoteCaptureState {
 
   /** Set the draft text (the surface's editor pushes edits here; tests seed it). */
   setDraft(text: string): void;
+  setDraftEditor(editor: TextEditorState): void;
 
   /** Set the title text (the title field's edits push here). */
   setTitle(text: string): void;
+  setTitleEditor(editor: TextEditorState): void;
 
   /**
    * Handle an `escape` keypress in the draft. Escape cancels immediately and returns `'commit'` so the
@@ -76,14 +82,22 @@ export function createNoteCaptureStore(): NoteCaptureStoreApi {
   const store = createStore<NoteCaptureState>()((set, get) => ({
     draftText: '',
     titleText: '',
+    draftEditor: editorAtEnd(),
+    titleEditor: editorAtEnd(),
     undoSnapshot: null,
 
     setDraft(text) {
-      set({ draftText: text });
+      set({ draftText: text, draftEditor: editorAtEnd(text) });
+    },
+    setDraftEditor(editor) {
+      set({ draftEditor: editor, draftText: editor.text });
     },
 
     setTitle(text) {
-      set({ titleText: text });
+      set({ titleText: text, titleEditor: editorAtEnd(text) });
+    },
+    setTitleEditor(editor) {
+      set({ titleEditor: editor, titleText: editor.text });
     },
 
     pressEscape() {
@@ -95,6 +109,7 @@ export function createNoteCaptureStore(): NoteCaptureStoreApi {
       set({
         undoSnapshot: snapshot,
         draftText: '',
+        draftEditor: editorAtEnd(),
       });
       return snapshot;
     },
@@ -104,7 +119,7 @@ export function createNoteCaptureStore(): NoteCaptureStoreApi {
       if (undoSnapshot === null) {
         return false;
       }
-      set({ draftText: undoSnapshot, undoSnapshot: null });
+      set({ draftText: undoSnapshot, draftEditor: editorAtEnd(undoSnapshot), undoSnapshot: null });
       return true;
     },
 
@@ -112,6 +127,8 @@ export function createNoteCaptureStore(): NoteCaptureStoreApi {
       set({
         draftText: '',
         titleText: '',
+        draftEditor: editorAtEnd(),
+        titleEditor: editorAtEnd(),
         undoSnapshot: null,
       });
     },

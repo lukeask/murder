@@ -51,6 +51,13 @@ import type { JSX } from 'react';
 import { useModalWidth } from '../hooks/useTerminalSize.js';
 import type { Modifier } from '../input/bindings.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
+import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '../input/textEditor/commands.js';
+import { singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
+import { reduceEditor } from '../input/textEditor/operations.js';
+import { plainTextProjection } from '../input/textEditor/projection.js';
+import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
+import { plainTextTopology } from '../input/textEditor/topology.js';
 import type { HarnessModel, HarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { modelsFor, STATIC_HARNESS_MODELS } from '../store/dialogs/harnessModelsActions.js';
 import type { SpawnActions } from '../store/dialogs/spawnActions.js';
@@ -79,10 +86,13 @@ import {
   stepProgress,
   type WizardStep,
 } from './spawnWizardMachine.js';
-import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
+import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (text/list steps need it).
 import '../input/dispatcher.js';
+
+/** Content width shared by text-step/rename renderers and visual-motion geometry. */
+const SPAWN_EDITOR_WIDTH = 58;
 
 /** Intent union — structural-key actions only. Printable chars (j/k/y/n + text) go through
  * `onUncaptured`, not the keymap. */
@@ -93,6 +103,9 @@ type SpawnWizardIntent =
   | 'cursorRight'
   | 'confirm'
   | 'backspace'
+  | 'deleteForward'
+  | 'home'
+  | 'end'
   | 'deleteAll'
   | 'dismiss';
 
@@ -181,6 +194,8 @@ interface SpawnWizardState {
   worktreeKey: string | null;
   branch: string;
   name: string;
+  branchEditor: TextEditorState;
+  nameEditor: TextEditorState;
   contextAccepted: boolean;
   // List cursors (per selection step).
   harnessCursor: number;
@@ -196,10 +211,12 @@ interface SpawnWizardState {
   creatingFavorite: boolean;
   /** The favorite name being typed on the `nameFavorite` step. */
   favoriteName: string;
+  favoriteNameEditor: TextEditorState;
   /** The first-step sub-mode: normal nav, delete-confirm, or inline rename. */
   gridMode: 'nav' | 'confirmDelete' | 'rename';
   /** The in-progress rename value (when `gridMode === 'rename'`). */
   renameValue: string;
+  renameValueEditor: TextEditorState;
   /** The right-column chord label prefix (`'A'` for alt, else `'C'`) — display only. */
   chordPrefix: string;
   error: string | null;
@@ -297,6 +314,8 @@ export function spawnWizardMode(
     worktreeKey: null,
     branch: '',
     name: '',
+    branchEditor: editorAtEnd(),
+    nameEditor: editorAtEnd(),
     contextAccepted: true,
     harnessCursor: 0,
     modelCursor: 0,
@@ -306,8 +325,10 @@ export function spawnWizardMode(
     favoriteCursor: 0,
     creatingFavorite: false,
     favoriteName: '',
+    favoriteNameEditor: editorAtEnd(),
     gridMode: 'nav',
     renameValue: '',
+    renameValueEditor: editorAtEnd(),
     chordPrefix,
     error: null,
   };
@@ -319,6 +340,22 @@ export function spawnWizardMode(
     if (current !== undefined) {
       modes.getState().enter(mode);
     }
+  }
+
+  function editText(
+    field: 'branch' | 'name' | 'favoriteName' | 'nameFavorite' | 'renameValue',
+    command: EditorCommand,
+  ): void {
+    const valueField = field === 'nameFavorite' ? 'favoriteName' : field;
+    const editorField = `${valueField}Editor` as const;
+    const current = s[editorField];
+    const next = reduceEditor(current, command, {
+      width: SPAWN_EDITOR_WIDTH,
+      topology: plainTextTopology,
+      projection: plainTextProjection,
+    }).state;
+    s[editorField] = next;
+    s[valueField] = next.text;
   }
 
   // Fetch the live model snapshot + worktree options once on open. Both fall back gracefully, so a
@@ -609,6 +646,9 @@ export function spawnWizardMode(
       { chord: { key: { rightArrow: true } }, intent: 'cursorRight', description: 'next choice' },
       { chord: { key: { return: true } }, intent: 'confirm', description: 'confirm' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
+      { chord: { key: { delete: true } }, intent: 'deleteForward', description: 'delete' },
+      { chord: { key: { home: true } }, intent: 'home', description: 'line start' },
+      { chord: { key: { end: true } }, intent: 'end', description: 'line end' },
       { chord: { input: 'u', key: { meta: true } }, intent: 'deleteAll', description: 'clear' },
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'cancel' },
     ],
@@ -618,11 +658,40 @@ export function spawnWizardMode(
       if (s.step === 'harness' && s.gridMode === 'rename') {
         switch (intent) {
           case 'backspace':
-            s.renameValue = deleteLastChar(s.renameValue);
+            editText('renameValue', { type: 'backspace' });
+            refresh();
+            return;
+          case 'deleteForward':
+            editText('renameValue', { type: 'deleteForward' });
+            refresh();
+            return;
+          case 'home':
+            editText('renameValue', { type: 'moveLineStart' });
+            refresh();
+            return;
+          case 'end':
+            editText('renameValue', { type: 'moveLineEnd' });
+            refresh();
+            return;
+          case 'cursorLeft':
+            editText('renameValue', { type: 'moveLeft' });
+            refresh();
+            return;
+          case 'cursorRight':
+            editText('renameValue', { type: 'moveRight' });
+            refresh();
+            return;
+          case 'cursorUp':
+            editText('renameValue', { type: 'moveVisualUp' });
+            refresh();
+            return;
+          case 'cursorDown':
+            editText('renameValue', { type: 'moveVisualDown' });
             refresh();
             return;
           case 'deleteAll':
             s.renameValue = '';
+            s.renameValueEditor = editorAtEnd();
             refresh();
             return;
           case 'confirm': {
@@ -644,8 +713,7 @@ export function spawnWizardMode(
             refresh();
             return;
           default:
-            // Arrows etc. are inert while renaming.
-            return;
+            return intent satisfies never;
         }
       }
 
@@ -654,15 +722,24 @@ export function spawnWizardMode(
       const isText = s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite';
       switch (intent) {
         case 'cursorUp':
-          if (s.step === 'harness') moveWithinColumn(-1);
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'moveVisualUp' });
+            refresh();
+          } else if (s.step === 'harness') moveWithinColumn(-1);
           else if (isList) moveCursor(-1);
           break;
         case 'cursorDown':
-          if (s.step === 'harness') moveWithinColumn(1);
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'moveVisualDown' });
+            refresh();
+          } else if (s.step === 'harness') moveWithinColumn(1);
           else if (isList) moveCursor(1);
           break;
         case 'cursorLeft':
-          if (s.step === 'harness') {
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'moveLeft' });
+            refresh();
+          } else if (s.step === 'harness') {
             switchColumn('harness');
           } else if (s.step === 'context' && !s.contextAccepted) {
             // Item 7: the context step's yes/no is a two-cell radio; ← highlights "yes".
@@ -671,7 +748,10 @@ export function spawnWizardMode(
           }
           break;
         case 'cursorRight':
-          if (s.step === 'harness') {
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'moveRight' });
+            refresh();
+          } else if (s.step === 'harness') {
             switchColumn('favorites');
           } else if (s.step === 'context' && s.contextAccepted) {
             s.contextAccepted = false;
@@ -686,10 +766,26 @@ export function spawnWizardMode(
           }
           break;
         case 'backspace':
-          if (isText) {
-            if (s.step === 'branch') s.branch = deleteLastChar(s.branch);
-            else if (s.step === 'name') s.name = deleteLastChar(s.name);
-            else s.favoriteName = deleteLastChar(s.favoriteName);
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'backspace' });
+            refresh();
+          }
+          break;
+        case 'deleteForward':
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'deleteForward' });
+            refresh();
+          }
+          break;
+        case 'home':
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'moveLineStart' });
+            refresh();
+          }
+          break;
+        case 'end':
+          if (s.step === 'branch' || s.step === 'name' || s.step === 'nameFavorite') {
+            editText(s.step, { type: 'moveLineEnd' });
             refresh();
           }
           break;
@@ -698,6 +794,9 @@ export function spawnWizardMode(
             if (s.step === 'branch') s.branch = '';
             else if (s.step === 'name') s.name = '';
             else s.favoriteName = '';
+            if (s.step === 'branch') s.branchEditor = editorAtEnd();
+            else if (s.step === 'name') s.nameEditor = editorAtEnd();
+            else s.favoriteNameEditor = editorAtEnd();
             refresh();
           }
           break;
@@ -739,13 +838,20 @@ export function spawnWizardMode(
         return true;
       }
       if (s.step === 'harness' && s.gridMode === 'rename') {
-        // Printable (non-ctrl/meta) chars extend the rename; structural keys ride onIntent.
-        if (!key.ctrl && !key.meta) {
-          s.renameValue = insertChar(s.renameValue, input);
-          refresh();
-          return true;
-        }
-        return true; // swallow ctrl/meta while renaming
+        // Shared decoder rejects Tab; structural keys ride onIntent.
+        const transition = applyEditorKey(s.renameValueEditor, input, key, {
+          policy: singleLineEditorPolicy,
+          environment: {
+            width: SPAWN_EDITOR_WIDTH,
+            topology: plainTextTopology,
+            projection: plainTextProjection,
+          },
+        });
+        if (transition === null) return key.ctrl === true || key.meta === true;
+        s.renameValueEditor = transition.state;
+        s.renameValue = transition.state.text;
+        refresh();
+        return true;
       }
 
       // Digit select+advance — runs BEFORE the ctrl/meta bail because command-modified digits arrive
@@ -821,6 +927,7 @@ export function spawnWizardMode(
             if (input === 'r') {
               s.gridMode = 'rename';
               s.renameValue = s.favorites[s.favoriteCursor]?.name ?? '';
+              s.renameValueEditor = editorAtEnd(s.renameValue);
               refresh();
               return true;
             }
@@ -839,19 +946,25 @@ export function spawnWizardMode(
           }
           return false; // other letters are not actions on a list step — swallow
         case 'branch':
-          s.branch = insertChar(s.branch, input);
-          s.error = null;
-          refresh();
-          return true;
         case 'name':
-          s.name = insertChar(s.name, input);
+        case 'nameFavorite': {
+          const field = s.step === 'nameFavorite' ? 'favoriteName' : s.step;
+          const editorField = `${field}Editor` as const;
+          const transition = applyEditorKey(s[editorField], input, key, {
+            policy: singleLineEditorPolicy,
+            environment: {
+              width: SPAWN_EDITOR_WIDTH,
+              topology: plainTextTopology,
+              projection: plainTextProjection,
+            },
+          });
+          if (transition === null) return false;
+          s[editorField] = transition.state;
+          s[field] = transition.state.text;
+          if (s.step === 'branch' || s.step === 'nameFavorite') s.error = null;
           refresh();
           return true;
-        case 'nameFavorite':
-          s.favoriteName = insertChar(s.favoriteName, input);
-          s.error = null;
-          refresh();
-          return true;
+        }
         case 'context':
           // Item 7: y/n set the choice then advance() (so a following nameFavorite step runs when
           // creating a favorite; when not, context is last so advance() still submits).
@@ -957,19 +1070,19 @@ function SpawnWizardDialog({
       {s.step === 'branch' && (
         <TextStep
           label="New worktree branch name:"
-          value={s.branch}
+          editor={s.branchEditor}
           placeholder="e.g. feature/my-work"
         />
       )}
 
       {s.step === 'name' && (
-        <TextStep label="Rogue name:" value={s.name} placeholder="blank = autogenerate" />
+        <TextStep label="Rogue name:" editor={s.nameEditor} placeholder="blank = autogenerate" />
       )}
 
       {s.step === 'nameFavorite' && (
         <TextStep
           label="Name this favorite config:"
-          value={s.favoriteName}
+          editor={s.favoriteNameEditor}
           placeholder="e.g. OpusMed"
         />
       )}
@@ -1104,8 +1217,9 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
         <Box marginTop={1} flexDirection="column">
           <Text color={theme.warning}>Select favorite — rename:</Text>
           <Box marginTop={1}>
-            <TextInput
-              value={s.renameValue}
+            <TextEditorDisplay
+              state={s.renameValueEditor}
+              width={SPAWN_EDITOR_WIDTH}
               placeholder="favorite name"
               focused
               color={theme.text}
@@ -1155,11 +1269,11 @@ function SelectList({
 /** A text-entry step — used by branch + name. */
 function TextStep({
   label,
-  value,
+  editor,
   placeholder,
 }: {
   readonly label: string;
-  readonly value: string;
+  readonly editor: TextEditorState;
   readonly placeholder: string;
 }): JSX.Element {
   const theme = useTheme();
@@ -1167,7 +1281,13 @@ function TextStep({
     <Box marginTop={1} flexDirection="column">
       <Text>{label}</Text>
       <Box marginTop={1}>
-        <TextInput value={value} placeholder={placeholder} focused color={theme.text} />
+        <TextEditorDisplay
+          state={editor}
+          width={SPAWN_EDITOR_WIDTH}
+          placeholder={placeholder}
+          focused
+          color={theme.text}
+        />
       </Box>
     </Box>
   );

@@ -21,6 +21,7 @@
 
 import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import type { CommandParams } from '../../application/ApplicationClient.js';
 import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
@@ -74,7 +75,10 @@ export function createTemplatesActions(
       templates: { ...state.templates, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.command('templates.set', { templates: next });
+      const reply = await bus.command(
+        'templates.set',
+        { templates: next } as unknown as CommandParams<'templates.set'>,
+      );
       store.setState({
         templates: {
           items: toItems(asCommandResult<'templates.set', { templates?: readonly TemplateRecord[] }>(reply).templates),

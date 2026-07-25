@@ -64,7 +64,7 @@ export const CrowsController = memo(function CrowsController({
   const view = useCrowsView(roster, favorites);
   const theme = useTheme();
   const rows = useMemo(() => crowsSurfaceRowsFromView(view), [view]);
-  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('crows', rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('crows', rows.length);
   const [expanded, setExpanded] = usePaneExpandedState('crows');
 
   const agentIdAtCursor = useCallback((): string | null => {
@@ -92,6 +92,27 @@ export const CrowsController = memo(function CrowsController({
       setActivePane(agentId);
     }
   }, [agentIdAtCursor, conversations, favorites, roster, setActivePane, toggleTranscriptPane]);
+
+  const onRowClick = useCallback(
+    (index: number) => {
+      setCursor(index);
+      const agentId = rows[index]?.id;
+      if (agentId === undefined) {
+        return;
+      }
+      const rosterRow = roster.rows.find((row) => row.agentId === agentId);
+      const identity = rosterRow === undefined ? null : deriveAgentIdentity(rosterRow);
+      if (identity === null) {
+        return;
+      }
+      const currentlyOpen = isTranscriptPaneOpen(identity, favorites, conversations.paneOverrides);
+      toggleTranscriptPane(agentId, currentlyOpen);
+      if (!currentlyOpen) {
+        setActivePane(agentId);
+      }
+    },
+    [conversations, favorites, roster, rows, setActivePane, setCursor, toggleTranscriptPane],
+  );
 
   const keymap: PanelKeymap<CrowsIntent> = useMemo(
     () => ({
@@ -214,6 +235,7 @@ export const CrowsController = memo(function CrowsController({
         expanded={expanded}
         status={surfaceStatus(view.status)}
         error={view.error}
+        onRowClick={onRowClick}
       />
     </AllocatedPaneFrame>
   );

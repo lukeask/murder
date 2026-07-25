@@ -95,12 +95,29 @@ describe('switchWorkspace (cookbook)', () => {
     expect(stores.focus.getState().intendedId).toBe('plans');
     expect(stores.chatInput.getState().text).toBe('draft for workspace one');
     expect(stores.chatInput.getState().cursor).toBe('draft for workspace one'.length);
+    expect(stores.chatInput.getState().buffer.desiredVisualColumn ?? null).toBeNull();
     expect(stores.paneUi.getState().cursors[plansPaneId]).toBe(3);
     expect(stores.paneUi.getState().scrolls['stage:transcript:crow-1']).toBe(12);
     expect(stores.paneUi.getState().expandeds[crowsPaneId]).toBe(true);
     expect(stores.app.getState().conversations.activePaneAgentId).toBe('crow-1');
     expect(stores.app.getState().conversations.paneOverrides.get('crow-1')).toBe(true);
     expect(stores.app.getState().conversations.paneViewModes['crow-1']).toBe('condensed');
+  });
+
+  it('round-trips sticky desiredVisualColumn with the chat draft', () => {
+    stores.chatInput.getState().setBuffer({
+      text: 'abcdefgh\nx\nabcdefgh',
+      cursor: 7,
+      desiredVisualColumn: 7,
+    });
+    switchWorkspace(stores, 1, 'next');
+    expect(stores.chatInput.getState().text).toBe('');
+    switchWorkspace(stores, 0, 'prev');
+    expect(stores.chatInput.getState().buffer).toEqual({
+      text: 'abcdefgh\nx\nabcdefgh',
+      cursor: 7,
+      desiredVisualColumn: 7,
+    });
   });
 
   it('restores chat history-nav state (recalled entry + stashed draft) verbatim', () => {

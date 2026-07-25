@@ -16,6 +16,7 @@
  * reference-by-path). See {@link deriveSpawnContext} for the C11 seam note.
  */
 
+import { MouseProvider } from '@ink-tools/ink-mouse';
 import { Box, type DOMElement, type Key, measureElement, Text, useStdout } from 'ink';
 import {
   Component,
@@ -1401,12 +1402,14 @@ export function App({
   readonly terminalEvents?: TerminalEvents | undefined;
 }): JSX.Element {
   return (
-    <AppStoreProvider value={store}>
-      <InputStoresProvider value={inputStores}>
-        <ApplicationClientProvider value={bus}>
-          <Shell project={project} terminalEvents={terminalEvents} />
-        </ApplicationClientProvider>
-      </InputStoresProvider>
-    </AppStoreProvider>
+    <MouseProvider>
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <ApplicationClientProvider value={bus}>
+            <Shell project={project} terminalEvents={terminalEvents} />
+          </ApplicationClientProvider>
+        </InputStoresProvider>
+      </AppStoreProvider>
+    </MouseProvider>
   );
 }

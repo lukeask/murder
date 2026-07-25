@@ -219,15 +219,27 @@ describe('mouse wheel (mouse reporting enabled)', () => {
     expect(wheels).toEqual(['down', 'up']);
   });
 
-  it('ignores non-wheel mouse reports (a click emits no wheel event)', () => {
+  it('forwards non-wheel mouse reports (clicks) for ink-mouse hit testing', () => {
     const real = new FakeStdin();
     const shim = new StdinShim(real);
     shim.setMouseEnabled(true);
+    const down = collectDownstream(shim);
     const wheels: string[] = [];
     shim.on('wheel', (w: { direction: string }) => wheels.push(w.direction));
 
     real.push('\x1b[<0;5;5M'); // left-button press — not a wheel notch
     expect(wheels).toEqual([]);
+    expect(down.text()).toBe('\x1b[<0;5;5M');
+  });
+
+  it('swallows pure motion reports so any-event tracking does not flood Ink', () => {
+    const real = new FakeStdin();
+    const shim = new StdinShim(real);
+    shim.setMouseEnabled(true);
+    const down = collectDownstream(shim);
+
+    real.push('\x1b[<35;8;4M'); // motion + no button (3 | 32)
+    expect(down.text()).toBe('');
   });
 
   it('still forwards ordinary keystrokes verbatim while mouse is enabled', () => {

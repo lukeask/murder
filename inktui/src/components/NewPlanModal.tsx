@@ -32,10 +32,18 @@ import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
+import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '../input/textEditor/commands.js';
+import { multilineEditorPolicy, singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
+import { reduceEditor } from '../input/textEditor/operations.js';
+import { plainTextProjection } from '../input/textEditor/projection.js';
+import type { TextEditorState } from '../input/textEditor/state.js';
+import { editorAtEnd } from '../input/textEditor/state.js';
+import { plainTextTopology } from '../input/textEditor/topology.js';
 import type { CreatePlanInput, DialogActions } from '../store/dialogs/dialogActions.js';
 import { toastStore } from '../store/toast/toastStore.js';
 import { useTheme } from '../theme/themeStore.js';
-import { deleteLastChar, insertChar, MultiLineText, TextInput } from './TextInput.js';
+import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
 import '../input/dispatcher.js';
@@ -44,10 +52,17 @@ import '../input/dispatcher.js';
  * `onUncaptured`, not the keymap, so they are not listed here. */
 type NewPlanIntent =
   | 'backspace'
+  | 'deleteForward'
   | 'newline'
   | 'advance'
   | 'navPrev'
   | 'navNext'
+  | 'editorLeft'
+  | 'editorRight'
+  | 'editorUp'
+  | 'editorDown'
+  | 'editorHome'
+  | 'editorEnd'
   | 'submit'
   | 'dismiss';
 
@@ -74,9 +89,9 @@ export const NEW_PLAN_MODE_ID = 'new-plan';
  * Mutated in `onIntent` / `onUncaptured`; `render` reads it at call time.
  */
 interface NewPlanState {
-  body: string;
+  body: TextEditorState;
   naming: Naming;
-  planName: string;
+  planName: TextEditorState;
   focus: FocusGroup;
   /** True while the `plan.create` RPC is in flight (the `naming…` pending state). */
   pending: boolean;
@@ -98,13 +113,16 @@ export function newPlanMode(
   const id = NEW_PLAN_MODE_ID;
 
   const s: NewPlanState = {
-    body: '',
+    body: editorAtEnd(),
     naming: 'auto',
-    planName: '',
+    planName: editorAtEnd(),
     focus: 'body',
     pending: false,
     error: null,
   };
+  // Updated from the render-time modal allocation. The editor itself retains no geometry; the mode
+  // supplies the latest observed content width with each key transition.
+  let editorWidth = 80;
 
   // Re-render by poking the mode store: re-enter the same id (idempotent focus, new stack ref).
   function refresh(): void {
@@ -121,7 +139,7 @@ export function newPlanMode(
       return;
     }
     const autoName = s.naming === 'auto';
-    const planName = s.planName.trim();
+    const planName = s.planName.text.trim();
     if (!autoName && planName.length === 0) {
       s.error = 'Plan name is required (or pick "auto").';
       s.focus = 'name';
@@ -131,7 +149,7 @@ export function newPlanMode(
     s.pending = true;
     s.error = null;
     refresh();
-    const body = s.body;
+    const body = s.body.text;
     const message = body.trim().length > 0 ? body : undefined;
     const input: CreatePlanInput = autoName
       ? { body, autoName: true, ...(message !== undefined ? { message } : {}) }
@@ -161,6 +179,19 @@ export function newPlanMode(
     refresh();
   }
 
+  function applyToFocused(command: EditorCommand): void {
+    if (s.focus === 'naming') return;
+    const key = s.focus === 'body' ? 'body' : 'planName';
+    const state = s[key];
+    s[key] = reduceEditor(state, command, {
+      width: editorWidth,
+      topology: plainTextTopology,
+      projection: plainTextProjection,
+    }).state;
+    s.error = null;
+    refresh();
+  }
+
   const mode: Mode<NewPlanIntent> = {
     id,
     presentation: 'modal',
@@ -173,11 +204,14 @@ export function newPlanMode(
     keymap: [
       { chord: { key: { shift: true, return: true } }, intent: 'newline', description: 'newline' },
       { chord: { key: { return: true } }, intent: 'advance', description: 'confirm' },
-      { chord: { key: { upArrow: true } }, intent: 'navPrev', description: 'prev' },
-      { chord: { key: { downArrow: true } }, intent: 'navNext', description: 'next' },
-      { chord: { key: { leftArrow: true } }, intent: 'navPrev', description: 'prev' },
-      { chord: { key: { rightArrow: true } }, intent: 'navNext', description: 'next' },
+      { chord: { key: { upArrow: true } }, intent: 'editorUp', description: 'up' },
+      { chord: { key: { downArrow: true } }, intent: 'editorDown', description: 'down' },
+      { chord: { key: { leftArrow: true } }, intent: 'editorLeft', description: 'left' },
+      { chord: { key: { rightArrow: true } }, intent: 'editorRight', description: 'right' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
+      { chord: { key: { delete: true } }, intent: 'deleteForward', description: 'delete' },
+      { chord: { key: { home: true } }, intent: 'editorHome', description: 'line start' },
+      { chord: { key: { end: true } }, intent: 'editorEnd', description: 'line end' },
       { chord: { key: { tab: true } }, intent: 'submit', description: 'create' },
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'cancel' },
     ],
@@ -187,19 +221,16 @@ export function newPlanMode(
       }
       switch (intent) {
         case 'backspace': {
-          if (s.focus === 'body') {
-            s.body = deleteLastChar(s.body);
-          } else if (s.focus === 'name') {
-            s.planName = deleteLastChar(s.planName);
-          }
-          refresh();
+          applyToFocused({ type: 'backspace' });
           return;
         }
+        case 'deleteForward':
+          applyToFocused({ type: 'deleteForward' });
+          return;
         case 'newline': {
           // Shift+Enter: a literal newline in the body box (a no-op in the radio/name groups).
           if (s.focus === 'body') {
-            s.body = `${s.body}\n`;
-            refresh();
+            applyToFocused({ type: 'insertNewline' });
           }
           return;
         }
@@ -223,15 +254,41 @@ export function newPlanMode(
         case 'navPrev': {
           if (s.focus === 'naming') {
             moveNaming(-1);
+          } else {
+            applyToFocused({ type: 'moveLeft' });
           }
           return;
         }
         case 'navNext': {
           if (s.focus === 'naming') {
             moveNaming(1);
+          } else {
+            applyToFocused({ type: 'moveRight' });
           }
           return;
         }
+        case 'editorLeft':
+          if (s.focus === 'naming') moveNaming(-1);
+          else applyToFocused({ type: 'moveLeft' });
+          return;
+        case 'editorRight':
+          if (s.focus === 'naming') moveNaming(1);
+          else applyToFocused({ type: 'moveRight' });
+          return;
+        case 'editorUp':
+          if (s.focus === 'naming') moveNaming(-1);
+          else applyToFocused({ type: 'moveVisualUp' });
+          return;
+        case 'editorDown':
+          if (s.focus === 'naming') moveNaming(1);
+          else applyToFocused({ type: 'moveVisualDown' });
+          return;
+        case 'editorHome':
+          applyToFocused({ type: 'moveLineStart' });
+          return;
+        case 'editorEnd':
+          applyToFocused({ type: 'moveLineEnd' });
+          return;
         case 'submit': {
           // Tab: submit from anywhere (a quick-create escape hatch).
           submit();
@@ -247,15 +304,15 @@ export function newPlanMode(
       }
     },
     // onUncaptured: printable text entry + the radio's hjkl navigation. The dispatcher calls this when
-    // the declared keymap has no match (the C12 hook).
+    // the declared keymap has no match (the C12 hook). Tab/Esc stay with the mode via the decoder.
     onUncaptured(input: string, key: Key): boolean {
-      if (input.length === 0 || key.ctrl || key.meta || key.escape) {
-        return false; // special/modified key — not our char to handle
-      }
       if (s.pending) {
         return true; // swallow edits while submitting
       }
       if (s.focus === 'naming') {
+        if (input.length === 0 || key.ctrl || key.meta || key.escape || key.tab) {
+          return false;
+        }
         // hjkl moves the radio highlight (arrows ride the keymap above).
         if (input === 'h' || input === 'k') {
           moveNaming(-1);
@@ -267,11 +324,17 @@ export function newPlanMode(
         }
         return true; // swallow other chars while the radio is focused (no text field here)
       }
-      if (s.focus === 'body') {
-        s.body = insertChar(s.body, input);
-      } else {
-        s.planName = insertChar(s.planName, input);
-      }
+      const field = s.focus === 'body' ? 'body' : 'planName';
+      const transition = applyEditorKey(s[field], input, key, {
+        policy: s.focus === 'body' ? multilineEditorPolicy : singleLineEditorPolicy,
+        environment: {
+          width: editorWidth,
+          topology: plainTextTopology,
+          projection: plainTextProjection,
+        },
+      });
+      if (transition === null) return false;
+      s[field] = transition.state;
       s.error = null;
       refresh();
       return true;
@@ -284,6 +347,9 @@ export function newPlanMode(
         focus={s.focus}
         pending={s.pending}
         error={s.error}
+        onContentWidth={(width) => {
+          editorWidth = width;
+        }}
       />
     ),
   };
@@ -322,13 +388,15 @@ function NewPlanForm({
   focus,
   pending,
   error,
+  onContentWidth,
 }: {
-  readonly body: string;
+  readonly body: TextEditorState;
   readonly naming: Naming;
-  readonly planName: string;
+  readonly planName: TextEditorState;
   readonly focus: FocusGroup;
   readonly pending: boolean;
   readonly error: string | null;
+  readonly onContentWidth: (width: number) => void;
 }): JSX.Element {
   const theme = useTheme();
   // The form fills ~90% of the available screen real estate so a long plan body has room to wrap and
@@ -338,6 +406,8 @@ function NewPlanForm({
   // naming/name controls to the bottom.
   const { columns } = useTerminalSize();
   const width = Math.max(48, Math.floor(columns * 0.9));
+  const contentWidth = Math.max(1, width - 6);
+  onContentWidth(contentWidth);
   return (
     <Box
       flexDirection="column"
@@ -354,13 +424,16 @@ function NewPlanForm({
 
       {/* Body textbox (multi-line) — grows to fill the tall modal so the draft has room to wrap. */}
       <Box marginTop={1} flexDirection="column" flexGrow={1}>
-        <Text color={focus === 'body' ? theme.text : theme.muted}>Plan body:</Text>
-        <MultiLineText
-          value={body}
-          placeholder="Describe the plan…"
-          focused={focus === 'body'}
-          color={focus === 'body' ? theme.text : theme.muted}
-        />
+        <Box flexDirection="column" flexShrink={0}>
+          <Text color={focus === 'body' ? theme.text : theme.muted}>Plan body:</Text>
+          <TextEditorDisplay
+            state={body}
+            width={contentWidth}
+            placeholder="Describe the plan…"
+            focused={focus === 'body'}
+            color={focus === 'body' ? theme.text : theme.muted}
+          />
+        </Box>
       </Box>
 
       {/* Naming radio group. */}
@@ -379,13 +452,16 @@ function NewPlanForm({
       {/* Custom-name input — shown only when the custom radio is chosen. */}
       {naming === 'custom' && (
         <Box marginTop={1} flexDirection="column">
-          <Text color={focus === 'name' ? theme.text : theme.muted}>Plan name:</Text>
-          <TextInput
-            value={planName}
-            placeholder="e.g. refactor-auth"
-            focused={focus === 'name'}
-            color={focus === 'name' ? theme.text : theme.muted}
-          />
+          <Box flexDirection="column" flexShrink={0}>
+            <Text color={focus === 'name' ? theme.text : theme.muted}>Plan name:</Text>
+            <TextEditorDisplay
+              state={planName}
+              width={contentWidth}
+              placeholder="e.g. refactor-auth"
+              focused={focus === 'name'}
+              color={focus === 'name' ? theme.text : theme.muted}
+            />
+          </Box>
         </Box>
       )}
 

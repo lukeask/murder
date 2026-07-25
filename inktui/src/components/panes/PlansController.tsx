@@ -29,7 +29,7 @@ export const PlansController = memo(function PlansController({
   const toggleDoc = useDocView('plan');
   const view = usePlansView(plans, favorites);
   const theme = useTheme();
-  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('plans', view.rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('plans', view.rows.length);
 
   useEffect(() => {
     void refresh();
@@ -38,6 +38,17 @@ export const PlansController = memo(function PlansController({
   const rowIdAtCursor = useCallback(
     (): string | null => view.rows[cursor]?.id ?? null,
     [cursor, view.rows],
+  );
+
+  const onRowClick = useCallback(
+    (index: number) => {
+      setCursor(index);
+      const id = view.rows[index]?.id;
+      if (id !== undefined) {
+        toggleDoc(id);
+      }
+    },
+    [setCursor, toggleDoc, view.rows],
   );
 
   const keymap: PanelKeymap<PlansIntent> = useMemo(
@@ -110,6 +121,7 @@ export const PlansController = memo(function PlansController({
         cursor={cursor}
         status={view.status}
         error={view.error}
+        onRowClick={onRowClick}
       />
     </AllocatedPaneFrame>
   );

@@ -52,7 +52,7 @@ export const TicketsController = memo(function TicketsController({
   const theme = useTheme();
   const rows = useMemo(() => ticketsSurfaceRowsFromView(view.rows), [view.rows]);
   const openEditor = useTicketEditor();
-  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('tickets', rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('tickets', rows.length);
   const cursorRef = useRef(cursor);
   const rowsRef = useRef(rows);
   cursorRef.current = cursor;
@@ -68,6 +68,17 @@ export const TicketsController = memo(function TicketsController({
       openEditor(row.id);
     }
   }, [openEditor]);
+
+  const onRowClick = useCallback(
+    (index: number) => {
+      setCursor(index);
+      const row = rowsRef.current[index];
+      if (row !== undefined) {
+        openEditor(row.id);
+      }
+    },
+    [openEditor, setCursor],
+  );
 
   const keymap: PanelKeymap<TicketsIntent> = useMemo(
     () => ({
@@ -119,6 +130,7 @@ export const TicketsController = memo(function TicketsController({
         cursor={cursor}
         status={surfaceStatus(view.status)}
         error={view.error}
+        onRowClick={onRowClick}
       />
     </AllocatedPaneFrame>
   );

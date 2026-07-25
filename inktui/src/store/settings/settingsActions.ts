@@ -27,6 +27,7 @@
 
 import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
+import type { CommandParams } from '../../application/ApplicationClient.js';
 import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import type { BarWidgetsConfig } from '../../selectors/barWidgetRegistry.js';
 import type { AppStore } from '../store.js';
@@ -366,7 +367,10 @@ export function createSettingsActions(bus: ApplicationClient, store: StoreApi<Ap
         },
       }));
       try {
-        const reply = await bus.command('settings.update', { settings: partial });
+        const reply = await bus.command(
+          'settings.update',
+          { settings: partial } as unknown as CommandParams<'settings.update'>,
+        );
         // Apply the full merged reply — refreshes llm (masked keys), the `effective_*` harness values,
         // and reconciles any server-side normalisation of the optimistic overlay.
         store.setState((state) => ({

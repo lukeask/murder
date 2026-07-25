@@ -28,7 +28,7 @@ export const NotesController = memo(function NotesController({
   const toggleDoc = useDocView('note');
   const view = useNotesView(notes, favorites);
   const theme = useTheme();
-  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('notes', view.rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('notes', view.rows.length);
 
   useEffect(() => {
     void refresh();
@@ -37,6 +37,17 @@ export const NotesController = memo(function NotesController({
   const rowNameAtCursor = useCallback(
     (): string | null => view.rows[cursor]?.name ?? null,
     [cursor, view.rows],
+  );
+
+  const onRowClick = useCallback(
+    (index: number) => {
+      setCursor(index);
+      const name = view.rows[index]?.name;
+      if (name !== undefined) {
+        toggleDoc(name);
+      }
+    },
+    [setCursor, toggleDoc, view.rows],
   );
 
   const keymap: PanelKeymap<NotesIntent> = useMemo(
@@ -101,6 +112,7 @@ export const NotesController = memo(function NotesController({
         cursor={cursor}
         status={view.status}
         error={view.error}
+        onRowClick={onRowClick}
       />
     </AllocatedPaneFrame>
   );

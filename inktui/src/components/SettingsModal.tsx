@@ -53,6 +53,13 @@ import { AppStoreContext } from '../hooks/useAppStore.js';
 import { useModalHeight, useModalWidth, useTerminalSize } from '../hooks/useTerminalSize.js';
 import { ACTIONS, type ActionId, type Modifier, resolveBindings } from '../input/bindings.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '../input/textEditor/commands.js';
+import { singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
+import { reduceEditor } from '../input/textEditor/operations.js';
+import { plainTextProjection } from '../input/textEditor/projection.js';
+import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
+import { plainTextTopology } from '../input/textEditor/topology.js';
 import {
   type BarWidgetId,
   type BarWidgetsConfig,
@@ -69,9 +76,9 @@ import type {
   StartupRogueWire,
 } from '../store/settings/settingsActions.js';
 import type {
+  ClaudeControlBackend,
   CodexControlBackend,
   CursorControlBackend,
-  ClaudeControlBackend,
   DefaultChatViewMode,
   DocumentDisplayMode,
 } from '../store/settings/settingsSlice.js';
@@ -96,7 +103,13 @@ import { REBINDABLE, RESERVED_KEYS } from './settings/items/keybindings.js';
 import { ENV_PROVIDERS, mergedTiers, tierNames } from './settings/items/llm.js';
 import { TEMPLATE_NAME_RE } from './settings/items/templates.js';
 import type { SettingsCategoryId, SettingsRow } from './settings/types.js';
-import { deleteLastChar, insertChar, TextInput } from './TextInput.js';
+import { TextEditorDisplay } from './TextEditorDisplay.js';
+
+/** Content widths must match the corresponding `TextEditorDisplay` allocations below. */
+const SETTINGS_LLM_FORM_EDITOR_WIDTH = 50;
+const SETTINGS_THEME_IMPORT_EDITOR_WIDTH = 48;
+const SETTINGS_TEMPLATE_EDITOR_WIDTH = 42;
+const SETTINGS_PROVIDER_EDITOR_WIDTH = 36;
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (the printable/capture router needs it).
 import '../input/dispatcher.js';
@@ -111,9 +124,14 @@ type SettingsIntent =
   | 'confirm'
   | 'cancel'
   | 'backspace'
+  | 'deleteForward'
+  | 'home'
+  | 'end'
   | 'deleteAll';
 
-const BUILTIN_POLICY_TEMPLATES: Readonly<Record<string, readonly { readonly selectors: readonly unknown[] }[]>> = {
+const BUILTIN_POLICY_TEMPLATES: Readonly<
+  Record<string, readonly { readonly selectors: readonly unknown[] }[]>
+> = {
   'local-then-free': [
     { selectors: [{ match: { locality: 'local' } }] },
     { selectors: [{ match: { locality: 'remote', cost_class: 'free' } }] },
@@ -243,6 +261,8 @@ interface SettingsState {
   editing: EditTarget | null;
   /** The in-progress text-entry buffer (the api_key / base_url being typed). */
   editValue: string;
+  /** Cursor-aware source of truth for all settings form/value drafts. */
+  editEditor: TextEditorState;
   /** Open LLM provider/policy form. The form owns its draft until Save. */
   llmForm: LlmForm | null;
   /** A text field inside the open LLM form is receiving printable input. */
@@ -300,9 +320,7 @@ function bindingLabel(
     modifier,
     ctrlAvailable,
     overrides as Partial<Record<ActionId, string>>,
-  ).label(
-    action,
-  );
+  ).label(action);
 }
 
 /**
@@ -408,6 +426,7 @@ export function settingsMode(
     llmEnv: current.llmEnv ?? { groq: false, cerebras: false, openrouter: false },
     editing: null,
     editValue: '',
+    editEditor: editorAtEnd(),
     llmForm: null,
     llmFormEditing: false,
     capturing: null,
@@ -496,7 +515,12 @@ export function settingsMode(
     }
     if (s.activePane === 'settings' && s.categoryId === 'llm') {
       const row = s.rows[s.cursor];
-      if (row?.kind === 'llmProvider' || row?.kind === 'llmPolicy' || row?.kind === 'llmAddProvider' || row?.kind === 'llmCreatePolicy') {
+      if (
+        row?.kind === 'llmProvider' ||
+        row?.kind === 'llmPolicy' ||
+        row?.kind === 'llmAddProvider' ||
+        row?.kind === 'llmCreatePolicy'
+      ) {
         confirm();
         return;
       }
@@ -843,7 +867,10 @@ export function settingsMode(
     if (template === undefined) return;
     void actions.llm.createPolicy(name, { groups: template }).then((id) => {
       if (id !== null) {
-        s.llm = { ...s.llm, policies: { ...(s.llm.policies ?? {}), [id]: { builtin: false, name, groups: template } } };
+        s.llm = {
+          ...s.llm,
+          policies: { ...(s.llm.policies ?? {}), [id]: { builtin: false, name, groups: template } },
+        };
         rebuildRows();
         s.notice = `Cloned as ${name}`;
         refresh();
@@ -852,7 +879,13 @@ export function settingsMode(
   }
 
   function selectFeaturePolicy(feature: string): void {
-    const choices = ['local-then-free', 'remote-free', 'local-only', 'oracle-smart', ...Object.keys(s.llm.policies ?? {})];
+    const choices = [
+      'local-then-free',
+      'remote-free',
+      'local-only',
+      'oracle-smart',
+      ...Object.keys(s.llm.policies ?? {}),
+    ];
     const current = s.llm.feature_policies?.[feature] ?? s.llm.active_policy ?? 'local-then-free';
     const next = choices[(choices.indexOf(current) + 1) % choices.length] ?? 'local-then-free';
     s.llm = { ...s.llm, feature_policies: { ...(s.llm.feature_policies ?? {}), [feature]: next } };
@@ -872,7 +905,7 @@ export function settingsMode(
       providerType,
       providerId,
       builtin,
-      name: provider?.name ?? (providerId?.replaceAll('-', ' ') ?? ''),
+      name: provider?.name ?? providerId?.replaceAll('-', ' ') ?? '',
       endpoint: provider?.endpoint ?? '',
       apiKey: provider?.auth?.api_key ?? provider?.api_key ?? '',
       source: provider?.models?.source ?? 'recommended',
@@ -908,6 +941,38 @@ export function settingsMode(
     return 0;
   }
 
+  /** Keep legacy scalar consumers derived from one cursor-aware draft during the incremental form UI migration. */
+  function setEditValue(value: string): void {
+    s.editValue = value;
+    s.editEditor = editorAtEnd(value);
+  }
+
+  /** Match the live field's rendered content width so Up/Down agree with layout. */
+  function currentEditorWidth(): number {
+    if (s.llmFormEditing) return SETTINGS_LLM_FORM_EDITOR_WIDTH;
+    switch (s.editing?.kind) {
+      case 'themeImport':
+        return SETTINGS_THEME_IMPORT_EDITOR_WIDTH;
+      case 'templateRename':
+      case 'templateCreateName':
+      case 'templateCreateBody':
+        return SETTINGS_TEMPLATE_EDITOR_WIDTH;
+      case 'provider':
+        return SETTINGS_PROVIDER_EDITOR_WIDTH;
+      default:
+        return SETTINGS_LLM_FORM_EDITOR_WIDTH;
+    }
+  }
+
+  function applyEdit(command: EditorCommand): void {
+    s.editEditor = reduceEditor(s.editEditor, command, {
+      width: currentEditorWidth(),
+      topology: plainTextTopology,
+      projection: plainTextProjection,
+    }).state;
+    s.editValue = s.editEditor.text;
+  }
+
   function moveFormField(delta: number): void {
     if (s.llmForm === null || s.llmFormEditing) return;
     const count = formFieldCount();
@@ -918,10 +983,23 @@ export function settingsMode(
   function beginFormTextEdit(): void {
     const form = s.llmForm;
     if (form === null) return;
-    const value = form.kind === 'provider'
-      ? form.field === 0 ? form.name : form.field === 1 ? form.endpoint : form.field === 2 ? form.apiKey : form.field === 4 ? form.include : form.field === 5 ? form.exclude : form.overrides
-      : form.field === 0 ? form.name : form.groups;
-    s.editValue = value;
+    const value =
+      form.kind === 'provider'
+        ? form.field === 0
+          ? form.name
+          : form.field === 1
+            ? form.endpoint
+            : form.field === 2
+              ? form.apiKey
+              : form.field === 4
+                ? form.include
+                : form.field === 5
+                  ? form.exclude
+                  : form.overrides
+        : form.field === 0
+          ? form.name
+          : form.groups;
+    setEditValue(value);
     s.llmFormEditing = true;
     s.notice = 'Type value. Enter to apply, Esc to cancel.';
     refresh();
@@ -942,7 +1020,7 @@ export function settingsMode(
     } else if (form.field === 1) {
       form.groups = s.editValue;
     }
-    s.editValue = '';
+    setEditValue('');
     s.llmFormEditing = false;
     s.notice = null;
     refresh();
@@ -951,7 +1029,7 @@ export function settingsMode(
   function cancelLlmForm(): void {
     s.llmForm = null;
     s.llmFormEditing = false;
-    s.editValue = '';
+    setEditValue('');
     s.activePane = 'settings';
     s.notice = null;
     refresh();
@@ -969,7 +1047,8 @@ export function settingsMode(
       let overrides: Record<string, LlmModelOverrideWire>;
       try {
         const parsed: unknown = JSON.parse(form.overrides || '{}');
-        if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error();
+        if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object')
+          throw new Error();
         overrides = parsed as Record<string, LlmModelOverrideWire>;
       } catch {
         s.notice = 'Model overrides must be a JSON object';
@@ -983,21 +1062,37 @@ export function settingsMode(
         overrides,
       };
       const patch = {
-        name: form.name.trim(), endpoint: form.endpoint.trim(),
-        auth: { api_key: form.apiKey }, models,
+        name: form.name.trim(),
+        endpoint: form.endpoint.trim(),
+        auth: { api_key: form.apiKey },
+        models,
       };
       if (form.providerId === null) {
         if (form.providerType !== 'openai_compatible' && form.providerType !== 'lemonade') return;
-        void actions.llm.createProvider({ type: form.providerType, enabled: false, ...patch }).then((id) => {
-          if (id !== null) {
-            s.llm = { ...s.llm, providers: { ...(s.llm.providers ?? {}), [id]: { type: form.providerType, enabled: false, ...patch } } };
-            rebuildRows();
-            cancelLlmForm();
-          }
-        });
+        void actions.llm
+          .createProvider({ type: form.providerType, enabled: false, ...patch })
+          .then((id) => {
+            if (id !== null) {
+              s.llm = {
+                ...s.llm,
+                providers: {
+                  ...(s.llm.providers ?? {}),
+                  [id]: { type: form.providerType, enabled: false, ...patch },
+                },
+              };
+              rebuildRows();
+              cancelLlmForm();
+            }
+          });
       } else {
         void actions.llm.updateProvider(form.providerId, patch);
-        s.llm = { ...s.llm, providers: { ...(s.llm.providers ?? {}), [form.providerId]: { ...(s.llm.providers?.[form.providerId] ?? {}), ...patch } } };
+        s.llm = {
+          ...s.llm,
+          providers: {
+            ...(s.llm.providers ?? {}),
+            [form.providerId]: { ...(s.llm.providers?.[form.providerId] ?? {}), ...patch },
+          },
+        };
         rebuildRows();
         cancelLlmForm();
       }
@@ -1020,14 +1115,26 @@ export function settingsMode(
     if (form.policyId === null) {
       void actions.llm.createPolicy(form.name.trim(), { groups }).then((id) => {
         if (id !== null) {
-          s.llm = { ...s.llm, policies: { ...(s.llm.policies ?? {}), [id]: { builtin: false, name: form.name.trim(), groups: groups as [] } } };
+          s.llm = {
+            ...s.llm,
+            policies: {
+              ...(s.llm.policies ?? {}),
+              [id]: { builtin: false, name: form.name.trim(), groups: groups as [] },
+            },
+          };
           rebuildRows();
           cancelLlmForm();
         }
       });
     } else {
       void actions.llm.updatePolicy(form.policyId, { name: form.name.trim(), groups });
-      s.llm = { ...s.llm, policies: { ...(s.llm.policies ?? {}), [form.policyId]: { builtin: false, name: form.name.trim(), groups: groups as [] } } };
+      s.llm = {
+        ...s.llm,
+        policies: {
+          ...(s.llm.policies ?? {}),
+          [form.policyId]: { builtin: false, name: form.name.trim(), groups: groups as [] },
+        },
+      };
       rebuildRows();
       cancelLlmForm();
     }
@@ -1037,7 +1144,12 @@ export function settingsMode(
     const form = s.llmForm;
     if (form?.kind === 'provider' && form.providerId !== null && !form.builtin) {
       void actions.llm.deleteProvider(form.providerId);
-      s.llm = { ...s.llm, providers: Object.fromEntries(Object.entries(s.llm.providers ?? {}).filter(([id]) => id !== form.providerId)) };
+      s.llm = {
+        ...s.llm,
+        providers: Object.fromEntries(
+          Object.entries(s.llm.providers ?? {}).filter(([id]) => id !== form.providerId),
+        ),
+      };
       rebuildRows();
       cancelLlmForm();
     } else if (form?.kind === 'policy' && form.policyId !== null) {
@@ -1050,7 +1162,12 @@ export function settingsMode(
         return;
       }
       void actions.llm.deletePolicy(form.policyId);
-      s.llm = { ...s.llm, policies: Object.fromEntries(Object.entries(s.llm.policies ?? {}).filter(([id]) => id !== form.policyId)) };
+      s.llm = {
+        ...s.llm,
+        policies: Object.fromEntries(
+          Object.entries(s.llm.policies ?? {}).filter(([id]) => id !== form.policyId),
+        ),
+      };
       rebuildRows();
       cancelLlmForm();
     }
@@ -1061,7 +1178,7 @@ export function settingsMode(
   function beginEdit(provider: LlmProviderId, field: 'api_key' | 'base_url'): void {
     const stored = s.llm.providers?.[provider]?.[field];
     s.editing = { kind: 'provider', provider, field };
-    s.editValue = stored ?? '';
+    setEditValue(stored ?? '');
     s.notice =
       field === 'api_key'
         ? 'Type the API key (leave as *** to keep, empty to clear). Enter to save, Esc to cancel.'
@@ -1099,7 +1216,7 @@ export function settingsMode(
       providers: { ...(s.llm.providers ?? {}), [provider]: nextProvider },
     };
     s.editing = null;
-    s.editValue = '';
+    setEditValue('');
     s.notice = null;
     rebuildRows();
     void actions.update({ llm: { providers: { [provider]: { [field]: value } } } });
@@ -1109,7 +1226,7 @@ export function settingsMode(
   /** Begin an inline rename of the template under the cursor, seeding the buffer with its name. */
   function beginTemplateRename(name: string): void {
     s.editing = { kind: 'templateRename', name };
-    s.editValue = name;
+    setEditValue(name);
     s.notice = 'Rename template. Enter to save, Esc to cancel.';
     refresh();
   }
@@ -1129,7 +1246,7 @@ export function settingsMode(
 
   function beginTemplateCreate(): void {
     s.editing = { kind: 'templateCreateName' };
-    s.editValue = '';
+    setEditValue('');
     s.previewTemplate = null;
     s.notice = 'New template name. Enter to continue, Esc to cancel.';
     refresh();
@@ -1147,7 +1264,7 @@ export function settingsMode(
       return;
     }
     s.editing = { kind: 'templateCreateBody', name };
-    s.editValue = '';
+    setEditValue('');
     s.notice = 'Template body. Enter to save, Esc to cancel.';
     refresh();
   }
@@ -1160,7 +1277,7 @@ export function settingsMode(
     const body = s.editValue;
     s.templateActions.save(name, body);
     s.editing = null;
-    s.editValue = '';
+    setEditValue('');
     s.notice = null;
     rebuildRows();
     refresh();
@@ -1181,7 +1298,7 @@ export function settingsMode(
       return;
     }
     s.editing = null;
-    s.editValue = '';
+    setEditValue('');
     s.previewTemplate = null;
     s.notice = null;
     if (newName !== oldName) {
@@ -1236,7 +1353,7 @@ export function settingsMode(
 
   function beginThemeImport(): void {
     s.editing = { kind: 'themeImport' };
-    s.editValue = '';
+    setEditValue('');
     s.notice = 'Paste theme JSON. Enter to import, Esc to cancel.';
     refresh();
   }
@@ -1254,7 +1371,7 @@ export function settingsMode(
     try {
       const newId = await s.themeActions.importTheme(json);
       s.editing = null;
-      s.editValue = '';
+      setEditValue('');
       s.theme = newId;
       setTheme(newId);
       s.notice = `Imported theme "${newId}" — Enter on the row to persist selection`;
@@ -1496,7 +1613,7 @@ export function settingsMode(
   function dismiss(): void {
     if (s.llmFormEditing) {
       s.llmFormEditing = false;
-      s.editValue = '';
+      setEditValue('');
       s.notice = null;
       refresh();
       return;
@@ -1508,7 +1625,7 @@ export function settingsMode(
     if (s.editing !== null) {
       // Esc during text-entry cancels the edit only (stay in the modal; no commit).
       s.editing = null;
-      s.editValue = '';
+      setEditValue('');
       s.notice = null;
       refresh();
       return;
@@ -1548,26 +1665,41 @@ export function settingsMode(
       { chord: { key: { return: true } }, intent: 'confirm', description: 'select' },
       { chord: { key: { escape: true } }, intent: 'cancel', description: 'close' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
+      { chord: { key: { delete: true } }, intent: 'deleteForward', description: 'delete' },
+      { chord: { key: { home: true } }, intent: 'home', description: 'line start' },
+      { chord: { key: { end: true } }, intent: 'end', description: 'line end' },
       { chord: { input: 'u', key: { meta: true } }, intent: 'deleteAll', description: 'clear' },
     ],
     onIntent(intent) {
       switch (intent) {
         case 'cursorUp':
           // Cursor moves are inert while capturing, editing, or awaiting a delete confirm.
-          if (!modalIsBusy()) {
+          if (s.llmFormEditing || s.editing !== null) {
+            applyEdit({ type: 'moveVisualUp' });
+            refresh();
+          } else if (!modalIsBusy()) {
             moveCursor(-1);
           }
           break;
         case 'cursorDown':
-          if (!modalIsBusy()) {
+          if (s.llmFormEditing || s.editing !== null) {
+            applyEdit({ type: 'moveVisualDown' });
+            refresh();
+          } else if (!modalIsBusy()) {
             moveCursor(1);
           }
           break;
         case 'enterPane':
-          enterSettingsPane();
+          if (s.llmFormEditing || s.editing !== null) {
+            applyEdit({ type: 'moveRight' });
+            refresh();
+          } else enterSettingsPane();
           break;
         case 'exitPane':
-          enterCategoryPane();
+          if (s.llmFormEditing || s.editing !== null) {
+            applyEdit({ type: 'moveLeft' });
+            refresh();
+          } else enterCategoryPane();
           break;
         case 'confirm':
           // Enter commits an in-progress text edit; otherwise acts on the focused row. Inert while a
@@ -1576,12 +1708,20 @@ export function settingsMode(
             commitFormTextEdit();
           } else if (s.llmForm !== null) {
             const form = s.llmForm;
-            const textField = (form.kind === 'provider' && (form.field <= 2 || (form.field >= 4 && form.field <= 6))) || (form.kind === 'policy' && form.field <= 1);
+            const textField =
+              (form.kind === 'provider' &&
+                (form.field <= 2 || (form.field >= 4 && form.field <= 6))) ||
+              (form.kind === 'policy' && form.field <= 1);
             if (textField) {
               beginFormTextEdit();
-            } else if ((form.kind === 'provider' && form.field === 3)) {
-              const sources: Array<'recommended' | 'discovered' | 'custom'> = ['recommended', 'discovered', 'custom'];
-              form.source = sources[(sources.indexOf(form.source) + 1) % sources.length] ?? 'recommended';
+            } else if (form.kind === 'provider' && form.field === 3) {
+              const sources: Array<'recommended' | 'discovered' | 'custom'> = [
+                'recommended',
+                'discovered',
+                'custom',
+              ];
+              form.source =
+                sources[(sources.indexOf(form.source) + 1) % sources.length] ?? 'recommended';
               refresh();
             } else if (form.field === (form.kind === 'provider' ? 7 : 2)) {
               saveLlmForm();
@@ -1603,19 +1743,37 @@ export function settingsMode(
           break;
         case 'backspace':
           if (s.llmFormEditing) {
-            s.editValue = deleteLastChar(s.editValue);
+            applyEdit({ type: 'backspace' });
             refresh();
           } else if (s.editing !== null) {
-            s.editValue = deleteLastChar(s.editValue);
+            applyEdit({ type: 'backspace' });
             refresh();
           }
           break;
         case 'deleteAll':
           if (s.llmFormEditing) {
-            s.editValue = '';
+            setEditValue('');
             refresh();
           } else if (s.editing !== null) {
-            s.editValue = '';
+            setEditValue('');
+            refresh();
+          }
+          break;
+        case 'deleteForward':
+          if (s.llmFormEditing || s.editing !== null) {
+            applyEdit({ type: 'deleteForward' });
+            refresh();
+          }
+          break;
+        case 'home':
+          if (s.llmFormEditing || s.editing !== null) {
+            applyEdit({ type: 'moveLineStart' });
+            refresh();
+          }
+          break;
+        case 'end':
+          if (s.llmFormEditing || s.editing !== null) {
+            applyEdit({ type: 'moveLineEnd' });
             refresh();
           }
           break;
@@ -1624,19 +1782,18 @@ export function settingsMode(
       }
     },
     onUncaptured(input: string, key: Key): boolean {
-      if (s.llmFormEditing) {
-        if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return) return false;
-        s.editValue = insertChar(s.editValue, input);
-        refresh();
-        return true;
-      }
-      // Text-entry mode (a provider api_key / base_url): printable chars extend the buffer. Structural
-      // keys (Enter/Esc/Backspace) ride the keymap.
-      if (s.editing !== null) {
-        if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return) {
-          return false;
-        }
-        s.editValue = insertChar(s.editValue, input);
+      if (s.llmFormEditing || s.editing !== null) {
+        const transition = applyEditorKey(s.editEditor, input, key, {
+          policy: singleLineEditorPolicy,
+          environment: {
+            width: currentEditorWidth(),
+            topology: plainTextTopology,
+            projection: plainTextProjection,
+          },
+        });
+        if (transition === null) return false;
+        s.editEditor = transition.state;
+        s.editValue = transition.state.text;
         refresh();
         return true;
       }
@@ -1870,13 +2027,9 @@ function SettingsDialog({
   const view = rowWindow(s.rows, s.cursor, visibleRowBudget(termRows));
   const llmSelection = s.categoryId === 'llm' ? s.rows[s.cursor] : undefined;
   const llmProvider =
-    llmSelection?.kind === 'llmProvider'
-      ? s.llm.providers?.[llmSelection.providerId]
-      : undefined;
+    llmSelection?.kind === 'llmProvider' ? s.llm.providers?.[llmSelection.providerId] : undefined;
   const llmPolicy =
-    llmSelection?.kind === 'llmPolicy'
-      ? s.llm.policies?.[llmSelection.policyId]
-      : undefined;
+    llmSelection?.kind === 'llmPolicy' ? s.llm.policies?.[llmSelection.policyId] : undefined;
 
   return (
     <Box
@@ -1965,64 +2118,189 @@ function SettingsDialog({
             <Box marginTop={1} flexDirection="column">
               {s.llmForm?.kind === 'provider' && (
                 <>
-                  <Text bold color={theme.heading}>{s.llmForm.providerId === null ? `Add ${s.llmForm.providerType === 'lemonade' ? 'Lemonade' : 'OpenAI-compatible'}` : 'Provider settings'}</Text>
-                  <LlmFormField label="Name" value={s.llmForm.name} editing={s.llmFormEditing && s.llmForm.field === 0} editValue={s.editValue} focused={s.activePane === 'editor' && s.llmForm.field === 0} theme={theme} />
-                  <Text color={s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2) ? theme.warning : theme.text} bold={s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2)} wrap="truncate-end">{`${s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2) ? '› ' : '  '}API key: ${s.llmForm.apiKey ? 'set' : 'not set'}; Endpoint`}</Text>
-                  <Text color={s.activePane === 'editor' && s.llmForm.field === 3 ? theme.warning : theme.text} bold={s.activePane === 'editor' && s.llmForm.field === 3}>{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Models source     ${s.llmForm.source}`}</Text>
-                  <LlmFormField label="Include models" value={s.llmForm.include} editing={s.llmFormEditing && s.llmForm.field === 4} editValue={s.editValue} focused={s.activePane === 'editor' && s.llmForm.field === 4} theme={theme} />
-                  <LlmFormField label="Exclude models" value={s.llmForm.exclude} editing={s.llmFormEditing && s.llmForm.field === 5} editValue={s.editValue} focused={s.activePane === 'editor' && s.llmForm.field === 5} theme={theme} />
-                  <LlmFormField label="Model overrides JSON" value={s.llmForm.overrides} editing={s.llmFormEditing && s.llmForm.field === 6} editValue={s.editValue} focused={s.activePane === 'editor' && s.llmForm.field === 6} theme={theme} />
-                  <Text color={theme.muted} wrap="truncate-end">{effectiveCatalogPreview(s.llmForm.include, s.llmForm.exclude, s.llmForm.overrides)}</Text>
-                  <Text color={s.activePane === 'editor' && s.llmForm.field === 7 ? theme.warning : theme.text} bold={s.activePane === 'editor' && s.llmForm.field === 7}>{`${s.activePane === 'editor' && s.llmForm.field === 7 ? '› ' : '  '}Save`}</Text>
-                  <Text color={s.activePane === 'editor' && s.llmForm.field === 8 ? theme.warning : theme.text} bold={s.activePane === 'editor' && s.llmForm.field === 8}>{`${s.activePane === 'editor' && s.llmForm.field === 8 ? '› ' : '  '}Cancel${s.llmForm.providerId !== null && !s.llmForm.builtin ? '  (d deletes)' : ''}`}</Text>
+                  <Text bold color={theme.heading}>
+                    {s.llmForm.providerId === null
+                      ? `Add ${s.llmForm.providerType === 'lemonade' ? 'Lemonade' : 'OpenAI-compatible'}`
+                      : 'Provider settings'}
+                  </Text>
+                  <LlmFormField
+                    label="Name"
+                    value={s.llmForm.name}
+                    editing={s.llmFormEditing && s.llmForm.field === 0}
+                    editEditor={s.editEditor}
+                    focused={s.activePane === 'editor' && s.llmForm.field === 0}
+                    theme={theme}
+                  />
+                  <Text
+                    color={
+                      s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2)
+                        ? theme.warning
+                        : theme.text
+                    }
+                    bold={
+                      s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2)
+                    }
+                    wrap="truncate-end"
+                  >{`${s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2) ? '› ' : '  '}API key: ${s.llmForm.apiKey ? 'set' : 'not set'}; Endpoint`}</Text>
+                  <Text
+                    color={
+                      s.activePane === 'editor' && s.llmForm.field === 3
+                        ? theme.warning
+                        : theme.text
+                    }
+                    bold={s.activePane === 'editor' && s.llmForm.field === 3}
+                  >{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Models source     ${s.llmForm.source}`}</Text>
+                  <LlmFormField
+                    label="Include models"
+                    value={s.llmForm.include}
+                    editing={s.llmFormEditing && s.llmForm.field === 4}
+                    editEditor={s.editEditor}
+                    focused={s.activePane === 'editor' && s.llmForm.field === 4}
+                    theme={theme}
+                  />
+                  <LlmFormField
+                    label="Exclude models"
+                    value={s.llmForm.exclude}
+                    editing={s.llmFormEditing && s.llmForm.field === 5}
+                    editEditor={s.editEditor}
+                    focused={s.activePane === 'editor' && s.llmForm.field === 5}
+                    theme={theme}
+                  />
+                  <LlmFormField
+                    label="Model overrides JSON"
+                    value={s.llmForm.overrides}
+                    editing={s.llmFormEditing && s.llmForm.field === 6}
+                    editEditor={s.editEditor}
+                    focused={s.activePane === 'editor' && s.llmForm.field === 6}
+                    theme={theme}
+                  />
+                  <Text color={theme.muted} wrap="truncate-end">
+                    {effectiveCatalogPreview(
+                      s.llmForm.include,
+                      s.llmForm.exclude,
+                      s.llmForm.overrides,
+                    )}
+                  </Text>
+                  <Text
+                    color={
+                      s.activePane === 'editor' && s.llmForm.field === 7
+                        ? theme.warning
+                        : theme.text
+                    }
+                    bold={s.activePane === 'editor' && s.llmForm.field === 7}
+                  >{`${s.activePane === 'editor' && s.llmForm.field === 7 ? '› ' : '  '}Save`}</Text>
+                  <Text
+                    color={
+                      s.activePane === 'editor' && s.llmForm.field === 8
+                        ? theme.warning
+                        : theme.text
+                    }
+                    bold={s.activePane === 'editor' && s.llmForm.field === 8}
+                  >{`${s.activePane === 'editor' && s.llmForm.field === 8 ? '› ' : '  '}Cancel${s.llmForm.providerId !== null && !s.llmForm.builtin ? '  (d deletes)' : ''}`}</Text>
                 </>
               )}
               {s.llmForm?.kind === 'policy' && (
                 <>
-                  <Text bold color={theme.heading}>{s.llmForm.policyId === null ? 'Create Policy' : 'Custom policy'}</Text>
-                  <LlmFormField label="Name" value={s.llmForm.name} editing={s.llmFormEditing && s.llmForm.field === 0} editValue={s.editValue} focused={s.activePane === 'editor' && s.llmForm.field === 0} theme={theme} />
-                  <LlmFormField label="Groups JSON" value={s.llmForm.groups} editing={s.llmFormEditing && s.llmForm.field === 1} editValue={s.editValue} focused={s.activePane === 'editor' && s.llmForm.field === 1} theme={theme} />
-                  <Text color={s.activePane === 'editor' && s.llmForm.field === 2 ? theme.warning : theme.text} bold={s.activePane === 'editor' && s.llmForm.field === 2}>{`${s.activePane === 'editor' && s.llmForm.field === 2 ? '› ' : '  '}Save`}</Text>
-                  <Text color={s.activePane === 'editor' && s.llmForm.field === 3 ? theme.warning : theme.text} bold={s.activePane === 'editor' && s.llmForm.field === 3}>{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Cancel${s.llmForm.policyId !== null ? '  (d deletes)' : ''}`}</Text>
+                  <Text bold color={theme.heading}>
+                    {s.llmForm.policyId === null ? 'Create Policy' : 'Custom policy'}
+                  </Text>
+                  <LlmFormField
+                    label="Name"
+                    value={s.llmForm.name}
+                    editing={s.llmFormEditing && s.llmForm.field === 0}
+                    editEditor={s.editEditor}
+                    focused={s.activePane === 'editor' && s.llmForm.field === 0}
+                    theme={theme}
+                  />
+                  <LlmFormField
+                    label="Groups JSON"
+                    value={s.llmForm.groups}
+                    editing={s.llmFormEditing && s.llmForm.field === 1}
+                    editEditor={s.editEditor}
+                    focused={s.activePane === 'editor' && s.llmForm.field === 1}
+                    theme={theme}
+                  />
+                  <Text
+                    color={
+                      s.activePane === 'editor' && s.llmForm.field === 2
+                        ? theme.warning
+                        : theme.text
+                    }
+                    bold={s.activePane === 'editor' && s.llmForm.field === 2}
+                  >{`${s.activePane === 'editor' && s.llmForm.field === 2 ? '› ' : '  '}Save`}</Text>
+                  <Text
+                    color={
+                      s.activePane === 'editor' && s.llmForm.field === 3
+                        ? theme.warning
+                        : theme.text
+                    }
+                    bold={s.activePane === 'editor' && s.llmForm.field === 3}
+                  >{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Cancel${s.llmForm.policyId !== null ? '  (d deletes)' : ''}`}</Text>
                 </>
               )}
               {s.llmForm === null && (
                 <>
-              {llmSelection?.kind === 'llmGlobal' && (
-                <>
-                  <Text bold color={theme.heading}>LLM Functionality</Text>
-                  <Text color={theme.text}>{`Enabled           ${s.llm.disabled ? '[ ]' : '[x]'}`}</Text>
-                  <Text color={theme.muted}>Disabling preserves providers and policies.</Text>
-                </>
-              )}
-              {llmSelection?.kind === 'llmProvider' && (
-                <>
-                  <Text bold color={theme.heading}>{llmProvider?.name ?? llmSelection.providerId}</Text>
-                  <Text color={theme.text}>{`Enabled           ${(llmProvider?.enabled ?? false) ? '[x]' : '[ ]'}`}</Text>
-                  <Text color={theme.text}>{`Endpoint          ${llmProvider?.endpoint ?? 'default'}`}</Text>
-                  <Text color={theme.text}>{`API Key           ${llmProvider?.auth?.api_key ?? llmProvider?.api_key ? 'set' : 'not set'}`}</Text>
-                  <Text color={theme.text}>{`Models            ${llmProvider?.models?.source ?? 'recommended'}`}</Text>
-                </>
-              )}
-              {llmSelection?.kind === 'llmPolicy' && (
-                <>
-                  <Text bold color={theme.heading}>{llmPolicy?.name ?? llmSelection.policyId}</Text>
-                  <Text color={theme.text}>{`Active            ${s.llm.active_policy === llmSelection.policyId ? '[x]' : '[ ]'}`}</Text>
-                  <Text color={theme.muted}>{llmSelection.builtin ? 'Built-in policy (read-only)' : 'Custom policy'}</Text>
-                </>
-              )}
-              {llmSelection?.kind === 'llmAddProvider' && (
-                <>
-                  <Text bold color={theme.heading}>{llmSelection.providerType === 'lemonade' ? 'Add Lemonade' : 'Add OpenAI-compatible'}</Text>
-                  <Text color={theme.muted}>Enter opens the configuration form.</Text>
-                </>
-              )}
-              {llmSelection?.kind === 'llmCreatePolicy' && (
-                <>
-                  <Text bold color={theme.heading}>Create Policy</Text>
-                  <Text color={theme.muted}>Enter opens the policy creation form.</Text>
-                </>
-              )}
+                  {llmSelection?.kind === 'llmGlobal' && (
+                    <>
+                      <Text bold color={theme.heading}>
+                        LLM Functionality
+                      </Text>
+                      <Text
+                        color={theme.text}
+                      >{`Enabled           ${s.llm.disabled ? '[ ]' : '[x]'}`}</Text>
+                      <Text color={theme.muted}>Disabling preserves providers and policies.</Text>
+                    </>
+                  )}
+                  {llmSelection?.kind === 'llmProvider' && (
+                    <>
+                      <Text bold color={theme.heading}>
+                        {llmProvider?.name ?? llmSelection.providerId}
+                      </Text>
+                      <Text
+                        color={theme.text}
+                      >{`Enabled           ${(llmProvider?.enabled ?? false) ? '[x]' : '[ ]'}`}</Text>
+                      <Text
+                        color={theme.text}
+                      >{`Endpoint          ${llmProvider?.endpoint ?? 'default'}`}</Text>
+                      <Text
+                        color={theme.text}
+                      >{`API Key           ${(llmProvider?.auth?.api_key ?? llmProvider?.api_key) ? 'set' : 'not set'}`}</Text>
+                      <Text
+                        color={theme.text}
+                      >{`Models            ${llmProvider?.models?.source ?? 'recommended'}`}</Text>
+                    </>
+                  )}
+                  {llmSelection?.kind === 'llmPolicy' && (
+                    <>
+                      <Text bold color={theme.heading}>
+                        {llmPolicy?.name ?? llmSelection.policyId}
+                      </Text>
+                      <Text
+                        color={theme.text}
+                      >{`Active            ${s.llm.active_policy === llmSelection.policyId ? '[x]' : '[ ]'}`}</Text>
+                      <Text color={theme.muted}>
+                        {llmSelection.builtin ? 'Built-in policy (read-only)' : 'Custom policy'}
+                      </Text>
+                    </>
+                  )}
+                  {llmSelection?.kind === 'llmAddProvider' && (
+                    <>
+                      <Text bold color={theme.heading}>
+                        {llmSelection.providerType === 'lemonade'
+                          ? 'Add Lemonade'
+                          : 'Add OpenAI-compatible'}
+                      </Text>
+                      <Text color={theme.muted}>Enter opens the configuration form.</Text>
+                    </>
+                  )}
+                  {llmSelection?.kind === 'llmCreatePolicy' && (
+                    <>
+                      <Text bold color={theme.heading}>
+                        Create Policy
+                      </Text>
+                      <Text color={theme.muted}>Enter opens the policy creation form.</Text>
+                    </>
+                  )}
                 </>
               )}
             </Box>
@@ -2135,11 +2413,20 @@ function rowKey(row: SettingsRow): string {
 }
 
 function parseModelList(value: string): string[] {
-  return [...new Set(value.split(',').map((model) => model.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      value
+        .split(',')
+        .map((model) => model.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function effectiveCatalogPreview(include: string, exclude: string, overrides: string): string {
-  const enabled = parseModelList(include).filter((model) => !parseModelList(exclude).includes(model));
+  const enabled = parseModelList(include).filter(
+    (model) => !parseModelList(exclude).includes(model),
+  );
   let overrideCount = 0;
   try {
     overrideCount = Object.keys(JSON.parse(overrides || '{}') as object).length;
@@ -2150,20 +2437,40 @@ function effectiveCatalogPreview(include: string, exclude: string, overrides: st
 }
 
 function LlmFormField({
-  label, value, editing, editValue, focused, theme,
+  label,
+  value,
+  editing,
+  editEditor,
+  focused,
+  theme,
 }: {
   readonly label: string;
   readonly value: string;
   readonly editing: boolean;
-  readonly editValue: string;
+  readonly editEditor: TextEditorState;
   readonly focused: boolean;
   readonly theme: ReturnType<typeof useTheme>;
 }): JSX.Element {
   return (
     <Box flexShrink={0}>
-      <Text color={focused ? theme.warning : theme.text} bold={focused}>{`${focused ? '› ' : '  '}${label}`}</Text>
+      <Text
+        color={focused ? theme.warning : theme.text}
+        bold={focused}
+      >{`${focused ? '› ' : '  '}${label}`}</Text>
       <Text color={theme.muted}>{'  '}</Text>
-      {editing ? <TextInput value={editValue} placeholder={label} focused color={theme.text} /> : <Text color={theme.muted} wrap="truncate-end">{value || 'not set'}</Text>}
+      {editing ? (
+        <TextEditorDisplay
+          state={editEditor}
+          width={SETTINGS_LLM_FORM_EDITOR_WIDTH}
+          placeholder={label}
+          focused
+          color={theme.text}
+        />
+      ) : (
+        <Text color={theme.muted} wrap="truncate-end">
+          {value || 'not set'}
+        </Text>
+      )}
     </Box>
   );
 }
@@ -2243,7 +2550,13 @@ function RowView({
           {importing ? 'paste JSON ' : '+ Import Theme'}
         </Text>
         {importing ? (
-          <TextInput value={s.editValue} placeholder="(json)" focused color={theme.text} />
+          <TextEditorDisplay
+            state={s.editEditor}
+            width={SETTINGS_THEME_IMPORT_EDITOR_WIDTH}
+            placeholder="(json)"
+            focused
+            color={theme.text}
+          />
         ) : null}
       </Box>
     );
@@ -2580,7 +2893,13 @@ function RowView({
           </Text>
           <Text color={theme.muted}>{'  '}</Text>
           {editing ? (
-            <TextInput value={s.editValue} placeholder="https://…" focused color={theme.text} />
+            <TextEditorDisplay
+              state={s.editEditor}
+              width={SETTINGS_PROVIDER_EDITOR_WIDTH}
+              placeholder="https://…"
+              focused
+              color={theme.text}
+            />
           ) : (
             <Text color={theme.muted}>{provenance}</Text>
           )}
@@ -2599,7 +2918,13 @@ function RowView({
         </Text>
         <Text color={theme.muted}>{'  '}</Text>
         {editing ? (
-          <TextInput value={s.editValue} placeholder="(api key)" focused color={theme.text} />
+          <TextEditorDisplay
+            state={s.editEditor}
+            width={SETTINGS_PROVIDER_EDITOR_WIDTH}
+            placeholder="(api key)"
+            focused
+            color={theme.text}
+          />
         ) : (
           <Text color={viaEnv ? theme.muted : theme.text}>{provenance}</Text>
         )}
@@ -2673,7 +2998,8 @@ function RowView({
   }
 
   if (row.kind === 'llmFeaturePolicy') {
-    const policyId = s.llm.feature_policies?.[row.feature] ?? s.llm.active_policy ?? 'local-then-free';
+    const policyId =
+      s.llm.feature_policies?.[row.feature] ?? s.llm.active_policy ?? 'local-then-free';
     return (
       <Box flexShrink={0}>
         <Text color={focused ? theme.warning : theme.text} bold={focused} wrap="truncate-end">
@@ -2745,8 +3071,9 @@ function RowView({
           {creatingName ? 'name ' : creatingBody ? `body :${creatingBodyName}: ` : '+ New Template'}
         </Text>
         {creatingName || creatingBody ? (
-          <TextInput
-            value={s.editValue}
+          <TextEditorDisplay
+            state={s.editEditor}
+            width={SETTINGS_TEMPLATE_EDITOR_WIDTH}
             placeholder={creatingName ? '(name)' : '(body)'}
             focused
             color={theme.text}
@@ -2767,7 +3094,13 @@ function RowView({
           {`:${renaming ? '' : row.name}`}
         </Text>
         {renaming ? (
-          <TextInput value={s.editValue} placeholder="(name)" focused color={theme.text} />
+          <TextEditorDisplay
+            state={s.editEditor}
+            width={SETTINGS_TEMPLATE_EDITOR_WIDTH}
+            placeholder="(name)"
+            focused
+            color={theme.text}
+          />
         ) : (
           <Text color={confirming ? theme.warning : theme.muted}>
             {confirming ? '  delete? (y/n)' : ''}

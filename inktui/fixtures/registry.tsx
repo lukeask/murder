@@ -23,7 +23,7 @@ import {
   renderResourceEntry,
   renderResourceHeader,
 } from '../src/components/ResourceRow.js';
-import { MultiLineText, TextInput } from '../src/components/TextInput.js';
+import { TextInput } from '../src/components/TextInput.js';
 import { layoutPlainText } from '../src/render/documentLayout.js';
 import { getTheme } from '../src/theme/themeStore.js';
 import { crowsSurfaceRowsFromFixture } from './crowsPanelFixture.js';
@@ -227,7 +227,7 @@ function ChatInputFixture({
         bold={focused}
       />
       <Box borderStyle={style} borderTop={false} borderColor={borderColor} paddingX={1}>
-        <MultiLineText value={data.value} placeholder={data.placeholder} focused={focused} />
+        <TextInput value={data.value} placeholder={data.placeholder} focused={focused} />
       </Box>
       <PaneBorderBottom
         borderColor={borderColor}
@@ -565,7 +565,7 @@ export const paneFixtures: readonly PaneFixture[] = [
   },
   {
     id: 'text-input',
-    description: 'Controlled TextInput and MultiLineText states.',
+    description: 'Controlled shared text-editor display states.',
     sizes: BAR_SIZES,
     data: {
       empty: { value: '', placeholder: 'Enter name...' },
@@ -578,7 +578,7 @@ export const paneFixtures: readonly PaneFixture[] = [
           placeholder={(data as { value: string; placeholder: string }).placeholder}
           focused={focused}
         />
-        <MultiLineText
+        <TextInput
           value={
             (data as { value: string; placeholder: string }).value.length > 0
               ? `${(data as { value: string; placeholder: string }).value}\nsecond line`

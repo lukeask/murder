@@ -206,18 +206,29 @@ export class StdinShim extends Readable implements TokenSource {
     }
   }
 
-  /** Lift a wheel notch out of an SGR mouse report into a `wheel` event; all other mouse reports
-   * (clicks, drags, motion) are swallowed — mouse reporting is enabled for scrolling only, and Ink
-   * has no mouse handling, so forwarding them as bytes would be noise at best. The wheel buttons are
-   * SGR codes 64 (up) / 65 (down); the +4/+8/+16 modifier and +32 motion bits are masked off so a
-   * shift/ctrl-scroll still scrolls. */
+  /** Lift a wheel notch into a `wheel` event (swallowed — focus-based scroll owns the wheel). Press /
+   * release / drag reports are re-encoded and forwarded so `@ink-tools/ink-mouse` can hit-test clicks
+   * on Ink elements. Pure motion (`button & 32` with no button) is swallowed to avoid flooding Ink
+   * when a provider also enables any-event tracking (xterm 1003). Wheel buttons are SGR 64/65; the
+   * +4/+8/+16 modifier and +32 motion bits are masked off so a shift/ctrl-scroll still scrolls. */
   private emitMouse(token: Extract<CsiToken, { type: 'mouse' }>): void {
     const base = token.button & 0xc3; // keep the button/wheel bits (0,1,6,7); drop modifier + motion
     if (base === 64) {
       this.emit('wheel', { direction: 'up' } satisfies Wheel);
-    } else if (base === 65) {
-      this.emit('wheel', { direction: 'down' } satisfies Wheel);
+      return;
     }
+    if (base === 65) {
+      this.emit('wheel', { direction: 'down' } satisfies Wheel);
+      return;
+    }
+    // Pure pointer motion (no button): drop. Press/release/drag still reach ink-mouse.
+    const isMotion = (token.button & 32) !== 0;
+    const noButton = (token.button & 3) === 3;
+    if (isMotion && noButton) {
+      return;
+    }
+    const final = token.pressed ? 'M' : 'm';
+    this.forward(Buffer.from(`\x1b[<${token.button};${token.x};${token.y}${final}`));
   }
 
   private emitKey(token: Extract<CsiToken, { type: 'key' }>): void {

@@ -28,7 +28,10 @@ export const ReportsController = memo(function ReportsController({
   const toggleDoc = useDocView('report');
   const view = useReportsView(reports, favorites);
   const theme = useTheme();
-  const { cursor, moveDown, moveUp } = usePaneUiClampedCursor('reports', view.rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor(
+    'reports',
+    view.rows.length,
+  );
 
   useEffect(() => {
     void refresh();
@@ -37,6 +40,17 @@ export const ReportsController = memo(function ReportsController({
   const rowNameAtCursor = useCallback(
     (): string | null => view.rows[cursor]?.name ?? null,
     [cursor, view.rows],
+  );
+
+  const onRowClick = useCallback(
+    (index: number) => {
+      setCursor(index);
+      const name = view.rows[index]?.name;
+      if (name !== undefined) {
+        toggleDoc(name);
+      }
+    },
+    [setCursor, toggleDoc, view.rows],
   );
 
   const keymap: PanelKeymap<ReportsIntent> = useMemo(
@@ -101,6 +115,7 @@ export const ReportsController = memo(function ReportsController({
         cursor={cursor}
         status={view.status}
         error={view.error}
+        onRowClick={onRowClick}
       />
     </AllocatedPaneFrame>
   );
