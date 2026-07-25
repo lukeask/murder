@@ -40,6 +40,7 @@
  */
 
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import { SPAN_RE } from './chat/chatSpans.js';
 import {
   type BufferState,
   backspace as bufBackspace,
@@ -54,23 +55,7 @@ import {
   moveRight as bufMoveRight,
   EMPTY_BUFFER,
 } from './chatBuffer.js';
-
-/** The opening PUA delimiter of a marked image span. Written as an explicit escape (NOT a literal
- * invisible glyph) so an editor/copy-paste can never silently strip it — an empty delimiter makes the
- * span scanner's `indexOf('')` loop forever. */
-export const SPAN_OPEN = '\u{E000}';
-/** The closing PUA delimiter of a marked image span. Explicit escape for the same reason as
- * {@link SPAN_OPEN}. */
-export const SPAN_CLOSE = '\u{E001}';
-
-/** Matches one whole marked span, capturing the inner id. Global so {@link spanLabels} / expansion can
- * walk every span. The id is any run of non-delimiter chars (ids are uuid+timestamp stems — no PUA). */
-const SPAN_RE = new RegExp(`${SPAN_OPEN}([^${SPAN_OPEN}${SPAN_CLOSE}]*)${SPAN_CLOSE}`, 'g');
-
-/** Wrap an image id into its marked-span text form: `U+E000 <id> U+E001`. */
-export function makeSpan(id: string): string {
-  return `${SPAN_OPEN}${id}${SPAN_CLOSE}`;
-}
+export { makeSpan, SPAN_CLOSE, SPAN_OPEN } from './chat/chatSpans.js';
 
 /** The chat-input buffer state: the in-progress message + cursor, its edit/motion verbs, and the
  * murder-wide-history navigation state/verbs. */
@@ -153,14 +138,7 @@ export type ChatInputStoreApi = StoreApi<ChatInputState>;
  * `{ id, label }` — the Nth span (1-based) gets `[Image N]`. Pure: the render layer interleaves these
  * with the surrounding plain text, so deletion renumbers for free (counting is positional, not stored).
  */
-export function spanLabels(text: string): readonly { id: string; label: string }[] {
-  const out: { id: string; label: string }[] = [];
-  for (const match of text.matchAll(SPAN_RE)) {
-    const id = match[1] ?? '';
-    out.push({ id, label: `[Image ${out.length + 1}]` });
-  }
-  return out;
-}
+export { spanLabels } from './chat/chatSpans.js';
 
 /**
  * Expand the buffer for submission: replace each marked span with its outgoing form, derived from the
@@ -272,7 +250,7 @@ export function createChatInputStore(): ChatInputStoreApi {
           set({
             stashedDraft: buffer,
             historyIndex: entries.length - 1,
-            buffer: { text: entry, cursor: entry.length },
+            buffer: { text: entry, cursor: entry.length, desiredVisualColumn: null },
             text: entry,
             cursor: entry.length,
           });
@@ -285,7 +263,7 @@ export function createChatInputStore(): ChatInputStoreApi {
         const entry = entries[idx] ?? '';
         set({
           historyIndex: idx,
-          buffer: { text: entry, cursor: entry.length },
+          buffer: { text: entry, cursor: entry.length, desiredVisualColumn: null },
           text: entry,
           cursor: entry.length,
         });
@@ -311,7 +289,7 @@ export function createChatInputStore(): ChatInputStoreApi {
         const entry = entries[idx] ?? '';
         set({
           historyIndex: idx,
-          buffer: { text: entry, cursor: entry.length },
+          buffer: { text: entry, cursor: entry.length, desiredVisualColumn: null },
           text: entry,
           cursor: entry.length,
         });

@@ -56,8 +56,10 @@ import {
   useFocusStore,
   useMeasureFocus,
 } from '../hooks/useInputStores.js';
-import { type BufferState, layout as bufferLayout } from '../input/chatBuffer.js';
-import { SPAN_CLOSE, SPAN_OPEN } from '../input/chatInputStore.js';
+import { type BufferState } from '../input/chatBuffer.js';
+import { SPAN_CLOSE, SPAN_OPEN } from '../input/chat/chatSpans.js';
+import { chatProjection } from '../input/chat/chatProjection.js';
+import { TextEditorDisplay } from './TextEditorDisplay.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { isDefaultFavorited } from '../selectors/agentIdentity.js';
 import {
@@ -118,55 +120,15 @@ function BufferDisplay({
   readonly placeholder: string;
   readonly cursorOnGlyph: boolean;
 }): React.JSX.Element {
-  const theme = useTheme();
-  if (buffer.text.length === 0) {
-    // Empty buffer → phantom placeholder; focused puts the cursor on its first glyph.
-    if (!focused || placeholder.length === 0) {
-      return <Text dimColor>{placeholder.length === 0 ? ' ' : placeholder}</Text>;
-    }
-    return (
-      <Text dimColor>
-        <Text inverse>{placeholder.slice(0, 1)}</Text>
-        {placeholder.slice(1)}
-      </Text>
-    );
-  }
-  const lay = bufferLayout(buffer, width);
   return (
-    <Box flexDirection="column">
-      {lay.rows.map((row, rowIndex) => {
-        // Stable-ish key: the row's buffer offset + index (offsets repeat only on empty rows).
-        const key = `${row.startBufferOffset}:${rowIndex}`;
-        if (!focused || rowIndex !== lay.cursorRow) {
-          return (
-            <Box key={key} flexShrink={0}>
-              <Text color={theme.text}>{row.text.length === 0 ? ' ' : row.text}</Text>
-            </Box>
-          );
-        }
-        // The cursor row: split before/at/after the cursor column so the block highlights one cell.
-        const col = lay.cursorCol;
-        const before = row.text.slice(0, col);
-        const atChar = row.text.slice(col, col + 1);
-        const after = row.text.slice(col + 1);
-        return (
-          <Box key={key} flexShrink={0}>
-            <Text color={theme.text}>
-              {before}
-              {cursorOnGlyph ? (
-                // Block ON the glyph (vim normal): inverse the char under the cursor (or a space at
-                // end-of-row so the block is still visible).
-                <Text inverse>{atChar.length === 0 ? ' ' : atChar}</Text>
-              ) : (
-                // Block AT the position (insert / non-vim): an inverse cell, then the rest verbatim.
-                <Text inverse> </Text>
-              )}
-              {cursorOnGlyph ? after : atChar + after}
-            </Text>
-          </Box>
-        );
-      })}
-    </Box>
+    <TextEditorDisplay
+      state={{ ...buffer, desiredVisualColumn: buffer.desiredVisualColumn ?? null }}
+      width={width}
+      projection={chatProjection}
+      focused={focused}
+      placeholder={placeholder}
+      cursorOnGlyph={cursorOnGlyph}
+    />
   );
 }
 

@@ -25,6 +25,7 @@
     "contracts:check": "cd .. && python tools/generate_application_protocol.py --check"
   },
   "dependencies": {
+    "@ink-tools/ink-mouse": "^2.1.0",
     "ink": "^7.0.5",
     "react": "^19.2.0",
     "remark-gfm": "^4.0.1",
