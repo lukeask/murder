@@ -12,14 +12,20 @@
  *
  * The bus is reached directly here (not via a store action) because tmux frames are streaming
  * DISPLAY data the store does not own — the same exception inktui's TmuxMode makes. The subscription
- * is torn down on unmount / agent change.
+ * is torn down on unmount / session change.
+ *
+ * Attach requires a real service session UUID — never fall back to an agent id (non-UUID).
  */
 
 import Convert from 'ansi-to-html';
 import { useEffect, useMemo, useState } from 'react';
 import { useApplicationClient } from '../../application/ApplicationClientContext.js';
 
-export function TmuxFrameView({ agentId }: { readonly agentId: string }): React.JSX.Element {
+export function TmuxFrameView({
+  sessionId,
+}: {
+  readonly sessionId: string | null;
+}): React.JSX.Element {
   const bus = useApplicationClient();
   const [frame, setFrame] = useState<string>('');
 
@@ -29,14 +35,19 @@ export function TmuxFrameView({ agentId }: { readonly agentId: string }): React.
 
   useEffect(() => {
     setFrame('');
-    const off = bus.attachTerminal(agentId, (terminalFrame) => {
+    if (sessionId === null) return;
+    const off = bus.attachTerminal(sessionId, (terminalFrame) => {
       // Snapshot-only stream: ignore non-reset / non-frame updates.
       if (terminalFrame.type === 'terminal.frame' && terminalFrame.reset) {
         setFrame(terminalFrame.data);
       }
     });
     return off;
-  }, [bus, agentId]);
+  }, [bus, sessionId]);
+
+  if (sessionId === null) {
+    return <div className="mds-tmux__empty">No terminal session for this crow.</div>;
+  }
 
   if (frame === '') {
     return <div className="mds-tmux__empty">Waiting for the agent's terminal…</div>;

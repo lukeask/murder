@@ -5,24 +5,49 @@ framework-agnostic core** of `inktui/` (store, selectors, theme, wire protocol) 
 reimplements the parts that are terminal-specific: the transport (WebSocket instead of a Unix
 socket) and the renderer (DOM instead of Ink).
 
-This is the **Wave-1 foundation**: it proves the data spine end-to-end with a minimal UI (header +
-live roster + live tickets). The full UI port is a later wave.
+The UI is a **cockpit**: header, stage (chat + terminal), and side panels (roster, tickets, docs,
+settings, and related views) wired to the same application protocol the Ink client uses.
 
 ## Commands
 
 ```sh
 npm install          # from webui/
-npm run dev          # Vite dev server; proxies /api/ws → ws://localhost:8473
+npm run dev          # Vite dev server; proxies /api/ws → live service (see env below)
 npm run build        # tsc --noEmit + vite build → webui/dist (index.html + hashed assets)
 npm run preview      # serve the production build locally
-npm run test         # vitest (WsBusClient + cssVars)
+npm run test         # vitest (ApplicationWebSocketClient + cssVars + component tests)
 npm run typecheck    # tsc --noEmit across webui + the aliased @core tree
 ```
 
-`npm run dev` expects the bus bridge running locally: `murder web up -f` on **port 8473** (the dev
-proxy target — override with `VITE_BUS_PROXY_PORT`). `npm run build` emits **`webui/dist`**, which
-the Python bridge ships as `murder/_webui/` and serves; in that served context `/api/ws` is
-same-origin so no proxy is involved.
+### Dev against a live service
+
+There is **no** unix-socket / bus bridge. The murder service serves browser assets and
+`GET /api/ws` itself. `murder web up` ensures the service is running and prints the **browser base
+URL** (e.g. `http://127.0.0.1:NNNN`). The WebSocket is `{base}/api/ws` (also published as
+`websocket_url` on the service session registry).
+
+For `npm run dev`, point Vite's `/api/ws` proxy at that service:
+
+```sh
+# From the repo root — print the browser base URL, then set the WS URL for the proxy:
+BASE="$(murder web up)"   # e.g. http://127.0.0.1:NNNN
+export VITE_APPLICATION_WS_URL="${BASE/http/ws}/api/ws"
+# or explicitly: export VITE_APPLICATION_WS_PROXY=ws://127.0.0.1:NNNN
+
+cd webui && npm run dev
+```
+
+Env resolution (first match wins):
+
+| Variable | Meaning |
+| --- | --- |
+| `VITE_APPLICATION_WS_PROXY` | Proxy origin only, e.g. `ws://127.0.0.1:NNNN` |
+| `VITE_APPLICATION_WS_URL` | Full WS URL, e.g. `ws://127.0.0.1:NNNN/api/ws` (host/port extracted) |
+| `VITE_BUS_PROXY_PORT` | Deprecated alias: `ws://localhost:$PORT` |
+
+If none are set, the `/api/ws` proxy is omitted. `npm run build` emits **`webui/dist`**, which the
+Python service ships as `murder/_webui/` and serves; in that context `/api/ws` is same-origin so no
+proxy is involved.
 
 ## Reuse strategy — the `@core` alias
 
@@ -33,15 +58,15 @@ imports the portable core straight off the inktui tree — there is no copy, no 
 | --- | --- |
 | `@core/store/store` (`createAppStore`) + every slice | zustand-vanilla only; no ink, no node |
 | `@core/hooks/useAppStore` (provider + hook) | react + `zustand/traditional` only |
-| `@core/generated/applicationProtocol`, `@core/bus/BusClient` | generated public wire + client seam |
+| `@core/generated/applicationProtocol`, `@core/application/*` | generated public wire + client seam |
 | `@core/selectors/*` | pure derived/formatting |
 | `@core/theme/buildTheme`, `@core/theme/palettes`, `@core/theme/themeStore` | pure + zustand |
 
 **Reimplemented in `webui/src` (the non-portable parts):**
 
-- `src/bus/WsBusClient.ts` — the `BusClient` over a browser `WebSocket`. It consumes the generated
-  application protocol and owns request correlation, projection/notification cursors, independent
-  terminal attachments, reconnect/backoff, and status hooks.
+- `src/application/ApplicationWebSocketClient.ts` — browser `WebSocket` transport for the closed
+  application protocol. Owns request correlation, projection subscriptions, terminal attach/detach,
+  reconnect/backoff, and status hooks. Mirrors `inktui`'s client; talks to the service's `/api/ws`.
 - `src/theme/cssVars.ts` + `src/theme/useThemeCssVars.ts` — project the semantic `Theme` onto CSS
   custom properties (the Ink UI paints `<Text color=…>`; the web UI paints via CSS vars).
 - `src/App.tsx`, `src/main.tsx` — DOM renderer + entrypoint (mirror of inktui's `index.tsx`).
@@ -59,23 +84,23 @@ and break hooks; `vite.config.ts` sets `resolve.dedupe: ['react','react-dom']` s
 inktui TS sources, and `tsconfig` uses `moduleResolution: bundler` so the core's `.js` import
 specifiers resolve back onto the `.ts` sources.
 
-## WsBusClient — the bridge contract
+## ApplicationWebSocketClient — the service contract
 
-The Python bridge is a **dumb 1:1 relay**; the browser implements the full protocol.
+The service owns the typed WebSocket endpoint; the browser speaks the application protocol directly
+(no relay framing).
 
-- **Endpoint:** `GET /api/ws` on the serving origin. Default URL:
+- **Endpoint:** `GET /api/ws` on the serving origin. Default URL in the browser:
   `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws`. Override via the
-  `url` option (dev uses the Vite proxy, so same-origin `/api/ws` still works).
-- **Outbound:** each protocol envelope is **one WS text frame**, `JSON.stringify(envelope)` with
-  **no trailing newline** — the bridge appends the `\n` when writing to the unix socket.
-- **Inbound:** each WS text frame is **exactly one complete JSON envelope**; `JSON.parse` directly.
-  No line buffering on the browser side (WebSocket is message-framed, unlike the raw socket).
+  client `url` option (dev uses the Vite proxy, so same-origin `/api/ws` still works).
+- **Outbound / inbound:** each protocol envelope is **one WS text frame** (`JSON.stringify` /
+  `JSON.parse`). No line buffering — WebSocket is message-framed.
 
 The first frame is `client.hello` with `APPLICATION_PROTOCOL_VERSION` and a stable `client_id`
 persisted in `localStorage`. Queries and commands use correlated `request`/`reply` messages;
-projection and error-notification subscriptions keep independent cursors across reconnects; terminal
-output uses `terminal.attach`/`terminal.frame`/`terminal.detach`. Reconnect uses capped exponential
-backoff with full jitter, while a version mismatch is permanent.
+projection subscriptions keep independent cursors across reconnects; terminal output uses
+`terminal.attach`/`terminal.frame`/`terminal.detach` with a real session UUID (`sessionId === null`
+skips attach). Reconnect uses capped exponential backoff with full jitter; a version mismatch is
+permanent.
 
 ## Styling — CSS custom properties only
 

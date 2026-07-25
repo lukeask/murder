@@ -13,6 +13,13 @@ import { render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { ApplicationClientProvider } from '../src/application/ApplicationClientContext.js';
 import type { ApplicationWebSocketClient } from '../src/application/ApplicationWebSocketClient.js';
+import { CreationDialogsProvider, type CreationDialogsApi } from '../src/creationDialogs.js';
+
+const noopCreationDialogs: CreationDialogsApi = {
+  openSpawn: () => {},
+  openTicket: () => {},
+  openPlan: () => {},
+};
 
 export function makeStore(): { store: AppStoreApi; bus: FakeApplicationClient } {
   const bus = new FakeApplicationClient();
@@ -24,13 +31,21 @@ export function makeStore(): { store: AppStoreApi; bus: FakeApplicationClient } 
  * the ApplicationClientProvider expects — components that subscribe via `useApplicationClient` use only the base `subscribe`. */
 export function renderWithStore(
   ui: ReactNode,
-  opts?: { store?: AppStoreApi; bus?: FakeApplicationClient },
+  opts?: {
+    store?: AppStoreApi;
+    bus?: FakeApplicationClient;
+    creationDialogs?: CreationDialogsApi;
+  },
 ): { store: AppStoreApi; bus: FakeApplicationClient } {
   const bus = opts?.bus ?? new FakeApplicationClient();
   const store = opts?.store ?? createAppStore(bus).store;
   render(
     <AppStoreProvider value={store}>
-      <ApplicationClientProvider value={bus as unknown as ApplicationWebSocketClient}>{ui}</ApplicationClientProvider>
+      <ApplicationClientProvider value={bus as unknown as ApplicationWebSocketClient}>
+        <CreationDialogsProvider value={opts?.creationDialogs ?? noopCreationDialogs}>
+          {ui}
+        </CreationDialogsProvider>
+      </ApplicationClientProvider>
     </AppStoreProvider>,
   );
   return { store, bus };

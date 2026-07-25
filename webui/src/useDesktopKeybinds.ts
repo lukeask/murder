@@ -1,7 +1,8 @@
 /**
  * Desktop keyboard shortcuts for the web cockpit — mirrors the Ink dispatcher's global chords that
- * have a sensible web analogue (focus chat, scroll a panel into view, cycle the recipient target).
- * Respects the persisted command modifier from settings (`alt` / `ctrl` / `both`).
+ * have a sensible web analogue (focus chat, scroll a panel into view, cycle the recipient target,
+ * open creation dialogs). Respects the persisted command modifier from settings (`alt` / `ctrl` /
+ * `both`).
  */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
@@ -12,6 +13,15 @@ import type { SettingsModifier } from '@core/store/settings/settingsSlice.js';
 import { useEffect } from 'react';
 
 const CHAT_INPUT_ID = 'chat-composer-input';
+
+export interface DesktopKeybindHandlers {
+  /** `C-s` — open spawn-rogue dialog (inktui `global.spawn`). */
+  readonly onSpawn?: () => void;
+  /** `C-t` — open new-ticket dialog (web; inktui made this chord-less). */
+  readonly onNewTicket?: () => void;
+  /** `C-p` — open new-plan dialog (inktui `global.newPlan`). */
+  readonly onNewPlan?: () => void;
+}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -46,8 +56,9 @@ function focusChatInput(): void {
 }
 
 /** Wire global desktop chords on `document` while the desktop shell is mounted. */
-export function useDesktopKeybinds(enabled: boolean): void {
+export function useDesktopKeybinds(enabled: boolean, handlers: DesktopKeybindHandlers = {}): void {
   const storeApi = useAppStoreApi();
+  const { onSpawn, onNewTicket, onNewPlan } = handlers;
 
   useEffect(() => {
     if (!enabled) {
@@ -87,6 +98,24 @@ export function useDesktopKeybinds(enabled: boolean): void {
         return;
       }
 
+      if ((e.key === 's' || e.key === 'S') && onSpawn !== undefined) {
+        e.preventDefault();
+        onSpawn();
+        return;
+      }
+
+      if ((e.key === 't' || e.key === 'T') && onNewTicket !== undefined) {
+        e.preventDefault();
+        onNewTicket();
+        return;
+      }
+
+      if ((e.key === 'p' || e.key === 'P') && onNewPlan !== undefined) {
+        e.preventDefault();
+        onNewPlan();
+        return;
+      }
+
       if (e.key === 'h' || e.key === 'H') {
         const result = selectCycledRecipientTarget(conversations, roster, favorites, -1);
         if (result !== null) {
@@ -107,7 +136,7 @@ export function useDesktopKeybinds(enabled: boolean): void {
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [enabled, storeApi]);
+  }, [enabled, storeApi, onSpawn, onNewTicket, onNewPlan]);
 }
 
 export { CHAT_INPUT_ID };

@@ -95,6 +95,26 @@
   }
 }
 
+/* ── Toast host (shell rack) ───────────────────────────────────────────────────────────────────── */
+.toast-host {
+  position: fixed;
+  right: calc(var(--space-3) + var(--safe-right));
+  bottom: calc(var(--space-3) + var(--safe-bottom));
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  pointer-events: none;
+  max-width: min(380px, calc(100vw - 2 * var(--space-3)));
+}
+.toast-host .mds-toast {
+  pointer-events: auto;
+}
+/* Clear the mobile bottom tab bar so toasts aren't buried under the pill switcher. */
+[data-layout="mobile"] .toast-host {
+  bottom: calc(var(--tabbar-height) + var(--space-3) + var(--safe-bottom));
+}
+
 /* ── Tooltip ───────────────────────────────────────────────────────────────────────────────────── */
 .mds-tip {
   position: relative;

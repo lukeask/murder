@@ -2,16 +2,18 @@
  * SettingsPanel — the settings screen, reskinned onto the design system (Phase C2). Theme switching
  * is the headline feature: selecting a theme calls `setTheme(id)` (the same global themeStore the Ink
  * UI uses → repaints every CSS var via {@link useThemeCssVars}) AND persists it through
- * `settings.update({ theme })` so it survives a reload. Pane gap, the input modifier, vim mode and the
- * collaborator harness are also surfaced (persisted via `settings.update`).
+ * `settings.update({ theme })` so it survives a reload. Pane gap, the input modifier, vim mode,
+ * collaborator/planner/crow harnesses, startup rogue, and harness control backends are also surfaced
+ * (persisted via `settings.update`).
  *
  * ── THE LOCKED PANEL-REWRITE PATTERN (see TicketsPanel exemplar) ────────────────────────────────
  * Presentation moves onto DS primitives (Panel + form controls from the barrel); the data wiring is
  * UNCHANGED — same `s.settings` reads and `s.actions.settings.update`, and the theme control keeps
  * `useThemeId()` + `PALETTES` with the existing `chooseTheme` (setTheme for instant repaint, update to
  * persist). Each setting maps to its DS control: modifier → Radio, paneGap → numeric Input,
- * vimMode → Switch, collaborator harness → Select, theme → selectable swatch toggles (`data-on`).
- * Bespoke CSS lives in `styles/panels-settings.css` (wired in by the shell, not imported here).
+ * vimMode → Switch, collaborator/planner harness → Select, crow → Checkbox pool, control backends →
+ * Radio, theme → selectable swatch toggles (`data-on`). Bespoke CSS lives in `styles/panels-settings.css`
+ * (wired in by the shell, not imported here).
  */
 
 import { useAppStore } from '@core/hooks/useAppStore.js';
@@ -27,7 +29,12 @@ import {
   startupRogueEffortsFor,
   startupRogueModelsFor,
 } from '@core/components/settings/items/harnesses.js';
-import { Panel, Input, Select, Radio, Switch, cx } from '../ds/index.js';
+import type {
+  ClaudeControlBackend,
+  CodexControlBackend,
+  CursorControlBackend,
+} from '@core/store/settings/settingsSlice.js';
+import { Panel, Input, Select, Radio, Switch, Checkbox, cx } from '../ds/index.js';
 
 const FALLBACK_THEME_IDS = listThemeIds();
 
@@ -36,6 +43,11 @@ const MODIFIER_OPTIONS = [
   { value: 'ctrl', label: 'ctrl' },
   { value: 'both', label: 'both' },
 ];
+
+/** Mirrored from `@core/.../harnesses` (not exported there). */
+const CODEX_CONTROL_BACKENDS: readonly CodexControlBackend[] = ['harness_parse', 'app_server'];
+const CURSOR_CONTROL_BACKENDS: readonly CursorControlBackend[] = ['harness_parse', 'acp'];
+const CLAUDE_CONTROL_BACKENDS: readonly ClaudeControlBackend[] = ['harness_parse', 'agent_sdk'];
 
 export function SettingsPanel(): React.JSX.Element {
   const settings = useAppStore((s) => s.settings, shallow);
@@ -62,6 +74,14 @@ export function SettingsPanel(): React.JSX.Element {
   const harnessOptions = Array.from(
     new Set([settings.effectiveCollaboratorHarness, ...settings.effectiveCrowHarnesses, harnessValue]),
   ).map((h) => ({ value: h, label: h }));
+  // Planner: Select includes an explicit "default" (null) option; label shows effective fallback.
+  const plannerOptions = [
+    { value: '', label: `default (${settings.effectivePlannerHarness})` },
+    ...HARNESSES.map((h) => ({ value: h, label: h })),
+  ];
+  // Crow pool: override when set, else the daemon's effective pool. Empty override = use default.
+  const crowPool = settings.crowHarnesses ?? settings.effectiveCrowHarnesses;
+  const crowUsingDefault = settings.crowHarnesses === null;
   const startupRogue = settings.startupRogue;
   const startupHarness = startupRogue?.harness ?? '';
   const startupModelChoices =
@@ -101,6 +121,25 @@ export function SettingsPanel(): React.JSX.Element {
             : defaultEffortFor(harness, settings.startupRogueEfforts),
       },
     });
+  };
+
+  const choosePlannerHarness = (value: string): void => {
+    void update({ planner_harness: value === '' ? null : value });
+  };
+
+  /** Toggle a crow harness in/out of the pool, or reset to the effective default. Mirrors inktui. */
+  const toggleCrow = (value: string | null): void => {
+    if (value === null) {
+      void update({ crow_harnesses: null });
+      return;
+    }
+    const current = settings.crowHarnesses ?? [...settings.effectiveCrowHarnesses];
+    const checked = current.includes(value);
+    if (checked && current.length === 1) {
+      return;
+    }
+    const next = checked ? current.filter((h) => h !== value) : [...current, value];
+    void update({ crow_harnesses: next });
   };
 
   return (
@@ -212,6 +251,73 @@ export function SettingsPanel(): React.JSX.Element {
               ) : null}
             </div>
           ) : null}
+        </section>
+
+        <section className="settings__group">
+          <Select
+            label="planner harness"
+            options={plannerOptions}
+            value={settings.plannerHarness ?? ''}
+            onChange={(e) => choosePlannerHarness(e.target.value)}
+          />
+        </section>
+
+        <section className="settings__group">
+          <h3 className="settings__heading">crow harnesses</h3>
+          <Switch
+            label="use default pool"
+            checked={crowUsingDefault}
+            onChange={(e) => {
+              if (e.target.checked) {
+                toggleCrow(null);
+              } else {
+                void update({ crow_harnesses: [...settings.effectiveCrowHarnesses] });
+              }
+            }}
+          />
+          <div className="settings__inline">
+            {HARNESSES.map((h) => (
+              <Checkbox
+                key={h}
+                label={h}
+                checked={crowPool.includes(h)}
+                onChange={() => toggleCrow(h)}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section className="settings__group">
+          <h3 className="settings__heading">codex control backend</h3>
+          <Radio
+            name="codex_control_backend"
+            inline
+            options={CODEX_CONTROL_BACKENDS.map((v) => ({ value: v, label: v }))}
+            value={settings.codexControlBackend}
+            onChange={(v) => void update({ codex_control_backend: v as CodexControlBackend })}
+          />
+        </section>
+
+        <section className="settings__group">
+          <h3 className="settings__heading">cursor control backend</h3>
+          <Radio
+            name="cursor_control_backend"
+            inline
+            options={CURSOR_CONTROL_BACKENDS.map((v) => ({ value: v, label: v }))}
+            value={settings.cursorControlBackend}
+            onChange={(v) => void update({ cursor_control_backend: v as CursorControlBackend })}
+          />
+        </section>
+
+        <section className="settings__group">
+          <h3 className="settings__heading">claude control backend</h3>
+          <Radio
+            name="claude_control_backend"
+            inline
+            options={CLAUDE_CONTROL_BACKENDS.map((v) => ({ value: v, label: v }))}
+            value={settings.claudeControlBackend}
+            onChange={(v) => void update({ claude_control_backend: v as ClaudeControlBackend })}
+          />
         </section>
 
         {settings.status === 'error' ? (

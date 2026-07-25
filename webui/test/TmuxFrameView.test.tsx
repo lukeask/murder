@@ -11,20 +11,27 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { TmuxFrameView } from '../src/components/stage/TmuxFrameView.js';
 import { renderWithStore } from './helpers.js';
 
+const SESSION = '0198b156-2dd3-70a9-bc79-fca001dc8801';
+
 afterEach(cleanup);
 
 describe('TmuxFrameView', () => {
   it('shows a waiting placeholder before any frame arrives', () => {
-    renderWithStore(<TmuxFrameView agentId="a1" />);
+    renderWithStore(<TmuxFrameView sessionId={SESSION} />);
     expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
+  });
+
+  it('shows an empty state when sessionId is missing', () => {
+    renderWithStore(<TmuxFrameView sessionId={null} />);
+    expect(screen.getByText(/No terminal session/)).toBeTruthy();
   });
 
   it('renders an ANSI terminal replacement frame as colored HTML', () => {
     const bus = new FakeApplicationClient();
-    renderWithStore(<TmuxFrameView agentId="a1" />, { bus });
+    renderWithStore(<TmuxFrameView sessionId={SESSION} />, { bus });
     // Red foreground "hi" then reset.
     act(() => {
-      bus.emitTerminal('a1', '[31mhi[0m');
+      bus.emitTerminal(SESSION, '[31mhi[0m');
     });
     const pre = document.querySelector('.mds-tmux__frame');
     expect(pre).not.toBeNull();
@@ -33,13 +40,13 @@ describe('TmuxFrameView', () => {
     expect(pre?.innerHTML.toLowerCase()).toContain('style');
   });
 
-  it('ignores frames for a different agent (filter scope)', () => {
+  it('ignores frames for a different session (filter scope)', () => {
     const bus = new FakeApplicationClient();
-    renderWithStore(<TmuxFrameView agentId="a1" />, { bus });
+    renderWithStore(<TmuxFrameView sessionId={SESSION} />, { bus });
     act(() => {
-      bus.emitTerminal('b2', 'other');
+      bus.emitTerminal('0198b156-2dd3-70a9-bc79-fca001dc8802', 'other');
     });
-    // Still waiting â€” the terminal attachment is scoped to a1.
+    // Still waiting — the terminal attachment is scoped to SESSION.
     expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
   });
 });

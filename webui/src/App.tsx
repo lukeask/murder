@@ -17,8 +17,9 @@
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
 import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@core/theme/palettes.js';
 import { setTheme } from '@core/theme/themeStore.js';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
+import { CreationDialogsProvider } from './creationDialogs.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
 import { type ConnectionStatus, useConnectionStatus } from './useConnectionStatus.js';
 import { MOBILE_QUERY, useMediaQuery } from './useMediaQuery.js';
@@ -32,6 +33,10 @@ import { UsagePanel } from './components/panels/UsagePanel.js';
 import { TreePanel } from './components/panels/TreePanel.js';
 import { SettingsPanel } from './components/panels/SettingsPanel.js';
 import { Stage } from './components/stage/Stage.js';
+import { ToastHost } from './components/ToastHost.js';
+import { NewTicketDialog } from './components/modals/NewTicketDialog.js';
+import { NewPlanDialog } from './components/modals/NewPlanDialog.js';
+import { SpawnRogueDialog } from './components/modals/SpawnRogueDialog.js';
 import { NavBar, KeybindBar, type KeybindHint, StatusDot, type StatusDotStatus, Tabs, type TabItem, Icon, type IconName, cx } from './components/ds/index.js';
 import { useDesktopKeybinds } from './useDesktopKeybinds.js';
 
@@ -66,13 +71,16 @@ const MOBILE_TAB_ICON: Record<MobileTab, IconName> = {
 
 /**
  * Keybind hints for the desktop bottom bar. Chords use `C-` as the default modifier label (the live
- * handler reads `settings.modifier` and accepts alt/ctrl/both). Spawn / new-plan / new-ticket are
- * omitted — those flows are not ported to the web shell yet.
+ * handler reads `settings.modifier` and accepts alt/ctrl/both). Creation chords match inktui where
+ * practical: spawn `C-s`, new plan `C-p`; new ticket is `C-t` on web (inktui made that chord-less).
  */
 const KEYBIND_HINTS: readonly KeybindHint[] = [
   { chord: 'C-1-0', desc: 'panels' },
   { chord: 'C-space', desc: 'chat' },
   { chord: 'C-hl', desc: 'target' },
+  { chord: 'C-s', desc: 'spawn' },
+  { chord: 'C-t', desc: 'ticket' },
+  { chord: 'C-p', desc: 'plan' },
   { chord: 'C-o', desc: 'settings' },
 ];
 
@@ -81,7 +89,23 @@ export function App({ bus }: { readonly bus: ApplicationWebSocketClient }): Reac
   const status = useConnectionStatus(bus);
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const storeApi = useAppStoreApi();
-  useDesktopKeybinds(!isMobile);
+
+  const [spawnOpen, setSpawnOpen] = useState(false);
+  const [ticketOpen, setTicketOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const openSpawn = useCallback(() => setSpawnOpen(true), []);
+  const openTicket = useCallback(() => setTicketOpen(true), []);
+  const openPlan = useCallback(() => setPlanOpen(true), []);
+  const creationApi = useMemo(
+    () => ({ openSpawn, openTicket, openPlan }),
+    [openSpawn, openTicket, openPlan],
+  );
+
+  useDesktopKeybinds(!isMobile, {
+    onSpawn: openSpawn,
+    onNewTicket: openTicket,
+    onNewPlan: openPlan,
+  });
 
   // Re-prime every slice on each (re)connect. Slice invalidation is key-only, so a slice that
   // changed while disconnected stays stale until an unrelated event; priming closes that gap.
@@ -124,10 +148,17 @@ export function App({ bus }: { readonly bus: ApplicationWebSocketClient }): Reac
 
   // `data-layout` is preserved (tests + any external hooks key off it). The DOM tree differs between
   // desktop (cockpit grid) and mobile (single pane) — the one thing CSS alone can't express.
+  // ToastHost is one global rack (desktop + mobile); core actions already push to toastStore.
   return (
-    <div className="app" data-layout={isMobile ? 'mobile' : 'desktop'}>
-      {isMobile ? <MobileLayout status={status} /> : <DesktopLayout status={status} />}
-    </div>
+    <CreationDialogsProvider value={creationApi}>
+      <div className="app" data-layout={isMobile ? 'mobile' : 'desktop'}>
+        {isMobile ? <MobileLayout status={status} /> : <DesktopLayout status={status} />}
+        <ToastHost />
+        <SpawnRogueDialog open={spawnOpen} onClose={() => setSpawnOpen(false)} />
+        <NewTicketDialog open={ticketOpen} onClose={() => setTicketOpen(false)} />
+        <NewPlanDialog open={planOpen} onClose={() => setPlanOpen(false)} />
+      </div>
+    </CreationDialogsProvider>
   );
 }
 

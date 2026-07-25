@@ -1,7 +1,7 @@
 /// <reference types="vitest/config" />
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig, type ProxyOptions } from 'vite';
 
 // Absolute path to the portable inktui core (sibling dir). The web app imports the store, bus
 // protocol, selectors and theme straight off this tree via the `@core` alias — the whole point of
@@ -21,11 +21,57 @@ const reactDomDir = fileURLToPath(new URL('./node_modules/react-dom', import.met
 const zustandDir = fileURLToPath(new URL('./node_modules/zustand', import.meta.url));
 const useSyncDir = fileURLToPath(new URL('./node_modules/use-sync-external-store', import.meta.url));
 
-// Dev-time bus bridge target. `murder web up -f` runs the WS<->unix-socket relay on this port; the
-// dev server proxies `/api/ws` to it so `npm run dev` talks to a locally-running supervisor. In a
-// production build the bridge serves `webui/dist` itself, so `/api/ws` is same-origin and no proxy is
-// needed. Override the port with VITE_BUS_PROXY_PORT if your bridge binds elsewhere.
-const busProxyPort = process.env['VITE_BUS_PROXY_PORT'] ?? '8473';
+/**
+ * Dev proxy target for `/api/ws` → the live murder service WebSocket.
+ *
+ * There is no unix-socket / bus bridge. The service serves `/api/ws` itself; `murder web up`
+ * prints the browser base URL (e.g. `http://127.0.0.1:NNNN`). Point the proxy at that host/port:
+ *
+ *   # Preferred: full application WS URL (same shape as the session registry's websocket_url)
+ *   export VITE_APPLICATION_WS_URL=ws://127.0.0.1:NNNN/api/ws
+ *
+ *   # Or: explicit proxy origin only
+ *   export VITE_APPLICATION_WS_PROXY=ws://127.0.0.1:NNNN
+ *
+ *   # Deprecated alias (still honoured): port-only override from the old bus-bridge era
+ *   export VITE_BUS_PROXY_PORT=NNNN
+ *
+ * If none of these are set, the `/api/ws` proxy is omitted — set one from `murder web up` before
+ * `npm run dev` when you need a live service. Production builds are same-origin (no proxy).
+ */
+function applicationWsProxyTarget(): string | undefined {
+  const explicit = process.env['VITE_APPLICATION_WS_PROXY'];
+  if (explicit !== undefined && explicit !== '') return explicit;
+
+  const wsUrl = process.env['VITE_APPLICATION_WS_URL'];
+  if (wsUrl !== undefined && wsUrl !== '') {
+    try {
+      const parsed = new URL(wsUrl);
+      return `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      // Fall through — invalid URL is treated as unset.
+    }
+  }
+
+  const legacyPort = process.env['VITE_BUS_PROXY_PORT'];
+  if (legacyPort !== undefined && legacyPort !== '') {
+    return `ws://localhost:${legacyPort}`;
+  }
+
+  return undefined;
+}
+
+function applicationWsProxy(): Record<string, ProxyOptions> {
+  const target = applicationWsProxyTarget();
+  if (target === undefined) return {};
+  return {
+    '/api/ws': {
+      target,
+      ws: true,
+      changeOrigin: true,
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [react()],
@@ -55,16 +101,10 @@ export default defineConfig({
       // and is transpiled on demand.
       allow: ['..'],
     },
-    proxy: {
-      '/api/ws': {
-        target: `ws://localhost:${busProxyPort}`,
-        ws: true,
-        changeOrigin: true,
-      },
-    },
+    proxy: applicationWsProxy(),
   },
   build: {
-    // Shipped by the Python bridge as `murder/_webui/`. Keep this path stable — the packaging step
+    // Shipped by the Python service as `murder/_webui/`. Keep this path stable — the packaging step
     // copies `webui/dist` wholesale.
     outDir: 'dist',
     emptyOutDir: true,

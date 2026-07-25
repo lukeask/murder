@@ -132,6 +132,31 @@
   border-bottom-right-radius: var(--radius-xs);
 }
 
+/* Optimistic shadow turns: translucent until the authoritative block arrives. */
+.mds-bubble--delivery-pending {
+  opacity: 0.62;
+}
+
+.mds-bubble--delivery-failed {
+  opacity: 0.9;
+  border-color: color-mix(in oklab, var(--danger, #c44) 55%, transparent);
+  color: var(--text-danger, var(--text-primary));
+}
+
+.mds-bubble--delivery-unknown {
+  opacity: 0.8;
+  border-color: color-mix(in oklab, var(--warning, #c90) 55%, transparent);
+}
+
+.mds-bubble__delivery {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  text-transform: lowercase;
+}
+
 /* tool/plan turns: a crow bubble that keeps preformatted structure tighter + monospace dimmed. */
 .mds-bubble--struct {
   font-size: var(--text-xs);

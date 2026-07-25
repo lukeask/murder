@@ -7,13 +7,15 @@
 import { selectPlansView } from '@core/selectors/plansSelectors.js';
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
-import { Button } from '../ds/index.js';
+import { useCreationDialogs } from '../../creationDialogs.js';
+import { Button, IconButton, Icon } from '../ds/index.js';
 import { DocListPanel } from './DocListPanel.js';
 
 export function PlansPanel(): React.JSX.Element {
   const plans = useAppStore((s) => s.plans, shallow);
   const favorites = useAppStore((s) => s.favorites, shallow);
   const spawnPlanner = useAppStore((s) => s.actions.plans.spawnPlanner);
+  const { openPlan } = useCreationDialogs();
   const view = selectPlansView(plans, favorites);
 
   return (
@@ -22,6 +24,11 @@ export function PlansPanel(): React.JSX.Element {
       kind="plan"
       view={view}
       empty="No plans."
+      actions={
+        <IconButton label="New plan" onClick={openPlan}>
+          <Icon name="plus" size={14} />
+        </IconButton>
+      }
       rows={view.rows.map((r) => ({
         id: r.id,
         name: r.name,

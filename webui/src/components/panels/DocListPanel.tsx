@@ -40,6 +40,7 @@ export function DocListPanel({
   view,
   empty,
   rowExtra,
+  actions,
 }: {
   readonly title: string;
   readonly kind: DocKind;
@@ -48,6 +49,8 @@ export function DocListPanel({
   readonly empty: string;
   /** Optional trailing per-row controls (e.g. plans' "spawn planner" button). */
   readonly rowExtra?: (row: DocListRow) => React.ReactNode;
+  /** Optional header actions (e.g. new-plan "+"). */
+  readonly actions?: React.ReactNode;
 }): React.JSX.Element {
   const openDoc = useAppStore((s) => s.actions.docView.open);
   const toggleFavorite = useAppStore((s) => s.actions.favorites.toggle);
@@ -57,6 +60,7 @@ export function DocListPanel({
     <Panel
       title={title}
       flush
+      actions={actions}
       data-panel-id={kind === 'plan' ? 'plans' : kind === 'note' ? 'notes' : 'reports'}
     >
       <SliceHint state={view} empty={empty} />

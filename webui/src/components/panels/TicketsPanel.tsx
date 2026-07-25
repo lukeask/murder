@@ -24,17 +24,29 @@
 import { selectTicketsView } from '@core/selectors/ticketsSelectors.js';
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
-import { Panel, ListRow, Badge, Tag } from '../ds/index.js';
+import { useCreationDialogs } from '../../creationDialogs.js';
+import { Panel, ListRow, Badge, Tag, IconButton, Icon } from '../ds/index.js';
 import { SliceHint } from '../SliceHint.js';
 
 export function TicketsPanel(): React.JSX.Element {
   const tickets = useAppStore((s) => s.tickets, shallow);
   const openDetail = useAppStore((s) => s.actions.ticketDetail.open);
   const openId = useAppStore((s) => s.ticketDetail.ticketId);
+  const { openTicket } = useCreationDialogs();
   const view = selectTicketsView(tickets);
 
   return (
-    <Panel title="tickets" count={view.isEmpty ? null : view.rows.length} flush data-panel-id="tickets">
+    <Panel
+      title="tickets"
+      count={view.isEmpty ? null : view.rows.length}
+      flush
+      data-panel-id="tickets"
+      actions={
+        <IconButton label="New ticket" onClick={openTicket}>
+          <Icon name="plus" size={14} />
+        </IconButton>
+      }
+    >
       <SliceHint state={view} empty="No tickets." />
       {view.rows.map((row) => (
         <ListRow

@@ -17,6 +17,7 @@ import { selectCrowsView } from '@core/selectors/crowsSelectors.js';
 import type { Health } from '@core/selectors/crowHealthSelectors.js';
 import { useAppStore } from '@core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
+import { useCreationDialogs } from '../../creationDialogs.js';
 import {
   Panel,
   ListRow,
@@ -48,6 +49,7 @@ export function RosterPanel(): React.JSX.Element {
   const setActivePane = useAppStore((s) => s.actions.conversations.setActivePaneAgentId);
   const setTranscriptPaneOpen = useAppStore((s) => s.actions.conversations.setTranscriptPaneOpen);
   const activeAgentId = useAppStore((s) => s.conversations.activePaneAgentId);
+  const { openSpawn } = useCreationDialogs();
 
   const view = selectCrowsView(roster, Date.now(), favorites);
 
@@ -57,7 +59,17 @@ export function RosterPanel(): React.JSX.Element {
   const rowCount = view.sections.reduce((n, s) => n + s.rows.length, 0);
 
   return (
-    <Panel title="crows" count={view.isEmpty ? null : rowCount} flush data-panel-id="crows">
+    <Panel
+      title="crows"
+      count={view.isEmpty ? null : rowCount}
+      flush
+      data-panel-id="crows"
+      actions={
+        <IconButton label="Spawn rogue" onClick={openSpawn}>
+          <Icon name="plus" size={14} />
+        </IconButton>
+      }
+    >
       <SliceHint state={view} empty="No agents." />
       {view.sections.map((section) => (
         <div key={section.group} className="roster-section">
