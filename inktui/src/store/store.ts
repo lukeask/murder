@@ -137,7 +137,7 @@ import { createWorkflowsActions, type WorkflowsActions } from './workflows/workf
 import {
   createWorkflowsSlice,
   initialWorkflowsState,
-  type WorkflowDef,
+  type WorkflowTemplate,
   type WorkflowsState,
 } from './workflows/workflowsSlice.js';
 import {
@@ -466,7 +466,7 @@ function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots):
     store.setState({ themes: { items, status: 'ready', error: null } });
   }
 
-  const workflows = snapshotAs<{ workflows?: readonly WorkflowDef[]; revision?: string }>(snapshots, 'workflows');
+  const workflows = snapshotAs<{ workflows?: readonly WorkflowTemplate[]; revision?: string }>(snapshots, 'workflows');
   if (workflows !== undefined) {
     store.setState({
       workflows: { items: workflows.workflows ?? [], revision: workflows.revision ?? '', status: 'ready', error: null },

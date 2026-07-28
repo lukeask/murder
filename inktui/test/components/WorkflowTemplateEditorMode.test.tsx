@@ -1,5 +1,5 @@
 /**
- * Integration coverage for the fullscreen workflow editor.  The graph kernels have
+ * Integration coverage for the fullscreen workflow template editor.  The graph kernels have
  * their own unit suites; these tests pin the user-visible mode shell: breakpoints,
  * transient draft state, command guards, and runtime truth rendering.
  */
@@ -13,12 +13,12 @@ import type { CommandParams } from '../../src/application/ApplicationClient.js';
 import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { BottomBar } from '../../src/components/BottomBar.js';
 import { Overlay } from '../../src/components/Overlay.js';
-import { workflowEditorMode } from '../../src/components/WorkflowEditorMode.js';
+import { workflowTemplateEditorMode } from '../../src/components/WorkflowTemplateEditorMode.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { createAppStore } from '../../src/store/store.js';
-import type { WorkflowDef, WorkflowStageDef } from '../../src/store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate, WorkflowNodeTemplate } from '../../src/store/workflows/workflowsSlice.js';
 
 const tick = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 15));
@@ -28,8 +28,8 @@ const stage = (
   id: string,
   title = id,
   dependsOn: readonly string[] = [],
-  overrides: Partial<WorkflowStageDef> = {},
-): WorkflowStageDef => ({
+  overrides: Partial<WorkflowNodeTemplate> = {},
+): WorkflowNodeTemplate => ({
   id,
   title,
   instructions: '',
@@ -41,7 +41,7 @@ const stage = (
   ...overrides,
 });
 
-const workflow = (overrides: Partial<WorkflowDef> = {}): WorkflowDef => ({
+const workflow = (overrides: Partial<WorkflowTemplate> = {}): WorkflowTemplate => ({
   name: 'release',
   description: 'Ship it',
   mode: 'static',
@@ -106,9 +106,9 @@ function Surface({
 function setup(
   options: {
     readonly columns?: number;
-    readonly definition?: WorkflowDef;
+    readonly definition?: WorkflowTemplate;
     readonly put?: unknown;
-    readonly remote?: WorkflowDef;
+    readonly remote?: WorkflowTemplate;
   } = {},
 ) {
   const definition = options.definition ?? workflow();
@@ -138,7 +138,7 @@ function setup(
   store.setState((state) => ({
     workflows: { ...state.workflows, items: [definition], revision: 'r1', status: 'ready' },
   }));
-  const mode = workflowEditorMode(stores.modes, store, { workflow: definition });
+  const mode = workflowTemplateEditorMode(stores.modes, store, { workflow: definition });
   stores.modes.getState().enter(mode);
   const rows = 30;
   const stdout = stdoutFor(options.columns ?? 140, rows);
@@ -161,7 +161,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('WorkflowEditorMode', () => {
+describe('WorkflowTemplateEditorMode', () => {
   it('shows graph-editor hints on the bottom bar while the fullscreen mode is open', async () => {
     const app = setup({ columns: 140 });
     await tick();

@@ -22,7 +22,7 @@ import {
 } from '../store/dialogs/worktreeOptionsActions.js';
 import type { AppStoreApi } from '../store/store.js';
 import type { WorkflowRun } from '../store/workflowRuns/workflowRunsSlice.js';
-import type { WorkflowDef } from '../store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
 import { useTheme } from '../theme/themeStore.js';
 import { type GraphLayout, layoutWorkflow } from '../workflowEditor/layout.js';
 import type {
@@ -49,7 +49,7 @@ import { useBottomBarLines } from './BottomBar.js';
 import { TextRuns } from './TextRuns.js';
 import { HARNESS_ORDER } from './spawnWizardMachine.js';
 
-export const WORKFLOW_EDITOR_MODE_ID = 'workflow-editor';
+export const WORKFLOW_TEMPLATE_EDITOR_MODE_ID = 'workflow-editor';
 
 type Interaction =
   | { readonly kind: 'normal' }
@@ -102,15 +102,15 @@ interface Session {
   worktrees: readonly WorktreeOption[];
 }
 
-export interface WorkflowEditorModeOptions {
-  readonly workflow?: WorkflowDef;
+export interface WorkflowTemplateEditorModeOptions {
+  readonly workflow?: WorkflowTemplate;
   /** Called after a successfully saved definition, useful to focus a caller-owned list. */
-  readonly onSaved?: (workflow: WorkflowDef) => void;
+  readonly onSaved?: (workflow: WorkflowTemplate) => void;
   readonly harnessModels?: HarnessModelsActions;
   readonly worktreeOptions?: WorktreeOptionsActions;
 }
 
-type WorkflowEditorIntent =
+type WorkflowTemplateEditorIntent =
   | 'up'
   | 'down'
   | 'dependency'
@@ -147,12 +147,12 @@ function blankWorkflow(): EditorWorkflow {
   return { name: '', description: '', mode: 'static', stages: [] };
 }
 
-/** Full-screen local-draft workflow editor. The canonical slice is written only by workflow.put. */
-export function workflowEditorMode(
+/** Full-screen local-draft workflow template editor. The canonical slice is written only by workflow.put. */
+export function workflowTemplateEditorMode(
   modes: ModeStoreApi,
   app: AppStoreApi,
-  options: WorkflowEditorModeOptions = {},
-): Mode<WorkflowEditorIntent> {
+  options: WorkflowTemplateEditorModeOptions = {},
+): Mode<WorkflowTemplateEditorIntent> {
   const existing = options.workflow ?? app.getState().workflows.items[0];
   const initial = existing === undefined ? blankWorkflow() : fromWire(existing);
   const s: Session = {
@@ -173,7 +173,7 @@ export function workflowEditorMode(
     harnessModels: STATIC_HARNESS_MODELS,
     worktrees: [],
   };
-  const id = WORKFLOW_EDITOR_MODE_ID;
+  const id = WORKFLOW_TEMPLATE_EDITOR_MODE_ID;
 
   void options.harnessModels?.fetch().then((models) => {
     s.harnessModels = models;
@@ -428,8 +428,8 @@ export function workflowEditorMode(
     get hints(): readonly ModeHint[] {
       return hints(s.interaction, fieldOptions(s, s.interaction));
     },
-    get keymap(): Keymap<WorkflowEditorIntent> {
-      return workflowEditorKeymap(s.interaction, fieldOptions(s, s.interaction).length > 0);
+    get keymap(): Keymap<WorkflowTemplateEditorIntent> {
+      return workflowTemplateEditorKeymap(s.interaction, fieldOptions(s, s.interaction).length > 0);
     },
     onIntent(intent): void {
       if (s.interaction.kind === 'conflict') {
@@ -788,7 +788,7 @@ export function workflowEditorMode(
       return false;
     },
     render: () => (
-      <WorkflowEditorSurface
+      <WorkflowTemplateEditorSurface
         session={s}
         onSelect={(key) => {
           s.selected = key;
@@ -803,10 +803,10 @@ export function workflowEditorMode(
   };
 }
 
-function workflowEditorKeymap(
+function workflowTemplateEditorKeymap(
   interaction: Interaction,
   hasOptions = false,
-): Keymap<WorkflowEditorIntent> {
+): Keymap<WorkflowTemplateEditorIntent> {
   const escapeBinding = {
     chord: { key: { escape: true } },
     intent: 'escape',
@@ -886,7 +886,7 @@ function workflowEditorKeymap(
       { chord: { input: 'n' }, intent: 'cancel', description: 'cancel' },
     ];
   }
-  const navigation: Keymap<WorkflowEditorIntent> = [
+  const navigation: Keymap<WorkflowTemplateEditorIntent> = [
     { chord: { input: 'j' }, intent: 'down', description: 'next' },
     { chord: { input: 'k' }, intent: 'up', description: 'previous' },
     { chord: { input: 'h' }, intent: 'dependency', description: 'dependency' },
@@ -1015,7 +1015,7 @@ function hints(
   ];
 }
 
-function WorkflowEditorSurface({
+function WorkflowTemplateEditorSurface({
   session,
   onSelect,
   onScroll,
@@ -1359,7 +1359,7 @@ function editorWorkflowFromSnapshot(snapshot: unknown): EditorWorkflow | null {
   )
     return null;
   try {
-    return fromWire(snapshot as WorkflowDef);
+    return fromWire(snapshot as WorkflowTemplate);
   } catch {
     return null;
   }

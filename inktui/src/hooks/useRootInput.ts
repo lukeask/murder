@@ -60,8 +60,8 @@ export interface DeferredGlobalHandlers {
   cycleChatView?: () => void;
   /** `alt+p`. Default: no-op until C12 wires the new-plan dialog. */
   newPlan?: () => void;
-  /** `alt+g` / `ctrl+g`: open the workflow graph editor. */
-  openWorkflowEditor?: () => void;
+  /** `alt+g` / `ctrl+g`: open the workflow template editor. */
+  openWorkflowTemplateEditor?: () => void;
   /** `alt+t`. Default: no-op until C12 wires the new-ticket dialog. */
   newTicket?: () => void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action). Default: no-op until a later phase wires the settings
@@ -277,7 +277,7 @@ export function useRootInput(
         cycleChatView: deferred.cycleChatView ?? (() => {}),
         // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
         newPlan: deferred.newPlan ?? (() => {}),
-        openWorkflowEditor: deferred.openWorkflowEditor ?? (() => {}),
+        openWorkflowTemplateEditor: deferred.openWorkflowTemplateEditor ?? (() => {}),
         newTicket: deferred.newTicket ?? (() => {}),
         // Phase 5: openSettings defaults to a no-op until the shell supplies the settings-modal
         // handler. The `global.settings` chord is now routed in the dispatcher, so this slot is live.

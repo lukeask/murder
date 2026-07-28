@@ -5,17 +5,17 @@
  *
  * Like {@link ../templates/templatesSlice.js templates} (its sibling pattern), this is none of the
  * `{ rows, status, error }` snapshot-re-pull shape the list-slice factory serves. The state is a list
- * of {@link WorkflowDef} records plus a load lifecycle, loaded once via `tui.load_workflows` and
+ * of {@link WorkflowTemplate} records plus a load lifecycle, loaded once via `tui.load_workflows` and
  * persisted via `tui.save_workflows` (never snapshot-invalidated). So — like `favorites`, `templates`,
  * and `conversations` — this is a hand-written slice with its own shape.
  *
- * ## What a workflow is
+ * ## What a workflow template is
  *
- * A workflow is a `{ name, description, mode, stages }` record: `name` is the `:name` leading-fire key
- * (validated server-side against `^[A-Za-z0-9_-]+$`), and `stages` is the ordered ticket-tree spec the
- * backend materializes when the workflow fires. The canonical list is normalized by the backend on
- * save and echoed back, so a successful save SYNCS the slice to the returned list — the store never
- * holds a list the server would have rejected/reordered.
+ * A workflow template is a `{ name, description, mode, stages }` record: `name` is the `:name`
+ * leading-fire key (validated server-side against `^[A-Za-z0-9_-]+$`), and `stages` is the ordered
+ * ticket-tree spec the backend materializes when the workflow fires. The canonical list is normalized
+ * by the backend on save and echoed back, so a successful save SYNCS the slice to the returned list —
+ * the store never holds a list the server would have rejected/reordered.
  *
  * Ref-swap granularity: every mutation replaces the whole `workflows` slice object (and the inner
  * `items` array), so `useAppStore(s => s.workflows, shallow)` subscribers re-render only when the
@@ -26,15 +26,22 @@ import type { StateCreator } from 'zustand';
 import type { QueryResult } from '../../application/ApplicationClient.js';
 import type { AppStore } from '../store.js';
 
-/** One stage of a workflow: a node in the ticket tree the backend materializes on fire. Mirrors the
- * backend stage dict. `depends_on` lists sibling stage ids this stage gates behind. */
-export type WorkflowStageDef = NonNullable<
+/** One node of a workflow template: a stage in the ticket tree the backend materializes on fire.
+ * Mirrors the backend stage dict. `depends_on` lists sibling stage ids this node gates behind. */
+export type WorkflowNodeTemplate = NonNullable<
   QueryResult<'workflows.get'>['workflows'][number]['stages']
 >[number];
 
-/** One named workflow: `name` is the `:name` leading-fire key, `stages` the ordered ticket-tree spec
- * the backend materializes when the workflow fires. Mirrors the backend `WorkflowDef` dict. */
-export type WorkflowDef = QueryResult<'workflows.get'>['workflows'][number];
+/** @deprecated Prefer {@link WorkflowNodeTemplate}. Kept for call-site migration. */
+export type WorkflowStageDef = WorkflowNodeTemplate;
+
+/** One named workflow template: `name` is the `:name` leading-fire key, `stages` the ordered
+ * ticket-tree spec the backend materializes when the workflow fires. Local name for the wire shape
+ * that still mirrors the backend `WorkflowDef` dict. */
+export type WorkflowTemplate = QueryResult<'workflows.get'>['workflows'][number];
+
+/** @deprecated Prefer {@link WorkflowTemplate}. Kept while protocol/generated names still say Def. */
+export type WorkflowDef = WorkflowTemplate;
 
 /**
  * The workflows slice state. `items` is the registry (canonical/normalized after a save); `status`
@@ -43,8 +50,8 @@ export type WorkflowDef = QueryResult<'workflows.get'>['workflows'][number];
  * — ref-swapped wholesale on change.
  */
 export interface WorkflowsState {
-  /** The named workflows. Normalized by the backend after each save. */
-  readonly items: readonly WorkflowDef[];
+  /** The named workflow templates. Normalized by the backend after each save. */
+  readonly items: readonly WorkflowTemplate[];
   /** Load/save lifecycle: `idle` before the first `load`, `ready` after, `error` on a failed RPC. */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   /** Set when the last load/save rejected; cleared on the next success. */
@@ -77,12 +84,14 @@ export const createWorkflowsSlice: StateCreator<
 });
 
 /**
- * Index the workflows by name into a `Map<string, WorkflowDef>` — the lookup shape the send-path
- * firing code consumes. Last-wins on a duplicate name (the backend normalizes away duplicates, but a
- * pre-save optimistic list could momentarily hold one).
+ * Index the workflow templates by name into a `Map<string, WorkflowTemplate>` — the lookup shape the
+ * send-path firing code consumes. Last-wins on a duplicate name (the backend normalizes away
+ * duplicates, but a pre-save optimistic list could momentarily hold one).
  */
-export function selectWorkflowsByName(items: readonly WorkflowDef[]): Map<string, WorkflowDef> {
-  const byName = new Map<string, WorkflowDef>();
+export function selectWorkflowsByName(
+  items: readonly WorkflowTemplate[],
+): Map<string, WorkflowTemplate> {
+  const byName = new Map<string, WorkflowTemplate>();
   for (const item of items) {
     byName.set(item.name, item);
   }
