@@ -1,13 +1,6 @@
 /**
- * Dialog — centered modal sheet with a scrim; docks to a bottom sheet on narrow screens. Closes via
- * the × button, scrim click, and Escape. Ported from the DS bundle (feedback/Dialog).
- *
- * EXEMPLAR — Phase B feedback components copy this shape:
- *  - Props derived from the bundle `.d.ts` (note `Omit<…, 'title'>` so `title` can be a ReactNode).
- *  - Plain typed FC returning `JSX.Element | null` (renders nothing when `open` is false).
- *  - `className` merged onto `.mds-dialog` via {@link cx}; `...rest` spread onto the dialog element.
- *  - The Escape-to-close effect is component behavior; all visuals live in ds.css (`.mds-scrim`,
- *    `.mds-dialog*`).
+ * Dialog — centered modal sheet with scrim; bottom sheet on narrow screens.
+ * Closes via ×, scrim click, and Escape. Visuals in ds.css (`.mds-scrim`, `.mds-dialog*`).
  */
 
 import { useEffect, type HTMLAttributes, type ReactNode } from 'react';

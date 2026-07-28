@@ -49,13 +49,6 @@
   height: var(--touch-min);
   border-radius: var(--radius);
 }
-.mds-iconbtn--active {
-  color: var(--accent);
-  background: var(--surface-hover);
-}
-.mds-iconbtn--bordered {
-  border-color: var(--border-default);
-}
 
 /* ── Input ───────────────────────────────────────────────────────────────────────────────────── */
 .mds-field {

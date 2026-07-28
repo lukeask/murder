@@ -1,10 +1,4 @@
-/**
- * Web entrypoint. Wires the data spine once: construct the WebSocket bus client, build the shared
- * store against it (`@core/store`), mount the store provider, connect, and render {@link App}.
- *
- * This is the web mirror of inktui's `src/index.tsx` — same store, same provider, different
- * transport (the shared application WebSocket) and different renderer (DOM instead of Ink).
- */
+/** Web entrypoint: WebSocket bus, shared store, providers, connect, render {@link App}. */
 
 import { AppStoreProvider } from '@core/hooks/useAppStore.js';
 import { createAppStore } from '@core/store/store.js';

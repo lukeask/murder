@@ -1,16 +1,6 @@
 /**
- * Panel — the DS cockpit container: titled, bordered, optional count pill + active state. Ported from
- * the DS bundle (data/Panel).
- *
- * NOTE: This is the DS panel (`.mds-panel`). It is kept SEPARATE from the existing app chrome
- * `src/components/Panel.tsx` (`.panel`) for this phase — do not conflate them.
- *
- * EXEMPLAR — Phase B data components copy this shape:
- *  - Props derived from the bundle `.d.ts` (extends HTMLAttributes<HTMLElement>).
- *  - Plain typed FC (NO forwardRef — the root is a non-focusable <section>; forwardRef is reserved
- *    for inputs/buttons, see Button).
- *  - `className` merged via {@link cx}; `...rest` spread onto the root <section>.
- *  - Visuals live entirely in ds.css (`.mds-panel*`).
+ * Panel — DS cockpit container (`.mds-panel`): titled, bordered, optional count + active + flush.
+ * Visuals in ds.css.
  */
 
 import type { HTMLAttributes, ReactNode } from 'react';
@@ -21,7 +11,7 @@ export interface PanelProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
   title?: ReactNode;
   /** Item count shown as a small pill badge at the right of the header. */
   count?: number | string | null;
-  /** Focused/active region — 2px green border + green title (the panel highlight). */
+  /** Focused/active region — 2px green border + green title. */
   active?: boolean;
   /** Remove body padding (for flush list rows). */
   flush?: boolean;

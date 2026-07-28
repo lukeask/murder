@@ -1,16 +1,7 @@
 /**
- * RosterPanel (crows) — the live agent roster, grouped by kind (collaborator / planners / rogue /
- * ticket) with per-crow health and favorite stars. Maps to the `roster` + `favorites` slices via
- * {@link selectCrowsView}; clicking a crow selects it as the active chat target (the conversations
- * slice's `setActivePaneAgentId`), and the ★ toggles its favorite (`favorites.toggle`). A
- * ticket-bound crow can be reset via `roster.resetCrow(ticketId)`.
- *
- * Reskinned onto the DS (C2, follows the TicketsPanel exemplar): a DS {@link Panel} wraps each
- * type-section's {@link ListRow}s. Per row: an {@link Avatar} (name-hashed identity color) leads the
- * title, harness · model is the mono meta line, the crow's client-side `health` becomes a
- * {@link StatusDot} (green/yellow/red/neutral → running/pending/failed/idle, with the raw status word
- * as its label), the favorite star is the ListRow's own `starred`/`onPinToggle`, and the reset action
- * is a small ghost {@link IconButton}. Data wiring is byte-for-byte unchanged.
+ * RosterPanel — live agent roster (collaborator / planners / rogue / ticket) with health and
+ * favorites. Click selects the crow as the active chat target; ★ toggles favorite; ticket-bound
+ * crows can be reset.
  */
 
 import { selectCrowsView } from '@core/selectors/crowsSelectors.js';
@@ -26,13 +17,11 @@ import {
   Tag,
   IconButton,
   Icon,
-  cx,
 } from '../ds/index.js';
 import type { StatusDotStatus } from '../ds/index.js';
 import { SliceHint } from '../SliceHint.js';
 
-/** Map the selector's client-side crow health onto a DS StatusDot status (rule 2: no re-derivation
- * of meaning — this is the fixed health→dot color contract from the C2 spec). */
+/** Map selector crow health onto a DS StatusDot status. */
 const HEALTH_TO_DOT: Readonly<Record<Health, StatusDotStatus>> = {
   green: 'running',
   yellow: 'pending',
@@ -87,7 +76,7 @@ export function RosterPanel(): React.JSX.Element {
                   setTranscriptPaneOpen(row.agentId, true);
                 }}
                 title={
-                  <span className={cx('roster-name')}>
+                  <span className="roster-name">
                     <Avatar size="sm" name={row.name} />
                     {row.name}
                   </span>

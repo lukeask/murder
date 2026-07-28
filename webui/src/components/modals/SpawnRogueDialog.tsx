@@ -1,11 +1,4 @@
-/**
- * SpawnRogueDialog — web counterpart of inktui's SpawnWizardModal (`ctrl+s`).
- *
- * Single form covering the essential {@link SpawnRogueParams}: harness, model, effort (model-aware
- * via {@link effortMatrixFor}), worktree (+ branch when "+ new"), optional name. Loads harness
- * models / worktree options / spawn favorites on open (cancelled-flag stale-load guards). Submits
- * through `createSpawnActions(bus, store).spawnRogue`.
- */
+/** SpawnRogueDialog — web counterpart of inktui's SpawnWizardModal (`ctrl+s`). */
 
 import { useAppStore, useAppStoreApi } from '@core/hooks/useAppStore.js';
 import {
@@ -33,18 +26,18 @@ import {
   type WorktreeOption,
 } from '@core/store/dialogs/worktreeOptionsActions.js';
 import { toastStore } from '@core/store/toast/toastStore.js';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useApplicationClient } from '../../application/ApplicationClientContext.js';
-import { Button, Dialog, Input, Select } from '../ds/index.js';
+import { Input, Select } from '../ds/index.js';
+import { CreationDialog } from './CreationDialog.js';
 
 export interface SpawnRogueDialogProps {
-  readonly open: boolean;
+  /** Optional while App remounts-on-open; Dialog defaults to true. */
+  readonly open?: boolean;
   readonly onClose: () => void;
 }
 
-function harnessLabel(id: string): string {
-  return id.replace(/_/g, '-');
-}
+const EMPTY_WORKTREES = buildWorktreeOptions([]);
 
 export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): React.JSX.Element {
   const bus = useApplicationClient();
@@ -54,7 +47,7 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
   const harnessOptions = useMemo(() => {
     const list =
       enabledHarnesses.length > 0 ? enabledHarnesses : ([...HARNESS_ORDER] as readonly string[]);
-    return list.map((h) => ({ value: h, label: harnessLabel(h) }));
+    return list.map((h) => ({ value: h, label: h.replace(/_/g, '-') }));
   }, [enabledHarnesses]);
 
   const initialHarness = harnessOptions[0]?.value ?? DEFAULT_HARNESS;
@@ -62,39 +55,23 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
   const [modelMap, setModelMap] = useState<Record<string, readonly HarnessModel[]>>(
     STATIC_HARNESS_MODELS,
   );
-  const [worktreeOptions, setWorktreeOptions] = useState<readonly WorktreeOption[]>(() =>
-    buildWorktreeOptions([]),
-  );
+  const [worktreeOptions, setWorktreeOptions] =
+    useState<readonly WorktreeOption[]>(EMPTY_WORKTREES);
   const [favorites, setFavorites] = useState<readonly SpawnFavorite[]>([]);
   const [favoriteKey, setFavoriteKey] = useState('');
 
   const [harness, setHarness] = useState(initialHarness);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
-  const [worktreeKey, setWorktreeKey] = useState(worktreeOptions[0]?.key ?? '');
+  const [worktreeKey, setWorktreeKey] = useState(EMPTY_WORKTREES[0]?.key ?? '');
   const [branch, setBranch] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  // Load live models / worktrees / favorites on open; ignore late replies after close.
+  // Fetch live models / worktrees / favorites; ignore late replies after unmount.
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
-
-    setModelMap(STATIC_HARNESS_MODELS);
-    setWorktreeOptions(buildWorktreeOptions([]));
-    setFavorites([]);
-    setFavoriteKey('');
-    setHarness(initialHarness);
-    setModel('');
-    setEffort('');
-    setWorktreeKey(buildWorktreeOptions([])[0]?.key ?? '');
-    setBranch('');
-    setName('');
-    setError(null);
-    setPending(false);
-
     void createHarnessModelsActions(bus)
       .fetch()
       .then((map) => {
@@ -113,61 +90,30 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
       .then((f) => {
         if (!cancelled) setFavorites(f);
       });
-
     return () => {
       cancelled = true;
     };
-  }, [open, bus, initialHarness]);
+  }, [bus]);
 
   const modelList = useMemo(() => modelsFor(harness, modelMap), [harness, modelMap]);
   const effortSpec = useMemo(() => effortMatrixFor(harness, model), [harness, model]);
 
   // Seed model/effort defaults when harness or model list changes.
   useEffect(() => {
-    if (!open) return;
     if (modelList.length > 0) {
       const stillValid = modelList.some((m) => m.id === model);
       if (!stillValid) {
         const next = modelList[0]?.id ?? '';
         setModel(next);
-        const spec = effortMatrixFor(harness, next);
-        setEffort(spec.options[defaultEffortCursor(harness, next)] ?? '');
+        setEffort(effortMatrixFor(harness, next).options[defaultEffortCursor(harness, next)] ?? '');
       }
     } else if (model !== '') {
       setModel('');
       setEffort('');
     }
-  }, [open, harness, modelList, model]);
+  }, [harness, modelList, model]);
 
-  useEffect(() => {
-    if (!open) return;
-    if (effortSpec.options.length === 0) {
-      if (effort !== '') setEffort('');
-      return;
-    }
-    if (!effortSpec.options.includes(effort)) {
-      setEffort(effortSpec.options[defaultEffortCursor(harness, model)] ?? '');
-    }
-  }, [open, effortSpec, effort, harness, model]);
-
-  const onHarnessChange = (next: string): void => {
-    setHarness(next);
-    setFavoriteKey('');
-    setModel('');
-    setEffort('');
-  };
-
-  const applyFavorite = (idxStr: string): void => {
-    setFavoriteKey(idxStr);
-    if (idxStr === '') return;
-    const f = favorites[Number(idxStr)];
-    if (f === undefined) return;
-    setHarness(f.harness);
-    setModel(f.model);
-    setEffort(f.effort);
-  };
-
-  const submit = useCallback(() => {
+  const submit = (): void => {
     if (pending) return;
     if (worktreeKey === NEW_WORKTREE_KEY && branch.trim().length === 0) {
       setError('Branch name is required.');
@@ -196,110 +142,109 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
         setError(message);
         toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       });
-  }, [branch, bus, effort, harness, model, name, onClose, pending, storeApi, worktreeKey]);
+  };
 
   return (
-    <Dialog
-      open={open}
+    <CreationDialog
+      open={open ?? true}
       title="Spawn Rogue"
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={pending}>
-            {pending ? 'Spawning…' : 'Spawn'}
-          </Button>
-        </>
-      }
+      pending={pending}
+      submitLabel="Spawn"
+      pendingLabel="Spawning…"
+      onSubmit={submit}
+      error={error}
     >
-      <form
-        className="creation-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
+      {favorites.length > 0 ? (
+        <Select
+          label="Favorite"
+          value={favoriteKey}
+          disabled={pending}
+          onChange={(e) => {
+            const idxStr = e.target.value;
+            setFavoriteKey(idxStr);
+            if (idxStr === '') return;
+            const f = favorites[Number(idxStr)];
+            if (f === undefined) return;
+            setHarness(f.harness);
+            setModel(f.model);
+            setEffort(f.effort);
+          }}
+          options={[
+            { value: '', label: '— none —' },
+            ...favorites.map((f, i) => ({ value: String(i), label: f.name })),
+          ]}
+        />
+      ) : null}
+
+      <Select
+        label="Harness"
+        value={harness}
+        disabled={pending}
+        onChange={(e) => {
+          setHarness(e.target.value);
+          setFavoriteKey('');
         }}
-      >
-        {favorites.length > 0 ? (
-          <Select
-            label="Favorite"
-            value={favoriteKey}
-            disabled={pending}
-            onChange={(e) => applyFavorite(e.target.value)}
-            options={[
-              { value: '', label: '— none —' },
-              ...favorites.map((f, i) => ({ value: String(i), label: f.name })),
-            ]}
-          />
-        ) : null}
+        options={harnessOptions}
+      />
 
+      {modelList.length > 0 ? (
         <Select
-          label="Harness"
-          value={harness}
+          label="Model"
+          value={model}
           disabled={pending}
-          onChange={(e) => onHarnessChange(e.target.value)}
-          options={harnessOptions}
+          onChange={(e) => {
+            const next = e.target.value;
+            setModel(next);
+            setEffort(effortMatrixFor(harness, next).options[defaultEffortCursor(harness, next)] ?? '');
+            setFavoriteKey('');
+          }}
+          options={modelList.map((m) => ({ value: m.id, label: m.label }))}
         />
+      ) : null}
 
-        {modelList.length > 0 ? (
-          <Select
-            label="Model"
-            value={model}
-            disabled={pending}
-            onChange={(e) => {
-              setModel(e.target.value);
-              setFavoriteKey('');
-            }}
-            options={modelList.map((m) => ({ value: m.id, label: m.label }))}
-          />
-        ) : null}
-
-        {effortSpec.options.length > 0 ? (
-          <Select
-            label="Effort"
-            value={effort}
-            disabled={pending}
-            onChange={(e) => {
-              setEffort(e.target.value);
-              setFavoriteKey('');
-            }}
-            options={effortSpec.options.map((o) => ({ value: o, label: o }))}
-          />
-        ) : null}
-
+      {effortSpec.options.length > 0 ? (
         <Select
-          label="Worktree"
-          value={worktreeKey}
+          label="Effort"
+          value={effort}
           disabled={pending}
-          onChange={(e) => setWorktreeKey(e.target.value)}
-          options={worktreeOptions.map((o) => ({ value: o.key, label: o.label }))}
+          onChange={(e) => {
+            setEffort(e.target.value);
+            setFavoriteKey('');
+          }}
+          options={effortSpec.options.map((o) => ({ value: o, label: o }))}
         />
+      ) : null}
 
-        {worktreeKey === NEW_WORKTREE_KEY ? (
-          <Input
-            label="Branch name"
-            value={branch}
-            placeholder="e.g. feature/my-work"
-            disabled={pending}
-            invalid={error !== null && branch.trim().length === 0}
-            onChange={(e) => {
-              setBranch(e.target.value);
-              setError(null);
-            }}
-          />
-        ) : null}
+      <Select
+        label="Worktree"
+        value={worktreeKey}
+        disabled={pending}
+        onChange={(e) => setWorktreeKey(e.target.value)}
+        options={worktreeOptions.map((o) => ({ value: o.key, label: o.label }))}
+      />
 
+      {worktreeKey === NEW_WORKTREE_KEY ? (
         <Input
-          label="Name"
-          value={name}
-          placeholder="blank = autogenerate"
+          label="Branch name"
+          value={branch}
+          placeholder="e.g. feature/my-work"
           disabled={pending}
-          onChange={(e) => setName(e.target.value)}
+          invalid={error !== null && branch.trim().length === 0}
+          onChange={(e) => {
+            setBranch(e.target.value);
+            setError(null);
+          }}
         />
+      ) : null}
 
-        {error !== null ? <p className="mds-field__hint mds-field__hint--error">{error}</p> : null}
-      </form>
-    </Dialog>
+      <Input
+        label="Name"
+        value={name}
+        placeholder="blank = autogenerate"
+        disabled={pending}
+        onChange={(e) => setName(e.target.value)}
+      />
+    </CreationDialog>
   );
 }

@@ -1,23 +1,9 @@
-/**
- * App — the web/mobile shell, rebuilt on the design-system primitives (Phase C1, "desktop cockpit").
- *
- * ## Layout (chrome only — data flow / IA unchanged)
- *  - Desktop (> 768px): a `.cockpit` grid of three rows — DS {@link NavBar} (`murder` brand +
- *    a connection indicator in the trailing slot), a 3-rail body `[ left rail | Stage | right rail ]`,
- *    and a DS {@link KeybindBar} of display-only chord hints. Rails scroll independently; the Stage
- *    grows. The left/center/right PANEL ASSIGNMENTS are identical to the pre-reskin shell.
- *  - Mobile (≤ 768px, {@link MOBILE_QUERY}): a single pane switched by a bottom pill {@link Tabs} bar
- *    (stacked icon+label), with a DS header showing the brand + the current-view label. Same 10 tabs,
- *    same `MobilePane` switch — only the chrome changed.
- *
- * Responsive switching stays a single JS decision ({@link useMediaQuery}); everything else is CSS in
- * `styles/cockpit.css`. Store/bus wiring (the onConnect re-prime, every selector) is untouched.
- */
+/** App — web/mobile shell on design-system primitives (desktop cockpit + mobile tabs). */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
 import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@core/theme/palettes.js';
 import { setTheme } from '@core/theme/themeStore.js';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import type { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
 import { CreationDialogsProvider } from './creationDialogs.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
@@ -40,40 +26,25 @@ import { SpawnRogueDialog } from './components/modals/SpawnRogueDialog.js';
 import { NavBar, KeybindBar, type KeybindHint, StatusDot, type StatusDotStatus, Tabs, type TabItem, Icon, type IconName, cx } from './components/ds/index.js';
 import { useDesktopKeybinds } from './useDesktopKeybinds.js';
 
-/** The mobile tab set — one entry per top-level destination (panels + the chat Stage). */
-const MOBILE_TABS = [
-  'chat',
-  'crows',
-  'tickets',
-  'plans',
-  'notes',
-  'reports',
-  'history',
-  'usage',
-  'tree',
-  'settings',
-] as const;
-type MobileTab = (typeof MOBILE_TABS)[number];
+const MOBILE_TAB_DEFS: readonly {
+  readonly id: string;
+  readonly icon: IconName;
+  readonly Pane: ComponentType;
+}[] = [
+  { id: 'chat', icon: 'message-square', Pane: Stage },
+  { id: 'crows', icon: 'crosshair', Pane: RosterPanel },
+  { id: 'tickets', icon: 'ticket', Pane: TicketsPanel },
+  { id: 'plans', icon: 'file-text', Pane: PlansPanel },
+  { id: 'notes', icon: 'file-text', Pane: NotesPanel },
+  { id: 'reports', icon: 'file-text', Pane: ReportsPanel },
+  { id: 'history', icon: 'git-branch', Pane: HistoryPanel },
+  { id: 'usage', icon: 'gauge', Pane: UsagePanel },
+  { id: 'tree', icon: 'git-commit', Pane: TreePanel },
+  { id: 'settings', icon: 'settings', Pane: SettingsPanel },
+];
+type MobileTab = (typeof MOBILE_TAB_DEFS)[number]['id'];
 
-/** Per-tab DS line icon (stacked above the label in the pill switcher). */
-const MOBILE_TAB_ICON: Record<MobileTab, IconName> = {
-  chat: 'message-square',
-  crows: 'crosshair',
-  tickets: 'ticket',
-  plans: 'file-text',
-  notes: 'file-text',
-  reports: 'file-text',
-  history: 'git-branch',
-  usage: 'gauge',
-  tree: 'git-commit',
-  settings: 'settings',
-};
-
-/**
- * Keybind hints for the desktop bottom bar. Chords use `C-` as the default modifier label (the live
- * handler reads `settings.modifier` and accepts alt/ctrl/both). Creation chords match inktui where
- * practical: spawn `C-s`, new plan `C-p`; new ticket is `C-t` on web (inktui made that chord-less).
- */
+/** Desktop bottom-bar chords (`C-` label; live handler reads `settings.modifier`). */
 const KEYBIND_HINTS: readonly KeybindHint[] = [
   { chord: 'C-1-0', desc: 'panels' },
   { chord: 'C-space', desc: 'chat' },
@@ -84,48 +55,43 @@ const KEYBIND_HINTS: readonly KeybindHint[] = [
   { chord: 'C-o', desc: 'settings' },
 ];
 
+const REFRESH_ON_CONNECT = [
+  'roster',
+  'tickets',
+  'plans',
+  'notes',
+  'reports',
+  'history',
+  'transit',
+  'usage',
+  'conversations',
+] as const;
+const LOAD_ON_CONNECT = ['favorites', 'themes', 'settings'] as const;
+
 export function App({ bus }: { readonly bus: ApplicationWebSocketClient }): React.JSX.Element {
   useThemeCssVars();
   const status = useConnectionStatus(bus);
   const isMobile = useMediaQuery(MOBILE_QUERY);
   const storeApi = useAppStoreApi();
 
-  const [spawnOpen, setSpawnOpen] = useState(false);
-  const [ticketOpen, setTicketOpen] = useState(false);
-  const [planOpen, setPlanOpen] = useState(false);
-  const openSpawn = useCallback(() => setSpawnOpen(true), []);
-  const openTicket = useCallback(() => setTicketOpen(true), []);
-  const openPlan = useCallback(() => setPlanOpen(true), []);
+  const [dialog, setDialog] = useState<'spawn' | 'ticket' | 'plan' | null>(null);
   const creationApi = useMemo(
-    () => ({ openSpawn, openTicket, openPlan }),
-    [openSpawn, openTicket, openPlan],
+    () => ({
+      openSpawn: () => setDialog('spawn'),
+      openTicket: () => setDialog('ticket'),
+      openPlan: () => setDialog('plan'),
+    }),
+    [],
   );
 
-  useDesktopKeybinds(!isMobile, {
-    onSpawn: openSpawn,
-    onNewTicket: openTicket,
-    onNewPlan: openPlan,
-  });
+  useDesktopKeybinds(!isMobile, creationApi);
 
-  // Re-prime every slice on each (re)connect. Slice invalidation is key-only, so a slice that
-  // changed while disconnected stays stale until an unrelated event; priming closes that gap.
-  // `onConnect` fires immediately if already connected (no race). The favorites + settings loads
-  // also fire so the stars and theme reflect persisted state.
+  // Re-prime every slice on each (re)connect so key-only invalidation can't leave stale data.
   useEffect(() => {
     const off = bus.onConnect(() => {
       const a = storeApi.getState().actions;
-      void a.roster.refresh();
-      void a.tickets.refresh();
-      void a.plans.refresh();
-      void a.notes.refresh();
-      void a.reports.refresh();
-      void a.history.refresh();
-      void a.transit.refresh();
-      void a.usage.refresh();
-      void a.conversations.refresh();
-      void a.favorites.load();
-      void a.themes.load();
-      void a.settings.load();
+      for (const key of REFRESH_ON_CONNECT) void a[key].refresh();
+      for (const key of LOAD_ON_CONNECT) void a[key].load();
     });
     return off;
   }, [bus, storeApi]);
@@ -146,23 +112,20 @@ export function App({ bus }: { readonly bus: ApplicationWebSocketClient }): Reac
     });
   }, [storeApi]);
 
-  // `data-layout` is preserved (tests + any external hooks key off it). The DOM tree differs between
-  // desktop (cockpit grid) and mobile (single pane) — the one thing CSS alone can't express.
-  // ToastHost is one global rack (desktop + mobile); core actions already push to toastStore.
   return (
     <CreationDialogsProvider value={creationApi}>
       <div className="app" data-layout={isMobile ? 'mobile' : 'desktop'}>
         {isMobile ? <MobileLayout status={status} /> : <DesktopLayout status={status} />}
         <ToastHost />
-        <SpawnRogueDialog open={spawnOpen} onClose={() => setSpawnOpen(false)} />
-        <NewTicketDialog open={ticketOpen} onClose={() => setTicketOpen(false)} />
-        <NewPlanDialog open={planOpen} onClose={() => setPlanOpen(false)} />
+        {dialog === 'spawn' && <SpawnRogueDialog onClose={() => setDialog(null)} />}
+        {dialog === 'ticket' && <NewTicketDialog onClose={() => setDialog(null)} />}
+        {dialog === 'plan' && <NewPlanDialog onClose={() => setDialog(null)} />}
       </div>
     </CreationDialogsProvider>
   );
 }
 
-/** Desktop: NavBar (brand + connection) / 3-rail body / KeybindBar. Panel assignments unchanged. */
+/** Desktop: NavBar / 3-rail body / KeybindBar. */
 function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
   return (
     <div className="cockpit">
@@ -185,21 +148,22 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
           <SettingsPanel />
         </aside>
       </div>
-      <KeybindBar hints={[...KEYBIND_HINTS]} help={null} />
+      <KeybindBar hints={KEYBIND_HINTS} />
     </div>
   );
 }
 
-/** Mobile: DS header (brand + view label) / single pane / bottom pill tab bar. */
+/** Mobile: header / single pane / bottom pill tab bar. */
 function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
   const [tab, setTab] = useState<MobileTab>('chat');
   const [tabScroll, setTabScroll] = useState({ left: false, right: true });
   const tabsRef = useRef<HTMLDivElement>(null);
-  const tabItems: TabItem[] = MOBILE_TABS.map((t) => ({
-    id: t,
-    label: t,
-    icon: <Icon name={MOBILE_TAB_ICON[t]} size={18} />,
+  const tabItems: TabItem[] = MOBILE_TAB_DEFS.map((t) => ({
+    id: t.id,
+    label: t.id,
+    icon: <Icon name={t.icon} size={18} />,
   }));
+  const Pane = MOBILE_TAB_DEFS.find((t) => t.id === tab)?.Pane ?? Stage;
 
   const syncTabScroll = (): void => {
     const el = tabsRef.current?.querySelector('.mds-tabs--full');
@@ -241,7 +205,7 @@ function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.
         <ConnectionIndicator status={status} />
       </header>
       <main className="app__body app__body--mobile mw-main">
-        <MobilePane tab={tab} />
+        <Pane />
       </main>
       <nav
         ref={tabsRef}
@@ -264,39 +228,7 @@ function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.
   );
 }
 
-function MobilePane({ tab }: { readonly tab: MobileTab }): React.JSX.Element {
-  switch (tab) {
-    case 'chat':
-      return <Stage />;
-    case 'crows':
-      return <RosterPanel />;
-    case 'tickets':
-      return <TicketsPanel />;
-    case 'plans':
-      return <PlansPanel />;
-    case 'notes':
-      return <NotesPanel />;
-    case 'reports':
-      return <ReportsPanel />;
-    case 'history':
-      return <HistoryPanel />;
-    case 'usage':
-      return <UsagePanel />;
-    case 'tree':
-      return <TreePanel />;
-    case 'settings':
-      return <SettingsPanel />;
-    default:
-      return tab satisfies never;
-  }
-}
-
-/**
- * ConnectionIndicator — the reskinned connection pill: a DS {@link StatusDot} + a terse lowercase
- * label. Drives all four {@link ConnectionStatus} states off the existing `useConnectionStatus`. The
- * status→dot mapping reuses the DS crow-state palette (connected→done/green, connecting/reconnecting→
- * running/pending, error→failed/red); the `pulse` breathe is only meaningful on the "running" status.
- */
+/** Connection pill: DS StatusDot + lowercase label for all four ConnectionStatus values. */
 function ConnectionIndicator({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
   const label: Record<ConnectionStatus, string> = {
     connecting: 'connecting…',
@@ -310,7 +242,6 @@ function ConnectionIndicator({ status }: { readonly status: ConnectionStatus }):
     reconnecting: 'running',
     error: 'failed',
   };
-  // Visual variant class for the label color (kept distinct from the dot's crow-state palette).
   const variant = status === 'connecting' ? 'reconnecting' : status;
   return (
     <span className={`conn cockpit__conn cockpit__conn--${variant}`} title={status === 'error' ? 'version mismatch — restart murder' : label[status]}>

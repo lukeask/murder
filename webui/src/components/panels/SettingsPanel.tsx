@@ -1,19 +1,6 @@
 /**
- * SettingsPanel — the settings screen, reskinned onto the design system (Phase C2). Theme switching
- * is the headline feature: selecting a theme calls `setTheme(id)` (the same global themeStore the Ink
- * UI uses → repaints every CSS var via {@link useThemeCssVars}) AND persists it through
- * `settings.update({ theme })` so it survives a reload. Pane gap, the input modifier, vim mode,
- * collaborator/planner/crow harnesses, startup rogue, and harness control backends are also surfaced
- * (persisted via `settings.update`).
- *
- * ── THE LOCKED PANEL-REWRITE PATTERN (see TicketsPanel exemplar) ────────────────────────────────
- * Presentation moves onto DS primitives (Panel + form controls from the barrel); the data wiring is
- * UNCHANGED — same `s.settings` reads and `s.actions.settings.update`, and the theme control keeps
- * `useThemeId()` + `PALETTES` with the existing `chooseTheme` (setTheme for instant repaint, update to
- * persist). Each setting maps to its DS control: modifier → Radio, paneGap → numeric Input,
- * vimMode → Switch, collaborator/planner harness → Select, crow → Checkbox pool, control backends →
- * Radio, theme → selectable swatch toggles (`data-on`). Bespoke CSS lives in `styles/panels-settings.css`
- * (wired in by the shell, not imported here).
+ * SettingsPanel — theme, modifier, pane gap, vim, harnesses, crow pool, startup rogue, and
+ * control backends. Persists via `settings.update`; theme also calls `setTheme` for instant repaint.
  */
 
 import { useAppStore } from '@core/hooks/useAppStore.js';
@@ -38,11 +25,7 @@ import { Panel, Input, Select, Radio, Switch, Checkbox, cx } from '../ds/index.j
 
 const FALLBACK_THEME_IDS = listThemeIds();
 
-const MODIFIER_OPTIONS = [
-  { value: 'alt', label: 'alt' },
-  { value: 'ctrl', label: 'ctrl' },
-  { value: 'both', label: 'both' },
-];
+const MODIFIER_OPTIONS = ['alt', 'ctrl', 'both'];
 
 /** Mirrored from `@core/.../harnesses` (not exported there). */
 const CODEX_CONTROL_BACKENDS: readonly CodexControlBackend[] = ['harness_parse', 'app_server'];
@@ -73,11 +56,11 @@ export function SettingsPanel(): React.JSX.Element {
   const harnessValue = settings.collaboratorHarness ?? settings.effectiveCollaboratorHarness;
   const harnessOptions = Array.from(
     new Set([settings.effectiveCollaboratorHarness, ...settings.effectiveCrowHarnesses, harnessValue]),
-  ).map((h) => ({ value: h, label: h }));
+  );
   // Planner: Select includes an explicit "default" (null) option; label shows effective fallback.
   const plannerOptions = [
     { value: '', label: `default (${settings.effectivePlannerHarness})` },
-    ...HARNESSES.map((h) => ({ value: h, label: h })),
+    ...HARNESSES,
   ];
   // Crow pool: override when set, else the daemon's effective pool. Empty override = use default.
   const crowPool = settings.crowHarnesses ?? settings.effectiveCrowHarnesses;
@@ -121,10 +104,6 @@ export function SettingsPanel(): React.JSX.Element {
             : defaultEffortFor(harness, settings.startupRogueEfforts),
       },
     });
-  };
-
-  const choosePlannerHarness = (value: string): void => {
-    void update({ planner_harness: value === '' ? null : value });
   };
 
   /** Toggle a crow harness in/out of the pool, or reset to the effective default. Mirrors inktui. */
@@ -186,42 +165,33 @@ export function SettingsPanel(): React.JSX.Element {
           />
         </section>
 
-        <section className="settings__group">
-          <Input
-            type="number"
-            min={0}
-            max={4}
-            label="pane gap"
-            className="settings__stepper"
-            value={settings.paneGap}
-            onChange={(e) => void update({ pane_gap: Number(e.target.value) })}
-          />
-        </section>
+        <Input
+          type="number"
+          min={0}
+          max={4}
+          label="pane gap"
+          className="settings__stepper"
+          value={settings.paneGap}
+          onChange={(e) => void update({ pane_gap: Number(e.target.value) })}
+        />
 
-        <section className="settings__group">
-          <Switch
-            label="vim mode"
-            checked={settings.vimMode}
-            onChange={(e) => void update({ vim_mode: e.target.checked })}
-          />
-        </section>
+        <Switch
+          label="vim mode"
+          checked={settings.vimMode}
+          onChange={(e) => void update({ vim_mode: e.target.checked })}
+        />
 
-        <section className="settings__group">
-          <Select
-            label="collaborator harness"
-            options={harnessOptions}
-            value={harnessValue}
-            onChange={(e) => void update({ collaborator_harness: e.target.value })}
-          />
-        </section>
+        <Select
+          label="collaborator harness"
+          options={harnessOptions}
+          value={harnessValue}
+          onChange={(e) => void update({ collaborator_harness: e.target.value })}
+        />
 
         <section className="settings__group">
           <Select
             label="startup rogue"
-            options={[
-              { value: '', label: 'off' },
-              ...HARNESSES.map((h) => ({ value: h, label: h })),
-            ]}
+            options={[{ value: '', label: 'off' }, ...HARNESSES]}
             value={startupHarness}
             onChange={(e) => chooseStartupHarness(e.target.value)}
           />
@@ -240,7 +210,7 @@ export function SettingsPanel(): React.JSX.Element {
               {startupEffortChoices.length > 0 ? (
                 <Select
                   label="startup effort"
-                  options={startupEffortChoices.map((effort) => ({ value: effort, label: effort }))}
+                  options={[...startupEffortChoices]}
                   value={startupEffortValue}
                   onChange={(e) =>
                     void update({
@@ -253,14 +223,12 @@ export function SettingsPanel(): React.JSX.Element {
           ) : null}
         </section>
 
-        <section className="settings__group">
-          <Select
-            label="planner harness"
-            options={plannerOptions}
-            value={settings.plannerHarness ?? ''}
-            onChange={(e) => choosePlannerHarness(e.target.value)}
-          />
-        </section>
+        <Select
+          label="planner harness"
+          options={plannerOptions}
+          value={settings.plannerHarness ?? ''}
+          onChange={(e) => void update({ planner_harness: e.target.value === '' ? null : e.target.value })}
+        />
 
         <section className="settings__group">
           <h3 className="settings__heading">crow harnesses</h3>
@@ -292,7 +260,7 @@ export function SettingsPanel(): React.JSX.Element {
           <Radio
             name="codex_control_backend"
             inline
-            options={CODEX_CONTROL_BACKENDS.map((v) => ({ value: v, label: v }))}
+            options={[...CODEX_CONTROL_BACKENDS]}
             value={settings.codexControlBackend}
             onChange={(v) => void update({ codex_control_backend: v as CodexControlBackend })}
           />
@@ -303,7 +271,7 @@ export function SettingsPanel(): React.JSX.Element {
           <Radio
             name="cursor_control_backend"
             inline
-            options={CURSOR_CONTROL_BACKENDS.map((v) => ({ value: v, label: v }))}
+            options={[...CURSOR_CONTROL_BACKENDS]}
             value={settings.cursorControlBackend}
             onChange={(v) => void update({ cursor_control_backend: v as CursorControlBackend })}
           />
@@ -314,7 +282,7 @@ export function SettingsPanel(): React.JSX.Element {
           <Radio
             name="claude_control_backend"
             inline
-            options={CLAUDE_CONTROL_BACKENDS.map((v) => ({ value: v, label: v }))}
+            options={[...CLAUDE_CONTROL_BACKENDS]}
             value={settings.claudeControlBackend}
             onChange={(v) => void update({ claude_control_backend: v as ClaudeControlBackend })}
           />

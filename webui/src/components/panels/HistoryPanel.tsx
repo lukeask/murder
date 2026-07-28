@@ -1,14 +1,6 @@
 /**
- * HistoryPanel — the conversation/intention history over the `history` slice via
- * {@link selectHistoryView}. A loose/all mode toggle (local state) controls the filter. Rows can be
- * dismissed (`history.dismiss`) and resumable rows resumed (`history.resumeConversation`).
- *
- * Reskinned onto the DS (C2, follows the TicketsPanel exemplar): a DS {@link Panel} wraps one
- * {@link ListRow} per history item — the intention text is the title, the target crow + relative age
- * is the mono meta line, and the status is a trailing {@link Tag} (tone derived from the view's raw
- * status). Resume (when resumable) + dismiss are small ghost controls in the trailing slot. The
- * loose/all segmented filter rides the Panel's `actions` slot as DS {@link Tabs} (pill variant),
- * preserving the existing `mode` state + `selectHistoryView(history, mode, Date.now())` wiring.
+ * HistoryPanel — conversation/intention history over the `history` slice. Loose/all mode toggle
+ * filters rows; dismiss and resume actions wire through `history.dismiss` / `history.resumeConversation`.
  */
 
 import { selectHistoryView } from '@core/selectors/historySelectors.js';
@@ -20,8 +12,7 @@ import { Panel, ListRow, Tag, Tabs, Button, IconButton, Icon } from '../ds/index
 import type { TabItem, TagProps } from '../ds/index.js';
 import { SliceHint } from '../SliceHint.js';
 
-/** Map the view's raw history status onto a DS Tag tone (rule 2: tone derived from the view, not
- * re-string-matched for meaning beyond this presentation map). */
+/** Map the view's raw history status onto a DS Tag tone. */
 function statusTone(status: string): NonNullable<TagProps['tone']> {
   if (status === 'open') return 'accent';
   if (status === 'stale') return 'brand';
@@ -35,10 +26,7 @@ export function HistoryPanel(): React.JSX.Element {
   const [mode, setMode] = useState<HistoryMode>('loose');
   const view = selectHistoryView(history, mode, Date.now());
 
-  const looseTab: TabItem =
-    view.looseCount > 0
-      ? { id: 'loose', label: 'loose', count: view.looseCount }
-      : { id: 'loose', label: 'loose' };
+  const looseTab = { id: 'loose', label: 'loose', count: view.looseCount || undefined } as TabItem;
   const toggle = (
     <Tabs
       variant="pill"

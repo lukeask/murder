@@ -1,7 +1,6 @@
 /**
- * PlansPanel — plans list (parent/child indent + star + open-doc) over the `plans` + `favorites`
- * slices via {@link selectPlansView}. Adds a "spawn planner" affordance per plan
- * (`plans.spawnPlanner`). A thin wrapper over {@link DocListPanel}.
+ * PlansPanel — plans list (parent/child indent + star + open-doc) over plans + favorites.
+ * Adds a per-plan "spawn planner" affordance; thin DocListPanel wrapper.
  */
 
 import { selectPlansView } from '@core/selectors/plansSelectors.js';
@@ -29,14 +28,7 @@ export function PlansPanel(): React.JSX.Element {
           <Icon name="plus" size={14} />
         </IconButton>
       }
-      rows={view.rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        charCount: r.charCount,
-        updatedAt: r.updatedAt,
-        starred: r.starred,
-        depth: r.depth,
-      }))}
+      rows={view.rows}
       rowExtra={(row) => (
         <Button
           variant="ghost"
@@ -45,7 +37,7 @@ export function PlansPanel(): React.JSX.Element {
           title="Spawn planner"
           onClick={(e) => {
             e.stopPropagation();
-            void spawnPlanner(row.id);
+            void spawnPlanner(row.id ?? row.name);
           }}
         >
           plan

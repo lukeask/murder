@@ -104,37 +104,6 @@
 .mds-keybar__spacer {
   flex: 1;
 }
-.mds-keybar__help {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  background: var(--surface-raised);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  padding: 6px 11px 6px 9px;
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
-}
-.mds-keybar__help:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
-}
-.mds-keybar__help:focus-visible {
-  outline: 2px solid var(--border-focus);
-  outline-offset: 2px;
-}
-.mds-keybar__help svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.75;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
 .mds-keybar--scroll {
   flex-wrap: nowrap;
   overflow-x: auto;

@@ -1,16 +1,15 @@
-/**
- * NewTicketDialog — web counterpart of inktui's NewTicketModal (`ctrl+t`).
- * Title field → `createDialogActions(bus).quickCreateTicket(title)`.
- */
+/** NewTicketDialog — web counterpart of inktui's NewTicketModal (`ctrl+t`). */
 
 import { createDialogActions } from '@core/store/dialogs/dialogActions.js';
 import { toastStore } from '@core/store/toast/toastStore.js';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useApplicationClient } from '../../application/ApplicationClientContext.js';
-import { Button, Dialog, Input } from '../ds/index.js';
+import { Input } from '../ds/index.js';
+import { CreationDialog } from './CreationDialog.js';
 
 export interface NewTicketDialogProps {
-  readonly open: boolean;
+  /** Optional while App remounts-on-open; Dialog defaults to true. */
+  readonly open?: boolean;
   readonly onClose: () => void;
 }
 
@@ -20,15 +19,7 @@ export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  useEffect(() => {
-    if (open) {
-      setTitle('');
-      setError(null);
-      setPending(false);
-    }
-  }, [open]);
-
-  const submit = useCallback(() => {
+  const submit = (): void => {
     const trimmed = title.trim();
     if (trimmed.length === 0) {
       setError('Ticket title is required.');
@@ -50,45 +41,30 @@ export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.
         setError(message);
         toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       });
-  }, [bus, onClose, pending, title]);
+  };
 
   return (
-    <Dialog
-      open={open}
+    <CreationDialog
+      open={open ?? true}
       title="New Ticket"
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={pending}>
-            Cancel
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={pending}>
-            {pending ? 'Creating…' : 'Create'}
-          </Button>
-        </>
-      }
+      pending={pending}
+      submitLabel="Create"
+      pendingLabel="Creating…"
+      onSubmit={submit}
+      error={error}
     >
-      <form
-        className="creation-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
+      <Input
+        label="Title"
+        value={title}
+        placeholder="Short description of the work…"
+        autoFocus
+        disabled={pending}
+        onChange={(e) => {
+          setTitle(e.target.value);
+          setError(null);
         }}
-      >
-        <Input
-          label="Title"
-          value={title}
-          placeholder="Short description of the work…"
-          autoFocus
-          invalid={error !== null}
-          {...(error !== null ? { hint: error } : {})}
-          disabled={pending}
-          onChange={(e) => {
-            setTitle(e.target.value);
-            setError(null);
-          }}
-        />
-      </form>
-    </Dialog>
+      />
+    </CreationDialog>
   );
 }

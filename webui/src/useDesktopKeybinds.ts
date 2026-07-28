@@ -1,9 +1,4 @@
-/**
- * Desktop keyboard shortcuts for the web cockpit — mirrors the Ink dispatcher's global chords that
- * have a sensible web analogue (focus chat, scroll a panel into view, cycle the recipient target,
- * open creation dialogs). Respects the persisted command modifier from settings (`alt` / `ctrl` /
- * `both`).
- */
+/** Desktop keyboard shortcuts for the web cockpit (focus chat, scroll panels, cycle target, open creation dialogs). */
 
 import { useAppStoreApi } from '@core/hooks/useAppStore.js';
 import { panelForDigit } from '@core/input/panels.js';
@@ -11,17 +6,9 @@ import type { PanelId } from '@core/input/panels.js';
 import { selectCycledRecipientTarget } from '@core/selectors/conversationsSelectors.js';
 import type { SettingsModifier } from '@core/store/settings/settingsSlice.js';
 import { useEffect } from 'react';
+import type { CreationDialogsApi } from './creationDialogs.js';
 
 const CHAT_INPUT_ID = 'chat-composer-input';
-
-export interface DesktopKeybindHandlers {
-  /** `C-s` — open spawn-rogue dialog (inktui `global.spawn`). */
-  readonly onSpawn?: () => void;
-  /** `C-t` — open new-ticket dialog (web; inktui made this chord-less). */
-  readonly onNewTicket?: () => void;
-  /** `C-p` — open new-plan dialog (inktui `global.newPlan`). */
-  readonly onNewPlan?: () => void;
-}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -56,9 +43,8 @@ function focusChatInput(): void {
 }
 
 /** Wire global desktop chords on `document` while the desktop shell is mounted. */
-export function useDesktopKeybinds(enabled: boolean, handlers: DesktopKeybindHandlers = {}): void {
+export function useDesktopKeybinds(enabled: boolean, { openSpawn, openTicket, openPlan }: CreationDialogsApi): void {
   const storeApi = useAppStoreApi();
-  const { onSpawn, onNewTicket, onNewPlan } = handlers;
 
   useEffect(() => {
     if (!enabled) {
@@ -76,9 +62,11 @@ export function useDesktopKeybinds(enabled: boolean, handlers: DesktopKeybindHan
         return;
       }
 
+      const key = e.key.toLowerCase();
+
       // Modifier + digit → scroll the bound panel into view (ctrl/alt+1–0).
-      if (e.key.length === 1 && e.key >= '0' && e.key <= '9' && !e.shiftKey) {
-        const panelId = panelForDigit(e.key);
+      if (key.length === 1 && key >= '0' && key <= '9' && !e.shiftKey) {
+        const panelId = panelForDigit(key);
         if (panelId !== null) {
           e.preventDefault();
           scrollPanelIntoView(panelId);
@@ -86,47 +74,27 @@ export function useDesktopKeybinds(enabled: boolean, handlers: DesktopKeybindHan
         return;
       }
 
-      if (e.key === ' ' || e.code === 'Space') {
+      if (key === ' ' || e.code === 'Space') {
         e.preventDefault();
         focusChatInput();
         return;
       }
 
-      if (e.key === 'o' || e.key === 'O') {
+      if (key === 'o') {
         e.preventDefault();
         scrollPanelIntoView('settings');
         return;
       }
 
-      if ((e.key === 's' || e.key === 'S') && onSpawn !== undefined) {
+      const openers = { s: openSpawn, t: openTicket, p: openPlan } as const;
+      if (key === 's' || key === 't' || key === 'p') {
         e.preventDefault();
-        onSpawn();
+        openers[key]();
         return;
       }
 
-      if ((e.key === 't' || e.key === 'T') && onNewTicket !== undefined) {
-        e.preventDefault();
-        onNewTicket();
-        return;
-      }
-
-      if ((e.key === 'p' || e.key === 'P') && onNewPlan !== undefined) {
-        e.preventDefault();
-        onNewPlan();
-        return;
-      }
-
-      if (e.key === 'h' || e.key === 'H') {
-        const result = selectCycledRecipientTarget(conversations, roster, favorites, -1);
-        if (result !== null) {
-          e.preventDefault();
-          actions.conversations.setActivePaneAgentId(result.agentId);
-        }
-        return;
-      }
-
-      if (e.key === 'l' || e.key === 'L') {
-        const result = selectCycledRecipientTarget(conversations, roster, favorites, 1);
+      if (key === 'h' || key === 'l') {
+        const result = selectCycledRecipientTarget(conversations, roster, favorites, key === 'h' ? -1 : 1);
         if (result !== null) {
           e.preventDefault();
           actions.conversations.setActivePaneAgentId(result.agentId);
@@ -136,7 +104,7 @@ export function useDesktopKeybinds(enabled: boolean, handlers: DesktopKeybindHan
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [enabled, storeApi, onSpawn, onNewTicket, onNewPlan]);
+  }, [enabled, storeApi, openSpawn, openTicket, openPlan]);
 }
 
 export { CHAT_INPUT_ID };

@@ -1,18 +1,6 @@
 /**
- * TreePanel — the git commit tree: branch lanes and their commits, over the `transit` slice
- * (Phase C2 reskin onto the design system).
- *
- * The inktui {@link selectTransitView} renders an ASCII railway tuned to a fixed terminal cell
- * width — that geometry is terminal-specific and does not translate to the DOM. So this panel reads
- * the RAW slice (`lanes[].commits[]`: short sha, subject, body, tsEpoch) and renders a natural web
- * commit list: a column of lanes, each listing its commits; clicking a commit shows its full
- * subject/body. The data wiring is UNCHANGED — same raw slice read, same local `selectedSha` state,
- * same inline `ageLabel()`. Only the DOM is reskinned onto the DS {@link Panel} + tokens.
- *
- * Per-branch identity color uses the crow palette `--crow-1..6` (cycled by lane index); short sha is
- * mono/muted, subject is primary text, age is muted. Lifecycle stays {@link SliceHint}. Bespoke CSS
- * lives in `styles/panels-transit.css` (wired in via main.tsx). This is the documented divergence
- * from the Ink railway (see STYLING.md) — no ASCII railway / graphical DAG here.
+ * TreePanel — git commit tree from the `transit` slice: lanes with commits; click a commit for
+ * subject/body detail. Web list (not the Ink ASCII railway); lane color cycles `--crow-1..6`.
  */
 
 import { useAppStore } from '@core/hooks/useAppStore.js';
@@ -40,20 +28,18 @@ export function TreePanel(): React.JSX.Element {
   const transit = useAppStore((s) => s.transit, shallow);
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
   const now = Date.now();
-
-  const view = {
-    status: transit.status,
-    error: transit.error,
-    isEmpty: transit.lanes.length === 0,
-  };
+  const isEmpty = transit.lanes.length === 0;
 
   const selected = transit.lanes
     .flatMap((l) => l.commits)
     .find((c) => c.sha === selectedSha);
 
   return (
-    <Panel title="Git Tree" count={view.isEmpty ? null : transit.lanes.length} data-panel-id="tree">
-      <SliceHint state={view} empty="No branches." />
+    <Panel title="Git Tree" count={isEmpty ? null : transit.lanes.length} data-panel-id="tree">
+      <SliceHint
+        state={{ status: transit.status, error: transit.error, isEmpty }}
+        empty="No branches."
+      />
       {transit.lanes.map((lane, laneIdx) => {
         const laneColor = `var(--crow-${(laneIdx % CROW_SLOTS) + 1})`;
         return (

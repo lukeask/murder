@@ -1,4 +1,4 @@
-/** ListRow smoke test: renders, selected/star variants apply classes, `as` polymorphism, onPinToggle. */
+/** ListRow smoke test: renders, selected/star variants apply classes, onPinToggle. */
 
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -49,11 +49,5 @@ describe('ds/ListRow', () => {
     expect(root?.tagName).toBe('DIV');
     expect(root?.getAttribute('role')).toBe('button');
     expect(screen.getByRole('button', { name: 'unpin' }).tagName).toBe('BUTTON');
-  });
-
-  it('honors the polymorphic `as` prop when the row is not interactive', () => {
-    const { container } = render(<ListRow as="a" title="t" />);
-    const root = container.querySelector('.mds-row');
-    expect(root?.tagName).toBe('A');
   });
 });

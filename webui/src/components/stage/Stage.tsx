@@ -1,13 +1,4 @@
-/**
- * Stage — the center region. Hosts the focused agent's conversation (transcript + composer) plus the
- * "watch the terminal" tmux frame view, and — when one is open — the doc viewer or ticket detail
- * layered on top (closing them returns to the chat, mirroring the Ink Stage's pane model).
- *
- * Reskinned onto the DS: the chat/terminal switch is a DS {@link Tabs} (underline). Data wiring is
- * UNCHANGED (rule 2): the active chat agent comes from {@link selectActiveAgentId}; the doc/ticket
- * overlay priority (ticket open → TicketDetail; doc open → DocViewer; else chat/terminal tabs) is
- * preserved exactly.
- */
+/** Stage — center column: chat/terminal tabs, or doc/ticket overlay when open. */
 
 import { selectActiveAgentId } from '@core/selectors/conversationsSelectors.js';
 import { useAppStore } from '@core/hooks/useAppStore.js';
@@ -31,14 +22,12 @@ export function Stage(): React.JSX.Element {
   const [tab, setTab] = useState<StageTab>('chat');
 
   const agentId = selectActiveAgentId(conversations, roster, favorites);
-  // Terminal attach needs a real session UUID from the roster — never fall back to agentId.
+  // Terminal attach needs a real session UUID — never fall back to agentId.
   const terminalSessionId =
     agentId === null
       ? null
       : (roster.rows.find((row) => row.agentId === agentId)?.sessionId ?? null);
 
-  // A doc / ticket takes over the Stage when open (an explicit overlay the user closes); otherwise
-  // the chat/terminal for the active agent.
   if (ticketOpen) {
     return (
       <div className="stage mds-stage mds-stage--overlay">

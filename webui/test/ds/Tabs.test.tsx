@@ -1,6 +1,6 @@
 /**
- * Tabs smoke test: renders string + object tabs, marks the active tab, fires onChange(id), and the
- * variant/full props map to the right `.mds-tabs*` classes. Pins the navigation exemplar contract.
+ * Tabs smoke test: renders TabItem tabs, marks the active tab, fires onChange(id), and the
+ * variant/full props map to the right `.mds-tabs*` classes.
  */
 
 import { fireEvent, render, screen, cleanup } from '@testing-library/react';
@@ -12,7 +12,15 @@ afterEach(cleanup);
 describe('ds/Tabs', () => {
   it('renders tabs, marks the active one, and applies the variant class', () => {
     const { container } = render(
-      <Tabs tabs={['Plans', 'Tickets']} value="Tickets" variant="pill" full />,
+      <Tabs
+        tabs={[
+          { id: 'Plans', label: 'Plans' },
+          { id: 'Tickets', label: 'Tickets' },
+        ]}
+        value="Tickets"
+        variant="pill"
+        full
+      />,
     );
     const list = container.querySelector('.mds-tabs');
     expect(list?.className).toContain('mds-tabs--pill');
@@ -24,7 +32,16 @@ describe('ds/Tabs', () => {
 
   it('fires onChange with the clicked tab id', () => {
     const onChange = vi.fn();
-    render(<Tabs tabs={['a', 'b']} value="a" onChange={onChange} />);
+    render(
+      <Tabs
+        tabs={[
+          { id: 'a', label: 'a' },
+          { id: 'b', label: 'b' },
+        ]}
+        value="a"
+        onChange={onChange}
+      />,
+    );
     fireEvent.click(screen.getByRole('tab', { name: 'b' }));
     expect(onChange).toHaveBeenCalledWith('b');
   });

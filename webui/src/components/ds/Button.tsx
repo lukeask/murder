@@ -1,13 +1,6 @@
 /**
- * Button — the primary action control. Ported from the DS bundle (forms/Button).
- *
- * EXEMPLAR — Phase B forms components copy this shape:
- *  - Props derived from the bundle `.d.ts` (here: extends ButtonHTMLAttributes).
- *  - `React.forwardRef` because the bundle's element is a focusable control (button). forwardRef is
- *    used for inputs/buttons; plain FC otherwise (see Panel).
- *  - `className` merged onto the base class via the shared {@link cx} helper.
- *  - `...rest` spread onto the root element.
- *  - Visuals live entirely in ds.css (`.mds-btn*`); this file is structure + class composition only.
+ * Button — primary action control. Visuals in ds.css (`.mds-btn*`).
+ * Variants: primary | brand | secondary | ghost | danger. Sizes: sm | md | lg.
  */
 
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
@@ -28,12 +21,6 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: 'sm' | 'md' | 'lg';
   /** Stretch to fill the container width. */
   block?: boolean;
-  /** Keybind chord shown as a chip on the right, e.g. "C-s". */
-  keyHint?: string;
-  /** Optional leading icon node (Lucide line icon, 16px). */
-  leadingIcon?: ReactNode;
-  /** Optional trailing icon node. */
-  trailingIcon?: ReactNode;
   children?: ReactNode;
 }
 
@@ -43,9 +30,6 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     variant = 'secondary',
     size = 'md',
     block = false,
-    keyHint,
-    leadingIcon,
-    trailingIcon,
     className,
     children,
     type = 'button',
@@ -66,10 +50,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       )}
       {...rest}
     >
-      {leadingIcon}
       {children}
-      {trailingIcon}
-      {keyHint !== undefined ? <span className="mds-btn__key">{keyHint}</span> : null}
     </button>
   );
 });

@@ -1,20 +1,5 @@
 /**
- * TmuxFrameView — the "watch the agent's terminal" view. Attaches to the independent terminal
- * stream for the selected session and renders each raw ANSI replacement frame.
- *
- * ## ANSI rendering choice
- * tmux frames are full-screen SNAPSHOT strings from `tmux capture-pane -e` (not an incremental PTY
- * byte stream), so a full terminal emulator (xterm.js) is overkill and heavy — xterm wants a live
- * stream and an explicit cols/rows geometry we don't control here. Instead we convert the ANSI SGR
- * codes to HTML with the lightweight `ansi-to-html` and render into a `<pre>` styled with the theme
- * monospace font + colors. This is accurate for colored snapshots and ~10x smaller than xterm.
- * (Documented in STYLING.md.)
- *
- * The bus is reached directly here (not via a store action) because tmux frames are streaming
- * DISPLAY data the store does not own — the same exception inktui's TmuxMode makes. The subscription
- * is torn down on unmount / session change.
- *
- * Attach requires a real service session UUID — never fall back to an agent id (non-UUID).
+ * TmuxFrameView — ANSI snapshot frames via ansi-to-html (not xterm). Attach needs a real session UUID.
  */
 
 import Convert from 'ansi-to-html';
@@ -29,15 +14,12 @@ export function TmuxFrameView({
   const bus = useApplicationClient();
   const [frame, setFrame] = useState<string>('');
 
-  // One converter instance, reading the current theme colors off CSS vars so the ANSI palette tracks
-  // the active theme. `escapeXML` guards against raw `<`/`>` in pane content rendering as HTML.
   const convert = useMemo(() => new Convert({ escapeXML: true, newline: false }), []);
 
   useEffect(() => {
     setFrame('');
     if (sessionId === null) return;
     const off = bus.attachTerminal(sessionId, (terminalFrame) => {
-      // Snapshot-only stream: ignore non-reset / non-frame updates.
       if (terminalFrame.type === 'terminal.frame' && terminalFrame.reset) {
         setFrame(terminalFrame.data);
       }

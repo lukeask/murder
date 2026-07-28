@@ -1,5 +1,5 @@
 /**
- * IconButton smoke test: renders, size/active/bordered + className map to `.mds-iconbtn*` classes,
+ * IconButton smoke test: renders, size + className map to `.mds-iconbtn*` classes,
  * label drives aria-label/title, and ref + onClick forward.
  */
 
@@ -20,16 +20,14 @@ describe('ds/IconButton', () => {
     expect(btn).toHaveProperty('type', 'button');
   });
 
-  it('applies size, active, bordered and merges className', () => {
+  it('applies size and merges className', () => {
     render(
-      <IconButton label="Pin" size="lg" active bordered className="extra">
+      <IconButton label="Pin" size="lg" className="extra">
         x
       </IconButton>,
     );
     const btn = screen.getByRole('button', { name: 'Pin' });
     expect(btn.className).toContain('mds-iconbtn--lg');
-    expect(btn.className).toContain('mds-iconbtn--active');
-    expect(btn.className).toContain('mds-iconbtn--bordered');
     expect(btn.className).toContain('extra');
   });
 

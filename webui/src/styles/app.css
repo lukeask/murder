@@ -234,9 +234,9 @@
 .row-action:hover { border-color: var(--color-focus); }
 .row-action:disabled { opacity: 0.4; cursor: default; }
 
-/* Segmented toggle (history loose/all, stage tabs) */
-.seg, .stage__tabs { display: inline-flex; border: 1px solid var(--color-border-blurred); border-radius: var(--radius-sm); overflow: hidden; }
-.seg button, .stage__tabs button {
+/* Segmented toggle (legacy) */
+.seg { display: inline-flex; border: 1px solid var(--color-border-blurred); border-radius: var(--radius-sm); overflow: hidden; }
+.seg button {
   background: var(--color-panel-header-bg);
   border: none;
   color: var(--color-muted);
@@ -245,7 +245,7 @@
   padding: 4px var(--space-2);
   cursor: pointer;
 }
-.seg button[data-on="true"], .stage__tabs button[data-on="true"] {
+.seg button[data-on="true"] {
   background: var(--color-focus);
   color: var(--color-gauge-label-text);
 }
@@ -366,7 +366,7 @@
 .theme-swatch[data-on="true"] { border-color: var(--color-focus); color: var(--color-focus); }
 .settings__value { margin-left: var(--space-2); font-family: var(--font-mono); color: var(--color-muted); }
 
-/* ── Stage (center: chat / tmux / doc / ticket) ────────────────────────────────────────────── */
+/* ── Stage shell (layout glue; chat/tmux/doc/ticket chrome lives in panels-stage.css) ───────── */
 .stage {
   flex: 1;
   display: flex;
@@ -377,128 +377,6 @@
   border: 1px solid var(--color-border-blurred);
   border-radius: var(--radius);
   overflow: hidden;
-}
-.stage__tabs {
-  flex-shrink: 0;
-  margin: var(--space-2);
-  align-self: flex-start;
-  align-items: center;
-}
-.stage__target { margin-left: var(--space-2); font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); padding-right: var(--space-2); }
-.stage__body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--space-3); }
-
-.chat__empty, .tmux__empty { padding: var(--space-4); color: var(--color-muted); font-style: italic; }
-
-.chat__transcript { display: flex; flex-direction: column; gap: var(--space-3); }
-.turn { display: flex; flex-direction: column; gap: 2px; }
-.turn__speaker { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-muted); }
-.turn__text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius);
-  background: var(--color-row-alt-bg);
-  color: var(--color-text);
-}
-.turn--user .turn__text { background: var(--color-row-selected-bg); }
-.turn--user { align-items: flex-end; }
-.turn--user .turn__text { max-width: 80%; }
-.turn--assistant .turn__text { border-left: 2px solid var(--color-heading); }
-.turn--tool .turn__text { border-left: 2px solid var(--color-accent); color: var(--color-muted); }
-.turn--plan .turn__text { border-left: 2px solid var(--color-warning); }
-.turn--agent .turn__text { font-size: 11px; color: var(--color-muted); background: none; padding: 0 var(--space-3); }
-.turn--notice .turn__text { color: var(--color-warning); }
-.turn--live .turn__text { border: 1px solid var(--color-focus); }
-
-/* tmux terminal frame */
-.tmux__frame {
-  margin: 0;
-  white-space: pre;
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.2;
-  color: var(--color-text);
-  background: #000;
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
-}
-
-/* Chat input */
-.chat-input {
-  flex-shrink: 0;
-  display: flex;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-top: 1px solid var(--color-border-blurred);
-  background: var(--color-panel-selected-bg);
-}
-.chat-input__field {
-  flex: 1;
-  background: var(--color-panel-header-bg);
-  border: 1px solid var(--color-border-blurred);
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  padding: var(--space-2);
-  min-height: var(--tap-min);
-}
-.chat-input__field:focus { outline: none; border-color: var(--color-focus); }
-.chat-input__send {
-  background: var(--color-focus);
-  color: var(--color-gauge-label-text);
-  border: none;
-  border-radius: var(--radius-sm);
-  font-weight: 600;
-  padding: 0 var(--space-4);
-  cursor: pointer;
-  min-width: var(--tap-min);
-}
-.chat-input__send:disabled { opacity: 0.4; cursor: default; }
-.chat-input--choice { flex-direction: column; align-items: stretch; }
-.chat-input__prompt-q { font-size: 13px; color: var(--color-heading); }
-.chat-input__options { margin: var(--space-1) 0; padding-left: var(--space-4); }
-.chat-input__options li { cursor: pointer; padding: 2px 0; }
-.chat-input__options li[data-selected="true"] { color: var(--color-focus); font-weight: 600; }
-
-/* Doc viewer + ticket detail */
-.doc-viewer, .ticket-detail { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.doc-viewer__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border-blurred);
-  background: var(--color-panel-selected-bg);
-  flex-shrink: 0;
-}
-.doc-viewer__kind { color: var(--color-muted); font-size: 11px; text-transform: uppercase; }
-.doc-viewer__title { font-family: var(--font-mono); color: var(--color-heading); }
-.doc-viewer__body, .ticket-detail__body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--space-3); min-height: 0; }
-/* Long words / paths in viewed docs must wrap, never push the pane wide on a phone. */
-.doc-viewer__body { overflow-wrap: anywhere; }
-.doc-viewer__body { white-space: pre-wrap; font-family: var(--font-mono); font-size: 13px; color: var(--color-text); margin: 0; }
-.ticket-detail__fm { display: grid; grid-template-columns: max-content 1fr; gap: 2px var(--space-3); margin: 0 0 var(--space-3); }
-.ticket-detail__fm dt { color: var(--color-muted); font-size: 11px; }
-.ticket-detail__fm dd { margin: 0; font-family: var(--font-mono); font-size: 12px; }
-.ticket-detail__schedule { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
-.ticket-detail__schedule input { background: var(--color-panel-header-bg); border: 1px solid var(--color-border-blurred); color: var(--color-text); border-radius: var(--radius-sm); padding: var(--space-1); margin-left: var(--space-2); font-family: var(--font-mono); }
-.ticket-detail__schedule input[aria-invalid="true"] { border-color: var(--color-error); }
-.ticket-detail__editor {
-  width: 100%;
-  min-height: 240px;
-  resize: vertical;
-  background: var(--color-panel-header-bg);
-  border: 1px solid var(--color-border-blurred);
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  border-radius: var(--radius-sm);
-  padding: var(--space-2);
-  margin-bottom: var(--space-2);
 }
 
 /* ── Mobile bottom tab bar ─────────────────────────────────────────────────────────────────── */
@@ -569,15 +447,6 @@
     padding: var(--safe-top) calc(var(--space-3) + var(--safe-right)) 0
       calc(var(--space-3) + var(--safe-left));
   }
-  .turn--user .turn__text { max-width: 90%; }
-
-  /* iOS Safari auto-zooms when a focused text field is < 16px. Bump every editable field to the
-   * mobile input size so focusing never zooms (and the layout never has to recover from it). */
-  .chat-input__field,
-  .ticket-detail__editor,
-  .ticket-detail__schedule input {
-    font-size: var(--font-input-mobile);
-  }
 
   /* Kill the grey flash on tap for interactive chrome; a real :active state keeps taps feeling
    * responsive. (Hover affordances stay desktop-only.) */
@@ -585,11 +454,8 @@
   .row-action,
   .star,
   .seg button,
-  .stage__tabs button,
-  .theme-swatch,
-  .chat-input__send {
+  .theme-swatch {
     -webkit-tap-highlight-color: transparent;
   }
   .list__row:active { background: var(--color-panel-selected-bg); }
-  .chat-input__send:active:not(:disabled) { opacity: 0.7; }
 }

@@ -1,9 +1,4 @@
-/**
- * Design-system barrel. Re-exports every ported `.mds-*` primitive + the shared helpers so consumers
- * import from one place: `import { Button, Panel, Icon } from '@/components/ds'`.
- *
- * Phase B: add each new component's export here.
- */
+/** Design-system barrel — `import { Button, Panel, Icon } from '@/components/ds'`. */
 
 export { cx } from './cx.js';
 export { Icon } from './Icon.js';
@@ -58,5 +53,3 @@ export type { KeybindBarProps, KeybindHint } from './KeybindBar.js';
 // ── feedback ──
 export { Toast } from './Toast.js';
 export type { ToastProps, ToastTone } from './Toast.js';
-export { Tooltip } from './Tooltip.js';
-export type { TooltipProps } from './Tooltip.js';

@@ -1,7 +1,7 @@
-/** Tag smoke test: tone class, dot, onRemove button fires. */
+/** Tag smoke test: tone class and dot. */
 
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, cleanup } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Tag } from '../../src/components/ds/Tag.js';
 
 afterEach(cleanup);
@@ -23,15 +23,5 @@ describe('ds/Tag', () => {
     );
     expect(container.querySelector('.mds-tag')?.className).toContain('mds-tag--accent');
     expect(container.querySelector('.mds-tag__dot')).not.toBeNull();
-  });
-
-  it('renders the remove × only with onRemove and fires it', () => {
-    const noRemove = render(<Tag>x</Tag>).container;
-    expect(noRemove.querySelector('.mds-tag__x')).toBeNull();
-    cleanup();
-    const onRemove = vi.fn();
-    render(<Tag onRemove={onRemove}>x</Tag>);
-    fireEvent.click(screen.getByRole('button', { name: 'remove' }));
-    expect(onRemove).toHaveBeenCalledTimes(1);
   });
 });

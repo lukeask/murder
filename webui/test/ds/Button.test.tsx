@@ -1,6 +1,6 @@
 /**
  * Button smoke test: renders, and the variant/size/block props + className merge map to the right
- * `.mds-btn*` classes. Pins the exemplar's class-composition contract for Phase B.
+ * `.mds-btn*` classes.
  */
 
 import { fireEvent, render, screen, cleanup } from '@testing-library/react';
@@ -16,7 +16,6 @@ describe('ds/Button', () => {
     const btn = screen.getByRole('button', { name: 'Spawn' });
     expect(btn.className).toContain('mds-btn');
     expect(btn.className).toContain('mds-btn--secondary');
-    // md is the default and emits no size modifier.
     expect(btn.className).not.toContain('mds-btn--md');
     expect(btn).toHaveProperty('type', 'button');
   });
@@ -34,17 +33,16 @@ describe('ds/Button', () => {
     expect(btn.className).toContain('extra');
   });
 
-  it('renders the keyHint chip and forwards ref + onClick', () => {
+  it('forwards ref + onClick', () => {
     const ref = createRef<HTMLButtonElement>();
     const onClick = vi.fn();
     render(
-      <Button ref={ref} keyHint="C-s" onClick={onClick}>
+      <Button ref={ref} onClick={onClick}>
         Save
       </Button>,
     );
-    expect(screen.getByText('C-s').className).toContain('mds-btn__key');
     expect(ref.current).toBeInstanceOf(HTMLButtonElement);
-    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onClick).toHaveBeenCalledOnce();
   });
 });

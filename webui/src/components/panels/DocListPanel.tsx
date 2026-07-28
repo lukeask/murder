@@ -1,20 +1,6 @@
 /**
- * DocListPanel — the shared list body for the three doc-backed slices (plans / notes / reports).
- * They have the SAME row shape (name · charCount · updatedAt · starred) and the SAME interactions
- * (click → open the doc in the Stage via `docView.open`; ★ → `favorites.toggle`). Plans add an
- * indent depth (parent/child) and a "spawn planner" affordance. Per the shared-abstraction rule,
- * the three panels are thin wrappers over this one body — never forked.
- *
- * Reskinned onto the design system (Phase C2), following the TicketsPanel exemplar: the DS
- * {@link Panel} container (titled, flush) → one {@link ListRow} per doc. Data wiring is UNCHANGED —
- * same `useAppStore` selectors/actions (`docView.open`, `favorites.toggle`) and the same `rowExtra`
- * mechanism. Mapping onto the DS:
- *  - the pin → ListRow `starred` + `onPinToggle` (replaces the old `.star` button);
- *  - the name → ListRow `title`;
- *  - charCount + updatedAt → ListRow `meta` (terse, lowercase, spacing/muted color, NO middot);
- *  - selection (the open doc) → ListRow `selected`;
- *  - the plans `depth` indent stays a data-driven inline `paddingLeft` (structural, not thematic);
- *  - `rowExtra` (plans' "spawn planner") → ListRow `trailing`.
+ * DocListPanel — shared list body for plans / notes / reports. Same row shape and interactions
+ * (open via `docView.open`, ★ via `favorites.toggle`); plans add depth indent + optional `rowExtra`.
  */
 
 import type { DocKind } from '@core/store/docView/docViewSlice.js';
@@ -24,12 +10,12 @@ import { SliceHint } from '../SliceHint.js';
 import type { SliceLike } from '../SliceHint.js';
 
 export interface DocListRow {
-  readonly id: string;
+  readonly id?: string;
   readonly name: string;
   readonly charCount: string;
   readonly updatedAt: string;
   readonly starred: boolean;
-  /** Indent depth (plans use 0/1 for parent/child); other slices pass 0. */
+  /** Indent depth (plans use 0/1 for parent/child); other slices omit. */
   readonly depth?: number;
 }
 
@@ -65,14 +51,15 @@ export function DocListPanel({
     >
       <SliceHint state={view} empty={empty} />
       {rows.map((row) => {
+        const id = row.id ?? row.name;
         const extra = rowExtra?.(row);
         return (
           <ListRow
-            key={row.id}
+            key={id}
             starred={row.starred}
-            onPinToggle={() => void toggleFavorite(row.id)}
+            onPinToggle={() => void toggleFavorite(id)}
             selected={row.name.trim() === openName}
-            onClick={() => void openDoc(kind, row.id)}
+            onClick={() => void openDoc(kind, id)}
             title={row.name.trim()}
             meta={
               <span className="doc-meta">

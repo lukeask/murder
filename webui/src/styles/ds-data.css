@@ -107,11 +107,6 @@ button.mds-row__star:focus-visible {
   white-space: nowrap;
   border: 1px solid transparent;
 }
-.mds-badge--subtle {
-  background: transparent;
-  border-color: var(--border-default);
-  color: var(--text-secondary);
-}
 .mds-badge__dot {
   width: 6px;
   height: 6px;
@@ -147,29 +142,6 @@ button.mds-row__star:focus-visible {
 .mds-badge--neutral {
   background: var(--surface-raised);
   color: var(--text-muted);
-}
-.mds-badge--solid {
-  color: var(--text-on-accent);
-}
-.mds-badge--solid.mds-badge--running,
-.mds-badge--solid.mds-badge--done,
-.mds-badge--solid.mds-badge--success {
-  background: var(--accent);
-}
-.mds-badge--solid.mds-badge--failed,
-.mds-badge--solid.mds-badge--error {
-  background: var(--brand);
-}
-.mds-badge--solid.mds-badge--archived,
-.mds-badge--solid.mds-badge--info {
-  background: var(--ef-aqua);
-}
-.mds-badge--solid.mds-badge--pending,
-.mds-badge--solid.mds-badge--warning {
-  background: var(--ef-yellow);
-}
-.mds-badge--solid.mds-badge--blocked {
-  background: var(--ef-blue);
 }
 
 /* ── StatusDot ─────────────────────────────────────────────────────────────────────────────────── */
@@ -279,19 +251,6 @@ button.mds-row__star:focus-visible {
   border-radius: var(--radius-pill);
   background: currentColor;
   flex: none;
-}
-.mds-tag__x {
-  background: transparent;
-  border: 0;
-  color: var(--text-faint);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0;
-  margin-left: 1px;
-}
-.mds-tag__x:hover {
-  color: var(--text-secondary);
 }
 .mds-tag--accent {
   color: var(--accent);

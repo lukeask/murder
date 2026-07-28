@@ -1,16 +1,6 @@
 /**
- * UsagePanel — per-harness usage gauges over the `usage` slice via {@link selectUsageView} (Phase C2
- * reskin onto the design system; follows the TicketsPanel exemplar).
- *
- * Data wiring is UNCHANGED: same `useAppStore(s.usage)` + `selectUsageView(usage)` → groups[]
- * .{harness, steering, gauges[]}, same `usage.setSteering`. Each gauge still drives the meter fill
- * width from `filledCount/barWidth` (data-driven inline width) and maps `isHigh` → a high (red) fill.
- *
- * Presentation moved onto DS primitives + tokens: the DS {@link Panel} container, a DS {@link Select}
- * for steering, and a tokenized meter (track = `--surface-active`/`--ef-bg-4`, fill = `--accent`,
- * high fill = `--text-error`). Visuals live in `styles/panels-usage.css` (wired in via main.tsx),
- * mirroring the design bundle's `.usage-grp`/`.mw-usagebar` (7–8px accent meter, pill radius, row =
- * tool name + pct in accent + window/reset muted). Lifecycle stays {@link SliceHint}.
+ * UsagePanel — per-harness usage gauges over `usage` via {@link selectUsageView}. Steering Select
+ * and meter fill width/`isHigh` map straight from the view; visuals in `panels-usage.css`.
  */
 
 import { selectUsageView } from '@core/selectors/usageSelectors.js';
