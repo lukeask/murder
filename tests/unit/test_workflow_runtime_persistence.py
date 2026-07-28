@@ -817,7 +817,7 @@ def test_load_decision_input_is_finite_current_state_not_history_replay() -> Non
 
 
 def test_preferred_runtime_terminology_aliases() -> None:
-    """WorkflowRun / WorkflowNodeRun are identity aliases, not copies."""
+    """WorkflowRun / WorkflowNodeRun are identity aliases re-exported from the package."""
 
     assert WorkflowRun is WorkflowRunRecord
     assert WorkflowNodeRun is StageRunState
