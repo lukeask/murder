@@ -85,6 +85,9 @@ class AgentMessageParams(ApplicationModel):
     agent_id: str = Field(min_length=1)
     message: str
     ticket_id: str | None = None
+    # Correlates an optimistic client-side turn with the persisted conversation
+    # block. The orchestration handler already forwards this value end-to-end.
+    client_message_id: str | None = None
 
     @field_validator("agent_id")
     @classmethod
@@ -95,6 +98,13 @@ class AgentMessageParams(ApplicationModel):
     @classmethod
     def strip_ticket_id(cls, value: str | None) -> str | None:
         return _strip_optional(value)
+
+    @field_validator("client_message_id")
+    @classmethod
+    def strip_client_message_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _strip_nonempty(value, field="client_message_id")
 
 
 class AgentMessageResult(ApplicationModel):

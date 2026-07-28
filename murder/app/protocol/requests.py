@@ -73,6 +73,8 @@ class CommandName(StrEnum):
     THEMES_SET = "themes.set"
     THEME_IMPORT = "theme.import"
     WORKFLOWS_SET = "workflows.set"
+    WORKFLOW_PUT = "workflow.put"
+    WORKFLOW_DELETE = "workflow.delete"
     WORKFLOW_START = "workflow.start"
     TRIGGER_FIRE = "trigger.fire"
     APPROVAL_DECIDE = "approval.decide"

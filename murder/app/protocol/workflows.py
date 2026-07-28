@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import Field, JsonValue, field_validator
 
 from murder.app.protocol.common import ApplicationModel
-from murder.work.workflows.definition import WorkflowDef
+from murder.work.workflows.definition import WorkflowDef, WorkflowIssue
 from murder.work.workflows.runtime import (
     ExternalWorkflowSignal,
     WorkflowRunRecord,
@@ -25,6 +25,7 @@ class GetWorkflowsParams(ApplicationModel):
 class GetWorkflowsResult(ApplicationModel):
     ok: Literal[True] = True
     workflows: list[WorkflowDef]
+    revision: str
 
 
 class SetWorkflowsParams(ApplicationModel):
@@ -34,6 +35,42 @@ class SetWorkflowsParams(ApplicationModel):
 class SetWorkflowsResult(ApplicationModel):
     ok: Literal[True] = True
     workflows: list[WorkflowDef]
+
+
+class PutWorkflowParams(ApplicationModel):
+    workflow: WorkflowDef
+    original_name: str | None = None
+    expected_revision: str = Field(min_length=1)
+
+
+class PutWorkflowResult(ApplicationModel):
+    ok: bool
+    workflow: WorkflowDef | None = None
+    workflows: list[WorkflowDef]
+    revision: str
+    issues: list[WorkflowIssue] = Field(default_factory=list)
+    conflict: bool = False
+
+
+class DeleteWorkflowParams(ApplicationModel):
+    name: str = Field(min_length=1)
+    expected_revision: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("name must be non-empty")
+        return text
+
+
+class DeleteWorkflowResult(ApplicationModel):
+    ok: bool
+    workflows: list[WorkflowDef]
+    revision: str
+    issues: list[WorkflowIssue] = Field(default_factory=list)
+    conflict: bool = False
 
 
 class StartWorkflowParams(ApplicationModel):
@@ -61,6 +98,7 @@ class StartWorkflowParams(ApplicationModel):
 
 class StartWorkflowResult(ApplicationModel):
     ok: Literal[True] = True
+    workflow_id: UUID
     run_ticket_id: str
     stage_ticket_ids: dict[str, str]
     created_ticket_ids: list[str]
@@ -116,8 +154,12 @@ __all__ = [
     "GetWorkflowRunResult",
     "GetWorkflowsParams",
     "GetWorkflowsResult",
+    "DeleteWorkflowParams",
+    "DeleteWorkflowResult",
     "ListWorkflowRunsParams",
     "ListWorkflowRunsResult",
+    "PutWorkflowParams",
+    "PutWorkflowResult",
     "SetWorkflowsParams",
     "SetWorkflowsResult",
     "SignalWorkflowParams",

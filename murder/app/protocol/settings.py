@@ -8,7 +8,6 @@ from pydantic import ConfigDict, Field, JsonValue
 
 from murder.app.protocol.common import ApplicationModel
 
-
 # --- Queries -----------------------------------------------------------------
 
 
@@ -34,9 +33,18 @@ class GetSpawnFavoritesParams(ApplicationModel):
     """Empty params object for ``spawn_favorites.get``."""
 
 
+class SpawnFavorite(ApplicationModel):
+    """A named spawn-wizard preset persisted in the user's configuration."""
+
+    name: str
+    harness: str
+    model: str
+    effort: str
+
+
 class GetSpawnFavoritesResult(ApplicationModel):
     ok: Literal[True] = True
-    favorites: list[dict[str, JsonValue]]
+    favorites: list[SpawnFavorite]
 
 
 class GetTemplatesParams(ApplicationModel):
@@ -193,12 +201,12 @@ class SetFavoritesResult(ApplicationModel):
 
 
 class SetSpawnFavoritesParams(ApplicationModel):
-    favorites: list[dict[str, JsonValue]]
+    favorites: list[SpawnFavorite]
 
 
 class SetSpawnFavoritesResult(ApplicationModel):
     ok: Literal[True] = True
-    favorites: list[dict[str, JsonValue]]
+    favorites: list[SpawnFavorite]
 
 
 class SetTemplatesParams(ApplicationModel):
@@ -253,6 +261,7 @@ __all__ = [
     "GetSettingsResult",
     "GetSpawnFavoritesParams",
     "GetSpawnFavoritesResult",
+    "SpawnFavorite",
     "GetTemplatesParams",
     "GetTemplatesResult",
     "GetThemesParams",
