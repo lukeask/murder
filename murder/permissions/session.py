@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 from typing import TYPE_CHECKING
@@ -31,7 +33,13 @@ def normalize_session_command(
     principal: PrincipalRef,
 ) -> ProposedOperation:
     if command.type == "write_terminal_input":
-        data = command.data.encode("utf-8")
+        if command.encoding == "base64":
+            try:
+                data = base64.b64decode(command.data, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("terminal input contains invalid base64") from exc
+        else:
+            data = command.data.encode("utf-8")
         return TerminalWrite(
             operation_id=command.operation_id,
             principal=principal,

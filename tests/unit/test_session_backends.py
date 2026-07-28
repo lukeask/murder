@@ -119,6 +119,9 @@ def test_terminal_only_tmux_backend_uses_same_fenced_controller(
         calls.append(("exists", session))
         return True
 
+    async def send_bytes(session: str, data: bytes) -> None:
+        calls.append(("bytes", (session, data)))
+
     async def send_keys(
         session: str,
         text: str,
@@ -135,6 +138,7 @@ def test_terminal_only_tmux_backend_uses_same_fenced_controller(
         calls.append(("kill", session))
 
     monkeypatch.setattr("murder.runtime.sessions.backend.tmux.session_exists", session_exists)
+    monkeypatch.setattr("murder.runtime.sessions.backend.tmux.send_bytes", send_bytes)
     monkeypatch.setattr("murder.runtime.sessions.backend.tmux.send_keys", send_keys)
     monkeypatch.setattr("murder.runtime.sessions.backend.tmux.resize_session", resize_session)
     monkeypatch.setattr("murder.runtime.sessions.backend.tmux.kill_session", kill_session)
@@ -196,7 +200,7 @@ def test_terminal_only_tmux_backend_uses_same_fenced_controller(
     asyncio.run(scenario())
     assert calls == [
         ("exists", "tmux-terminal-only"),
-        ("keys", ("tmux-terminal-only", "hello", True, False)),
+        ("bytes", ("tmux-terminal-only", b"hello")),
         ("resize", ("tmux-terminal-only", 100, 30)),
         ("keys", ("tmux-terminal-only", "C-c", False, False)),
     ]

@@ -119,11 +119,7 @@ class TmuxSessionBackend:
         data: bytes,
     ) -> None:
         del command
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise SessionBackendError("terminal-only tmux backend accepts UTF-8 input") from exc
-        await tmux.send_keys(self._session, text, literal=True, enter=False)
+        await tmux.send_bytes(self._session, data)
 
     async def resize_terminal(self, command: ResizeTerminal) -> None:
         await tmux.resize_session(
@@ -224,18 +220,7 @@ class VerifiedHarnessSessionBackend:
         await self._terminate_writer(command.force, command.reason)
 
     async def _write_tmux(self, data: bytes) -> None:
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise SessionBackendError(
-                "tmux verified backend accepts UTF-8 terminal input only"
-            ) from exc
-        await tmux.send_keys(
-            self._control.terminal_session,
-            text,
-            literal=True,
-            enter=False,
-        )
+        await tmux.send_bytes(self._control.terminal_session, data)
 
     async def _resize_tmux(self, columns: int, rows: int) -> None:
         await tmux.resize_session(self._control.terminal_session, columns=columns, rows=rows)

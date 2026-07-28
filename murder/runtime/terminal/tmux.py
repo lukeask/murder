@@ -18,6 +18,7 @@ import os
 import shlex
 import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from murder.observability.advanced_log import TmuxFrameRecord, current_advanced_log
@@ -25,9 +26,30 @@ from murder.observability.advanced_log import TmuxFrameRecord, current_advanced_
 _log = logging.getLogger(__name__)
 
 LARGE_PAYLOAD_BYTES = 1024
+BYTE_SEND_CHUNK_SIZE = 512
 PASTE_ENTER_DELAY_S = 0.15
 TMUX_TIMEOUT_RETURN_CODE = 124
 PANE_DIMENSION_FIELD_COUNT = 2
+PANE_TERMINAL_STATE_FIELD_COUNT = 13
+
+
+@dataclass(frozen=True)
+class PaneTerminalState:
+    """Read-only tmux screen metadata used to seed a native output stream."""
+
+    columns: int
+    rows: int
+    alternate: bool
+    cursor_x: int
+    cursor_y: int
+    cursor_visible: bool
+    application_cursor: bool
+    application_keypad: bool
+    insert: bool
+    origin: bool
+    wraparound: bool
+    scroll_top: int
+    scroll_bottom: int
 
 
 class TmuxError(RuntimeError):
@@ -111,9 +133,7 @@ async def create_session(
             raise TmuxError(f"session already exists: {name}") from exc
         raise
     current_advanced_log().record_tmux_frame(
-        TmuxFrameRecord(
-            session=name, op="create", meta={"width": width, "height": height}
-        )
+        TmuxFrameRecord(session=name, op="create", meta={"width": width, "height": height})
     )
 
 
@@ -168,9 +188,7 @@ async def list_sessions(prefix: str | None = None) -> list[str]:
     names = [line for line in out.splitlines() if line]
     result = [n for n in names if prefix is None or n.startswith(prefix)]
     current_advanced_log().record_tmux_frame(
-        TmuxFrameRecord(
-            session="*", op="list", meta={"prefix": prefix, "count": len(result)}
-        )
+        TmuxFrameRecord(session="*", op="list", meta={"prefix": prefix, "count": len(result)})
     )
     return result
 
@@ -212,6 +230,14 @@ async def capture_viewport(name: str, *, escapes: bool = False) -> str:
     return out
 
 
+async def capture_saved_viewport(name: str, *, escapes: bool = False) -> str:
+    """Capture the screen selected by tmux's read-only ``capture-pane -a``."""
+
+    extra = ("-e",) if escapes else ()
+    _, out, _ = await _tmux("capture-pane", "-p", "-a", *extra, "-t", name, "-S", "0")
+    return out
+
+
 async def pane_dimensions(name: str) -> tuple[int, int]:
     """Return the active pane dimensions for immutable frame provenance.
 
@@ -231,6 +257,43 @@ async def pane_dimensions(name: str) -> tuple[int, int]:
     if width <= 0 or height <= 0:
         raise TmuxError(f"tmux returned non-positive pane dimensions for {name!r}: {out!r}")
     return width, height
+
+
+async def pane_terminal_state(name: str) -> PaneTerminalState:
+    """Read the current screen/cursor modes without attaching or resizing."""
+
+    template = (
+        "#{pane_width} #{pane_height} #{alternate_on} #{cursor_x} #{cursor_y} "
+        "#{cursor_flag} #{keypad_cursor_flag} #{keypad_flag} "
+        "#{insert_flag} #{origin_flag} #{wrap_flag} "
+        "#{scroll_region_upper} #{scroll_region_lower}"
+    )
+    _, out, _ = await _tmux("display-message", "-p", "-t", name, template)
+    fields = out.strip().split()
+    if len(fields) != PANE_TERMINAL_STATE_FIELD_COUNT:
+        raise TmuxError(f"tmux returned invalid terminal state for {name!r}: {out!r}")
+    try:
+        values = [int(field) for field in fields]
+    except ValueError as exc:
+        raise TmuxError(f"tmux returned non-integer terminal state for {name!r}: {out!r}") from exc
+    columns, rows = values[:2]
+    if columns < 1 or rows < 1:
+        raise TmuxError(f"tmux returned invalid terminal dimensions for {name!r}: {out!r}")
+    return PaneTerminalState(
+        columns=columns,
+        rows=rows,
+        alternate=bool(values[2]),
+        cursor_x=values[3],
+        cursor_y=values[4],
+        cursor_visible=bool(values[5]),
+        application_cursor=bool(values[6]),
+        application_keypad=bool(values[7]),
+        insert=bool(values[8]),
+        origin=bool(values[9]),
+        wraparound=bool(values[10]),
+        scroll_top=values[11],
+        scroll_bottom=values[12],
+    )
 
 
 def _record_capture(name: str, out: str, *, lines: int, escapes: bool) -> None:
@@ -282,8 +345,42 @@ async def send_keys(name: str, text: str, *, literal: bool = True, enter: bool =
         await _tmux("send-keys", "-t", name, "Enter")
 
     current_advanced_log().record_tmux_frame(
+        TmuxFrameRecord(session=name, op="send", frame=text, meta={"literal": True, "enter": enter})
+    )
+
+
+async def send_bytes(name: str, payload: bytes) -> None:
+    """Write exact terminal bytes to a tmux pane.
+
+    ``send-keys -l`` receives a Unicode argv value and therefore cannot
+    truthfully be the transport for arbitrary terminal bytes.  ``-H`` sends
+    each supplied hexadecimal key byte verbatim, including control and escape
+    bytes.  Chunking bounds argv size while preserving the one-command-per-
+    batch fast path for ordinary typing.
+
+    This intentionally does *not* use ``paste-buffer``: tmux paste semantics
+    may add bracketed-paste framing or otherwise treat controls differently
+    from ordinary keystrokes.
+    """
+
+    for offset in range(0, len(payload), BYTE_SEND_CHUNK_SIZE):
+        chunk = payload[offset : offset + BYTE_SEND_CHUNK_SIZE]
+        await _tmux(
+            "send-keys",
+            "-t",
+            name,
+            "-H",
+            *(f"{byte:02x}" for byte in chunk),
+        )
+    current_advanced_log().record_tmux_frame(
         TmuxFrameRecord(
-            session=name, op="send", frame=text, meta={"literal": True, "enter": enter}
+            session=name,
+            op="send_bytes",
+            # Do not record a user's raw terminal data in the flight recorder.
+            meta={
+                "bytes": len(payload),
+                "chunks": (len(payload) + BYTE_SEND_CHUNK_SIZE - 1) // BYTE_SEND_CHUNK_SIZE,
+            },
         )
     )
 
