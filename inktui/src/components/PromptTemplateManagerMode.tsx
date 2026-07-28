@@ -430,12 +430,13 @@ export function promptTemplateManagerMode(
       { chord: { key: { downArrow: true } }, intent: 'down', description: 'next' },
       { chord: { key: { leftArrow: true } }, intent: 'left', description: 'left' },
       { chord: { key: { rightArrow: true } }, intent: 'right', description: 'right' },
-      { chord: { key: { return: true } }, intent: 'enter', description: 'confirm' },
+      // Shift+Enter must precede bare Enter: unlisted shift is don't-care, first-match-wins.
       {
         chord: { key: { shift: true, return: true } },
         intent: 'newline',
         description: 'newline',
       },
+      { chord: { key: { return: true } }, intent: 'enter', description: 'confirm' },
       { chord: { key: { escape: true } }, intent: 'escape', description: 'cancel' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete char' },
       { chord: { key: { delete: true } }, intent: 'deleteForward', description: 'delete' },

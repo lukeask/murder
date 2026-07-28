@@ -138,6 +138,7 @@ type WorkflowTemplateEditorIntent =
   | 'inspector'
   | 'escape'
   | 'enter'
+  | 'newline'
   | 'backspace'
   | 'argsNext'
   | 'argsPrev'
@@ -714,6 +715,11 @@ export function workflowTemplateEditorMode(
           void app.getState().actions.workflows.run(s.draft.name, values);
           s.interaction = { kind: 'normal' };
           refresh();
+        } else if (intent === 'newline') {
+          const field = s.interaction.fields[s.interaction.cursor];
+          if (field?.kind !== 'multiline') return;
+          s.interaction.values[field.name] = (s.interaction.values[field.name] ?? '') + '\n';
+          refresh();
         } else if (intent === 'escape') {
           s.interaction = { kind: 'normal' };
           refresh();
@@ -896,6 +902,12 @@ function workflowTemplateEditorKeymap(
     intent: 'enter',
     description: 'confirm',
   } as const;
+  // Shift+Enter must precede bare Enter: unlisted shift is don't-care, first-match-wins.
+  const newline = {
+    chord: { key: { shift: true, return: true } },
+    intent: 'newline',
+    description: 'newline',
+  } as const;
   const backspace = {
     chord: { key: { backspace: true } },
     intent: 'backspace',
@@ -915,7 +927,13 @@ function workflowTemplateEditorKeymap(
     { chord: { key: { upArrow: true } }, intent: 'up', description: 'previous option' },
     { chord: { key: { downArrow: true } }, intent: 'down', description: 'next option' },
   ] as const;
-  if (interaction.kind === 'search' || interaction.kind === 'wizard') {
+  if (interaction.kind === 'wizard') {
+    const field = interaction.fields[interaction.cursor];
+    return field?.kind === 'multiline'
+      ? [escapeBinding, newline, enter, backspace, tab, backtab]
+      : [escapeBinding, enter, backspace, tab, backtab];
+  }
+  if (interaction.kind === 'search') {
     return [escapeBinding, enter, backspace, tab, backtab];
   }
   if (interaction.kind === 'edit') {
@@ -1051,13 +1069,23 @@ function hints(
       { key: '/', description: 'search' },
       { key: 'esc', description: 'done' },
     ];
-  if (interaction.kind === 'wizard')
-    return [
-      { key: 'type', description: 'input value' },
-      { key: 'tab', description: 'next field' },
-      { key: 'enter', description: 'run' },
-      { key: 'esc', description: 'cancel' },
-    ];
+  if (interaction.kind === 'wizard') {
+    const field = interaction.fields[interaction.cursor];
+    return field?.kind === 'multiline'
+      ? [
+          { key: 'type', description: 'input value' },
+          { key: 'shift+enter', description: 'newline' },
+          { key: 'tab', description: 'next field' },
+          { key: 'enter', description: 'run' },
+          { key: 'esc', description: 'cancel' },
+        ]
+      : [
+          { key: 'type', description: 'input value' },
+          { key: 'tab', description: 'next field' },
+          { key: 'enter', description: 'run' },
+          { key: 'esc', description: 'cancel' },
+        ];
+  }
   if (interaction.kind === 'search')
     return [
       { key: 'type', description: 'filter stages' },

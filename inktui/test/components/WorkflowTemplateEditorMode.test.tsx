@@ -17,10 +17,12 @@ import { workflowTemplateEditorMode } from '../../src/components/WorkflowTemplat
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
+import { matchKeymap } from '../../src/input/keymap.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { WorkflowTemplate, WorkflowNodeTemplate } from '../../src/store/workflows/workflowsSlice.js';
 import { compileWorkflowTemplate } from '../../src/workflowEditor/compile.js';
 import { fromWire, toWire } from '../../src/workflowEditor/wire.js';
+import { makeKey } from '../input/key.js';
 
 const tick = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 15));
@@ -770,6 +772,41 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     expect(app.stdout.lastFrame()).toContain("required input 'target' is not filled");
     expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')).toBeUndefined();
+    app.close();
+  });
+
+  it('Shift+Enter on multiline wizard field inserts newline; Enter still submits', async () => {
+    const definition = workflow({
+      inputs: {
+        brief: { label: 'Brief', kind: 'multiline', required: true },
+      },
+      stages: [stage('build', 'Build', [], { instructions: 'Use {brief}' })],
+    });
+    const app = setup({ definition });
+    await tick();
+    app.mode.onIntent('run');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('Run  [Brief=]');
+    // Regression: bare `{ return }` before `{ shift, return }` would steal Shift+Enter as submit.
+    expect(matchKeymap(app.mode.keymap, '', makeKey({ return: true, shift: true }))).toBe(
+      'newline',
+    );
+    expect(matchKeymap(app.mode.keymap, '', makeKey({ return: true }))).toBe('enter');
+    expect(app.mode.hints.some((hint) => hint.description === 'newline')).toBe(true);
+
+    for (const ch of 'line1') app.mode.onUncaptured?.(ch, {} as never);
+    app.mode.onIntent('newline');
+    for (const ch of 'line2') app.mode.onUncaptured?.(ch, {} as never);
+    await tick();
+    app.mode.onIntent('enter');
+    await tick();
+
+    expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')?.params).toMatchObject(
+      {
+        name: 'release',
+        args: { brief: 'line1\nline2' },
+      },
+    );
     app.close();
   });
 
