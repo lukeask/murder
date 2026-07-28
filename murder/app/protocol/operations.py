@@ -13,6 +13,15 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, JsonValue, RootModel
 
+from murder.app.protocol.document_editor import (
+    DocumentEditorInputParams,
+    DocumentEditorMutationResult,
+    DocumentEditorSessionResult,
+    DocumentEditorStatusResult,
+    DocumentEditorTargetParams,
+    ResizeDocumentEditorParams,
+    StartDocumentEditorParams,
+)
 from murder.app.protocol.lifecycle import (
     AgentInterruptParams,
     AgentInterruptResult,
@@ -40,10 +49,10 @@ from murder.app.protocol.lifecycle import (
     NotetakerCaptureSubmitResult,
     PlanCreateParams,
     PlanCreateResult,
-    PlanRenameParams,
-    PlanRenameResult,
     PlannerSpawnParams,
     PlannerSpawnResult,
+    PlanRenameParams,
+    PlanRenameResult,
     TicketExistsParams,
     TicketExistsResult,
     TicketNextIdParams,
@@ -310,6 +319,26 @@ _COMMAND_MODELS: dict[CommandName, tuple[type[BaseModel], type[BaseModel], bool]
         False,
     ),
     CommandName.TICKET_QUICK_CREATE: (TicketQuickCreateParams, TicketQuickCreateResult, False),
+    CommandName.DOCUMENT_EDITOR_START: (
+        StartDocumentEditorParams,
+        DocumentEditorSessionResult,
+        False,
+    ),
+    CommandName.DOCUMENT_EDITOR_INPUT: (
+        DocumentEditorInputParams,
+        DocumentEditorMutationResult,
+        False,
+    ),
+    CommandName.DOCUMENT_EDITOR_RESIZE: (
+        ResizeDocumentEditorParams,
+        DocumentEditorMutationResult,
+        False,
+    ),
+    CommandName.DOCUMENT_EDITOR_STATUS: (
+        DocumentEditorTargetParams,
+        DocumentEditorStatusResult,
+        False,
+    ),
 }
 
 # Explicitly opaque operations.  Membership here is the only way an enum name

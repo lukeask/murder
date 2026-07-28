@@ -14,7 +14,9 @@ class StrEnum(str, Enum):
         return str.__str__(self)
 
 
-APPLICATION_PROTOCOL_VERSION = 2
+# ``terminal.input`` is a new client→server stream message.  It is not
+# compatible with a v2 peer which could otherwise silently ignore it.
+APPLICATION_PROTOCOL_VERSION = 3
 
 
 class ClientKind(StrEnum):

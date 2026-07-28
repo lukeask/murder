@@ -96,6 +96,10 @@ class CommandName(StrEnum):
     SCHEDULER_SET_STEERING = "scheduler.set_steering"
     HARNESS_USAGE_SAMPLE = "state.harness_usage.sample"
     TICKET_QUICK_CREATE = "ticket.quick_create"
+    DOCUMENT_EDITOR_START = "document.editor.start"
+    DOCUMENT_EDITOR_INPUT = "document.editor.input"
+    DOCUMENT_EDITOR_RESIZE = "document.editor.resize"
+    DOCUMENT_EDITOR_STATUS = "document.editor.status"
 
 
 class QueryRequest(ApplicationModel):

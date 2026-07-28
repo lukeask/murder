@@ -250,6 +250,7 @@ export interface TerminalAttachMessage {{
     readonly session_id: string;
   }};
   readonly after_sequence: number;
+  readonly mode: 'raw' | 'replace';
 }}
 
 export interface TerminalDetachMessage {{
@@ -261,15 +262,34 @@ export interface TerminalResyncMessage {{
   readonly op: 'terminal.resync';
   readonly stream_id: string;
   readonly after_sequence: number;
-  readonly reason: 'gap' | 'unsupported_mode';
+  readonly request: 'keyframe';
+  readonly reason: 'gap' | 'reconnect' | 'unsupported_mode';
+}}
+
+export interface TerminalInputMessage {{
+  readonly op: 'terminal.input';
+  readonly stream_id: string;
+  readonly session_id: string;
+  readonly lease_id: string;
+  readonly fence: number;
+  readonly input_sequence: number;
+  readonly encoding: 'base64';
+  readonly data: string;
+}}
+
+export interface TerminalInputAckMessage {{
+  readonly op: 'terminal.input_ack';
+  readonly stream_id: string;
+  readonly accepted_through: number;
 }}
 
 export interface TerminalAttachedMessage {{
   readonly op: 'terminal.attached';
   readonly stream_id: string;
-  readonly mode: 'replace';
+  readonly mode: 'raw' | 'replace';
 }}
 
+/** Legacy UTF-8 replace frame retained for non-raw capture consumers. */
 export interface TerminalFrame {{
   readonly type: 'terminal.frame';
   readonly subscription_id: string;
@@ -283,28 +303,97 @@ export interface TerminalFrame {{
   readonly reset: boolean;
 }}
 
+export interface TerminalFrameMessage {{
+  readonly op: 'terminal.frame';
+  readonly stream_id: string;
+  readonly frame: TerminalFrame;
+}}
+
+export interface TerminalColor {{
+  readonly kind: 'default' | 'indexed' | 'rgb';
+  readonly index?: number | null;
+  readonly red?: number | null;
+  readonly green?: number | null;
+  readonly blue?: number | null;
+}}
+
+export interface TerminalRendition {{
+  readonly foreground: TerminalColor;
+  readonly background: TerminalColor;
+  readonly bold: boolean;
+  readonly faint: boolean;
+  readonly italic: boolean;
+  readonly underline: boolean;
+  readonly blink: boolean;
+  readonly inverse: boolean;
+  readonly invisible: boolean;
+  readonly strikethrough: boolean;
+}}
+
+export interface TerminalCell {{
+  readonly text: string;
+  readonly width: 0 | 1 | 2;
+  readonly rendition: TerminalRendition;
+}}
+
+export interface TerminalCursor {{
+  readonly column: number;
+  readonly row: number;
+  readonly visible: boolean;
+  readonly shape: 'block' | 'underline' | 'bar';
+}}
+
+export interface TerminalModes {{
+  readonly application_cursor: boolean;
+  readonly application_keypad: boolean;
+  readonly bracketed_paste: boolean;
+  readonly insert: boolean;
+  readonly origin: boolean;
+  readonly wraparound: boolean;
+  readonly synchronized_updates: boolean;
+}}
+
+export interface TerminalBuffer {{
+  readonly cells: readonly TerminalCell[];
+  readonly cursor: TerminalCursor;
+  readonly saved_cursor: TerminalCursor;
+  readonly rendition: TerminalRendition;
+  readonly saved_rendition: TerminalRendition;
+  readonly scroll_top: number;
+  readonly scroll_bottom: number;
+  readonly wrap_pending: boolean;
+}}
+
+export interface TerminalKeyframe {{
+  readonly type: 'terminal.keyframe';
+  readonly sequence: number;
+  readonly captured_at: string;
+  readonly columns: number;
+  readonly rows: number;
+  readonly primary: TerminalBuffer;
+  readonly alternate: TerminalBuffer;
+  readonly active_buffer: 'primary' | 'alternate';
+  readonly rendition: TerminalRendition;
+  readonly modes: TerminalModes;
+}}
+
 export interface TerminalChunk {{
   readonly type: 'terminal.chunk';
-  readonly subscription_id: string;
-  readonly session_id: string;
   readonly sequence: number;
-  readonly encoding: 'utf-8';
+  readonly encoding: 'base64';
   readonly data: string;
 }}
 
 export interface TerminalStreamGap {{
   readonly type: 'terminal.gap';
-  readonly subscription_id: string;
-  readonly session_id: string;
   readonly expected_sequence: number;
   readonly next_sequence: number;
-  readonly snapshot_required: boolean;
 }}
 
-export interface TerminalFrameMessage {{
-  readonly op: 'terminal.frame';
+export interface TerminalKeyframeMessage {{
+  readonly op: 'terminal.keyframe';
   readonly stream_id: string;
-  readonly frame: TerminalFrame;
+  readonly keyframe: TerminalKeyframe;
 }}
 
 export interface TerminalChunkMessage {{
@@ -322,7 +411,7 @@ export interface TerminalStreamGapMessage {{
 export interface TerminalResyncedMessage {{
   readonly op: 'terminal.resynced';
   readonly stream_id: string;
-  readonly frame: TerminalFrame;
+  readonly keyframe: TerminalKeyframe;
 }}
 
 export interface ErrorMessage {{
@@ -344,7 +433,8 @@ export type ClientMessage =
   | UnsubscribeMessage
   | TerminalAttachMessage
   | TerminalDetachMessage
-  | TerminalResyncMessage;
+  | TerminalResyncMessage
+  | TerminalInputMessage;
 
 export type ServerMessage =
   | ServerHello
@@ -353,9 +443,11 @@ export type ServerMessage =
   | SubscriptionEventMessage
   | TerminalAttachedMessage
   | TerminalFrameMessage
+  | TerminalKeyframeMessage
   | TerminalChunkMessage
   | TerminalStreamGapMessage
   | TerminalResyncedMessage
+  | TerminalInputAckMessage
   | ErrorMessage;
 """
 

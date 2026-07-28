@@ -20,6 +20,7 @@ function clientOp(message: ClientMessage): string {
     case 'terminal.attach':
     case 'terminal.detach':
     case 'terminal.resync':
+    case 'terminal.input':
       return message.op;
     default: {
       const unreachable: never = message;
@@ -37,9 +38,11 @@ function serverOp(message: ServerMessage): string {
     case 'subscription.event':
     case 'terminal.attached':
     case 'terminal.frame':
+    case 'terminal.keyframe':
     case 'terminal.chunk':
     case 'terminal.gap':
     case 'terminal.resynced':
+    case 'terminal.input_ack':
     case 'error':
       return message.op;
     default: {
@@ -51,7 +54,7 @@ function serverOp(message: ServerMessage): string {
 
 describe('protocol', () => {
   it('pins the generated application protocol version', () => {
-    expect(APPLICATION_PROTOCOL_VERSION).toBe(2);
+    expect(APPLICATION_PROTOCOL_VERSION).toBe(3);
   });
 
   it('models projection invalidations as the only subscription event payload', () => {

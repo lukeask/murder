@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import Field, TypeAdapter
 
@@ -17,6 +18,7 @@ from murder.app.protocol.subscriptions import SubscriptionSnapshot, Subscription
 from murder.app.protocol.terminal import (
     TerminalChunk,
     TerminalFrame,
+    TerminalKeyframe,
     TerminalStreamGap,
     TerminalTarget,
 )
@@ -89,6 +91,9 @@ class TerminalAttachMessage(ApplicationModel):
     stream_id: str
     target: TerminalTarget
     after_sequence: int = Field(default=0, ge=0)
+    # Explicit during migration: raw is the native VT stream, while replace
+    # preserves capture-pane consumers without overloading either payload.
+    mode: Literal["raw", "replace"] = "raw"
 
 
 class TerminalDetachMessage(ApplicationModel):
@@ -97,22 +102,61 @@ class TerminalDetachMessage(ApplicationModel):
 
 
 class TerminalResyncMessage(ApplicationModel):
+    """Request a full keyframe after a gap or a resumed connection."""
+
     op: Literal["terminal.resync"] = "terminal.resync"
     stream_id: str
     after_sequence: int = Field(ge=0)
-    reason: Literal["gap", "unsupported_mode"]
+    request: Literal["keyframe"] = "keyframe"
+    reason: Literal["gap", "reconnect", "unsupported_mode"]
+
+
+class TerminalInputMessage(ApplicationModel):
+    """One ordered, byte-exact terminal-input batch.
+
+    ``data`` is deliberately base64 rather than a JSON string: editor input
+    includes controls and arbitrary UTF-8 sequences, neither of which should
+    acquire accidental text-normalisation semantics at the wire boundary.
+    """
+
+    op: Literal["terminal.input"] = "terminal.input"
+    stream_id: str = Field(min_length=1, max_length=200)
+    session_id: UUID
+    lease_id: UUID
+    fence: int = Field(ge=1)
+    input_sequence: int = Field(ge=1)
+    encoding: Literal["base64"] = "base64"
+    data: str = Field(min_length=1, max_length=349_528)
+
+
+class TerminalInputAckMessage(ApplicationModel):
+    """Non-critical acknowledgement of the contiguous accepted input prefix."""
+
+    op: Literal["terminal.input_ack"] = "terminal.input_ack"
+    stream_id: str
+    accepted_through: int = Field(ge=0)
 
 
 class TerminalAttachedMessage(ApplicationModel):
     op: Literal["terminal.attached"] = "terminal.attached"
     stream_id: str
-    mode: Literal["replace"] = "replace"
+    mode: Literal["raw", "replace"]
 
 
 class TerminalFrameMessage(ApplicationModel):
+    """Legacy UTF-8 replace frame for existing non-raw capture consumers."""
+
     op: Literal["terminal.frame"] = "terminal.frame"
     stream_id: str
     frame: TerminalFrame
+
+
+class TerminalKeyframeMessage(ApplicationModel):
+    """An authoritative replace-state for a stable terminal stream."""
+
+    op: Literal["terminal.keyframe"] = "terminal.keyframe"
+    stream_id: str
+    keyframe: TerminalKeyframe
 
 
 class TerminalChunkMessage(ApplicationModel):
@@ -132,7 +176,7 @@ class TerminalResyncedMessage(ApplicationModel):
 
     op: Literal["terminal.resynced"] = "terminal.resynced"
     stream_id: str
-    frame: TerminalFrame
+    keyframe: TerminalKeyframe
 
 
 class ErrorMessage(ApplicationModel):
@@ -155,8 +199,11 @@ ApplicationWireMessage = Annotated[
     | TerminalAttachMessage
     | TerminalDetachMessage
     | TerminalResyncMessage
+    | TerminalInputMessage
+    | TerminalInputAckMessage
     | TerminalAttachedMessage
     | TerminalFrameMessage
+    | TerminalKeyframeMessage
     | TerminalChunkMessage
     | TerminalStreamGapMessage
     | TerminalResyncedMessage
@@ -183,6 +230,9 @@ __all__ = [
     "TerminalChunkMessage",
     "TerminalDetachMessage",
     "TerminalFrameMessage",
+    "TerminalKeyframeMessage",
+    "TerminalInputAckMessage",
+    "TerminalInputMessage",
     "TerminalResyncMessage",
     "TerminalResyncedMessage",
     "TerminalStreamGapMessage",
