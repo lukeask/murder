@@ -31,6 +31,12 @@ def test_ticket_builtin_registers_and_skips_harness_model_until_launch() -> None
     defn = ticket_workflow_template()
     assert defn.name == TICKET_WORKFLOW_NAME
     assert defn.builtin is True
+    assert defn.inputs["title"].label == "Title"
+    assert defn.inputs["title"].kind == "text"
+    assert defn.inputs["title"].required is True
+    assert defn.inputs["prompt"].label == "Instructions"
+    assert defn.inputs["prompt"].kind == "multiline"
+    assert defn.inputs["prompt"].required is False
     assert defn.stages[0].title == "{title}"
     assert defn.stages[0].instructions == "{prompt}"
     assert defn.stages[0].harness is None
@@ -63,6 +69,8 @@ def test_merge_builtin_workflows_overlays_ticket_and_wins_name_clash() -> None:
     ticket = next(row for row in merged if row["name"] == "ticket")
     assert ticket["builtin"] is True
     assert ticket["description"] == "A single work item"
+    assert ticket["inputs"]["title"]["required"] is True
+    assert ticket["inputs"]["prompt"]["kind"] == "multiline"
 
 
 def test_registry_read_includes_builtin_ticket_without_persisting_it(tmp_path: Path) -> None:
@@ -202,6 +210,17 @@ def test_run_workflow_by_name_rejects_ticket_without_defaults(
     )
     with pytest.raises(ValueError, match="requires a harness"):
         run_workflow_by_name(MagicMock(), tmp_path, "ticket", {"title": "x"})
+
+
+def test_run_workflow_by_name_rejects_ticket_without_required_title(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "murder.work.workflows.builtins.configured_execution_defaults",
+        lambda: ("codex", "gpt-5"),
+    )
+    with pytest.raises(ValueError, match="required input"):
+        run_workflow_by_name(MagicMock(), tmp_path, "ticket", {"prompt": "do stuff"})
 
 
 def test_materialize_prepared_ticket_creates_workflow_run(repo_root: Path) -> None:

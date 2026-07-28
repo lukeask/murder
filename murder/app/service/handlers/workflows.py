@@ -114,7 +114,17 @@ def register(
 
 
 def _load_workflow_by_name(name: str) -> WorkflowDef:
+    """Resolve a workflow template by name (built-ins first, then userspace).
+
+    Mirrors ``run_workflow_by_name`` so ``workflow.compile`` by name can preview
+    the built-in ``ticket`` template the same way ``workflow.start`` launches it.
+    """
     from murder.user_config import load_workflows  # noqa: PLC0415
+    from murder.work.workflows.builtins import get_builtin_workflow  # noqa: PLC0415
+
+    builtin = get_builtin_workflow(name)
+    if builtin is not None:
+        return builtin
 
     found: dict | None = None
     for record in load_workflows():

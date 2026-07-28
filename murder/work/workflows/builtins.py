@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from murder.work.workflows.definition import StageDef, WorkflowDef
+from murder.work.workflows.definition import StageDef, WorkflowDef, WorkflowInputDecl
 
 TICKET_WORKFLOW_NAME = "ticket"
 
@@ -20,6 +20,12 @@ def ticket_workflow_template() -> WorkflowDef:
         name=TICKET_WORKFLOW_NAME,
         builtin=True,
         description="A single work item",
+        inputs={
+            "title": WorkflowInputDecl(label="Title", kind="text", required=True),
+            "prompt": WorkflowInputDecl(
+                label="Instructions", kind="multiline", required=False
+            ),
+        },
         stages=[
             StageDef(
                 id="work",
