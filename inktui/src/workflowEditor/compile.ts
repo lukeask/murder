@@ -1,25 +1,21 @@
 /**
- * Client-side workflow-template compilation for the editor wizard.
+ * Workflow-template compilation for the editor run wizard.
  *
- * Order (mirrors the overhaul plan):
+ * Order (mirrors the overhaul plan / server `compile_workflow_template`):
  *   source title/instructions → expand inline `:foo:` → collect `{placeholders}` → wizard fields.
  *
- * Authoritative compile at `workflow.start` is not in the generated protocol yet; this path is for
- * preview / wizard generation / unknown-template diagnostics. Start still goes through the existing
- * start RPC; the server snapshots the saved definition so later template edits cannot rewrite a run.
+ * Prefer the `workflow.compile` RPC (via workflows actions) for preview/wizard generation.
+ * {@link compileWorkflowTemplate} is the offline / RPC-error fallback; `workflow.start` still
+ * compiles authoritatively on the server before creating a run.
  */
 
+import type { QueryResult } from '../generated/applicationProtocol.js';
 import { expandInlinePromptTemplates } from '../input/expandTemplates.js';
-import type { EditorWorkflow, StageKey } from './model.js';
+import type { EditorInputDecl, EditorWorkflow, StageKey } from './model.js';
 import { collectPlaceholdersFromText } from './placeholders.js';
 
-/** Optional declared input metadata (forward-compatible; wire schema may not expose `inputs` yet). */
-export type WorkflowInputDecl = {
-  readonly label?: string;
-  readonly kind?: 'text' | 'multiline';
-  readonly required?: boolean;
-  readonly default?: string;
-};
+/** Optional declared input metadata (also lives on {@link EditorWorkflow.inputs}). */
+export type WorkflowInputDecl = EditorInputDecl;
 
 /** One generated wizard field (one per distinct placeholder after expansion). */
 export type WizardField = {
@@ -31,12 +27,15 @@ export type WizardField = {
 };
 
 export type WorkflowCompileIssue = {
-  readonly code: 'unknown_prompt_template';
-  readonly severity: 'error';
+  readonly code: 'unknown_prompt_template' | 'unused_input' | 'required_input_missing';
+  readonly severity: 'error' | 'warning';
   readonly message: string;
   readonly stageKey?: StageKey;
+  /** Wire stage id from `workflow.compile` (map to a local {@link stageKey} in the editor). */
+  readonly stageId?: string;
   readonly field?: 'title' | 'instructions';
-  readonly templateName: string;
+  readonly templateName?: string;
+  readonly inputName?: string;
 };
 
 export type WorkflowCompileResult = {
@@ -50,12 +49,12 @@ export type WorkflowCompileResult = {
   readonly issues: readonly WorkflowCompileIssue[];
 };
 
+export type WorkflowCompileRpcResult = QueryResult<'workflow.compile'>;
+
 function declaredInputsOf(
   workflow: EditorWorkflow,
 ): Readonly<Record<string, WorkflowInputDecl>> | undefined {
-  const raw = (workflow as EditorWorkflow & { readonly inputs?: unknown }).inputs;
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  return raw as Readonly<Record<string, WorkflowInputDecl>>;
+  return workflow.inputs;
 }
 
 function fieldFor(
@@ -73,8 +72,87 @@ function fieldFor(
 }
 
 /**
+ * Merge declared inputs (declaration order) with placeholders discovered after expansion —
+ * mirrors server `_merge_inputs`.
+ */
+function mergeWizardFields(
+  declared: Readonly<Record<string, WorkflowInputDecl>> | undefined,
+  discovered: readonly string[],
+): WizardField[] {
+  const fields: WizardField[] = [];
+  const seen = new Set<string>();
+  if (declared !== undefined) {
+    for (const name of Object.keys(declared)) {
+      seen.add(name);
+      fields.push(fieldFor(name, declared));
+    }
+  }
+  for (const name of discovered) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    fields.push(fieldFor(name, declared));
+  }
+  return fields;
+}
+
+/** Map a `workflow.compile` RPC result into editor wizard fields + diagnostics. */
+export function wizardFieldsFromCompileResult(
+  result: WorkflowCompileRpcResult,
+): {
+  readonly fields: readonly WizardField[];
+  readonly issues: readonly WorkflowCompileIssue[];
+  readonly ok: boolean;
+} {
+  const fields = (result.inputs ?? []).map(
+    (input): WizardField => ({
+      name: input.name,
+      label: input.label.trim() || input.name,
+      kind: input.kind === 'multiline' ? 'multiline' : 'text',
+      required: input.required ?? false,
+      defaultValue: input.default ?? '',
+    }),
+  );
+  const issues = (result.issues ?? []).map(
+    (issue): WorkflowCompileIssue => ({
+      code: issue.code,
+      severity: issue.severity ?? 'error',
+      message: issue.message,
+      ...(issue.template_name == null ? {} : { templateName: issue.template_name }),
+      ...(issue.input_name == null ? {} : { inputName: issue.input_name }),
+      ...(issue.stage_id == null ? {} : { stageId: issue.stage_id }),
+    }),
+  );
+  return { fields, issues, ok: result.ok };
+}
+
+/**
+ * Mirror server `required_input_issues`: errors for required wizard fields that are missing
+ * or blank after defaults/args merge.
+ */
+export function requiredInputIssues(
+  fields: readonly WizardField[],
+  args: Readonly<Record<string, string>>,
+): readonly WorkflowCompileIssue[] {
+  const issues: WorkflowCompileIssue[] = [];
+  for (const field of fields) {
+    if (!field.required) continue;
+    const value = args[field.name];
+    if (value === undefined || !value.trim()) {
+      issues.push({
+        code: 'required_input_missing',
+        severity: 'error',
+        message: `required input '${field.name}' is not filled`,
+        inputName: field.name,
+      });
+    }
+  }
+  return issues;
+}
+
+/**
  * Compile a workflow template draft for the run wizard: expand inline prompt templates in each
  * stage's title/instructions, then collect `{placeholder}` tokens from the expanded text.
+ * Offline / RPC-error fallback — prefer `workflow.compile` when the application client is available.
  */
 export function compileWorkflowTemplate(
   workflow: EditorWorkflow,
@@ -123,10 +201,25 @@ export function compileWorkflowTemplate(
     };
   });
 
+  if (declared !== undefined) {
+    for (const name of Object.keys(declared)) {
+      if (!seen.has(name)) {
+        issues.push({
+          code: 'unused_input',
+          severity: 'warning',
+          message: `declared input '${name}' is not used in any stage field`,
+          inputName: name,
+        });
+      }
+    }
+  }
+
+  const fields = mergeWizardFields(declared, names);
+
   return {
     expanded: { ...workflow, stages: expandedStages },
-    fields: names.map((name) => fieldFor(name, declared)),
-    placeholders: names,
+    fields,
+    placeholders: fields.map((field) => field.name),
     issues,
   };
 }

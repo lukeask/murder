@@ -1,8 +1,15 @@
 import type { QueryResult } from '../generated/applicationProtocol.js';
-import type { EditorStage, EditorWorkflow, StageGate, StageKey } from './model.js';
+import type {
+  EditorInputDecl,
+  EditorStage,
+  EditorWorkflow,
+  StageGate,
+  StageKey,
+} from './model.js';
 
 export type WorkflowWire = QueryResult<'workflows.get'>['workflows'][number];
 export type StageWire = NonNullable<WorkflowWire['stages']>[number];
+export type InputDeclWire = NonNullable<WorkflowWire['inputs']>[string];
 
 let keySequence = 0;
 export function createLocalStageKey(): StageKey {
@@ -14,7 +21,40 @@ function gate(value: StageWire['gate']): StageGate {
   return value === 'human' || value === 'conditional' ? value : 'auto';
 }
 
+function inputsFromWire(
+  inputs: WorkflowWire['inputs'],
+): Readonly<Record<string, EditorInputDecl>> | undefined {
+  if (inputs === undefined) return undefined;
+  const out: Record<string, EditorInputDecl> = {};
+  for (const [name, decl] of Object.entries(inputs)) {
+    out[name] = {
+      ...(decl.label == null ? {} : { label: decl.label }),
+      ...(decl.kind === 'multiline' || decl.kind === 'text' ? { kind: decl.kind } : {}),
+      ...(decl.required === undefined ? {} : { required: decl.required }),
+      ...(decl.default == null ? {} : { default: decl.default }),
+    };
+  }
+  return out;
+}
+
+function inputsToWire(
+  inputs: EditorWorkflow['inputs'],
+): WorkflowWire['inputs'] | undefined {
+  if (inputs === undefined) return undefined;
+  const out: Record<string, InputDeclWire> = {};
+  for (const [name, decl] of Object.entries(inputs)) {
+    out[name] = {
+      ...(decl.label === undefined ? {} : { label: decl.label }),
+      ...(decl.kind === undefined ? {} : { kind: decl.kind }),
+      ...(decl.required === undefined ? {} : { required: decl.required }),
+      ...(decl.default === undefined ? {} : { default: decl.default }),
+    };
+  }
+  return out;
+}
+
 export function fromWire(workflow: WorkflowWire): EditorWorkflow {
+  const inputs = inputsFromWire(workflow.inputs);
   return {
     name: workflow.name,
     ...(workflow.definition_version === undefined
@@ -22,6 +62,7 @@ export function fromWire(workflow: WorkflowWire): EditorWorkflow {
       : { definitionVersion: workflow.definition_version }),
     description: workflow.description ?? '',
     mode: workflow.mode ?? 'static',
+    ...(inputs === undefined ? {} : { inputs }),
     stages: (workflow.stages ?? []).map(
       (stage): EditorStage => ({
         key: createLocalStageKey(),
@@ -39,6 +80,7 @@ export function fromWire(workflow: WorkflowWire): EditorWorkflow {
 }
 
 export function toWire(workflow: EditorWorkflow): WorkflowWire {
+  const inputs = inputsToWire(workflow.inputs);
   return {
     name: workflow.name,
     ...(workflow.definitionVersion === undefined
@@ -46,6 +88,7 @@ export function toWire(workflow: EditorWorkflow): WorkflowWire {
       : { definition_version: workflow.definitionVersion }),
     description: workflow.description,
     mode: workflow.mode,
+    ...(inputs === undefined ? {} : { inputs }),
     stages: workflow.stages.map((stage) => ({
       id: stage.id,
       title: stage.title,

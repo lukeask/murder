@@ -69,6 +69,12 @@ function setup() {
     waits: [],
     error: 'not_found',
   });
+  fake.stubQuery('workflow.compile', {
+    ok: true,
+    expanded_template: { name: 'alpha', stages: [] },
+    inputs: [],
+    issues: [],
+  });
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
   return { fake, store, dispose };
@@ -340,6 +346,39 @@ describe('workflows actions', () => {
     expect(workflows.status).toBe('error');
     expect(workflows.error).toBe('no workflows');
     expect(workflows.items).toEqual([]);
+    dispose();
+  });
+
+  it('compile() fires workflow.compile with template draft and prompt_templates override', async () => {
+    const { fake, store, dispose } = setup();
+    const draft = wf('review');
+    fake.stubQuery('workflow.compile', {
+      ok: true,
+      expanded_template: draft,
+      inputs: [
+        {
+          name: 'input',
+          label: 'input',
+          kind: 'text',
+          required: false,
+          default: null,
+          inferred: true,
+        },
+      ],
+      issues: [],
+    });
+
+    const result = await store.getState().actions.workflows.compile({
+      template: draft,
+      promptTemplates: { review: 'Review {subject}' },
+    });
+
+    expect(fake.queryCalls.find((c) => c.name === 'workflow.compile')?.params).toEqual({
+      template: draft,
+      prompt_templates: { review: 'Review {subject}' },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.inputs).toHaveLength(1);
     dispose();
   });
 

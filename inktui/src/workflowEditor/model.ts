@@ -4,6 +4,14 @@ export type StageKey = string;
 export type StageGate = 'auto' | 'human' | 'conditional';
 export type WorkflowMode = 'static' | 'generative';
 
+/** Optional author-declared metadata for a `{placeholder}` workflow input. */
+export type EditorInputDecl = {
+  readonly label?: string;
+  readonly kind?: 'text' | 'multiline';
+  readonly required?: boolean;
+  readonly default?: string;
+};
+
 export interface EditorStage {
   readonly key: StageKey;
   readonly id: string;
@@ -22,6 +30,8 @@ export interface EditorWorkflow {
   readonly definitionVersion?: number;
   readonly description: string;
   readonly mode: WorkflowMode;
+  /** Declared input metadata; undeclared `{placeholders}` are still inferred at compile time. */
+  readonly inputs?: Readonly<Record<string, EditorInputDecl>>;
   readonly stages: readonly EditorStage[];
 }
 

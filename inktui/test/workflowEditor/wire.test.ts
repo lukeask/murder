@@ -43,4 +43,44 @@ describe('workflow wire normalization', () => {
       ],
     });
   });
+
+  it('round-trips declared inputs through the editor wire model', () => {
+    const wire: WorkflowWire = {
+      name: 'review',
+      description: 'Review flow',
+      mode: 'static',
+      inputs: {
+        subject: { label: 'What should be reviewed?', kind: 'text', required: true },
+        risk_area: {
+          label: 'Particular risk area',
+          kind: 'text',
+          required: false,
+          default: 'correctness',
+        },
+      },
+      stages: [
+        {
+          id: 'review',
+          title: 'Review {subject}',
+          instructions: 'Focus on {risk_area}',
+          harness: 'codex',
+          model: 'o3',
+          worktree: null,
+          depends_on: [],
+          gate: 'auto',
+        },
+      ],
+    };
+    const editor = fromWire(wire);
+    expect(editor.inputs).toEqual({
+      subject: { label: 'What should be reviewed?', kind: 'text', required: true },
+      risk_area: {
+        label: 'Particular risk area',
+        kind: 'text',
+        required: false,
+        default: 'correctness',
+      },
+    });
+    expect(toWire(editor).inputs).toEqual(wire.inputs);
+  });
 });
