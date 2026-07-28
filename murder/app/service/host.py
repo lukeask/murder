@@ -201,6 +201,9 @@ class ServiceHost:
             providers=self.projection_providers,
             run_id=str(self.runtime.run_id),
             terminal_capture=self.runtime.capture_terminal_frame,
+            terminal_output_open=self.runtime.open_terminal_output,
+            terminal_input=self.runtime.write_document_editor_terminal_input,
+            terminal_input_validator=self.runtime.validate_document_editor_terminal_writer,
             assets_dir=(self.repo_root / "webui" / "dist"),
         )
         self.websocket_bound = await self.socket_server.start(

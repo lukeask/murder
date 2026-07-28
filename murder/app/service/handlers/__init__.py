@@ -5,11 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 from murder.app.service.application import ApplicationRegistrar
-from murder.app.service.projection_registry import ProjectionProviderRegistry
-
 from murder.app.service.handlers import (
     approvals,
     command,
+    document_editor,
     harness_control,
     health,
     image,
@@ -25,6 +24,7 @@ from murder.app.service.handlers import (
     workflows,
     worktree,
 )
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
@@ -55,6 +55,10 @@ def register_all(
     health.register(legacy_host)
     harness_control.register(legacy_host)
     command.register(legacy_host)
+    document_editor.register(
+        app,
+        cast(document_editor.DocumentEditorEffects, feature_effects),
+    )
     state.register(legacy_host, projections)
     roster.register(legacy_host, projections)
     sessions.register(
