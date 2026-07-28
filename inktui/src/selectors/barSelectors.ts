@@ -206,6 +206,11 @@ export interface BarWidgetContext {
   readonly now: number;
   readonly activeIndex: number;
   readonly count: number;
+  /** Focus-accent fill for the active workspace tab (from {@link Theme}). */
+  readonly workspaceColors?: {
+    readonly activeBg: string;
+    readonly activeFg: string;
+  };
 }
 
 /** One packable bottom-bar item: a contextual hint chip or a widget segment (Phase 3.1). */
@@ -480,7 +485,11 @@ export function selectBottomBarLineItems(
       continue;
     }
     if (widgetId === 'workspace') {
-      const segment = selectWorkspaceBarWidget(context.activeIndex, context.count);
+      const segment = selectWorkspaceBarWidget(
+        context.activeIndex,
+        context.count,
+        context.workspaceColors,
+      );
       if (segment !== null) {
         const gap = items.length > 0 ? BOTTOM_BAR_ITEM_GAP : 0;
         reservedWidth += gap + segment.width;
@@ -519,7 +528,11 @@ export function selectTopBarWidgetSegments(
       continue;
     }
     if (widgetId === 'workspace') {
-      const segment = selectWorkspaceBarWidget(context.activeIndex, context.count);
+      const segment = selectWorkspaceBarWidget(
+        context.activeIndex,
+        context.count,
+        context.workspaceColors,
+      );
       if (segment !== null) {
         segments.push({
           widgetId: 'workspace',

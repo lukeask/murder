@@ -9,7 +9,17 @@ import {
 } from '../render/cellSurface.js';
 import type { GraphLayout } from './layout.js';
 import type { EditorIssue, StageKey, Viewport } from './model.js';
-import { type DirectionMask, glyphForMask, routeEdges, segmentMasks } from './routing.js';
+import {
+  type DirectionMask,
+  E,
+  glyphForMask,
+  N,
+  type Point,
+  routeEdges,
+  S,
+  segmentMasks,
+  W,
+} from './routing.js';
 
 export type ConnectLegality = 'add' | 'remove' | 'cycle' | 'invalid';
 
@@ -92,6 +102,33 @@ export function paintWorkflow(
       putCell(surface, x, y, '▶', styles.invalid ?? styles.edge);
     }
   }
+  if (styles.connect !== undefined) {
+    const preview = dependencyPreviewPoints(
+      layout,
+      styles.connect.candidate,
+      styles.connect.target,
+    );
+    const previewStyle =
+      styles.connect.legality === 'add'
+        ? styles.candidateAdd
+        : styles.connect.legality === 'remove'
+          ? styles.candidateRemove
+          : styles.candidateIllegal;
+    for (const [position, mask] of segmentMasks(preview)) {
+      const [x, y] = position.split(',').map(Number) as [number, number];
+      const [sx, sy] = translate(x, y);
+      const horizontal = (mask & (E | W)) !== 0;
+      const vertical = (mask & (N | S)) !== 0;
+      const glyph =
+        horizontal && vertical ? glyphForMask(mask) : horizontal ? '┄' : vertical ? '┆' : ' ';
+      putCell(surface, sx, sy, glyph, previewStyle);
+    }
+    const arrow = preview.at(-1);
+    if (arrow !== undefined) {
+      const [x, y] = translate(arrow.x, arrow.y);
+      putCell(surface, x, y, '▷', previewStyle);
+    }
+  }
   const selectedDependencies = new Set(
     (selected === null ? [] : (layout.graph.incoming.get(selected) ?? [])).map(
       (edge) => edge.source,
@@ -147,8 +184,8 @@ export function paintWorkflow(
     const definition = layout.graph.workflow.stages[stage.index];
     if (definition === undefined) continue;
     const innerWidth = positioned.rect.width - 2;
-    putClippedText(surface, x + 1, y, innerWidth, definition.id || '(blank)', style);
-    putClippedText(surface, x + 1, y + 1, innerWidth, definition.title || '(untitled)', style);
+    putClippedText(surface, x + 1, y, innerWidth, definition.title || '(untitled)', style);
+    putClippedText(surface, x + 1, y + 1, innerWidth, definition.instructions, style);
     const harnessModel = [definition.harness, definition.model].filter(Boolean).join(' · ');
     putClippedText(surface, x + 1, y + 2, innerWidth, harnessModel || '(runtime required)', style);
     const indicators = [
@@ -174,6 +211,44 @@ export function paintWorkflow(
     );
   }
   return surface;
+}
+
+function dependencyPreviewPoints(
+  layout: GraphLayout,
+  sourceKey: StageKey,
+  targetKey: StageKey,
+): readonly Point[] {
+  const source = layout.nodes.get(sourceKey);
+  const target = layout.nodes.get(targetKey);
+  if (source === undefined || target === undefined) return [];
+  const from = {
+    x: source.rect.x + source.rect.width,
+    y: source.rect.y + Math.floor(source.rect.height / 2),
+  };
+  const to = {
+    x: target.rect.x - 1,
+    y: target.rect.y + Math.floor(target.rect.height / 2),
+  };
+  if (sourceKey === targetKey) {
+    const right = source.rect.x + source.rect.width + 2;
+    const bottom = source.rect.y + source.rect.height + 1;
+    const left = source.rect.x - 2;
+    return [
+      from,
+      { x: right, y: from.y },
+      { x: right, y: bottom },
+      { x: left, y: bottom },
+      { x: left, y: to.y },
+      to,
+    ];
+  }
+  if (from.x < to.x) {
+    const gutter = Math.floor((from.x + to.x) / 2);
+    return [from, { x: gutter, y: from.y }, { x: gutter, y: to.y }, to];
+  }
+  const right = Math.max(from.x, target.rect.x + target.rect.width) + 2;
+  const below = Math.max(source.rect.y + source.rect.height, target.rect.y + target.rect.height);
+  return [from, { x: right, y: from.y }, { x: right, y: below }, { x: to.x, y: below }, to];
 }
 
 // Re-exported for consumers which want to build node decorations without a React dependency.

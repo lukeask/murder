@@ -6,11 +6,12 @@
 
 import { EventEmitter } from 'node:events';
 import { MouseProvider } from '@ink-tools/ink-mouse';
-import { render as inkRender } from 'ink';
+import { Box, render as inkRender } from 'ink';
 import type { JSX } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CommandParams } from '../../src/application/ApplicationClient.js';
 import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { BottomBar } from '../../src/components/BottomBar.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import { workflowEditorMode } from '../../src/components/WorkflowEditorMode.js';
 import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
@@ -77,15 +78,25 @@ function stdoutFor(columns: number, rows = 30): CapturingStdout {
 function Surface({
   store,
   stores,
+  rows,
 }: {
   readonly store: ReturnType<typeof createAppStore>['store'];
   readonly stores: ReturnType<typeof createInputStores>;
+  readonly rows: number;
 }): JSX.Element {
+  // Mirror the App fullscreen chrome: Overlay fills the body; BottomBar keeps mode hints visible.
   return (
     <MouseProvider>
       <AppStoreProvider value={store}>
         <InputStoresProvider value={stores}>
-          <Overlay />
+          <Box flexDirection="column" height={rows} width="100%" overflow="hidden">
+            <Box flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden">
+              <Overlay />
+            </Box>
+            <Box flexShrink={0}>
+              <BottomBar />
+            </Box>
+          </Box>
         </InputStoresProvider>
       </AppStoreProvider>
     </MouseProvider>
@@ -129,8 +140,9 @@ function setup(
   }));
   const mode = workflowEditorMode(stores.modes, store, { workflow: definition });
   stores.modes.getState().enter(mode);
-  const stdout = stdoutFor(options.columns ?? 140);
-  const instance = inkRender(<Surface store={store} stores={stores} />, {
+  const rows = 30;
+  const stdout = stdoutFor(options.columns ?? 140, rows);
+  const instance = inkRender(<Surface store={store} stores={stores} rows={rows} />, {
     stdout,
     stderr: stdout,
     stdin: new EventEmitter() as unknown as NodeJS.ReadStream,
@@ -150,6 +162,17 @@ afterEach(() => {
 });
 
 describe('WorkflowEditorMode', () => {
+  it('shows graph-editor hints on the bottom bar while the fullscreen mode is open', async () => {
+    const app = setup({ columns: 140 });
+    await tick();
+    const frame = app.stdout.lastFrame();
+    expect(frame).toContain('WORKFLOWS  release');
+    expect(frame).toContain('navigate graph');
+    expect(frame).toContain('add stage');
+    expect(frame).toContain('dependencies');
+    app.close();
+  });
+
   it('uses the wide inspector, medium overlay inspector, and narrow outline at the documented 140/90/60 widths', async () => {
     const wide = setup({ columns: 140 });
     await tick();
@@ -248,8 +271,8 @@ describe('WorkflowEditorMode', () => {
     const frame = app.stdout.lastFrame();
     expect(frame).toContain('Stage harness is required.');
     expect(frame).toContain('ID: far-invalid');
-    // The ID is present in both the selected inspector and the newly revealed canvas node.
-    expect(frame.match(/far-invalid/g)?.length ?? 0).toBeGreaterThan(1);
+    // The human name is in the canvas border; the machine ID remains available in the inspector.
+    expect(frame).toContain('Far Invalid');
     app.close();
   });
 
@@ -367,8 +390,10 @@ describe('WorkflowEditorMode', () => {
     const app = setup({ put });
     await tick();
     app.mode.onIntent('enter');
+    app.mode.onIntent('enter');
     app.mode.onUncaptured?.('!', {} as never);
     app.mode.onIntent('enter');
+    app.mode.onIntent('escape');
     await tick();
     expect(app.stdout.lastFrame()).toContain('• unsaved');
     app.mode.onIntent('run');
@@ -396,9 +421,16 @@ describe('WorkflowEditorMode', () => {
     app.close();
   });
 
-  it('lets normal command letters flow into active text fields', async () => {
+  it('opens the same vim-navigable stage editor with enter or i and accepts spaced descriptions', async () => {
     const app = setup();
     await tick();
+    app.mode.onIntent('inspector');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('Stage editor');
+    expect(app.stdout.lastFrame()).toContain('› Name: Build');
+    app.mode.onIntent('down');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('› Description: —');
     app.mode.onIntent('enter');
 
     const capturedInputs = new Set(
@@ -410,12 +442,69 @@ describe('WorkflowEditorMode', () => {
     );
     expect(capturedInputs.has('a')).toBe(false);
     expect(capturedInputs.has('s')).toBe(false);
-    app.mode.onUncaptured?.('a', {} as never);
-    app.mode.onUncaptured?.('s', {} as never);
+    for (const char of 'A useful description') app.mode.onUncaptured?.(char, {} as never);
     app.mode.onIntent('enter');
     await tick();
 
-    expect(app.stdout.lastFrame()).toContain('Title: Buildas');
+    expect(app.stdout.lastFrame()).toContain('│A useful description');
+    app.mode.onIntent('up');
+    app.mode.onIntent('enter');
+    for (const char of ' stage') app.mode.onUncaptured?.(char, {} as never);
+    app.mode.onIntent('enter');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('┌Build stage');
+    app.mode.onIntent('escape');
+    app.mode.onIntent('enter');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('Stage editor');
+    app.close();
+  });
+
+  it('picks harness and model from option lists instead of free typing', async () => {
+    const app = setup();
+    await tick();
+    app.mode.onIntent('inspector');
+    app.mode.onIntent('down');
+    app.mode.onIntent('down');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('› Harness: codex');
+
+    app.mode.onIntent('enter');
+    await tick();
+    let frame = app.stdout.lastFrame();
+    expect(frame).toContain('Options (↑/↓):');
+    expect(frame).toContain('[codex]');
+    expect(frame).toContain('claude_code');
+    expect(app.mode.hints.some((hint) => hint.description === 'select option')).toBe(true);
+
+    app.mode.onUncaptured?.('x', {} as never);
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('› Harness: codex█');
+
+    app.mode.onIntent('up'); // previous option → claude_code
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('› Harness: claude_code█');
+    app.mode.onIntent('down'); // codex
+    app.mode.onIntent('down'); // cursor
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('› Harness: cursor█');
+    app.mode.onIntent('enter');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('› Harness: cursor');
+    expect(app.stdout.lastFrame()).toMatch(/Model: (composer-2\.5|auto)/);
+
+    app.mode.onIntent('down');
+    app.mode.onIntent('enter');
+    await tick();
+    frame = app.stdout.lastFrame();
+    expect(frame).toContain('Options (↑/↓):');
+    expect(frame).toContain('composer-2.5');
+    expect(frame).toContain('claude-sonnet-4.5');
+    app.mode.onIntent('down');
+    app.mode.onIntent('down');
+    app.mode.onIntent('enter');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('› Model: gpt-5.5');
     app.close();
   });
 
@@ -434,8 +523,10 @@ describe('WorkflowEditorMode', () => {
     });
     await tick();
     app.mode.onIntent('enter');
+    app.mode.onIntent('enter');
     app.mode.onUncaptured?.('!', {} as never);
     app.mode.onIntent('enter');
+    app.mode.onIntent('escape');
     app.mode.onIntent('save');
     await tick();
     expect(app.stdout.lastFrame()).toMatch(
@@ -462,8 +553,10 @@ describe('WorkflowEditorMode', () => {
     });
     await tick();
     reloaded.mode.onIntent('enter');
+    reloaded.mode.onIntent('enter');
     reloaded.mode.onUncaptured?.('!', {} as never);
     reloaded.mode.onIntent('enter');
+    reloaded.mode.onIntent('escape');
     reloaded.mode.onIntent('save');
     await tick();
     reloaded.mode.onIntent('reload');
@@ -490,8 +583,10 @@ describe('WorkflowEditorMode', () => {
     });
     await tick();
     overwrite.mode.onIntent('enter');
+    overwrite.mode.onIntent('enter');
     overwrite.mode.onUncaptured?.('!', {} as never);
     overwrite.mode.onIntent('enter');
+    overwrite.mode.onIntent('escape');
     overwrite.mode.onIntent('save');
     await tick();
     overwrite.mode.onIntent('overwrite');
@@ -528,8 +623,10 @@ describe('WorkflowEditorMode', () => {
     ).toMatchObject({ name: 'release', args: { target: 'p', region: 'u' } });
 
     app.mode.onIntent('enter');
+    app.mode.onIntent('enter');
     app.mode.onUncaptured?.('!', {} as never);
     app.mode.onIntent('enter');
+    app.mode.onIntent('escape');
     app.mode.onIntent('escape');
     await tick();
     expect(app.stdout.lastFrame()).toContain('Discard unsaved edits?');

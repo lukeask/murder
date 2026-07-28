@@ -60,6 +60,8 @@ export interface DeferredGlobalHandlers {
   cycleChatView?: () => void;
   /** `alt+p`. Default: no-op until C12 wires the new-plan dialog. */
   newPlan?: () => void;
+  /** `alt+g` / `ctrl+g`: open the workflow graph editor. */
+  openWorkflowEditor?: () => void;
   /** `alt+t`. Default: no-op until C12 wires the new-ticket dialog. */
   newTicket?: () => void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action). Default: no-op until a later phase wires the settings
@@ -194,6 +196,17 @@ function normalizeTerminalKey(input: string, key: Key): { input: string; key: Ke
 }
 
 /**
+ * Ink's `useInput` and `@ink-tools/ink-mouse` both subscribe to the same stdin stream. A complete
+ * SGR mouse report therefore reaches both listeners: ink-mouse uses it for hit testing, while Ink's
+ * key parser strips the leading Escape and surfaces the remainder as printable input. Keep those
+ * reports out of the keyboard dispatcher so clicks cannot become chat text.
+ */
+function isSgrMouseReportInput(input: string): boolean {
+  const withoutEscape = input.charCodeAt(0) === 0x1b ? input.slice(1) : input;
+  return /^\[<\d+;\d+;\d+[Mm]$/.test(withoutEscape);
+}
+
+/**
  * Shared panel-shortcut behaviour. Visibility and focus meet here:
  *  - hidden panel: show it and focus it
  *  - visible panel while focused: hide it and focus chat
@@ -264,6 +277,7 @@ export function useRootInput(
         cycleChatView: deferred.cycleChatView ?? (() => {}),
         // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
         newPlan: deferred.newPlan ?? (() => {}),
+        openWorkflowEditor: deferred.openWorkflowEditor ?? (() => {}),
         newTicket: deferred.newTicket ?? (() => {}),
         // Phase 5: openSettings defaults to a no-op until the shell supplies the settings-modal
         // handler. The `global.settings` chord is now routed in the dispatcher, so this slot is live.
@@ -360,6 +374,9 @@ export function useRootInput(
 
   useInput(
     (input, key) => {
+      if (isSgrMouseReportInput(input)) {
+        return;
+      }
       const normalized = normalizeTerminalKey(input, key);
       handleKey(normalized.input, normalized.key);
     },

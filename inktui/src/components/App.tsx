@@ -986,6 +986,24 @@ function Shell({
     );
   };
 
+  const openWorkflowEditorHandler = (name: string | null): void => {
+    const workflow =
+      name === null
+        ? undefined
+        : appStore.getState().workflows.items.find((item) => item.name === name);
+    if (name !== null && workflow === undefined) {
+      toastStore.getState().push(`workflow “${name}” was not found`, { severity: 'error' });
+      return;
+    }
+    modes.getState().enter(
+      workflowEditorMode(modes, appStore, {
+        ...(workflow === undefined ? {} : { workflow }),
+        harnessModels: createHarnessModelsActions(bus),
+        worktreeOptions: createWorktreeOptionsActions(bus),
+      }),
+    );
+  };
+
   // `ctrl+n` → open the quick-note capture (item 10). Draft persists across cancel/reopen (the mode
   // resets the FSM only on a confirmed submit); submit is fire-and-forget via `notetaker.capture.submit`
   // (close instantly + toast). Title is auto/LLM (empty title field).
@@ -1212,23 +1230,7 @@ function Shell({
     terminalViewport: (agentId, action) => {
       paneScroll.emitTerminalViewport(stageTranscriptFocusId(agentId), action);
     },
-    openWorkflows: (name) => {
-      const workflow =
-        name === null
-          ? undefined
-          : appStore.getState().workflows.items.find((item) => item.name === name);
-      if (name !== null && workflow === undefined) {
-        toastStore.getState().push(`workflow “${name}” was not found`, { severity: 'error' });
-        return;
-      }
-      modes.getState().enter(
-        workflowEditorMode(modes, appStore, {
-          ...(workflow === undefined ? {} : { workflow }),
-          harnessModels: createHarnessModelsActions(bus),
-          worktreeOptions: createWorktreeOptionsActions(bus),
-        }),
-      );
-    },
+    openWorkflows: openWorkflowEditorHandler,
     resolveRenameTarget: () => {
       const state = appStore.getState();
       const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
@@ -1287,6 +1289,7 @@ function Shell({
       spawn: spawnHandler,
       openSettings: openSettingsHandler,
       newPlan: newPlanHandler,
+      openWorkflowEditor: () => openWorkflowEditorHandler(null),
       newTicket: newTicketHandler,
       cycleChatView: cycleChatViewHandler,
       quickNote: quickNoteHandler,
@@ -1322,11 +1325,12 @@ function Shell({
     terminalEvents,
   );
 
-  // A full-screen mode (C14 tmux) replaces the whole layout: when one is active the shell renders
-  // only the {@link Overlay} (which paints the full-viewport surface), suppressing its own bars and
-  // panels. `modal`/`inlayout` modes keep the layout — the overlay draws over/within it. The
-  // suppression predicate lives with the presentation data ({@link presentationHidesLayout}), not
-  // hardcoded here, so a new full-screen-like presentation is honoured without editing the shell.
+  // A full-screen mode replaces the panel layout: when one is active the shell renders the
+  // {@link Overlay} in the body slot plus the BottomBar (so mode-declared hints stay visible),
+  // suppressing TopBar / panels / chat. `modal`/`inlayout` modes keep the full layout — the overlay
+  // draws over/within it. The suppression predicate lives with the presentation data
+  // ({@link presentationHidesLayout}), not hardcoded here, so a new full-screen-like presentation is
+  // honoured without editing the shell.
   // Min-terminal-size guard (first-run UX): below the floor the layout degenerates (the pane layout
   // can't share 60-odd columns; modals clamp to ~24 wide; 16 rows barely fits chat + both bars), so
   // render a full-screen notice instead of a broken shell. Checked AFTER every hook (rules of
@@ -1355,8 +1359,20 @@ function Shell({
   if (workspaceSliding) {
     return <WorkspaceSlideOverlay />;
   }
+  // Fullscreen modes still keep the BottomBar so mode-specific hints stay discoverable (the workflow
+  // graph editor declares interaction-aware hints; without this chrome those keys are invisible).
+  // Panels / TopBar / chat stay suppressed — only the hint rail rides along under the Overlay.
   if (active !== null && presentationHidesLayout(active.presentation)) {
-    return <Overlay />;
+    return (
+      <Box flexDirection="column" width="100%" height={rows} overflow="hidden">
+        <Box flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden" flexDirection="column">
+          <Overlay />
+        </Box>
+        <Box flexShrink={0} flexDirection="column">
+          <BottomBar />
+        </Box>
+      </Box>
+    );
   }
   // Item 4a: while a capturing (non-passThrough) mode is up, the chat input can't be typed into — it
   // owns input exclusively — so hide it. Its hints (and the chat field's role) move to the bottom

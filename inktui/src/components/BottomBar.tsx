@@ -74,6 +74,7 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
     focused === CHAT_FOCUS ? undefined : s.keymaps[focused]?.keymap,
   );
   const bindings = useBindings();
+  const theme = useTheme();
   const barWidgets = useAppStore((s) => s.settings.barWidgets);
   const usage = useAppStore((s) => s.usage);
   const activeIndex = useWorkspaceStore((s) => s.activeIndex);
@@ -85,6 +86,10 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
   const { columns } = useTerminalSize();
   const avail = Math.max(1, columns - BAR_PADDING);
   const now = Date.now();
+  const workspaceColors = useMemo(
+    () => ({ activeBg: theme.focus, activeFg: theme.gaugeLabelText }),
+    [theme.focus, theme.gaugeLabelText],
+  );
   const items = useMemo(
     () =>
       selectBottomBarLineItems(
@@ -92,7 +97,7 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
         focused,
         focusedKeymap,
         bindings,
-        { usage, keyUsage, now, activeIndex, count },
+        { usage, keyUsage, now, activeIndex, count, workspaceColors },
         avail,
         modeHints,
       ),
@@ -108,6 +113,7 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
       now,
       activeIndex,
       count,
+      workspaceColors,
     ],
   );
   const hasToasts = useStore(toastStore, (s) => s.toasts.length > 0);

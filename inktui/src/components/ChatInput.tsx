@@ -2,7 +2,8 @@
  * ChatInput — the always-visible chat input and the focus *home* (the re-home destination). It is a
  * focusable like a panel — registers its rect, reads {@link useEffectiveFocus} for its highlight —
  * but it is **not** a `PanelId`: it can never be toggled off, so it uses the {@link CHAT_FOCUS}
- * literal as its focus id and lives outside the panel store.
+ * literal as its focus id and lives outside the panel store. Left-click focuses chat the same way
+ * {@link ./panes/shared/AllocatedPaneFrame.js AllocatedPaneFrame} focuses a pane.
  *
  * Scope here: the always-visible, always-focusable input box with its highlight, AND (C11, part F)
  * the live message buffer + send pipeline — the **persistent chat-input mode**.
@@ -44,6 +45,7 @@
  * the next input-ready parse).
  */
 
+import { useOnClick } from '@ink-tools/ink-mouse';
 import { Box, Text } from 'ink';
 import { memo } from 'react';
 import { shallow } from 'zustand/shallow';
@@ -54,6 +56,7 @@ import {
   useEffectiveFocus,
   useFocusRef,
   useFocusStore,
+  useInputStores,
   useMeasureFocus,
 } from '../hooks/useInputStores.js';
 import { type BufferState } from '../input/chatBuffer.js';
@@ -236,8 +239,16 @@ function ChoiceMenu({
 export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const theme = useTheme();
   const ref = useFocusRef();
+  const { focus } = useInputStores();
   const focused = useEffectiveFocus() === CHAT_FOCUS;
   useMeasureFocus(CHAT_FOCUS, ref);
+  // Same click-to-focus pattern as AllocatedPaneFrame / TopBar panel labels (ink-mouse hit-test).
+  useOnClick(ref, (event) => {
+    if (event.button !== 'left') {
+      return;
+    }
+    focus.getState().focus(CHAT_FOCUS);
+  });
   // Rule 1: read the chat buffer (text + cursor). The dispatcher's chat handler owns mutation (rule 5).
   const text = useChatInputStore((s) => s.text);
   const buffer = useChatInputStore((s) => s.buffer);

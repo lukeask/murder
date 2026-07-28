@@ -14,9 +14,10 @@
  *    that centers the mode's box with flex alignment. The panels are not torn down (the shell keeps
  *    them mounted so their stores/effects persist), but the modal occupies the foreground region.
  *    Centered via `justifyContent="center" alignItems="center"` over the terminal's full width/height.
- *  - **`fullscreen`** — the mode's surface *replaces* the whole layout: a full width/height container
- *    holding only the mode's render. The shell suppresses its own bars/panels for this variant (see
- *    {@link ./App.js}), so a full-screen takeover (C14's tmux frame) owns the screen.
+ *  - **`fullscreen`** — the mode's surface *replaces* the panel layout: a flex-fill container holding
+ *    the mode's render. The shell suppresses TopBar / panels / chat for this variant (see
+ *    {@link ./App.js}) but keeps the BottomBar so mode-declared hints stay visible; the Overlay fills
+ *    the remaining body slot rather than claiming the raw terminal height.
  *  - **`inlayout`** — the surface occupies a layout region while the panels stay visible. The overlay
  *    contributes no positioning of its own here: it renders the mode's component inline and lets the
  *    *mode's own render* place itself within the region the shell gives it (C8's in-layout editor
@@ -32,21 +33,17 @@
  * Rendering nothing when no mode is up means the slot is zero-cost in the common case.
  */
 
-import { Box, useStdout } from 'ink';
+import { Box } from 'ink';
 import type { ReactNode } from 'react';
 import { useInputStores, useModeStore } from '../hooks/useInputStores.js';
 import { type ModePresentation, selectActiveMode } from '../input/modeStore.js';
 
-/** A reasonable floor so a modal/fullscreen still lays out before the first `useStdout` measurement
- * (some non-TTY renders report no size). Ink clamps to the real terminal once known. */
-const FALLBACK_COLUMNS = 80;
-const FALLBACK_ROWS = 24;
-
 /**
- * Whether the shell should hide its own chrome (bars + panels) for the active mode. A `fullscreen`
- * mode takes the whole screen, so the shell renders only the overlay; `modal`/`inlayout` keep the
- * layout. Exported so {@link ./App.js} reads the same predicate the overlay lays out against — the
- * suppression decision lives with the presentation data, not duplicated in the shell.
+ * Whether the shell should hide its panel layout for the active mode. A `fullscreen` mode takes the
+ * body (TopBar / panels / chat suppressed); the shell still mounts the BottomBar underneath so mode
+ * hints stay discoverable. `modal`/`inlayout` keep the full layout. Exported so {@link ./App.js}
+ * reads the same predicate the overlay lays out against — the suppression decision lives with the
+ * presentation data, not duplicated in the shell.
  */
 export function presentationHidesLayout(presentation: ModePresentation): boolean {
   return presentation === 'fullscreen';
@@ -60,10 +57,6 @@ function PresentedMode({
   readonly presentation: ModePresentation;
   readonly children: ReactNode;
 }): ReactNode {
-  const { stdout } = useStdout();
-  const columns = stdout?.columns ?? FALLBACK_COLUMNS;
-  const rows = stdout?.rows ?? FALLBACK_ROWS;
-
   switch (presentation) {
     case 'modal':
       // Centered within the region the shell hands it (item 4d: the Body slot between TopBar and the
@@ -77,9 +70,10 @@ function PresentedMode({
         </Box>
       );
     case 'fullscreen':
-      // The surface replaces the layout: a full-viewport container holding only the mode.
+      // Fill the body slot the shell hands us (terminal minus the BottomBar). Prefer percentage /
+      // flexGrow over raw `rows` so the hint rail below is never clipped by an oversized surface.
       return (
-        <Box width={columns} height={rows} flexDirection="column">
+        <Box width="100%" height="100%" flexGrow={1} flexDirection="column" overflow="hidden">
           {children}
         </Box>
       );

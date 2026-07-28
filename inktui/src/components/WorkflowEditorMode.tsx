@@ -12,6 +12,7 @@ import {
   type HarnessModel,
   type HarnessModelsActions,
   modelsFor,
+  STATIC_HARNESS_MODELS,
 } from '../store/dialogs/harnessModelsActions.js';
 import {
   MAIN_WORKTREE_KEY,
@@ -44,13 +45,22 @@ import {
 import { decodeStaticDagStatuses } from '../workflowEditor/runState.js';
 import { validateEditorWorkflow } from '../workflowEditor/validate.js';
 import { fromWire, toWire } from '../workflowEditor/wire.js';
+import { useBottomBarLines } from './BottomBar.js';
 import { TextRuns } from './TextRuns.js';
+import { HARNESS_ORDER } from './spawnWizardMachine.js';
 
 export const WORKFLOW_EDITOR_MODE_ID = 'workflow-editor';
 
 type Interaction =
   | { readonly kind: 'normal' }
   | { readonly kind: 'connect'; readonly candidate: StageKey | null }
+  | {
+      readonly kind: 'stage-menu';
+      readonly target: StageKey;
+      readonly field: EditableField;
+      readonly editing: boolean;
+      readonly value: string;
+    }
   | {
       readonly kind: 'edit';
       readonly target: StageKey | 'workflow';
@@ -160,7 +170,7 @@ export function workflowEditorMode(
     status: 'idle',
     feedback: null,
     serverIssues: [],
-    harnessModels: {},
+    harnessModels: STATIC_HARNESS_MODELS,
     worktrees: [],
   };
   const id = WORKFLOW_EDITOR_MODE_ID;
@@ -190,6 +200,31 @@ export function workflowEditorMode(
     if (s.selected === null) s.selected = next.stages[0]?.key ?? null;
     refresh();
   }
+  /** Clamp a free-text field value onto a pick list when the field has options. */
+  function pickValue(
+    interaction:
+      | Extract<Interaction, { readonly kind: 'edit' }>
+      | Extract<Interaction, { readonly kind: 'stage-menu' }>,
+    value: string,
+  ): string {
+    const options = optionsForEditorField(s, interaction);
+    if (options.length === 0) return value;
+    if (options.includes(value)) return value;
+    return options[0] ?? '';
+  }
+  /** After harness changes, keep model on a valid id for that harness (or clear it). */
+  function syncModelForHarness(target: StageKey, harness: string): void {
+    const models = modelsFor(harness, s.harnessModels);
+    const stage = s.draft.stages.find((item) => item.key === target);
+    if (stage === undefined) return;
+    if (models.length === 0) {
+      if (stage.model !== null && stage.model !== '')
+        apply({ type: 'set-field', key: target, field: 'model', value: '' });
+      return;
+    }
+    if (stage.model !== null && models.some((model) => model.id === stage.model)) return;
+    apply({ type: 'set-field', key: target, field: 'model', value: models[0]?.id ?? '' });
+  }
   function navigate(direction: 'up' | 'down' | 'dependency' | 'dependent'): void {
     const layout = layoutWorkflow(s.draft);
     const selected = s.interaction.kind === 'connect' ? s.interaction.candidate : s.selected;
@@ -210,12 +245,48 @@ export function workflowEditorMode(
       s.viewport = autoPan(s.viewport, rect, s.canvasWidth, s.canvasHeight);
     }
   }
-  function startEdit(): void {
-    const target = s.selected ?? 'workflow';
-    const stage = target === 'workflow' ? null : s.draft.stages.find((item) => item.key === target);
-    const field: EditableField = stage === null || stage === undefined ? 'name' : 'title';
-    const value = stage === null || stage === undefined ? s.draft.name : stage.title;
-    s.interaction = { kind: 'edit', target, field, value };
+  function stageFieldValue(target: StageKey, field: EditableField): string {
+    const stage = s.draft.stages.find((item) => item.key === target);
+    if (stage === undefined) return '';
+    if (field === 'gate') return stage.gate;
+    if (field === 'harness' || field === 'model' || field === 'worktree') return stage[field] ?? '';
+    if (field === 'id' || field === 'title' || field === 'instructions') return stage[field];
+    return '';
+  }
+  function startStageMenu(): void {
+    if (s.selected === null) return;
+    s.inspectorOpen = true;
+    s.interaction = {
+      kind: 'stage-menu',
+      target: s.selected,
+      field: 'title',
+      editing: false,
+      value: stageFieldValue(s.selected, 'title'),
+    };
+    refresh();
+  }
+  function moveStageMenuField(
+    interaction: Extract<Interaction, { readonly kind: 'stage-menu' }>,
+    delta: number,
+  ): void {
+    const fields: readonly EditableField[] = [
+      'title',
+      'instructions',
+      'harness',
+      'model',
+      'worktree',
+      'gate',
+      'id',
+    ];
+    const current = fields.indexOf(interaction.field);
+    const field = fields[(current + delta + fields.length) % fields.length];
+    if (field === undefined) return;
+    s.interaction = {
+      ...interaction,
+      field,
+      editing: false,
+      value: stageFieldValue(interaction.target, field),
+    };
     refresh();
   }
   function nextEditableField(
@@ -241,7 +312,8 @@ export function workflowEditorMode(
           : field === 'harness' || field === 'model' || field === 'worktree'
             ? (stage?.[field] ?? '')
             : (stage?.[field as 'id' | 'title' | 'instructions'] ?? '');
-    s.interaction = { ...interaction, field, value };
+    const next = { ...interaction, field, value };
+    s.interaction = { ...next, value: pickValue(next, value) };
     refresh();
   }
   function save(afterSave?: () => void): void {
@@ -354,10 +426,10 @@ export function workflowEditorMode(
     id,
     presentation: 'fullscreen',
     get hints(): readonly ModeHint[] {
-      return hints(s.interaction);
+      return hints(s.interaction, fieldOptions(s, s.interaction));
     },
     get keymap(): Keymap<WorkflowEditorIntent> {
-      return workflowEditorKeymap(s.interaction);
+      return workflowEditorKeymap(s.interaction, fieldOptions(s, s.interaction).length > 0);
     },
     onIntent(intent): void {
       if (s.interaction.kind === 'conflict') {
@@ -449,20 +521,95 @@ export function workflowEditorMode(
         else if (intent === 'dependent') navigate('dependent');
         return;
       }
+      if (s.interaction.kind === 'stage-menu') {
+        if (s.interaction.editing) {
+          if (intent === 'enter') {
+            const editing = s.interaction;
+            const previous =
+              editing.field === 'harness'
+                ? (s.draft.stages.find((item) => item.key === editing.target)?.harness ?? '')
+                : null;
+            apply({
+              type: 'set-field',
+              key: editing.target,
+              field: editing.field,
+              value: editing.value,
+            });
+            if (editing.field === 'harness' && previous !== editing.value)
+              syncModelForHarness(editing.target, editing.value);
+            s.interaction = { ...editing, editing: false };
+            refresh();
+          } else if (intent === 'escape') {
+            s.interaction = {
+              ...s.interaction,
+              editing: false,
+              value: stageFieldValue(s.interaction.target, s.interaction.field),
+            };
+            refresh();
+          } else if (intent === 'backspace') {
+            if (optionsForEditorField(s, s.interaction).length > 0) return;
+            s.interaction = { ...s.interaction, value: s.interaction.value.slice(0, -1) };
+            refresh();
+          } else if (intent === 'up' || intent === 'down') {
+            const options = optionsForEditorField(s, s.interaction);
+            if (options.length > 0) {
+              const current = options.indexOf(s.interaction.value);
+              const delta = intent === 'down' ? 1 : -1;
+              const index =
+                current < 0
+                  ? delta > 0
+                    ? 0
+                    : options.length - 1
+                  : (current + delta + options.length) % options.length;
+              const value = options[index];
+              if (value !== undefined) s.interaction = { ...s.interaction, value };
+              refresh();
+            }
+          }
+        } else if (intent === 'escape') {
+          s.interaction = { kind: 'normal' };
+          refresh();
+        } else if (intent === 'enter') {
+          const value = pickValue(
+            s.interaction,
+            stageFieldValue(s.interaction.target, s.interaction.field),
+          );
+          s.interaction = {
+            ...s.interaction,
+            editing: true,
+            value,
+          };
+          refresh();
+        } else if (intent === 'up') moveStageMenuField(s.interaction, -1);
+        else if (intent === 'down') moveStageMenuField(s.interaction, 1);
+        return;
+      }
       if (s.interaction.kind === 'edit') {
         if (intent === 'enter') {
+          const editing = s.interaction;
+          const previous =
+            editing.target !== 'workflow' && editing.field === 'harness'
+              ? (s.draft.stages.find((item) => item.key === editing.target)?.harness ?? '')
+              : null;
           apply({
             type: 'set-field',
-            key: s.interaction.target,
-            field: s.interaction.field,
-            value: s.interaction.value,
+            key: editing.target,
+            field: editing.field,
+            value: editing.value,
           });
+          if (
+            editing.target !== 'workflow' &&
+            editing.field === 'harness' &&
+            previous !== editing.value
+          )
+            syncModelForHarness(editing.target, editing.value);
           s.interaction = { kind: 'normal' };
           refresh();
         } else if (intent === 'escape') {
           s.interaction = { kind: 'normal' };
           refresh();
         } else if (intent === 'backspace') {
+          if (optionsForEditorField(s, s.interaction).length > 0) return;
           s.interaction = { ...s.interaction, value: s.interaction.value.slice(0, -1) };
           refresh();
         } else if (intent === 'up' || intent === 'down') {
@@ -554,7 +701,7 @@ export function workflowEditorMode(
       } else if (intent === 'panRight') {
         s.viewport = { ...s.viewport, x: s.viewport.x + 4 };
         refresh();
-      } else if (intent === 'enter') startEdit();
+      } else if (intent === 'enter') startStageMenu();
       else if (intent === 'add') apply({ type: 'add-stage', after: s.selected });
       else if (intent === 'connect' && s.selected !== null)
         s.interaction = { kind: 'connect', candidate: s.selected };
@@ -593,10 +740,8 @@ export function workflowEditorMode(
         }
       } else if (intent === 'save') save();
       else if (intent === 'run') run();
-      else if (intent === 'inspector') {
-        s.inspectorOpen = !s.inspectorOpen;
-        refresh();
-      } else if (intent === 'search') {
+      else if (intent === 'inspector') startStageMenu();
+      else if (intent === 'search') {
         s.interaction = { kind: 'search', query: '', returnTo: 'normal' };
         refresh();
       } else if (intent === 'workflowEdit') {
@@ -617,6 +762,13 @@ export function workflowEditorMode(
     onUncaptured(input: string, _key: Key): boolean {
       if (input.length !== 1) return false;
       if (s.interaction.kind === 'edit') {
+        if (optionsForEditorField(s, s.interaction).length > 0) return true;
+        s.interaction = { ...s.interaction, value: s.interaction.value + input };
+        refresh();
+        return true;
+      }
+      if (s.interaction.kind === 'stage-menu' && s.interaction.editing) {
+        if (optionsForEditorField(s, s.interaction).length > 0) return true;
         s.interaction = { ...s.interaction, value: s.interaction.value + input };
         refresh();
         return true;
@@ -651,7 +803,10 @@ export function workflowEditorMode(
   };
 }
 
-function workflowEditorKeymap(interaction: Interaction): Keymap<WorkflowEditorIntent> {
+function workflowEditorKeymap(
+  interaction: Interaction,
+  hasOptions = false,
+): Keymap<WorkflowEditorIntent> {
   const escapeBinding = {
     chord: { key: { escape: true } },
     intent: 'escape',
@@ -677,18 +832,43 @@ function workflowEditorKeymap(interaction: Interaction): Keymap<WorkflowEditorIn
     intent: 'argsPrev',
     description: 'previous field',
   } as const;
+  const optionArrows = [
+    { chord: { key: { upArrow: true } }, intent: 'up', description: 'previous option' },
+    { chord: { key: { downArrow: true } }, intent: 'down', description: 'next option' },
+  ] as const;
   if (interaction.kind === 'search' || interaction.kind === 'run-args') {
     return [escapeBinding, enter, backspace, tab, backtab];
   }
   if (interaction.kind === 'edit') {
+    return hasOptions
+      ? [escapeBinding, enter, tab, backtab, ...optionArrows]
+      : [escapeBinding, enter, backspace, tab, backtab, ...optionArrows];
+  }
+  if (interaction.kind === 'stage-menu') {
+    if (interaction.editing) {
+      return hasOptions
+        ? [escapeBinding, enter, ...optionArrows]
+        : [
+            escapeBinding,
+            enter,
+            backspace,
+            { chord: { key: { upArrow: true } }, intent: 'up', description: 'previous option' },
+            { chord: { key: { downArrow: true } }, intent: 'down', description: 'next option' },
+          ];
+    }
     return [
       escapeBinding,
       enter,
-      backspace,
-      tab,
-      backtab,
-      { chord: { key: { upArrow: true } }, intent: 'up', description: 'previous option' },
-      { chord: { key: { downArrow: true } }, intent: 'down', description: 'next option' },
+      {
+        chord: [{ input: 'k' }, { key: { upArrow: true } }],
+        intent: 'up',
+        description: 'previous field',
+      },
+      {
+        chord: [{ input: 'j' }, { key: { downArrow: true } }],
+        intent: 'down',
+        description: 'next field',
+      },
     ];
   }
   if (interaction.kind === 'conflict') {
@@ -733,7 +913,7 @@ function workflowEditorKeymap(interaction: Interaction): Keymap<WorkflowEditorIn
     { chord: { input: 'r', key: { ctrl: true } }, intent: 'redo', description: 'redo' },
     { chord: { input: 's' }, intent: 'save', description: 'save' },
     { chord: { input: 'R' }, intent: 'run', description: 'save & run' },
-    { chord: { input: 'i' }, intent: 'inspector', description: 'inspector' },
+    { chord: { input: 'i' }, intent: 'inspector', description: 'edit stage' },
     { chord: { input: '/' }, intent: 'search', description: 'search' },
     { chord: { input: 'w' }, intent: 'workflowEdit', description: 'workflow fields' },
     {
@@ -749,20 +929,52 @@ function workflowEditorKeymap(interaction: Interaction): Keymap<WorkflowEditorIn
   ];
 }
 
-function hints(interaction: Interaction): readonly ModeHint[] {
+function hints(
+  interaction: Interaction,
+  options: readonly string[] = [],
+): readonly ModeHint[] {
+  if (interaction.kind === 'stage-menu')
+    return interaction.editing
+      ? options.length > 0
+        ? [
+            { key: '↑/↓', description: 'select option' },
+            { key: 'enter', description: 'apply' },
+            { key: 'esc', description: 'cancel field' },
+          ]
+        : [
+            { key: 'type', description: 'edit value' },
+            { key: 'enter', description: 'apply' },
+            { key: 'esc', description: 'cancel field' },
+          ]
+      : [
+          { key: 'j/k', description: 'select field' },
+          { key: 'enter', description: 'edit field' },
+          { key: 'esc', description: 'close editor' },
+        ];
   if (interaction.kind === 'edit')
-    return [
-      { key: 'enter', description: 'commit field' },
-      { key: 'esc', description: 'cancel' },
-    ];
+    return options.length > 0
+      ? [
+          { key: '↑/↓', description: 'select option' },
+          { key: 'tab', description: 'next field' },
+          { key: 'enter', description: 'commit' },
+          { key: 'esc', description: 'cancel' },
+        ]
+      : [
+          { key: 'type', description: 'edit field' },
+          { key: 'tab', description: 'next field' },
+          { key: 'enter', description: 'commit' },
+          { key: 'esc', description: 'cancel' },
+        ];
   if (interaction.kind === 'connect')
     return [
-      { key: 'j/k/h/l', description: 'candidate' },
-      { key: 'enter', description: 'toggle dependency' },
+      { key: 'hjkl', description: 'pick candidate' },
+      { key: 'enter', description: 'toggle edge' },
+      { key: '/', description: 'search' },
       { key: 'esc', description: 'done' },
     ];
   if (interaction.kind === 'run-args')
     return [
+      { key: 'type', description: 'arg value' },
       { key: 'tab', description: 'next arg' },
       { key: 'enter', description: 'run' },
       { key: 'esc', description: 'cancel' },
@@ -778,6 +990,7 @@ function hints(interaction: Interaction): readonly ModeHint[] {
       { key: 'r', description: 'reload remote' },
       { key: 'o', description: 'overwrite latest' },
       { key: 'A', description: 'save as' },
+      { key: 'esc', description: 'cancel' },
     ];
   if (interaction.kind === 'delete')
     return [
@@ -790,10 +1003,14 @@ function hints(interaction: Interaction): readonly ModeHint[] {
       { key: 'n/esc', description: 'keep editing' },
     ];
   return [
-    { key: 'a', description: 'add' },
+    { key: 'hjkl', description: 'navigate graph' },
+    { key: 'enter/i', description: 'edit stage' },
+    { key: 'a', description: 'add stage' },
     { key: 'c', description: 'dependencies' },
+    { key: 'x', description: 'delete' },
     { key: 's', description: 'save' },
     { key: 'R', description: 'run' },
+    { key: 'arrows', description: 'pan' },
     { key: 'esc', description: 'close' },
   ];
 }
@@ -808,6 +1025,9 @@ function WorkflowEditorSurface({
   readonly onScroll: (delta: number) => void;
 }): JSX.Element {
   const { columns, rows } = useTerminalSize();
+  const footerLines = useBottomBarLines().length;
+  // Shell keeps the BottomBar under fullscreen modes; size the canvas to the body slot above it.
+  const availRows = Math.max(8, rows - footerLines);
   const theme = useTheme();
   const activeRun = useAppStore((state) => state.workflowRuns.activeRun);
   const run =
@@ -839,7 +1059,7 @@ function WorkflowEditorSurface({
   const overlay = columns >= 72 && columns < 110;
   const inspectorWidth = !narrow && !overlay && session.inspectorOpen ? 36 : 0;
   const canvasWidth = Math.max(20, columns - inspectorWidth);
-  const canvasHeight = Math.max(5, rows - 4);
+  const canvasHeight = Math.max(5, availRows - 4);
   session.canvasWidth = canvasWidth;
   session.canvasHeight = canvasHeight;
   const connect =
@@ -894,8 +1114,12 @@ function WorkflowEditorSurface({
   const editOptions =
     session.interaction.kind === 'edit' ? optionsForEditorField(session, session.interaction) : [];
   const editValue = session.interaction.kind === 'edit' ? session.interaction.value : '';
+  const stageMenuOptions =
+    session.interaction.kind === 'stage-menu'
+      ? optionsForEditorField(session, session.interaction)
+      : [];
   return (
-    <Box width={columns} height={rows} flexDirection="column" overflow="hidden">
+    <Box width={columns} height={availRows} flexDirection="column" overflow="hidden">
       <Text
         bold
         color={theme.accent}
@@ -917,7 +1141,7 @@ function WorkflowEditorSurface({
           {editOptions.length > 0 ? (
             <Text
               dimColor
-            >{`Options (↑/↓): ${editOptions.map((option) => (option === editValue ? `[${option}]` : option)).join(' · ')}`}</Text>
+            >{`Options (↑/↓): ${formatOptionList(editOptions, editValue)}`}</Text>
           ) : null}
         </>
       ) : null}
@@ -955,7 +1179,23 @@ function WorkflowEditorSurface({
           dimColor
         >{`Monitoring immutable run snapshot v${run?.definition_version ?? '?'}`}</Text>
       ) : null}
-      {narrow ? (
+      {narrow && session.interaction.kind === 'stage-menu' ? (
+        <WorkflowInspector
+          stage={selected}
+          issues={issues}
+          run={run}
+          statuses={stageStatuses}
+          order={
+            displayedSelected === null
+              ? undefined
+              : displayed.stages.findIndex((stage) => stage.key === displayedSelected) + 1
+          }
+          total={displayed.stages.length}
+          width={columns}
+          interaction={session.interaction}
+          editorOptions={stageMenuOptions}
+        />
+      ) : narrow ? (
         <WorkflowOutline
           draft={displayed}
           selected={displayedSelected}
@@ -986,6 +1226,10 @@ function WorkflowEditorSurface({
               }
               total={displayed.stages.length}
               width={inspectorWidth}
+              {...(session.interaction.kind === 'stage-menu'
+                ? { interaction: session.interaction }
+                : {})}
+              editorOptions={stageMenuOptions}
             />
           ) : null}
           {overlay && session.inspectorOpen ? (
@@ -1002,6 +1246,10 @@ function WorkflowEditorSurface({
                 }
                 total={displayed.stages.length}
                 width={Math.min(44, columns - 4)}
+                {...(session.interaction.kind === 'stage-menu'
+                  ? { interaction: session.interaction }
+                  : {})}
+                editorOptions={stageMenuOptions}
               />
             </Box>
           ) : null}
@@ -1061,16 +1309,33 @@ function WorkflowCanvas({
   );
 }
 
+function fieldOptions(session: Session, interaction: Interaction): readonly string[] {
+  if (interaction.kind !== 'edit' && interaction.kind !== 'stage-menu') return [];
+  if (interaction.kind === 'stage-menu' && !interaction.editing) return [];
+  return optionsForEditorField(session, interaction);
+}
+
+function formatOptionList(options: readonly string[], selected: string): string {
+  return options.map((option) => (option === selected ? `[${option}]` : option)).join(' · ');
+}
+
 function optionsForEditorField(
   session: Session,
-  interaction: Extract<Interaction, { readonly kind: 'edit' }>,
+  interaction:
+    | Extract<Interaction, { readonly kind: 'edit' }>
+    | Extract<Interaction, { readonly kind: 'stage-menu' }>,
 ): readonly string[] {
   if (interaction.target === 'workflow') {
     return interaction.field === 'mode' ? ['static', 'generative'] : [];
   }
   const stage = session.draft.stages.find((candidate) => candidate.key === interaction.target);
   if (interaction.field === 'harness') {
-    return Object.keys(session.harnessModels).sort();
+    const known = new Set(Object.keys(session.harnessModels));
+    const ordered = HARNESS_ORDER.filter((harness) => known.has(harness));
+    const extras = [...known]
+      .filter((harness) => !(HARNESS_ORDER as readonly string[]).includes(harness))
+      .sort();
+    return ordered.length > 0 || extras.length > 0 ? [...ordered, ...extras] : [...HARNESS_ORDER];
   }
   if (interaction.field === 'model' && stage !== undefined) {
     return modelsFor(stage.harness ?? '', session.harnessModels).map((model) => model.id);
@@ -1211,6 +1476,8 @@ function WorkflowInspector({
   order,
   total,
   width,
+  interaction,
+  editorOptions = [],
 }: {
   readonly stage: EditorWorkflow['stages'][number] | null;
   readonly issues: readonly EditorIssue[];
@@ -1219,29 +1486,48 @@ function WorkflowInspector({
   readonly order: number | undefined;
   readonly total: number;
   readonly width: number;
+  readonly interaction?: Extract<Interaction, { readonly kind: 'stage-menu' }>;
+  readonly editorOptions?: readonly string[];
 }): JSX.Element {
+  const theme = useTheme();
   const workflowIssues = issues.filter((issue) => issue.stageKey === undefined);
   const stageIssues =
     stage === null || stage === undefined
       ? workflowIssues
       : [...workflowIssues, ...issues.filter((issue) => issue.stageKey === stage.key)];
+  const stageMenu = stage?.key === interaction?.target ? interaction : undefined;
+  const row = (field: EditableField, label: string, value: string): JSX.Element => {
+    const active = stageMenu?.field === field;
+    const shown = active && stageMenu.editing ? `${stageMenu.value}█` : value;
+    const text = `${active ? '› ' : '  '}${label}: ${shown}`;
+    return active ? (
+      <Text key={field} color={theme.accent} bold>
+        {text}
+      </Text>
+    ) : (
+      <Text key={field}>{text}</Text>
+    );
+  };
   return (
     <Box width={width} flexDirection="column" borderStyle="single" paddingX={1}>
-      <Text bold>Inspector</Text>
+      <Text bold>{stageMenu === undefined ? 'Inspector' : 'Stage editor'}</Text>
       {stage === null || stage === undefined ? (
         <Text dimColor>Select a stage</Text>
       ) : (
         <>
-          <Text>{`ID: ${stage.id || '(blank)'}`}</Text>
-          <Text>{`Title: ${stage.title || '(blank)'}`}</Text>
-          <Text>{`Harness: ${stage.harness ?? '(required)'}`}</Text>
-          <Text>{`Model: ${stage.model ?? '(required)'}`}</Text>
-          <Text>{`Worktree: ${stage.worktree ?? '—'}`}</Text>
-          <Text>{`Gate: ${stage.gate}`}</Text>
+          {row('title', 'Name', stage.title || '(untitled)')}
+          {row('instructions', 'Description', stage.instructions || '—')}
+          {row('harness', 'Harness', stage.harness ?? '(required)')}
+          {row('model', 'Model', stage.model ?? '(required)')}
+          {row('worktree', 'Worktree', stage.worktree ?? '—')}
+          {row('gate', 'Gate', stage.gate)}
+          {row('id', 'ID', stage.id || '(blank)')}
           <Text>{`Depends on: ${stage.dependsOn.join(', ') || '—'}`}</Text>
           <Text>{`Definition order: ${order ?? 0} of ${total}`}</Text>
           <Text>{`Runtime: ${statuses.get(stage.id) ?? 'not running'}`}</Text>
-          <Text dimColor>{stage.instructions || '(no instructions)'}</Text>
+          {stageMenu?.editing === true && editorOptions.length > 0 ? (
+            <Text dimColor>{`Options (↑/↓): ${formatOptionList(editorOptions, stageMenu.value)}`}</Text>
+          ) : null}
         </>
       )}
       {run !== null ? (

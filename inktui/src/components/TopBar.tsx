@@ -100,10 +100,21 @@ export const TopBar = memo(function TopBar({
   const usage = useAppStore((s) => s.usage);
   const { columns } = useTerminalSize();
   const labels = useMemo(() => selectTopBar(visible), [visible]);
+  const workspaceColors = useMemo(
+    () => ({ activeBg: theme.focus, activeFg: theme.gaugeLabelText }),
+    [theme.focus, theme.gaugeLabelText],
+  );
   const rawSegments = useMemo(
     () =>
-      selectTopBarWidgetSegments(barWidgets, { usage, keyUsage: {}, now: 0, activeIndex, count }),
-    [barWidgets, usage, activeIndex, count],
+      selectTopBarWidgetSegments(barWidgets, {
+        usage,
+        keyUsage: {},
+        now: 0,
+        activeIndex,
+        count,
+        workspaceColors,
+      }),
+    [barWidgets, usage, activeIndex, count, workspaceColors],
   );
   const widgetAvail = useMemo(() => {
     const left = estimateTopBarLeftWidth(project, labels);

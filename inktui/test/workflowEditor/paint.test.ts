@@ -31,7 +31,10 @@ describe('paintWorkflow', () => {
       definitionVersion: 1,
       description: '',
       mode: 'static',
-      stages: [stage('a', 'build'), stage('b', 'test', ['build'])],
+      stages: [
+        { ...stage('a', 'build'), title: 'Build release', instructions: 'Compile packages' },
+        stage('b', 'test', ['build']),
+      ],
     };
     const surface = createSurface(80, 14);
     const layout = layoutWorkflow(workflow);
@@ -41,7 +44,8 @@ describe('paintWorkflow', () => {
     });
     const output = lines(surface).join('\n');
 
-    expect(output).toContain('Title build');
+    expect(output).toContain('┌Build release');
+    expect(output).toContain('Compile packages');
     expect(output).toContain('codex · gpt-5');
     expect(output).toContain('wt:');
     expect(output).toContain('running');
@@ -67,5 +71,23 @@ describe('paintWorkflow', () => {
     paintWorkflow(surface, layoutWorkflow(workflow), { x: 0, y: 0 }, 'a');
 
     expect(lines(surface).join('\n')).toContain('?───▶');
+  });
+
+  it('draws a dashed directional preview while choosing a dependency', () => {
+    const workflow: EditorWorkflow = {
+      name: 'flow',
+      description: '',
+      mode: 'static',
+      stages: [stage('a', 'build'), stage('b', 'docs')],
+    };
+    const surface = createSurface(50, 18);
+    paintWorkflow(surface, layoutWorkflow(workflow), { x: 0, y: 0 }, 'b', {
+      connect: { target: 'b', candidate: 'a', legality: 'add' },
+      candidateAdd: { fg: 'green' },
+    });
+
+    const output = lines(surface).join('\n');
+    expect(output).toContain('┄');
+    expect(output).toContain('▷');
   });
 });

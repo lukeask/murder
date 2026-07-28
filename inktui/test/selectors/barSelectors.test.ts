@@ -433,7 +433,7 @@ describe('bar widget framework', () => {
 
   it('selectTopBarWidgetSegments emits the workspace segment by default when count > 1', () => {
     // The workspace widget is default-enabled + top, so with more than one workspace and no stored
-    // config it appears in the top bar with the one-based active-index label.
+    // config it appears in the top bar as a fixed-width numbered tab strip.
     const segments = selectTopBarWidgetSegments(undefined, {
       ...BAR_CONTEXT,
       activeIndex: 1,
@@ -441,7 +441,7 @@ describe('bar widget framework', () => {
     });
     const workspace = segments.find((s) => s.widgetId === 'workspace');
     expect(workspace).toBeDefined();
-    expect(workspace?.runs.map((run) => run.text).join('')).toBe('⟨2/3⟩');
+    expect(workspace?.runs.map((run) => run.text).join('')).toBe(' 1  2  3 ');
   });
 
   it('the workspace widget is inert at count == 1 (emits no segment even though enabled)', () => {

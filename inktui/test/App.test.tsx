@@ -189,6 +189,30 @@ describe('App shell', () => {
     expect(lastFrame() ?? '').toContain('type a message');
     dispose();
   });
+
+  it('keeps the bottom bar with mode hints under a fullscreen mode', async () => {
+    const { inputStores, lastFrame, dispose } = setup([]);
+    await tick();
+
+    inputStores.modes.getState().enter({
+      id: 'test-fullscreen',
+      presentation: 'fullscreen',
+      keymap: [],
+      hints: [
+        { key: 'a', description: 'add stage' },
+        { key: 'esc', description: 'close' },
+      ],
+      onIntent() {},
+      render: () => <Text>fullscreen surface</Text>,
+    });
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('fullscreen surface');
+    expect(frame).toContain('add stage');
+    expect(frame).toContain('close');
+    expect(frame).not.toContain('type a message');
+    dispose();
+  });
 });
 
 describe('bodyHeightForChrome', () => {

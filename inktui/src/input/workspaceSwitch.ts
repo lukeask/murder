@@ -54,7 +54,8 @@
  *     switch (no cached frame). Input is inert for the ~300ms slide.
  *  6. **Resize mid-slide.** Trigger a terminal resize during a slide — the animation cancels and the
  *     live view paints at the new size (no stale-geometry frame left on screen).
- *  7. **Indicator widget.** `⟨2/3⟩` shows the active workspace and updates on every switch. Drop
+ *  7. **Indicator widget.** A tab strip (` 1  2  3  4 ` for four workspaces, one tab per slot)
+ *     shows the active workspace (filled focus accent) and updates on every switch. Drop
  *     `workspace_count` to 1 in Settings — the indicator disappears (feature fully inert).
  *  8. **Shrink clamp.** From WS3, set `workspace_count` to 2 in Settings — active index clamps into
  *     range (lands on the last remaining workspace) with an instant switch, no crash, no orphan.

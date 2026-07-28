@@ -11,6 +11,7 @@
  *  - backspace deletes from the buffer.
  */
 
+import { MouseProvider } from '@ink-tools/ink-mouse';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -29,6 +30,8 @@ const RETURN = '\r';
 const ALT_S = '\x1bs';
 const BACKSPACE = '\x7f';
 const CTRL_H_BACKSPACE = '\x08';
+const LEFT_CLICK_PRESS = '\x1b[<0;5;5M';
+const LEFT_CLICK_RELEASE = '\x1b[<0;5;5m';
 
 async function tick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -95,12 +98,15 @@ function Harness({
     return null;
   }
   return (
-    <AppStoreProvider value={store}>
-      <InputStoresProvider value={inputStores}>
-        <Root />
-        <ChatInput />
-      </InputStoresProvider>
-    </AppStoreProvider>
+    // useOnClick (click-to-focus chat) requires MouseProvider — same as TopBar / pane frames.
+    <MouseProvider autoEnable={false}>
+      <AppStoreProvider value={store}>
+        <InputStoresProvider value={inputStores}>
+          <Root />
+          <ChatInput />
+        </InputStoresProvider>
+      </AppStoreProvider>
+    </MouseProvider>
   );
 }
 
@@ -205,6 +211,21 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     stdin.write(CTRL_H_BACKSPACE);
     await tick();
     expect(inputStores.chatInput.getState().text).toBe('ab');
+    dispose();
+  });
+
+  it('does not insert SGR mouse reports into the chat buffer', async () => {
+    const { store, inputStores, dispose } = await setup();
+    const { stdin } = render(<Harness store={store} inputStores={inputStores} />);
+    await tick();
+
+    stdin.write('draft');
+    stdin.write(LEFT_CLICK_PRESS);
+    stdin.write(LEFT_CLICK_RELEASE);
+    stdin.write(' text');
+    await tick();
+
+    expect(inputStores.chatInput.getState().text).toBe('draft text');
     dispose();
   });
 

@@ -105,6 +105,8 @@ export interface GlobalHandlers {
   cycleChatView(): void;
   /** `alt+p`: open the new-plan popup (wired by C12). */
   newPlan(): void;
+  /** `alt+g` / `ctrl+g`: open the workflow graph editor. */
+  openWorkflowEditor?(): void;
   /** New-ticket popup. CHORD-LESS since TUIchat-3 (it lost `t` to the chat-view cycle; ticket-redo
    * rehomes it). The handler stays wired so a future chord/command can reach it. */
   newTicket(): void;
@@ -446,6 +448,10 @@ function dispatchGlobalChord(
     // C12: new-plan popup.
     handlers.newPlan();
     return 'global.newPlan';
+  }
+  if (bindings.matches('global.workflowEditor', input, key)) {
+    handlers.openWorkflowEditor?.();
+    return 'global.workflowEditor';
   }
   if (bindings.matches('global.settings', input, key)) {
     // Phase 5: the settings modal. Like the other app chords it wins app-wide (it carries the

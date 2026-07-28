@@ -39,12 +39,11 @@
  * ## Vim modes
  *
  * NORMAL mode: cursor-line navigation (`j`/`k` or arrows), `i` → INSERT, `dd` → delete line,
- *   `x` → toggle checklist item on cursor line, `w` → save & close, `q` → discard & close,
+ *   `x` → toggle checklist item on cursor line, `w` → save & close, `q`/`Esc` → discard & close,
  *   `tab` → focus the schedule field.
  * INSERT mode: printable chars appended to cursor line; `Backspace` → delete last char;
- *   `Return` → new line after cursor; `Esc` → back to NORMAL. Esc is a proper mode toggle and never
- *   discards: in INSERT it returns to NORMAL, with the schedule field focused it blurs it, and in
- *   NORMAL it is a no-op (swallowed). Discard is only `q` in NORMAL.
+ *   `Return` → new line after cursor; `Esc` → back to NORMAL. With the schedule field focused Esc
+ *   blurs it; from NORMAL Esc discards and closes, so this capturing mode always has an obvious exit.
  *
  * ## What this is the reference for (C12 plan/note editors)
  *
@@ -59,7 +58,7 @@ import { Box, Text } from 'ink';
 import { type JSX, useCallback } from 'react';
 import { useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { useInputStores } from '../hooks/useInputStores.js';
-import type { Mode, ModeStoreApi } from '../input/modeStore.js';
+import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
 import type { AppStoreApi } from '../store/store.js';
 import type { TicketFrontmatter } from '../store/ticketDetail/ticketDetailSlice.js';
 import { useTheme } from '../theme/themeStore.js';
@@ -264,11 +263,30 @@ export function ticketEditorMode(
   const mode: Mode<EditorIntent> = {
     id,
     presentation: 'inlayout',
+    get hints(): readonly ModeHint[] {
+      if (ui.scheduleFocused) {
+        return [
+          { key: 'type', description: 'schedule' },
+          { key: 'esc', description: 'back to ticket' },
+        ];
+      }
+      if (ui.vimMode === 'insert') {
+        return [
+          { key: 'type', description: 'edit ticket' },
+          { key: 'esc', description: 'normal mode' },
+        ];
+      }
+      return [
+        { key: 'i', description: 'edit' },
+        { key: 'w', description: 'save & close' },
+        { key: 'esc/q', description: 'discard & close' },
+      ];
+    },
     // No passThrough: the editor captures everything. Panel/global chords do NOT fire underneath.
     keymap: [
-      // Esc is mode-aware (see the 'escape' intent): blur the schedule field, or INSERT→NORMAL, or a
-      // NORMAL no-op. It NEVER discards+closes — discard is `q` in NORMAL, save is `w` in NORMAL.
-      { chord: { key: { escape: true } }, intent: 'escape', description: 'normal mode' },
+      // Esc is mode-aware (see the 'escape' intent): blur the schedule field, INSERT→NORMAL, or
+      // discard+close from NORMAL. This guarantees the capturing editor always has an obvious exit.
+      { chord: { key: { escape: true } }, intent: 'escape', description: 'back / close' },
       // Tab toggles the schedule field focus.
       { chord: { key: { tab: true } }, intent: 'toggleSchedule', description: 'schedule field' },
       // Arrow navigation (NORMAL line nav; mirrors j/k).
@@ -283,7 +301,7 @@ export function ticketEditorMode(
     onIntent(intent) {
       switch (intent) {
         case 'escape':
-          // Mode-aware Esc. Never discards+closes (discard is `q` in NORMAL).
+          // Mode-aware Esc: first leave the nested schedule/insert state, then close from NORMAL.
           if (ui.scheduleFocused) {
             ui.scheduleFocused = false; // blur the schedule field
             refresh();
@@ -295,7 +313,9 @@ export function ticketEditorMode(
             refresh();
             return;
           }
-          return; // NORMAL, no schedule: swallow (do NOT exit the editor)
+          modes.getState().exit(id);
+          options.onDiscard();
+          return;
         case 'toggleSchedule':
           ui.scheduleFocused = !ui.scheduleFocused;
           ui.pendingD = false;
@@ -517,7 +537,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
       <Box flexDirection="row" columnGap={2} marginTop={0}>
         <Text dimColor>
           {ui.vimMode === 'normal'
-            ? 'j/k:nav  i:insert  x:toggle-checklist  dd:del-line  w:save  q:discard  tab:schedule'
+            ? 'j/k:nav  i:insert  x:toggle-checklist  dd:del-line  w:save  esc/q:discard  tab:schedule'
             : 'type text  esc:normal'}
         </Text>
       </Box>

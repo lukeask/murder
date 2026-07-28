@@ -62,7 +62,8 @@ import type { PanelKeymap } from './keymap.js';
 
 /** How the overlay presents a mode. Data, not a branch the consumer hardcodes: the three surfaces
  * C8/C12/C14 need, each picking one. `modal` = centered box over the panels; `fullscreen` = replaces
- * the whole layout; `inlayout` = occupies a region while panels stay visible. */
+ * the panel layout (BottomBar kept for mode hints); `inlayout` = occupies a region while panels stay
+ * visible. */
 export type ModePresentation = 'modal' | 'fullscreen' | 'inlayout';
 
 /**

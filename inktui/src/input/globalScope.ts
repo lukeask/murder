@@ -59,6 +59,7 @@ export const GLOBAL_SCOPE = {
   'global.spawn': 'chat-or-stage',
   'global.cycleChatView': 'always',
   'global.newPlan': 'always',
+  'global.workflowEditor': 'always',
   'global.settings': 'always',
   'global.quickNote': 'always',
   'global.keyHelp': 'not-chat',
