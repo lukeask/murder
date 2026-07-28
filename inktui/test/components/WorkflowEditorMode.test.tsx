@@ -109,6 +109,7 @@ function setup(
     readonly definition?: WorkflowDef;
     readonly put?: unknown;
     readonly remote?: WorkflowDef;
+    readonly templates?: readonly { readonly name: string; readonly body: string }[];
   } = {},
 ) {
   const definition = options.definition ?? workflow();
@@ -137,6 +138,16 @@ function setup(
   });
   store.setState((state) => ({
     workflows: { ...state.workflows, items: [definition], revision: 'r1', status: 'ready' },
+    ...(options.templates === undefined
+      ? {}
+      : {
+          templates: {
+            ...state.templates,
+            items: options.templates,
+            status: 'ready' as const,
+            error: null,
+          },
+        }),
   }));
   const mode = workflowEditorMode(stores.modes, store, { workflow: definition });
   stores.modes.getState().enter(mode);
@@ -612,7 +623,7 @@ describe('WorkflowEditorMode', () => {
     await tick();
     app.mode.onIntent('run');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('Run arguments  [target=]  region=');
+    expect(app.stdout.lastFrame()).toContain('Run  [target=]  region=');
     app.mode.onUncaptured?.('p', {} as never);
     app.mode.onIntent('argsNext');
     app.mode.onUncaptured?.('u', {} as never);
@@ -632,6 +643,46 @@ describe('WorkflowEditorMode', () => {
     expect(app.stdout.lastFrame()).toContain('Discard unsaved edits?');
     app.mode.onIntent('confirm');
     expect(app.store.getState().workflows.items).toEqual([definition]);
+    app.close();
+  });
+
+  it('opens wizard fields introduced by expanded prompt templates', async () => {
+    const definition = workflow({
+      stages: [
+        stage('review', 'Review', [], {
+          instructions: ':review-context:\n\nReturn a prioritized report.',
+        }),
+      ],
+    });
+    const app = setup({
+      definition,
+      templates: [
+        {
+          name: 'review-context',
+          body: 'Review {subject}.\nCheck specifically for {risk_area}.',
+        },
+      ],
+    });
+    await tick();
+    app.mode.onIntent('run');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('Run  [subject=]  risk_area=');
+    expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')).toBeUndefined();
+    app.close();
+  });
+
+  it('blocks start when a stage references an unknown prompt template', async () => {
+    const definition = workflow({
+      stages: [
+        stage('review', 'Review', [], { instructions: 'Use :missing-template: please' }),
+      ],
+    });
+    const app = setup({ definition });
+    await tick();
+    app.mode.onIntent('run');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('Unknown prompt template :missing-template:');
+    expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')).toBeUndefined();
     app.close();
   });
 });

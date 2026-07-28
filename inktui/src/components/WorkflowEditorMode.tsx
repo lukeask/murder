@@ -21,9 +21,14 @@ import {
   type WorktreeOptionsActions,
 } from '../store/dialogs/worktreeOptionsActions.js';
 import type { AppStoreApi } from '../store/store.js';
+import { selectTemplatesByName } from '../store/templates/templatesSlice.js';
 import type { WorkflowRun } from '../store/workflowRuns/workflowRunsSlice.js';
 import type { WorkflowDef } from '../store/workflows/workflowsSlice.js';
 import { useTheme } from '../theme/themeStore.js';
+import {
+  compileWorkflowTemplate,
+  type WizardField,
+} from '../workflowEditor/compile.js';
 import { type GraphLayout, layoutWorkflow } from '../workflowEditor/layout.js';
 import type {
   EditableField,
@@ -35,7 +40,6 @@ import type {
 import { workflowEqual } from '../workflowEditor/model.js';
 import { autoPan, nearestNode } from '../workflowEditor/navigation.js';
 import { paintWorkflow } from '../workflowEditor/paint.js';
-import { collectPlaceholders } from '../workflowEditor/placeholders.js';
 import {
   applyWorkflowEdit,
   dependencyLegality,
@@ -68,8 +72,9 @@ type Interaction =
       readonly value: string;
     }
   | {
-      readonly kind: 'run-args';
-      readonly names: readonly string[];
+      /** Generated run wizard: one field per distinct placeholder after prompt-template expansion. */
+      readonly kind: 'wizard';
+      readonly fields: readonly WizardField[];
       readonly values: Record<string, string>;
       readonly cursor: number;
     }
@@ -239,8 +244,11 @@ export function workflowEditorMode(
   }
   function revealIssue(issue: EditorIssue | undefined): void {
     if (issue?.stageKey === undefined) return;
-    s.selected = issue.stageKey;
-    const rect = layoutWorkflow(s.draft).nodes.get(issue.stageKey)?.rect;
+    focusStage(issue.stageKey);
+  }
+  function focusStage(stageKey: StageKey): void {
+    s.selected = stageKey;
+    const rect = layoutWorkflow(s.draft).nodes.get(stageKey)?.rect;
     if (rect !== undefined) {
       s.viewport = autoPan(s.viewport, rect, s.canvasWidth, s.canvasHeight);
     }
@@ -397,20 +405,42 @@ export function workflowEditorMode(
       return;
     }
     const runWith = (args: Record<string, string>): void => {
+      // Start uses the existing RPC; server snapshots the saved definition so later template edits
+      // cannot rewrite an already-started run. Client compile is wizard/preview only until a
+      // workflow.compile RPC exists in the generated protocol.
       void app.getState().actions.workflows.run(s.draft.name, args);
       s.interaction = { kind: 'normal' };
       refresh();
     };
     const ask = (): void => {
-      const names = collectPlaceholders(s.draft);
-      if (names.length === 0) {
+      const templateBodies = new Map(
+        [...selectTemplatesByName(app.getState().templates.items)].map(([name, record]) => [
+          name,
+          record.body,
+        ]),
+      );
+      const compiled = compileWorkflowTemplate(s.draft, templateBodies);
+      if (compiled.issues.length > 0) {
+        const first = compiled.issues[0];
+        s.serverIssues = [];
+        s.feedback = first?.message ?? 'Workflow template compile failed.';
+        s.status = 'error';
+        if (first?.stageKey !== undefined) focusStage(first.stageKey);
+        refresh();
+        return;
+      }
+      if (compiled.fields.length === 0) {
         runWith({});
         return;
       }
+      s.feedback = null;
+      s.status = 'idle';
       s.interaction = {
-        kind: 'run-args',
-        names,
-        values: Object.fromEntries(names.map((name) => [name, ''])),
+        kind: 'wizard',
+        fields: compiled.fields,
+        values: Object.fromEntries(
+          compiled.fields.map((field) => [field.name, field.defaultValue]),
+        ),
         cursor: 0,
       };
       refresh();
@@ -631,7 +661,7 @@ export function workflowEditorMode(
         else if (intent === 'argsPrev') nextEditableField(s.interaction, -1);
         return;
       }
-      if (s.interaction.kind === 'run-args') {
+      if (s.interaction.kind === 'wizard') {
         if (intent === 'enter') {
           void app.getState().actions.workflows.run(s.draft.name, s.interaction.values);
           s.interaction = { kind: 'normal' };
@@ -642,20 +672,21 @@ export function workflowEditorMode(
         } else if (intent === 'argsNext') {
           s.interaction = {
             ...s.interaction,
-            cursor: (s.interaction.cursor + 1) % s.interaction.names.length,
+            cursor: (s.interaction.cursor + 1) % s.interaction.fields.length,
           };
           refresh();
         } else if (intent === 'argsPrev') {
           s.interaction = {
             ...s.interaction,
             cursor:
-              (s.interaction.cursor - 1 + s.interaction.names.length) % s.interaction.names.length,
+              (s.interaction.cursor - 1 + s.interaction.fields.length) %
+              s.interaction.fields.length,
           };
           refresh();
         } else if (intent === 'backspace') {
-          const name = s.interaction.names[s.interaction.cursor];
-          if (name === undefined) return;
-          s.interaction.values[name] = (s.interaction.values[name] ?? '').slice(0, -1);
+          const field = s.interaction.fields[s.interaction.cursor];
+          if (field === undefined) return;
+          s.interaction.values[field.name] = (s.interaction.values[field.name] ?? '').slice(0, -1);
           refresh();
         }
         return;
@@ -773,10 +804,10 @@ export function workflowEditorMode(
         refresh();
         return true;
       }
-      if (s.interaction.kind === 'run-args') {
-        const name = s.interaction.names[s.interaction.cursor];
-        if (name === undefined) return false;
-        s.interaction.values[name] = (s.interaction.values[name] ?? '') + input;
+      if (s.interaction.kind === 'wizard') {
+        const field = s.interaction.fields[s.interaction.cursor];
+        if (field === undefined) return false;
+        s.interaction.values[field.name] = (s.interaction.values[field.name] ?? '') + input;
         refresh();
         return true;
       }
@@ -836,7 +867,7 @@ function workflowEditorKeymap(
     { chord: { key: { upArrow: true } }, intent: 'up', description: 'previous option' },
     { chord: { key: { downArrow: true } }, intent: 'down', description: 'next option' },
   ] as const;
-  if (interaction.kind === 'search' || interaction.kind === 'run-args') {
+  if (interaction.kind === 'search' || interaction.kind === 'wizard') {
     return [escapeBinding, enter, backspace, tab, backtab];
   }
   if (interaction.kind === 'edit') {
@@ -972,10 +1003,10 @@ function hints(
       { key: '/', description: 'search' },
       { key: 'esc', description: 'done' },
     ];
-  if (interaction.kind === 'run-args')
+  if (interaction.kind === 'wizard')
     return [
-      { key: 'type', description: 'arg value' },
-      { key: 'tab', description: 'next arg' },
+      { key: 'type', description: 'input value' },
+      { key: 'tab', description: 'next field' },
       { key: 'enter', description: 'run' },
       { key: 'esc', description: 'cancel' },
     ];
@@ -1110,7 +1141,7 @@ function WorkflowEditorSurface({
     },
   );
   const selected = displayed.stages.find((stage) => stage.key === displayedSelected) ?? null;
-  const runArgs = session.interaction.kind === 'run-args' ? session.interaction : null;
+  const wizard = session.interaction.kind === 'wizard' ? session.interaction : null;
   const editOptions =
     session.interaction.kind === 'edit' ? optionsForEditorField(session, session.interaction) : [];
   const editValue = session.interaction.kind === 'edit' ? session.interaction.value : '';
@@ -1169,10 +1200,16 @@ function WorkflowEditorSurface({
           }
         >{`${connect.legality.toUpperCase()} dependency`}</Text>
       ) : null}
-      {runArgs !== null ? (
+      {wizard !== null ? (
         <Text
           color={theme.accent}
-        >{`Run arguments  ${runArgs.names.map((name, index) => `${index === runArgs.cursor ? '[' : ''}${name}=${runArgs.values[name]}${index === runArgs.cursor ? ']' : ''}`).join('  ')}`}</Text>
+        >{`Run  ${wizard.fields
+          .map((field, index) => {
+            const value = wizard.values[field.name] ?? '';
+            const cell = `${field.label}=${value}`;
+            return index === wizard.cursor ? `[${cell}]` : cell;
+          })
+          .join('  ')}`}</Text>
       ) : null}
       {runSnapshot !== null ? (
         <Text
