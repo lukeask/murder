@@ -5,12 +5,15 @@
 
 import type { WorkflowTemplate } from '../../store/workflows/workflowsSlice.js';
 
-/** Inline `:name:` macros inside a body (or workflow field). */
-export const INLINE_TEMPLATE_RE = /:([A-Za-z0-9_-]+):/g;
+/**
+ * Inline `:name:` macros inside a body (or workflow field).
+ * Identifier-like names only (letter/underscore first) — not pure-digit times/versions.
+ */
+export const INLINE_TEMPLATE_RE = /:([A-Za-z_][A-Za-z0-9_-]*):/g;
 /** `{placeholder}` tokens inside a template body. */
 export const BODY_PLACEHOLDER_RE = /\{([A-Za-z0-9_-]+)\}/g;
-/** Valid prompt-template name. */
-export const TEMPLATE_NAME_RE = /^[A-Za-z0-9_-]+$/;
+/** Valid prompt-template name (same shape as inline refs). */
+export const TEMPLATE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /** One site where a workflow template textually references `:name:`. */
 export interface WorkflowTemplateRef {
@@ -117,7 +120,7 @@ export function validateTemplateName(
 ): string | null {
   if (name === '') return 'Template name cannot be empty';
   if (!TEMPLATE_NAME_RE.test(name)) {
-    return `"${name}" is invalid — use letters, digits, _ or - only`;
+    return `"${name}" is invalid — start with a letter or _, then letters, digits, _ or -`;
   }
   if (name !== originalName && existing.some((t) => t.name === name)) {
     return `A template named "${name}" already exists`;

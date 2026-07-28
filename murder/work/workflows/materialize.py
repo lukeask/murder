@@ -77,7 +77,9 @@ def materialize_workflow(
     Raises ``ValueError`` if the definition is invalid (so a bad workflow never
     leaves a partial tree behind).
     """
-    errors = validate_workflow(defn)
+    # Materialize always creates frontmatter tickets, so harness/model are required
+    # even when *defn* is still marked builtin (unprepared launch path).
+    errors = validate_workflow(defn.model_copy(update={"builtin": False}))
     if errors:
         raise ValueError("invalid workflow: " + "; ".join(errors))
 

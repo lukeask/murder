@@ -122,7 +122,9 @@ describe('promptTemplates/refs helpers', () => {
       'review/s1.title',
     );
     expect(validateTemplateName('ok', null, [])).toBeNull();
+    expect(validateTemplateName('review-context', null, [])).toBeNull();
     expect(validateTemplateName('bad!', null, [])).toContain('invalid');
+    expect(validateTemplateName('100', null, [])).toContain('invalid');
     expect(validateTemplateName('x', null, [{ name: 'x' }])).toContain('already exists');
   });
 });

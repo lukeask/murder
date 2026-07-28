@@ -75,8 +75,8 @@ export type RenameTarget =
   | { readonly kind: 'rogue'; readonly agentId: string }
   | { readonly kind: 'plan'; readonly oldName: string };
 
-/** Valid template/command name — matches the backend's `^[A-Za-z0-9_-]+$`. */
-const NAME_RE = /^[A-Za-z0-9_-]+$/;
+/** Valid template/command name — letter/underscore first (matches inline `:name:` refs). */
+const NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /** Plan filename stem guard — mirrors `plan_ops._validate_plan_filename_stem` (client-side preflight). */
 function isValidPlanStem(name: string): boolean {

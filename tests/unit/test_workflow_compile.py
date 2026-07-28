@@ -61,6 +61,30 @@ def test_expand_unknown_prompt_template_left_literal() -> None:
     assert unknown == ["missing"]
 
 
+def test_expand_inline_ignores_times_versions_and_pure_digits() -> None:
+    """Times/versions must not be treated as unknown template refs (hard errors at start)."""
+    cases = (
+        "meet at 12:30: then go",
+        "versions 1:2:3 matter",
+        "see :100: later",
+        "deadline 09:05:00Z",
+    )
+    for text in cases:
+        expanded, unknown = expand_inline_prompt_templates(text, {})
+        assert expanded == text, text
+        assert unknown == [], text
+
+
+def test_expand_inline_still_expands_identifier_template_names() -> None:
+    templates = {"my-template": "BODY", "review-context": "CTX", "a1": "A"}
+    expanded, unknown = expand_inline_prompt_templates(
+        "x :my-template: y :review-context: z :a1:",
+        templates,
+    )
+    assert unknown == []
+    assert expanded == "x BODY y CTX z A"
+
+
 def test_collect_placeholders_dedupes_first_occurrence_order() -> None:
     assert collect_placeholders("A {b} {a}", "{a} then {c} and {b}") == ["b", "a", "c"]
 
@@ -96,6 +120,28 @@ def test_compile_expands_templates_and_infers_inputs() -> None:
     assert all(field.kind == "text" for field in result.inputs)
     assert ":review-context:" not in stage.instructions
     assert "{subject}" in stage.instructions
+
+
+def test_compile_does_not_flag_times_or_versions_as_unknown_templates() -> None:
+    defn = WorkflowDef(
+        name="timed",
+        stages=[
+            _stage(
+                id="a",
+                title="Meet at 12:30:",
+                instructions="Ship v1:2:3 and check :100: then :review-context:.",
+            )
+        ],
+    )
+    result = compile_workflow_template(
+        defn,
+        prompt_templates={"review-context": "Review it."},
+    )
+    assert result.ok
+    assert result.issues == []
+    assert "Review it." in result.expanded_template.stages[0].instructions
+    assert "12:30:" in result.expanded_template.stages[0].title
+    assert ":100:" in result.expanded_template.stages[0].instructions
 
 
 def test_compile_unknown_prompt_template_is_error() -> None:

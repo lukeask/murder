@@ -223,6 +223,27 @@ def test_run_workflow_by_name_rejects_ticket_without_required_title(
         run_workflow_by_name(MagicMock(), tmp_path, "ticket", {"prompt": "do stuff"})
 
 
+def test_materialize_rejects_unprepared_builtin_missing_harness_model(
+    repo_root: Path,
+) -> None:
+    from murder.state.persistence.schema import get_db, init_db
+
+    db_file = repo_root / ".murder" / "murder.db"
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    conn = get_db(db_file)
+    init_db(conn)
+
+    unprepared = ticket_workflow_template()
+    assert unprepared.builtin
+    assert unprepared.stages[0].harness is None
+    assert unprepared.stages[0].model is None
+
+    with pytest.raises(ValueError, match="requires a harness"):
+        materialize_workflow(
+            conn, repo_root, unprepared, {"title": "x", "prompt": "y"}
+        )
+
+
 def test_materialize_prepared_ticket_creates_workflow_run(repo_root: Path) -> None:
     from murder.state.persistence.schema import get_db, init_db
     from murder.state.persistence.workflow_runs import get_workflow_run

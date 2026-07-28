@@ -27,7 +27,10 @@ from murder.work.workflows.definition import (
     WorkflowInputKind,
 )
 
-_INLINE_TEMPLATE_RE = re.compile(r":([A-Za-z0-9_-]+):")
+# Identifier-like names only (must start with a letter or underscore). Pure-digit
+# spans like ``12:30:``, ``1:2:3``, and ``:100:`` are left literal — they are times /
+# versions, not prompt-template refs.
+_INLINE_TEMPLATE_RE = re.compile(r":([A-Za-z_][A-Za-z0-9_-]*):")
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_-]+)\}")
 
 WorkflowCompileIssueCode = Literal[

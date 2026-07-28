@@ -30,8 +30,9 @@
  *        by the filled body, and the result is returned WITHOUT an inline re-scan (precedence rule).
  *      - else (unknown) → untouched (falls through `dispatchCommand` literally, sent verbatim).
  * 2. **Inline form** — only when leading expansion did NOT fire: every `:name:` (double-colon delimited,
- *    `name` matches `[A-Za-z0-9_-]+`) is replaced by its registry body, or left verbatim on a miss
- *    (literal fallthrough). Inline form is templates-only — it never consults builtins.
+ *    `name` matches `[A-Za-z_][A-Za-z0-9_-]*` — identifier-like, not pure digits) is replaced by its
+ *    registry body, or left verbatim on a miss (literal fallthrough). Inline form is templates-only —
+ *    it never consults builtins. Times/versions like `12:30:`, `1:2:3`, `:100:` are not refs.
  *
  * Unknown inline `:name:` tokens are left verbatim for chat. Workflow compile will treat unknowns as
  * errors later; {@link ExpansionResult.missing} surfaces those names for that path.
@@ -39,8 +40,11 @@
 
 /** A leading bare name: `:name` followed by whitespace or end-of-string. Captures `name`. */
 const LEADING_RE = /^:([A-Za-z0-9_-]+)(?=\s|$)/;
-/** An inline macro: `:name:`. Global so we can sweep every occurrence. */
-const INLINE_RE = /:([A-Za-z0-9_-]+):/g;
+/**
+ * An inline macro: `:name:`. Name must start with a letter or underscore so times /
+ * versions (`12:30:`, `1:2:3`, `:100:`) are not treated as template refs.
+ */
+const INLINE_RE = /:([A-Za-z_][A-Za-z0-9_-]*):/g;
 /** A `{placeholder}` token inside a template body. */
 const PLACEHOLDER_RE = /\{([A-Za-z0-9_-]+)\}/g;
 

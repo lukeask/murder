@@ -177,6 +177,35 @@ describe('expandInlinePromptTemplates', () => {
       expanded: ['a1', 'under_score', 'kebab-case'],
     });
   });
+
+  it('does not treat times, versions, or pure-digit :N: as template refs', () => {
+    for (const text of [
+      'meet at 12:30: then go',
+      'versions 1:2:3 matter',
+      'see :100: later',
+      'deadline 09:05:00Z',
+    ]) {
+      expect(expandInlinePromptTemplates(text, new Map())).toEqual({
+        text,
+        missing: [],
+        expanded: [],
+      });
+    }
+  });
+
+  it('still expands identifier-like :my-template: / :review-context:', () => {
+    const templates = new Map<string, string>([
+      ['my-template', 'BODY'],
+      ['review-context', 'CTX'],
+    ]);
+    expect(
+      expandInlinePromptTemplates('x :my-template: y :review-context:', templates),
+    ).toEqual({
+      text: 'x BODY y CTX',
+      missing: [],
+      expanded: ['my-template', 'review-context'],
+    });
+  });
 });
 
 describe('parseLeadingColonName', () => {
