@@ -74,7 +74,13 @@ def _is_pi_chrome(line: str) -> bool:
 
 
 def _pi_is_transcript_chrome(line: str) -> bool:
-    """Chrome predicate for pi transcript parsing."""
+    """Chrome predicate for pi transcript parsing.
+
+    Pi currently exposes no stable role marker beyond its one-cell transcript
+    indent. This remains a fixed-geometry compatibility heuristic: a width
+    change can produce a flush-left continuation that is indistinguishable from
+    chrome. Ambiguous Pi transcript reflow therefore still requires 220×50.
+    """
     s = line.strip()
     if not s:
         return True

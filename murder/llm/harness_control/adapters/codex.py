@@ -842,7 +842,14 @@ class CodexHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
 
 
 def _viewport(clean: str, height: int) -> str:
-    """Return the current terminal viewport while preserving broad raw evidence."""
+    """Best-effort legacy viewport fallback.
+
+    Native tmux observation supplies ``TerminalFrame.viewport_text`` and
+    ``_payload_viewport`` prefers it. Taking the last ``height`` physical lines
+    remains geometry-sensitive: wrapping and omitted trailing blank rows can
+    change which semantic surface appears live. It is retained only for the
+    fixed 220×50 compatibility path and must not justify dynamic harness resize.
+    """
 
     lines = clean.splitlines()
     return "\n".join(lines[-height:]) if height > 0 else clean

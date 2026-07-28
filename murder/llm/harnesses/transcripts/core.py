@@ -126,6 +126,12 @@ class _PaneScrollback:
     Coordinates are absolute and monotonic within an epoch (see module docstring).
     ``start`` is the absolute index of the visible pane's top line; ``epoch`` is
     bumped on every alignment failure so callers can tell history apart.
+
+    Geometry invariant: exact physical-line coordinates are comparable only
+    while the harness width is unchanged. Production harnesses intentionally
+    remain at the 220×50 compatibility geometry. A future dynamic-width source
+    must start an explicit reflow epoch rather than feeding differently wrapped
+    rows into one accumulator and treating alignment failure as ordinary scroll.
     """
 
     def __init__(self, *, live_window: int = _DEFAULT_LIVE_WINDOW) -> None:

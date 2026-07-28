@@ -1,0 +1,9 @@
+# terminal_width: 220 (compatibility baseline; extracted from the established status shape)
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.200.0)                                                      │
+│ Account: user@example.com (Plus)                                                │
+│ Session: 019e5c91-89a0-7ca1-9b8c-b407e537f7d6                                  │
+│ 5h limit: [██████████░░] 75% left (resets 21:29)                                 │
+│ Weekly limit: [████░░░░] 40% left (resets 14:49 on 18 May)                      │
+│ Context window: 80% left (20K used / 100K)                                      │
+╰─────────────────────────────────────────────────────────────────────────────────╯

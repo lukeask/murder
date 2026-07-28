@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -15,6 +14,11 @@ from murder.llm.harnesses.models import (
     HarnessUsageStatus,
     HarnessUsageTotals,
     HarnessUsageWindow,
+)
+from murder.llm.harnesses.codex_status import (
+    clean_codex_status_line as _clean_codex_line,
+    fold_codex_status_lines as _codex_status_logical_lines,
+    locate_codex_status_surface,
 )
 from murder.llm.harnesses.parsing import strip_ansi
 
@@ -225,8 +229,6 @@ _CLOCK_RESET_RE = re.compile(
     r"(?:\s+on\s+(?:(?P<day>\d{1,2})\s+(?P<mon>[A-Za-z]{3,})|(?P<mon2>[A-Za-z]{3,})\s+(?P<day2>\d{1,2})))?",
     re.IGNORECASE,
 )
-_CODEX_HEADING_RE = re.compile(r"(?:>_\s*)?OpenAI\s+Codex\s*\(v[^)]*\)", re.I)
-_CODEX_FIELD_RE = re.compile(r"^(?P<label>[A-Za-z][A-Za-z ._-]{1,40}):\s*(?P<value>.+)$")
 _CODEX_CONTEXT_RE = re.compile(
     r"^Context\s+window\s*:\s*(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<dir>left|remaining|used|consumed)"
     r"(?:\s*\(\s*(?P<used>\d+(?:\.\d+)?)\s*(?P<unit>[KMGT]?)\s*used\s*/\s*"
@@ -240,15 +242,6 @@ _RESET_CREDIT_RE = re.compile(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class CodexStatusSurface:
-    """The bounded status panel selected from a terminal capture."""
-
-    start: int
-    end: int
-    complete: bool
-    active: bool
-    lines: tuple[str, ...]
 _MONTHS = {
     m: i
     for i, m in enumerate(
@@ -316,51 +309,6 @@ def _parse_clock_reset(raw: str, now: datetime | None) -> str | None:
     return reset_at.isoformat()
 
 
-def locate_codex_status_surface(pane_text: str) -> CodexStatusSurface | None:
-    """Locate the newest structurally valid Codex status panel.
-
-    Selection is intentionally independent of quota labels: an update may
-    remove a window, and scrollback must never lend it back from an old panel.
-    """
-    lines = strip_ansi(pane_text).splitlines()
-    last_composer = max(
-        (i for i, line in enumerate(lines) if line.lstrip().startswith("›")), default=-1
-    )
-    candidates: list[CodexStatusSurface] = []
-    for start, line in enumerate(lines):
-        if not _CODEX_HEADING_RE.search(line):
-            continue
-        next_heading = next(
-            (i for i in range(start + 1, len(lines)) if _CODEX_HEADING_RE.search(lines[i])),
-            len(lines),
-        )
-        close = next(
-            (i for i in range(start + 1, next_heading) if lines[i].lstrip().startswith(("╰", "+"))),
-            None,
-        )
-        end = (close + 1) if close is not None else next_heading
-        content = [_clean_codex_line(item) for item in lines[start + 1:end]]
-        labels = {
-            match.group("label").strip().lower()
-            for item in content
-            if (match := _CODEX_FIELD_RE.match(item)) is not None
-        }
-        if not labels.intersection({"session", "account", "collaboration mode"}):
-            continue
-        # Borderless captures are accepted only when another status heading or
-        # composer bounds them; an unbounded rendering remains incomplete.
-        complete = close is not None or end < len(lines)
-        candidates.append(
-            CodexStatusSurface(start, end, complete, start > last_composer, tuple(lines[start:end]))
-        )
-    completed = [candidate for candidate in candidates if candidate.complete]
-    return (completed or candidates or [None])[-1]
-
-
-def _clean_codex_line(line: str) -> str:
-    return line.strip().strip("│").strip()
-
-
 def _codex_key(label: str) -> str:
     normalized = re.sub(r"\s+", " ", label).strip().lower()
     aliases = {"5h limit": "5h", "5 hour limit": "5h", "weekly limit": "weekly"}
@@ -390,12 +338,12 @@ def parse_codex_status_pane(
 ) -> HarnessUsageStatus:
     clean = strip_ansi(pane_text)
     surface = locate_codex_status_surface(clean)
-    panel_lines = list(surface.lines) if surface else []
+    panel_lines = _codex_status_logical_lines(surface.lines) if surface else []
     diagnostics: list[str] = []
     windows: list[HarnessUsageWindow] = []
     context: HarnessUsageContextWindow | None = None
     session_id: str | None = None
-    for index, raw_line in enumerate(panel_lines):
+    for raw_line in panel_lines:
         line = _clean_codex_line(raw_line)
         if session_match := _CODEX_SESSION_RE.search(line):
             session_id = session_match.group("session")
@@ -422,11 +370,6 @@ def parse_codex_status_pane(
         pct = float(match.group("pct"))
         used = pct if direction in {"used", "consumed"} else 100.0 - pct
         reset_text = match.group("tail")
-        # A wrapped reset can only belong to the immediately preceding row.
-        if "reset" not in reset_text.lower() and index + 1 < len(panel_lines):
-            following = _clean_codex_line(panel_lines[index + 1])
-            if following.lower().startswith("resets"):
-                reset_text = following
         reset_at = _parse_clock_reset(reset_text, now) if "reset" in reset_text.lower() else None
         if "reset" in reset_text.lower() and reset_at is None:
             diagnostics.append(f"invalid reset for {label!r}: {reset_text!r}")

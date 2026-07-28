@@ -644,15 +644,31 @@ def _resume_filter(lines: list[str]) -> str | None:
 
 
 def _model_scope(lines: list[str]) -> dict[str, object]:
-    line = next((line.strip() for line in lines if line.strip().startswith("Model scope:")), None)
-    if line is None:
+    start = next(
+        (index for index, line in enumerate(lines) if line.strip().startswith("Model scope:")),
+        None,
+    )
+    if start is None:
         return {"present": False, "selected": None, "available": (), "raw": None}
-    raw = line.partition(":")[2].strip()
+    first = lines[start].strip()
+    fragments = [first.partition(":")[2].strip()]
+    # Pi emits the model scope as one logical comma-delimited value but tmux
+    # exposes its soft wraps as physical rows, including wraps in the middle of
+    # model identifiers ("prev" + "iew", "xia" + "omi"). Join without adding
+    # whitespace until the blank/footer delimiter, then parse the logical row.
+    for continuation in lines[start + 1 :]:
+        stripped = continuation.strip()
+        if not stripped:
+            break
+        if stripped.startswith((">", "Model scope:", "Session:", "Working directory:")):
+            break
+        fragments.append(stripped)
+        if "Ctrl+P to cycle" in stripped:
+            break
+    raw = "".join(fragments)
     raw = re.sub(r"\s*\(Ctrl\+P to cycle\)\s*$", "", raw, flags=re.I)
-    # Terminal wrapping is retained in raw evidence; comma-delimited entries
-    # on the visible first line are still useful choices.
     available = tuple(part.strip() for part in raw.split(",") if part.strip())
-    return {"present": True, "selected": None, "available": available, "raw": line}
+    return {"present": True, "selected": None, "available": available, "raw": raw}
 
 
 def _notices(lines: list[str], pattern: re.Pattern[str]) -> list[dict[str, object]]:

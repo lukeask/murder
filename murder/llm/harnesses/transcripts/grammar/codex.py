@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from murder.llm.harnesses.codex_status import codex_status_physical_lines
 from murder.llm.harnesses.transcripts.segments import PlanItem, Segment, SpannedSegment
 from murder.llm.harnesses.transcripts._shared import (
     dedupe_adjacent_spanned,
@@ -206,8 +207,15 @@ def parse_spanned(
     user_texts: list[str] | None = None,  # noqa: ARG001
 ) -> list[SpannedSegment]:
     spanned: list[SpannedSegment] = []
+    # Mask the complete semantic surface, not only individually recognized
+    # quota rows. Narrow terminals may wrap a label/value/reset over several
+    # physical lines whose continuations do not independently look like chrome.
+    status_lines = codex_status_physical_lines(lines)
     i = 0
     while i < len(lines):
+        if i in status_lines:
+            i += 1
+            continue
         line = lines[i]
         block_start = i
 
@@ -266,7 +274,9 @@ def parse_spanned(
         body = [label]
         i += 1
         while i < len(lines) and not _codex_starts_block(lines, i):
-            if not _codex_is_chrome(lines[i]):
+            if i in status_lines:
+                pass
+            elif not _codex_is_chrome(lines[i]):
                 body.append(lines[i])
             elif not lines[i].strip():
                 body.append("")
