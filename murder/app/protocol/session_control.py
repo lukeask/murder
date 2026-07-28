@@ -10,6 +10,7 @@ from murder.app.protocol.common import ApplicationModel
 
 
 class SampleHarnessUsageParams(ApplicationModel):
+    trigger: str | None = None
     modes: list[str] | None = None
 
 

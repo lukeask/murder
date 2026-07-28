@@ -165,18 +165,24 @@ class AgentOps:
             # renders it. This is the sole crow delivery path — a crow with no
             # live agent handle is simply not addressable and falls through to
             # the honest "no agent named" failure below.
-            # Startup (verified model selection / conversation bind) must finish
-            # before chat can be queued or delivered. Otherwise the optimistic TUI
-            # clear has nowhere durable to land.
+            # A newly registered crow can be targetable before verified model
+            # selection and conversation binding finish. Prepare a clean durable
+            # conversation on the first such send, then let the normal agent queue
+            # hold it until projection observes awaiting_input.
             if getattr(agent, "status", None) is not None:
                 status_value = getattr(agent.status, "value", agent.status)
                 producer = getattr(agent, "_producer", None)
                 if status_value == "idle" and producer is None:
-                    return {
-                        "ok": False,
-                        "handled": False,
-                        "error": "agent is still starting; try again shortly",
-                    }
+                    db = getattr(self.rt, "db", None)
+                    if db is not None and getattr(agent, "_queued_message", None) is None:
+                        from murder.state.persistence import conversation  # noqa: PLC0415
+
+                        conversation.clear(db, agent_id)
+                        conversation.upsert_conversation(
+                            db,
+                            conversation_id=agent_id,
+                            agent_id=agent_id,
+                        )
             queue_result = await agent.queue_message(message)
             if queue_result.get("ok") is False:
                 return {
@@ -187,9 +193,7 @@ class AgentOps:
                 }
             # Ground truth: record the user turn once immediate or queued
             # delivery is accepted.
-            await self._record_user_block(
-                agent_id, message, client_message_id=client_message_id
-            )
+            await self._record_user_block(agent_id, message, client_message_id=client_message_id)
             return {"handled": True, **queue_result}
         if agent is None:
             return {"ok": False, "handled": False, "error": f"no agent named {agent_id}"}
@@ -200,9 +204,7 @@ class AgentOps:
                 "handled": False,
                 "error": getattr(send_result, "message", None) or "agent message delivery failed",
             }
-        await self._record_user_block(
-            agent_id, message, client_message_id=client_message_id
-        )
+        await self._record_user_block(agent_id, message, client_message_id=client_message_id)
         return {"handled": True, "queued": False}
 
     async def send_agent_key(  # noqa: PLR0911 - each validation failure is an API result

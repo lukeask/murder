@@ -41,15 +41,29 @@ class AcpViewState:
     _stream_message_id: str | None = field(default=None, repr=False)
     _stream_thought_id: str | None = field(default=None, repr=False)
     _stream_user_id: str | None = field(default=None, repr=False)
+    _stream_user_seeded: bool = field(default=False, repr=False)
 
 
-def mark_prompt_started(state: AcpViewState) -> None:
-    """Caller hook: mark turn as streaming when ``session/prompt`` begins."""
+def mark_prompt_started(state: AcpViewState, prompt_text: str | None = None) -> None:
+    """Mark a new turn and optionally seed its exact submitted user prompt."""
     state.turn_status = "streaming"
     state.stop_reason = None
     state._stream_message_id = None
     state._stream_thought_id = None
     state._stream_user_id = None
+    state._stream_user_seeded = False
+    if prompt_text is not None:
+        item_id = _next_stream_id(state, "user")
+        state._stream_user_id = item_id
+        state._stream_user_seeded = True
+        state.items.append(
+            {
+                "id": item_id,
+                "type": "userMessage",
+                "role": "user",
+                "text": prompt_text,
+            }
+        )
 
 
 def apply_stop_reason(state: AcpViewState, stop_reason: str | None) -> None:
@@ -169,6 +183,11 @@ def _apply_session_update(state: AcpViewState, update: dict[str, Any]) -> None:
     if kind == "user_message_chunk":
         text = _content_text(update.get("content"))
         if text is None:
+            return
+        # The client-submitted prompt is exact and already complete. Some ACP
+        # agents echo it as chunks while Cursor emits no user chunks; ignore an
+        # echo for a seeded turn so neither shape can duplicate user content.
+        if state._stream_user_seeded:
             return
         item_id = state._stream_user_id
         if item_id is None:

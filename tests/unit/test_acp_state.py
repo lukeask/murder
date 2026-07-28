@@ -129,6 +129,31 @@ def test_message_chunks_tool_call_and_snapshot() -> None:
     assert encoded == again
 
 
+def test_seeded_prompt_is_authoritative_over_agent_user_echo() -> None:
+    state = AcpViewState()
+    mark_prompt_started(state, "exact submitted prompt")
+    apply_notification(
+        state,
+        _update(
+            "sess",
+            {
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": "exact submitted prompt"},
+            },
+        ),
+    )
+
+    snapshot = to_snapshot_dict(state, staged_composer_text="", session_id=None)
+    assert snapshot["items"] == [
+        {
+            "id": "user-1",
+            "type": "userMessage",
+            "role": "user",
+            "text": "exact submitted prompt",
+        }
+    ]
+
+
 def test_thought_chunks_permission_pending_and_cancel() -> None:
     state = AcpViewState()
     mark_prompt_started(state)

@@ -18,6 +18,22 @@ from murder.llm.harness_control.model.actions import (
 )
 
 
+def _prompt_text(params: dict[str, object] | None) -> str | None:
+    if params is None:
+        return None
+    blocks = params.get("prompt")
+    if not isinstance(blocks, list):
+        return None
+    parts: list[str] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        text = block.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts) if parts else None
+
+
 class AcpRpcPort(Protocol):
     """Minimal JSON-RPC surface needed to emit ``AcpRpcEffect`` values."""
 
@@ -82,10 +98,21 @@ class AcpEffectTransport:
             return
         if effect.expects_response:
             is_prompt = effect.method == "session/prompt"
+            prompt_text = _prompt_text(effect.params) if is_prompt else None
             if is_prompt and hasattr(self._connection, "prompt_in_flight"):
                 self._connection.prompt_in_flight = True
+            if is_prompt and hasattr(self._connection, "pending_prompt_text"):
+                self._connection.pending_prompt_text = prompt_text
             try:
                 result = await self._connection.request(effect.method, effect.params)
+            except BaseException:
+                if (
+                    is_prompt
+                    and hasattr(self._connection, "pending_prompt_text")
+                    and self._connection.pending_prompt_text == prompt_text
+                ):
+                    self._connection.pending_prompt_text = None
+                raise
             finally:
                 if is_prompt and hasattr(self._connection, "prompt_in_flight"):
                     self._connection.prompt_in_flight = False

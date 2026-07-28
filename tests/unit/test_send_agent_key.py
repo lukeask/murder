@@ -10,11 +10,14 @@ from types import SimpleNamespace
 import pytest
 
 from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
+from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.results import fail_result, ok_result
+from murder.runtime.agents.crow import CrowAgent
 from murder.runtime.orchestration import agent_ops
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.runtime.terminal import tmux
 from murder.state.persistence.agents import get_agent_messages
+from murder.state.persistence.conversation import read_conversation_blocks
 from murder.state.persistence.schema import get_db, init_db
 from tests.support.fake_tmux import FakeTmux
 
@@ -213,6 +216,58 @@ def test_send_agent_message_reports_delivery_failure_without_user_block(
     assert get_agent_messages(db, "crow-t001") == []
 
 
+def test_send_agent_message_queues_while_crow_is_still_starting(
+    repo_root: Path,
+) -> None:
+    db = get_db(repo_root / ".murder" / "murder.db")
+    init_db(db)
+    runtime = SimpleNamespace(
+        db=db,
+        orchestration_events=None,
+        run_id=None,
+        sync_agent=lambda _agent: None,
+    )
+    agent = CrowAgent(
+        agent_id="claude-rogue-startup",
+        ticket_id=None,
+        session="murder_test_startup",
+        harness=ClaudeCodeAdapter(),
+        repo_root=repo_root,
+        runtime=runtime,
+    )
+    runtime.get_agent = lambda agent_id: agent if agent_id == agent.id else None
+    runtime.get_crow_handler = lambda _ticket_id: None
+
+    result = asyncio.run(
+        Orchestrator(runtime).send_agent_message(
+            agent.id,
+            "test before startup",
+            None,
+            client_message_id="client-startup",
+        )
+    )
+
+    assert result == {"handled": True, "queued": True}
+    assert agent.pending_message == "test before startup"
+    row = db.execute(
+        "SELECT queued_message FROM conversations WHERE conversation_id = ?",
+        (agent.id,),
+    ).fetchone()
+    assert row["queued_message"] == "test before startup"
+
+    assert [block.payload for block in read_conversation_blocks(db, agent.id)] == [
+        {
+            "type": "user",
+            "text": "test before startup",
+            "client_message_id": "client-startup",
+        }
+    ]
+
+    agent.start_conversation()
+    assert agent.pending_message == "test before startup"
+    assert len(read_conversation_blocks(db, agent.id)) == 1
+
+
 def test_send_agent_message_records_user_block_after_delivery_acceptance(
     repo_root: Path,
 ) -> None:
@@ -268,8 +323,6 @@ def test_send_agent_message_persists_client_message_id_on_user_block(
     )
 
     assert result == {"handled": True, "queued": False}
-    from murder.state.persistence.conversation import read_conversation_blocks
-
     blocks = read_conversation_blocks(db, "crow-t001")
     assert len(blocks) == 1
     assert blocks[0].payload == {

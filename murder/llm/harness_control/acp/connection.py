@@ -138,6 +138,10 @@ class AcpConnection:
         # Set by AcpEffectTransport when session/prompt returns (or cancel fires);
         # consumed by AcpFrameObserver on the next capture_frame.
         self.pending_stop_reason: str | None = None
+        # Set immediately before a session/prompt RPC. Cursor ACP does not emit
+        # user_message_chunk updates, so the observer consumes this exact client
+        # prompt to establish a turn boundary and a transcript user item.
+        self.pending_prompt_text: str | None = None
 
     @property
     def started(self) -> bool:
@@ -385,9 +389,7 @@ class AcpConnection:
             if self._reader_task is asyncio.current_task():
                 self._reader_task = None
             if not self._closed and self._transport_exit is None:
-                self._transport_exit = (
-                    f"AcpConnection transport exited: {exit_error}"
-                )
+                self._transport_exit = f"AcpConnection transport exited: {exit_error}"
             self._lifecycle_done.set()
 
     async def _drain_stderr(self, process: asyncio.subprocess.Process) -> None:

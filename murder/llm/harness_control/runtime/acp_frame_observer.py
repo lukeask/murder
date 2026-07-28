@@ -52,6 +52,15 @@ class AcpFrameObserver:
         return self._view_state
 
     async def capture_frame(self) -> TerminalFrame:
+        # Establish the new turn before applying its queued notifications.
+        # Cursor ACP omits user_message_chunk entirely; AcpEffectTransport
+        # retains the exact submitted text so the transcript still has a user
+        # boundary and fresh assistant stream ids for every prompt.
+        pending_prompt = getattr(self._connection, "pending_prompt_text", None)
+        if isinstance(pending_prompt, str):
+            mark_prompt_started(self._view_state, pending_prompt)
+            self._connection.pending_prompt_text = None
+
         for notification in self._connection.drain_notifications():
             apply_notification(self._view_state, notification)
         for request in self._connection.drain_incoming_requests():

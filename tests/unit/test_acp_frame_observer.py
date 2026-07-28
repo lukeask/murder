@@ -125,6 +125,55 @@ async def test_pending_stop_reason_clears_streaming_after_prompt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_consecutive_cursor_prompts_keep_user_and_reply_turn_boundaries() -> None:
+    """Cursor omits user chunks; submitted prompts must still split ACP streams."""
+    transport = _IdleTransport()
+    connection = AcpConnection(transport=transport)
+    await connection.start()
+    observer = AcpFrameObserver(connection, HarnessId("cursor"))
+
+    def queue_turn(prompt: str, thought: str, reply: str) -> None:
+        connection.pending_prompt_text = prompt
+        for kind, text in (
+            ("agent_thought_chunk", thought),
+            ("agent_message_chunk", reply),
+        ):
+            connection.notifications.put_nowait(
+                RpcNotification(
+                    method="session/update",
+                    params={
+                        "sessionId": "sess-1",
+                        "update": {
+                            "sessionUpdate": kind,
+                            "content": {"type": "text", "text": text},
+                        },
+                    },
+                )
+            )
+        connection.pending_stop_reason = "end_turn"
+
+    queue_turn("test", "Preparing first.", "Here — ready.")
+    await observer.capture_frame()
+    queue_turn(
+        "Test part 2, please use bullets",
+        "Preparing bullets.",
+        "- One\n- Two",
+    )
+    payload = json.loads((await observer.capture_frame()).raw_text)
+
+    assert [(item["type"], item["text"]) for item in payload["items"]] == [
+        ("userMessage", "test"),
+        ("agentThought", "Preparing first."),
+        ("agentMessage", "Here — ready."),
+        ("userMessage", "Test part 2, please use bullets"),
+        ("agentThought", "Preparing bullets."),
+        ("agentMessage", "- One\n- Two"),
+    ]
+
+    await connection.aclose()
+
+
+@pytest.mark.asyncio
 async def test_successful_response_removes_request_from_next_observation() -> None:
     transport = _IdleTransport()
     connection = AcpConnection(transport=transport)
@@ -162,9 +211,10 @@ async def test_failed_response_write_leaves_request_pending_and_retryable() -> N
         )
     )
     observer = AcpFrameObserver(connection, HarnessId("cursor"))
-    assert [request["id"] for request in json.loads((await observer.capture_frame()).raw_text)[
-        "pending_requests"
-    ]] == ["question-1"]
+    assert [
+        request["id"]
+        for request in json.loads((await observer.capture_frame()).raw_text)["pending_requests"]
+    ] == ["question-1"]
 
     async def _fail_write(line: str) -> None:
         del line

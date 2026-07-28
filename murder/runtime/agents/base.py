@@ -519,7 +519,12 @@ class HarnessBackedAgent(LifecycleParticipant):
         if runtime is not None and runtime.db is not None:
             from murder.state.persistence import conversation
 
-            conversation.clear(runtime.db, self.id)
+            # A message may be accepted while this agent is still completing
+            # startup. AgentOps prepares a clean conversation and queues that
+            # message before the producer exists; preserve those authoritative
+            # user rows and queued_message when startup reaches this boundary.
+            if self._queued_message is None:
+                conversation.clear(runtime.db, self.id)
         self._build_producer()
 
     def _build_producer(self) -> None:
