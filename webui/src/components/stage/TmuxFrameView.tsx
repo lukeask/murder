@@ -41,7 +41,7 @@ export function TmuxFrameView({
       if (terminalFrame.type === 'terminal.frame' && terminalFrame.reset) {
         setFrame(terminalFrame.data);
       }
-    });
+    }, 'replace');
     return off;
   }, [bus, sessionId]);
 

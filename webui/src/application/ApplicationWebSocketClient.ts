@@ -13,6 +13,10 @@ import type {
   QueryParams,
   QueryResult,
   TerminalFrameListener,
+  TerminalAttachMode,
+  TerminalInputBatch,
+  TerminalInputLease,
+  TerminalUpdate,
   Unsubscribe,
 } from '@core/application/ApplicationClient.js';
 import {
@@ -27,6 +31,7 @@ import {
   type SubscriptionSnapshot,
   type TerminalChunk,
   type TerminalFrame,
+  type TerminalKeyframe,
 } from '@core/generated/applicationProtocol.js';
 import { unwrapReadReply } from '@core/application/normalizeReply.js';
 
@@ -158,7 +163,9 @@ interface TerminalRegistration {
   readonly sessionId: string | null;
   readonly listener: TerminalFrameListener;
   lastSequence: number;
+  suspended: boolean;
   resyncPending: boolean;
+  mode: TerminalAttachMode;
 }
 
 const UUID_RE =
@@ -187,6 +194,7 @@ export class ApplicationWebSocketClient implements ApplicationClient {
   private readonly pendingRequests = new Map<string, PendingRequest>();
   private readonly projections = new Map<string, ProjectionRegistration>();
   private readonly terminals = new Map<string, TerminalRegistration>();
+  private readonly terminalInputWatchers = new Map<string, Set<(error: Error) => void>>();
   private readonly connectWaiters = new Set<{
     resolve: () => void;
     reject: (error: Error) => void;
@@ -317,14 +325,20 @@ export class ApplicationWebSocketClient implements ApplicationClient {
     return result;
   }
 
-  attachTerminal(sessionId: string | null, listener: TerminalFrameListener): Unsubscribe {
+  attachTerminal(
+    sessionId: string | null,
+    listener: TerminalFrameListener,
+    mode: TerminalAttachMode = 'raw',
+  ): Unsubscribe {
     const id = `terminal-${randomId()}`;
     const registration: TerminalRegistration = {
       id,
       sessionId,
       listener,
       lastSequence: 0,
+      suspended: false,
       resyncPending: false,
+      mode,
     };
     this.terminals.set(id, registration);
     if (this.state === 'connected' && this.socket !== undefined) {
@@ -337,6 +351,46 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       if (!active) return;
       active = false;
       this.detachTerminal(id);
+    };
+  }
+
+  async openTerminalInput(sessionId: string): Promise<TerminalInputLease> {
+    const result = await this.command('session.writer.acquire', {
+      session_id: sessionId,
+      mode: 'raw_terminal',
+      holder: { kind: 'client', id: this.clientId },
+    });
+    if (!('lease' in result)) throw new Error(`terminal input unavailable: ${result.reason}`);
+    return {
+      streamId: `terminal-input-${randomId()}`,
+      sessionId,
+      leaseId: result.lease.lease_id,
+      fence: result.lease.fence,
+    };
+  }
+
+  sendTerminalInput(batch: TerminalInputBatch): boolean {
+    if (this.state !== 'connected' || this.socket === undefined) return false;
+    this.write(this.socket, {
+      op: 'terminal.input',
+      stream_id: batch.streamId,
+      session_id: batch.sessionId,
+      lease_id: batch.leaseId,
+      fence: batch.fence,
+      input_sequence: batch.inputSequence,
+      encoding: 'base64',
+      data: batch.data,
+    });
+    return true;
+  }
+
+  watchTerminalInput(streamId: string, listener: (error: Error) => void): Unsubscribe {
+    const listeners = this.terminalInputWatchers.get(streamId) ?? new Set();
+    listeners.add(listener);
+    this.terminalInputWatchers.set(streamId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.terminalInputWatchers.delete(streamId);
     };
   }
 
@@ -416,6 +470,10 @@ export class ApplicationWebSocketClient implements ApplicationClient {
         if ((this.state as ConnectionState) === 'closed') return;
         this.state = 'connecting';
         this.failAllRequests(new ConnectionLostError());
+        for (const terminal of this.terminals.values()) {
+          terminal.resyncPending = false;
+          if (terminal.lastSequence > 0) terminal.suspended = true;
+        }
         for (const listener of [...this.disconnectListeners]) listener();
       } catch (error: unknown) {
         const normalized = asError(error);
@@ -535,6 +593,13 @@ export class ApplicationWebSocketClient implements ApplicationClient {
         }
         return;
       }
+      case 'terminal.keyframe': {
+        const stream = this.terminals.get(message.stream_id);
+        if (stream !== undefined) {
+          this.acceptTerminalKeyframe(stream, message.keyframe, false);
+        }
+        return;
+      }
       case 'terminal.chunk': {
         const stream = this.terminals.get(message.stream_id);
         if (stream !== undefined) {
@@ -545,6 +610,8 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       case 'terminal.gap': {
         const stream = this.terminals.get(message.stream_id);
         if (stream !== undefined) {
+          stream.suspended = true;
+          this.notifyTerminal(stream, message.gap);
           this.requestTerminalResync(stream, 'gap');
         }
         return;
@@ -552,8 +619,7 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       case 'terminal.resynced': {
         const stream = this.terminals.get(message.stream_id);
         if (stream !== undefined) {
-          stream.resyncPending = false;
-          this.acceptTerminalFrame(stream, message.frame);
+          this.acceptTerminalKeyframe(stream, message.keyframe, true);
         }
         return;
       }
@@ -659,6 +725,7 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       }
     }
     if (message.stream_id !== null && message.stream_id !== undefined) {
+      this.terminalInputWatchers.get(message.stream_id)?.forEach((listener) => listener(error));
       // Keep attach intent across transient stream errors so reconnect
       // reattaches. Only `stream_failed` means the registration should be abandoned.
       if (message.error.code === 'stream_failed') {
@@ -729,7 +796,9 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       stream_id: terminal.id,
       target: { session_id: terminal.sessionId },
       after_sequence: terminal.lastSequence,
+      mode: terminal.mode,
     });
+    if (terminal.lastSequence > 0) this.requestTerminalResync(terminal, 'reconnect');
   }
 
   private acceptTerminalFrame(terminal: TerminalRegistration, frame: TerminalFrame): void {
@@ -739,13 +808,36 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       return;
     }
     terminal.lastSequence = frame.sequence;
+    terminal.suspended = false;
     terminal.resyncPending = false;
     this.notifyTerminal(terminal, frame);
   }
 
+  private acceptTerminalKeyframe(
+    terminal: TerminalRegistration,
+    keyframe: TerminalKeyframe,
+    resynced: boolean,
+  ): void {
+    if (keyframe.sequence <= terminal.lastSequence) return;
+    terminal.lastSequence = keyframe.sequence;
+    terminal.suspended = false;
+    terminal.resyncPending = false;
+    this.notifyTerminal(
+      terminal,
+      resynced ? { type: 'terminal.resynced', keyframe } : keyframe,
+    );
+  }
+
   private acceptTerminalChunk(terminal: TerminalRegistration, chunk: TerminalChunk): void {
+    if (chunk.sequence <= terminal.lastSequence || terminal.suspended) return;
     const expected = terminal.lastSequence + 1;
-    if (terminal.lastSequence === 0 || chunk.sequence !== expected) {
+    if (chunk.sequence !== expected) {
+      terminal.suspended = true;
+      this.notifyTerminal(terminal, {
+        type: 'terminal.gap',
+        expected_sequence: expected,
+        next_sequence: chunk.sequence,
+      });
       this.requestTerminalResync(terminal, 'gap');
       return;
     }
@@ -755,7 +847,7 @@ export class ApplicationWebSocketClient implements ApplicationClient {
 
   private requestTerminalResync(
     terminal: TerminalRegistration,
-    reason: 'gap' | 'unsupported_mode',
+    reason: 'gap' | 'reconnect' | 'unsupported_mode',
   ): void {
     if (terminal.resyncPending || this.state !== 'connected' || this.socket === undefined) return;
     terminal.resyncPending = true;
@@ -763,13 +855,14 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       op: 'terminal.resync',
       stream_id: terminal.id,
       after_sequence: terminal.lastSequence,
+      request: 'keyframe',
       reason,
     });
   }
 
   private notifyTerminal(
     terminal: TerminalRegistration,
-    update: TerminalFrame | TerminalChunk,
+    update: TerminalUpdate,
   ): void {
     try {
       terminal.listener(update);
@@ -888,6 +981,7 @@ function isServerOp(op: unknown): boolean {
     op === 'subscription.event' ||
     op === 'terminal.attached' ||
     op === 'terminal.frame' ||
+    op === 'terminal.keyframe' ||
     op === 'terminal.chunk' ||
     op === 'terminal.gap' ||
     op === 'terminal.resynced' ||
