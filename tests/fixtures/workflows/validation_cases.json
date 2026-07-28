@@ -1,0 +1,90 @@
+[
+  {
+    "name": "valid_dag",
+    "workflow": {
+      "name": "ship",
+      "mode": "static",
+      "stages": [
+        {
+          "id": "build",
+          "title": "Build",
+          "harness": "codex",
+          "model": "gpt-5",
+          "depends_on": [],
+          "gate": "auto"
+        },
+        {
+          "id": "test",
+          "title": "Test",
+          "harness": "codex",
+          "model": "gpt-5",
+          "depends_on": ["build"],
+          "gate": "auto"
+        }
+      ]
+    },
+    "issue_codes": []
+  },
+  {
+    "name": "dangling_dependency",
+    "workflow": {
+      "name": "ship",
+      "mode": "static",
+      "stages": [
+        {
+          "id": "build",
+          "title": "Build",
+          "harness": "codex",
+          "model": "gpt-5",
+          "depends_on": ["missing"],
+          "gate": "auto"
+        }
+      ]
+    },
+    "issue_codes": ["unknown_dependency", "no_root"]
+  },
+  {
+    "name": "cycle",
+    "workflow": {
+      "name": "ship",
+      "mode": "static",
+      "stages": [
+        {
+          "id": "build",
+          "title": "Build",
+          "harness": "codex",
+          "model": "gpt-5",
+          "depends_on": ["test"],
+          "gate": "auto"
+        },
+        {
+          "id": "test",
+          "title": "Test",
+          "harness": "codex",
+          "model": "gpt-5",
+          "depends_on": ["build"],
+          "gate": "auto"
+        }
+      ]
+    },
+    "issue_codes": ["cycle", "no_root"]
+  },
+  {
+    "name": "reserved_runtime_values",
+    "workflow": {
+      "name": "future",
+      "mode": "generative",
+      "stages": [
+        {
+          "id": "review",
+          "title": "Review",
+          "harness": "codex",
+          "model": "gpt-5",
+          "depends_on": [],
+          "gate": "conditional"
+        }
+      ]
+    },
+    "issue_codes": ["unsupported_mode", "unsupported_gate"]
+  }
+]

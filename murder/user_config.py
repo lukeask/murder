@@ -13,9 +13,15 @@ fallback). Other fields merge bundled -> user -> project.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
 import re
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
@@ -186,7 +192,9 @@ class UserNotetakerPatch(BaseModel):
     """Partial notetaker api role; fields align with `NotetakerConfig` for deep-merge."""
 
     kind: Literal["api"] | None = None
-    provider: Literal["groq", "cerebras", "openrouter", "anthropic", "openai", "local"] | None = None
+    provider: Literal["groq", "cerebras", "openrouter", "anthropic", "openai", "local"] | None = (
+        None
+    )
     model: str | None = None
     max_tokens: int | None = None
     max_context_tokens: int | None = None
@@ -337,19 +345,39 @@ BUILTIN_LLM_POLICIES: dict[str, UserLlmPolicy] = {
         builtin=True,
         name="Local Then Free",
         groups=[
-            UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))]),
-            UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="remote", cost_class="free"))]),
+            UserLlmPolicyGroup(
+                selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))]
+            ),
+            UserLlmPolicyGroup(
+                selectors=[
+                    UserLlmSelector(
+                        match=UserLlmSelectorMatch(locality="remote", cost_class="free")
+                    )
+                ]
+            ),
         ],
     ),
     "remote-free": UserLlmPolicy(
         builtin=True,
         name="Remote Free",
-        groups=[UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="remote", cost_class="free"))])],
+        groups=[
+            UserLlmPolicyGroup(
+                selectors=[
+                    UserLlmSelector(
+                        match=UserLlmSelectorMatch(locality="remote", cost_class="free")
+                    )
+                ]
+            )
+        ],
     ),
     "local-only": UserLlmPolicy(
         builtin=True,
         name="Local Only",
-        groups=[UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))])],
+        groups=[
+            UserLlmPolicyGroup(
+                selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))]
+            )
+        ],
     ),
     # Oracle-oriented default: prefer capable remote free models, then any local.
     # Execution mode (batch vs immediate) is intentionally not encoded here.
@@ -368,9 +396,15 @@ BUILTIN_LLM_POLICIES: dict[str, UserLlmPolicy] = {
                     )
                 ]
             ),
-            UserLlmPolicyGroup(selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))]),
             UserLlmPolicyGroup(
-                selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="remote", cost_class="free"))]
+                selectors=[UserLlmSelector(match=UserLlmSelectorMatch(locality="local"))]
+            ),
+            UserLlmPolicyGroup(
+                selectors=[
+                    UserLlmSelector(
+                        match=UserLlmSelectorMatch(locality="remote", cost_class="free")
+                    )
+                ]
             ),
         ],
     ),
@@ -479,7 +513,11 @@ class UserLlmConfig(BaseModel):
         if isinstance(providers, dict):
             migrated: dict[str, Any] = {}
             for provider_id, settings in providers.items():
-                if isinstance(settings, dict) and "type" not in settings and "provider" not in settings:
+                if (
+                    isinstance(settings, dict)
+                    and "type" not in settings
+                    and "provider" not in settings
+                ):
                     settings = {**settings, "type": provider_id}
                 migrated[provider_id] = settings
             data["providers"] = migrated
@@ -641,6 +679,165 @@ def save_templates(records: Any, path: Path | None = None) -> list[dict[str, str
 def workflows_path() -> Path:
     """Userspace/global workflow-definition registry (follows the user across repos)."""
     return config_dir() / "workflows.yaml"
+
+
+@dataclass(frozen=True)
+class WorkflowRegistrySnapshot:
+    """Canonical workflow registry state and its optimistic-concurrency token."""
+
+    workflows: list[dict[str, Any]]
+    revision: str
+
+
+@dataclass(frozen=True)
+class WorkflowRegistryMutation:
+    """Outcome of one atomic workflow registry mutation."""
+
+    ok: bool
+    workflows: list[dict[str, Any]]
+    revision: str
+    issues: list[dict[str, Any]]
+    conflict: bool = False
+
+
+_workflow_registry_locks: dict[Path, threading.RLock] = {}
+_workflow_registry_locks_guard = threading.Lock()
+
+
+def _workflow_lock_for(path: Path) -> threading.RLock:
+    resolved = path.resolve()
+    with _workflow_registry_locks_guard:
+        return _workflow_registry_locks.setdefault(resolved, threading.RLock())
+
+
+@contextmanager
+def _locked_workflow_registry(path: Path) -> Iterator[None]:
+    """Serialize registry RMW transactions across threads and processes."""
+    with _workflow_lock_for(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_name(f".{path.name}.lock")
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+
+def _canonical_workflow_payload(records: list[dict[str, Any]]) -> str:
+    return yaml.safe_dump({"workflows": records}, default_flow_style=False, sort_keys=False)
+
+
+def _workflow_revision(records: list[dict[str, Any]]) -> str:
+    return hashlib.sha256(_canonical_workflow_payload(records).encode("utf-8")).hexdigest()
+
+
+def _workflow_registry_records(path: Path) -> list[dict[str, Any]]:
+    """Read valid persisted records without silently repairing a registry."""
+    from murder.work.workflows import WorkflowDef, validate_workflow  # noqa: PLC0415
+
+    raw = load_workflows(path)
+    records: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for record in raw:
+        try:
+            definition = WorkflowDef.model_validate(record)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("workflow registry contains an invalid definition") from exc
+        if validate_workflow(definition):
+            raise ValueError("workflow registry contains an invalid definition")
+        if definition.name in names:
+            raise ValueError("workflow registry contains duplicate workflow names")
+        names.add(definition.name)
+        records.append(definition.model_dump(mode="json"))
+    return sorted(records, key=lambda record: str(record["name"]))
+
+
+def read_workflow_registry(path: Path | None = None) -> WorkflowRegistrySnapshot:
+    """Return canonical definitions plus an opaque revision for editor clients."""
+    registry_path = path or workflows_path()
+    with _locked_workflow_registry(registry_path):
+        records = _workflow_registry_records(registry_path)
+        return WorkflowRegistrySnapshot(records, _workflow_revision(records))
+
+
+def put_workflow(
+    record: dict[str, Any],
+    *,
+    original_name: str | None,
+    expected_revision: str,
+    path: Path | None = None,
+) -> WorkflowRegistryMutation:
+    """Atomically validate and upsert one workflow using optimistic concurrency."""
+    from murder.work.workflows import WorkflowDef, workflow_issues  # noqa: PLC0415
+
+    registry_path = path or workflows_path()
+    with _locked_workflow_registry(registry_path):
+        records = _workflow_registry_records(registry_path)
+        revision = _workflow_revision(records)
+        if revision != expected_revision:
+            return WorkflowRegistryMutation(False, records, revision, [], conflict=True)
+
+        definition = WorkflowDef.model_validate(record)
+        issues = [issue.model_dump(mode="json") for issue in workflow_issues(definition)]
+        if any(issue["severity"] == "error" for issue in issues):
+            return WorkflowRegistryMutation(False, records, revision, issues)
+
+        target_name = definition.name
+        existing_names = {str(item["name"]) for item in records}
+        replace_name = original_name or target_name
+        names_after_removal = existing_names - {replace_name}
+        if target_name in names_after_removal:
+            issue = {
+                "code": "invalid_name",
+                "message": f"workflow name {target_name!r} already exists",
+                "path": ["name"],
+                "stage_id": None,
+                "dependency_id": None,
+                "severity": "error",
+            }
+            return WorkflowRegistryMutation(False, records, revision, [issue])
+
+        updated = [item for item in records if item["name"] != replace_name]
+        updated.append(definition.model_dump(mode="json"))
+        updated.sort(key=lambda item: str(item["name"]))
+        from murder.state.storage.filesystem import atomic_write_text  # noqa: PLC0415
+
+        atomic_write_text(registry_path, _canonical_workflow_payload(updated))
+        return WorkflowRegistryMutation(True, updated, _workflow_revision(updated), issues)
+
+
+def delete_workflow(
+    name: str,
+    *,
+    expected_revision: str,
+    path: Path | None = None,
+) -> WorkflowRegistryMutation:
+    """Atomically delete one workflow using the same revision boundary as put."""
+    registry_path = path or workflows_path()
+    with _locked_workflow_registry(registry_path):
+        records = _workflow_registry_records(registry_path)
+        revision = _workflow_revision(records)
+        if revision != expected_revision:
+            return WorkflowRegistryMutation(False, records, revision, [], conflict=True)
+
+        updated = [item for item in records if item["name"] != name]
+        if len(updated) == len(records):
+            issue = {
+                "code": "invalid_name",
+                "message": f"workflow name {name!r} does not exist",
+                "path": ["name"],
+                "stage_id": None,
+                "dependency_id": None,
+                "severity": "error",
+            }
+            return WorkflowRegistryMutation(False, records, revision, [issue])
+
+        from murder.state.storage.filesystem import atomic_write_text  # noqa: PLC0415
+
+        atomic_write_text(registry_path, _canonical_workflow_payload(updated))
+        return WorkflowRegistryMutation(True, updated, _workflow_revision(updated), [])
 
 
 def load_workflows(path: Path | None = None) -> list[dict[str, Any]]:
@@ -1025,7 +1222,9 @@ def ensure_user_themes(path: Path | None = None) -> bool:
     return True
 
 
-def import_theme_from_json(json_str: str, theme_id: str | None = None) -> tuple[list[dict[str, Any]], str]:
+def import_theme_from_json(
+    json_str: str, theme_id: str | None = None
+) -> tuple[list[dict[str, Any]], str]:
     """Append a BYO theme to ``themes.yaml`` after validation.
 
     Returns ``(canonical_theme_list, new_theme_id)``.
