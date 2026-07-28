@@ -41,6 +41,9 @@ import { CsiUParser, LONE_ESC_FLUSH_MS } from './csiU.js';
 import type { TokenSource } from './kittyDriver.js';
 import { type Chord, translate } from './translate.js';
 
+const BRACKETED_PASTE_START = Buffer.from('\u001b[200~');
+const BRACKETED_PASTE_END = Buffer.from('\u001b[201~');
+
 /** The minimal real-stdin surface the shim forwards to. `process.stdin` (a `ReadStream`) satisfies
  * this structurally; a test passes a fake `EventEmitter` with these members. */
 export interface RealStdin {
@@ -69,6 +72,27 @@ export interface StdinShimEvents {
   wheel: (wheel: Wheel) => void;
 }
 
+/** Result of incrementally examining bytes at the head of a raw terminal-input stream. */
+export type ReservedChordResult =
+  | { readonly kind: 'matched'; readonly bytes: number }
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'passthrough'; readonly bytes: number };
+
+/**
+ * Destination for real stdin.  Ink remains the normal destination.  A terminal destination owns
+ * the bytes before Ink's parser sees them; its matcher may hold an incomplete escape sequence until
+ * it can tell whether that sequence is one of Murder's reserved pane-navigation chords.
+ */
+export type StdinRoute =
+  | { readonly kind: 'ink' }
+  | {
+      readonly kind: 'terminal';
+      /** Return false when the mode is present but its terminal is not the focused input owner. */
+      readonly isActive?: () => boolean;
+      readonly consumeReservedChord: (buffer: Buffer) => ReservedChordResult;
+      readonly write: (buffer: Buffer) => void;
+    };
+
 /**
  * The shim. Construct it around the real stdin, hand it to `render(…, { stdin })`, then drive its
  * mode from the protocol lifecycle: stays in `bypass` until {@link setBypass}(false) (after the
@@ -89,6 +113,12 @@ export class StdinShim extends Readable implements TokenSource {
    * Keystrokes are unaffected: under legacy encoding they are not CSI-u, so they stay passthrough. */
   private mouseEnabled = false;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private route: StdinRoute = { kind: 'ink' };
+  /** Bytes held only while resolving a split reserved terminal chord. */
+  private terminalPending = Buffer.alloc(0);
+  private terminalFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Navigation-looking control bytes inside a bracketed paste are literal child input. */
+  private terminalBracketedPaste = false;
 
   constructor(real: RealStdin) {
     // objectMode:false — we push Buffers, exactly like the real stdin.
@@ -114,6 +144,35 @@ export class StdinShim extends Readable implements TokenSource {
   /** Whether the shim is currently in pure-passthrough mode. */
   isBypass(): boolean {
     return this.bypass;
+  }
+
+  /**
+   * Select the sole stdin consumer.  Terminal routes deliberately do not push bytes downstream:
+   * this is what prevents Ink and the ordinary dispatcher from transforming editor input. Before a
+   * route transition, an incomplete non-navigation sequence is returned byte-for-byte to the owner
+   * that received its prefix; route changes must not silently eat a literal Escape or split paste.
+   */
+  setRoute(route: StdinRoute): void {
+    if (this.terminalFlushTimer !== undefined) {
+      clearTimeout(this.terminalFlushTimer);
+      this.terminalFlushTimer = undefined;
+    }
+    if (this.terminalPending.length > 0) {
+      const pending = this.terminalPending;
+      this.terminalPending = Buffer.alloc(0);
+      if (this.route.kind === 'terminal') {
+        this.route.write(pending);
+      } else {
+        this.forward(pending);
+      }
+    }
+    this.terminalBracketedPaste = false;
+    this.route = route;
+    this.emit('route', route.kind === 'terminal' && (route.isActive?.() ?? true));
+  }
+
+  isTerminalRoute(): boolean {
+    return this.route.kind === 'terminal' && (this.route.isActive?.() ?? true);
   }
 
   /** Enable (`true`) or disable (`false`) wheel tokenisation. When enabled the parser runs even in
@@ -164,12 +223,18 @@ export class StdinShim extends Readable implements TokenSource {
     const off = this.real.off ?? this.real.removeListener;
     off?.call(this.real, 'data', this.onData);
     this.clearFlush();
+    this.clearTerminalPending();
   }
 
   // --- internals ---------------------------------------------------------------------------------
 
   private readonly onData = (chunk: Buffer | string): void => {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+    const route = this.route;
+    if (route.kind === 'terminal' && (route.isActive?.() ?? true)) {
+      this.routeTerminalBytes(route, bytes);
+      return;
+    }
     // Fast path: pure bypass with no detection in flight AND no mouse tokenisation → forward verbatim,
     // parser untouched. This is the behavior-neutral default (modifier=alt, mouse off), so we never pay
     // parser cost when not needed. With mouse enabled the parser runs so SGR reports become `wheel`
@@ -182,6 +247,104 @@ export class StdinShim extends Readable implements TokenSource {
     this.emitTokens(tokens);
     this.armFlush();
   };
+
+  /** Route raw bytes to the interactive terminal, consuming only explicitly matched Murder chords. */
+  private routeTerminalBytes(
+    route: Extract<StdinRoute, { kind: 'terminal' }>,
+    bytes: Buffer,
+  ): void {
+    let buffer =
+      this.terminalPending.length === 0 ? bytes : Buffer.concat([this.terminalPending, bytes]);
+    this.terminalPending = Buffer.alloc(0);
+    while (buffer.length > 0) {
+      if (this.terminalBracketedPaste) {
+        const end = buffer.indexOf(BRACKETED_PASTE_END);
+        if (end >= 0) {
+          const throughEnd = end + BRACKETED_PASTE_END.length;
+          route.write(buffer.subarray(0, throughEnd));
+          this.terminalBracketedPaste = false;
+          buffer = buffer.subarray(throughEnd);
+          continue;
+        }
+        const heldBytes = terminalMarkerSuffixLength(buffer, BRACKETED_PASTE_END);
+        const safeBytes = buffer.length - heldBytes;
+        if (safeBytes > 0) route.write(buffer.subarray(0, safeBytes));
+        if (heldBytes > 0) {
+          this.terminalPending = Buffer.from(buffer.subarray(safeBytes));
+          this.armTerminalFlush(route);
+        }
+        return;
+      }
+
+      if (
+        buffer.length >= BRACKETED_PASTE_START.length &&
+        buffer.subarray(0, BRACKETED_PASTE_START.length).equals(BRACKETED_PASTE_START)
+      ) {
+        route.write(buffer.subarray(0, BRACKETED_PASTE_START.length));
+        this.terminalBracketedPaste = true;
+        buffer = buffer.subarray(BRACKETED_PASTE_START.length);
+        continue;
+      }
+      if (
+        buffer.length < BRACKETED_PASTE_START.length &&
+        BRACKETED_PASTE_START.subarray(0, buffer.length).equals(buffer)
+      ) {
+        this.terminalPending = Buffer.from(buffer);
+        this.armTerminalFlush(route);
+        return;
+      }
+
+      const result = route.consumeReservedChord(buffer);
+      if (result.kind === 'pending') {
+        this.terminalPending = Buffer.from(buffer);
+        this.armTerminalFlush(route);
+        return;
+      }
+      if (
+        !Number.isSafeInteger(result.bytes) ||
+        result.bytes <= 0 ||
+        result.bytes > buffer.length
+      ) {
+        // A route bug must never wedge stdin or lose the rest of a paste. Preserve the byte stream.
+        route.write(buffer);
+        return;
+      }
+      if (result.kind === 'passthrough') {
+        route.write(buffer.subarray(0, result.bytes));
+      }
+      buffer = buffer.subarray(result.bytes);
+    }
+  }
+
+  /** A literal Esc must not wait forever for an Alt suffix. Timed-out fragments are raw terminal
+   * data, never fed back to Ink, which is also the safest recovery for a truncated CSI sequence. */
+  private armTerminalFlush(route: Extract<StdinRoute, { kind: 'terminal' }>): void {
+    if (this.terminalFlushTimer !== undefined) clearTimeout(this.terminalFlushTimer);
+    this.terminalFlushTimer = setTimeout(() => {
+      this.terminalFlushTimer = undefined;
+      if (
+        this.route !== route ||
+        this.terminalPending.length === 0 ||
+        !(route.isActive?.() ?? true)
+      ) {
+        this.terminalPending = Buffer.alloc(0);
+        return;
+      }
+      const pending = this.terminalPending;
+      this.terminalPending = Buffer.alloc(0);
+      route.write(pending);
+    }, LONE_ESC_FLUSH_MS);
+    this.terminalFlushTimer.unref?.();
+  }
+
+  private clearTerminalPending(): void {
+    if (this.terminalFlushTimer !== undefined) {
+      clearTimeout(this.terminalFlushTimer);
+      this.terminalFlushTimer = undefined;
+    }
+    this.terminalPending = Buffer.alloc(0);
+    this.terminalBracketedPaste = false;
+  }
 
   private emitTokens(tokens: readonly CsiToken[]): void {
     for (const token of tokens) {
@@ -278,4 +441,13 @@ export class StdinShim extends Readable implements TokenSource {
       this.flushTimer = undefined;
     }
   }
+}
+
+/** Number of trailing bytes which may be the beginning of a marker split across stdin chunks. */
+function terminalMarkerSuffixLength(buffer: Buffer, marker: Buffer): number {
+  const limit = Math.min(buffer.length, marker.length - 1);
+  for (let length = limit; length > 0; length -= 1) {
+    if (buffer.subarray(buffer.length - length).equals(marker.subarray(0, length))) return length;
+  }
+  return 0;
 }

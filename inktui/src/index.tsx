@@ -2,8 +2,8 @@
 import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
 import type { ApplicationClient } from './application/ApplicationClient.js';
-import { FakeApplicationClient } from './application/FakeApplicationClient.js';
 import { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
+import { FakeApplicationClient } from './application/FakeApplicationClient.js';
 import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
 import type { PanelId } from './input/panels.js';
@@ -140,6 +140,9 @@ export async function runLive(busFactory: () => ApplicationClient = makeLiveBus)
       // `NodeJS.ReadStream`; we provide the consumed subset, so cast through `unknown`.
       stdin: shim as unknown as NodeJS.ReadStream,
       alternateScreen: true,
+      // Root input keeps Murder's normal Ctrl-C exit everywhere except an active terminal mode
+      // that explicitly consumes it (document editors need Ctrl-C for Vim).
+      exitOnCtrlC: false,
       // The full-screen TUI repaints frequently while typing. Ink's default renderer erases the
       // previous full frame before writing the next one; on slower SSH links that erase can become a
       // visible blank flash. Incremental rendering rewrites only changed lines, which keeps stable
@@ -222,10 +225,13 @@ export async function setupTerminal(
   bindings.getState().setCtrlAvailable(supported);
 
   // Apply the protocol state for a given modifier: enable + active iff ctrl is wanted and supported.
+  // Raw editor stdin is intentionally conventional terminal bytes: the StdinShim consumes it before
+  // Ink and forwards it verbatim to tmux, so kitty CSI-u must be popped for that interval.
   let enabled = false;
+  let rawTerminal = shim.isTerminalRoute();
   const apply = (): void => {
     const wantsCtrl = bindings.getState().modifier !== 'alt';
-    const shouldEnable = wantsCtrl && supported;
+    const shouldEnable = wantsCtrl && supported && !rawTerminal;
     if (shouldEnable && !enabled) {
       driver.enable();
       shim.setBypass(false);
@@ -238,6 +244,11 @@ export async function setupTerminal(
   };
   apply();
   const unsubscribe = bindings.subscribe(apply);
+  const onRoute = (terminal: boolean): void => {
+    rawTerminal = terminal;
+    apply();
+  };
+  shim.on('route', onRoute);
 
   // Best-effort pop on abnormal exit so the parent shell's input isn't left in protocol or mouse mode
   // (a terminal stuck in mouse reporting spews escape codes on every move/click).
@@ -257,6 +268,7 @@ export async function setupTerminal(
 
   return () => {
     unsubscribe();
+    shim.off('route', onRoute);
     process.off('exit', popOnExit);
     process.off('SIGTERM', popOnExit);
     popOnExit();
@@ -323,7 +335,10 @@ function detectIfTty(shim: StdinShim, driver: KeyProtocolDriver): Promise<boolea
  * does; the fake does not). Narrowed structurally so the seam stays the transport-agnostic
  * {@link ApplicationClient}, exactly as {@link closeIfSupported} does. Returns the disposer, or `undefined`
  * when unsupported so the caller can fall back to a one-shot prime. */
-function onConnectIfSupported(bus: ApplicationClient, listener: () => void): (() => void) | undefined {
+function onConnectIfSupported(
+  bus: ApplicationClient,
+  listener: () => void,
+): (() => void) | undefined {
   const maybe = bus as ApplicationClient & { onConnect?: (listener: () => void) => () => void };
   return maybe.onConnect?.(listener);
 }
@@ -331,7 +346,10 @@ function onConnectIfSupported(bus: ApplicationClient, listener: () => void): (()
 /** Register a disconnect listener if the client exposes `onDisconnect` (the live
  * the application client does; the fake does not). Same structural narrowing as
  * {@link onConnectIfSupported}; returns the disposer, or `undefined` when unsupported. */
-function onDisconnectIfSupported(bus: ApplicationClient, listener: () => void): (() => void) | undefined {
+function onDisconnectIfSupported(
+  bus: ApplicationClient,
+  listener: () => void,
+): (() => void) | undefined {
   const maybe = bus as ApplicationClient & { onDisconnect?: (listener: () => void) => () => void };
   return maybe.onDisconnect?.(listener);
 }

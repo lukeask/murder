@@ -8,6 +8,14 @@
 import { Box, Text } from 'ink';
 import { memo, useEffect, useMemo } from 'react';
 import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
+import { TerminalSurfaceController } from '../../terminalSurface/TerminalSurfaceController.js';
+import {
+  FOLLOW_VIEWPORT_TERMINAL_SIZING,
+  type TerminalSizingPolicy,
+  type TerminalSurfaceUpdate,
+  type TerminalViewportCommand,
+  type TerminalViewportMetrics,
+} from '../../terminalSurface/types.js';
 import { useTheme } from '../../theme/themeStore.js';
 import { terminalSafeText } from '../../utils/terminalSafeText.js';
 import { truncateToWidth, wrapTextToRows } from '../../utils/wrapText.js';
@@ -63,7 +71,12 @@ export interface TranscriptPaneProps {
     readonly maxScrollUp: number;
   }) => void;
   readonly tmuxFrame?: string;
+  /** Persistent VT stream update. `tmuxFrame` remains a compatibility snapshot input. */
+  readonly tmuxUpdate?: TerminalSurfaceUpdate | null;
   readonly tmuxWaitingText?: string;
+  readonly terminalSizingPolicy?: TerminalSizingPolicy;
+  readonly terminalViewportCommand?: TerminalViewportCommand | null;
+  readonly onTerminalViewportChange?: (metrics: TerminalViewportMetrics) => void;
   readonly titleExtra?: React.ReactNode;
 }
 
@@ -152,9 +165,7 @@ function ChatHistoryLine({
   const verbatim = line.kind === 'code' || line.kind === 'pre';
   const text = line.text === '' ? ' ' : line.text;
   const pending =
-    line.delivery === 'sending' ||
-    line.delivery === 'accepted' ||
-    line.delivery === 'queued';
+    line.delivery === 'sending' || line.delivery === 'accepted' || line.delivery === 'queued';
 
   return (
     <Box flexDirection="row" flexShrink={0} width="100%" minWidth={0}>
@@ -277,43 +288,6 @@ export function tmuxFrameRows(frame: string, columns: number, maxRows: number): 
   return lines.map((line) => truncateToWidth(line, columns));
 }
 
-function TmuxFrameBody({
-  frame,
-  width,
-  height,
-  waitingText,
-}: {
-  readonly frame: string | undefined;
-  readonly width: number;
-  readonly height: number;
-  readonly waitingText: string;
-}): React.JSX.Element {
-  const columns = contentWidth(width);
-  const source = frame !== undefined && frame !== '' ? frame : waitingText;
-  const lines = tmuxFrameRows(source, columns, height);
-  const keyedLines = lines.map((text, index) => ({
-    key: `tmux-${index}:${text}`,
-    text,
-  }));
-
-  return (
-    <Box
-      flexDirection="column"
-      flexShrink={0}
-      width="100%"
-      minWidth={0}
-      height={height}
-      overflow="hidden"
-    >
-      {keyedLines.map(({ key, text }) => (
-        <Box key={key} flexShrink={0} width="100%" minWidth={0} overflow="hidden">
-          <Text wrap="truncate">{text === '' ? ' ' : text}</Text>
-        </Box>
-      ))}
-    </Box>
-  );
-}
-
 export const TranscriptPane = memo(function TranscriptPane({
   width,
   height,
@@ -328,7 +302,11 @@ export const TranscriptPane = memo(function TranscriptPane({
   onScrollUpChange,
   onWindowMetricsChange,
   tmuxFrame,
+  tmuxUpdate,
   tmuxWaitingText = '[waiting for tmux frame…]',
+  terminalSizingPolicy = FOLLOW_VIEWPORT_TERMINAL_SIZING,
+  terminalViewportCommand,
+  onTerminalViewportChange,
   titleExtra,
 }: TranscriptPaneProps): React.JSX.Element {
   const theme = useTheme();
@@ -364,12 +342,29 @@ export const TranscriptPane = memo(function TranscriptPane({
 
   const body = (() => {
     if (viewMode === 'tmux') {
+      const compatibilityUpdate =
+        tmuxFrame === undefined || tmuxFrame === ''
+          ? null
+          : {
+              type: 'terminal.frame' as const,
+              columns: contentWidth(width),
+              rows: innerH,
+              data: tmuxFrame,
+              reset: true,
+            };
       return (
-        <TmuxFrameBody
-          frame={tmuxFrame}
-          width={width}
+        <TerminalSurfaceController
+          update={tmuxUpdate ?? compatibilityUpdate}
+          width={contentWidth(width)}
           height={innerH}
           waitingText={tmuxWaitingText}
+          sizingPolicy={terminalSizingPolicy}
+          {...(terminalViewportCommand === undefined
+            ? {}
+            : { viewportCommand: terminalViewportCommand })}
+          {...(onTerminalViewportChange === undefined
+            ? {}
+            : { onViewportChange: onTerminalViewportChange })}
         />
       );
     }

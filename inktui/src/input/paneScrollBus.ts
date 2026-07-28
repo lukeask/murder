@@ -26,6 +26,14 @@ export type ScrollDirection = 'up' | 'down';
 
 /** A subscriber's handler: a request to scroll by `amount` lines in `direction`. The pane clamps. */
 export type PaneScrollListener = (direction: ScrollDirection, amount: number) => void;
+export type TerminalViewportAction =
+  | {
+      readonly kind: 'pan';
+      readonly deltaColumns: number;
+      readonly deltaRows: number;
+    }
+  | { readonly kind: 'follow_cursor' };
+export type TerminalViewportListener = (action: TerminalViewportAction) => void;
 
 /** The command channel. One instance lives in the input-store bundle. */
 export interface PaneScrollBus {
@@ -36,12 +44,17 @@ export interface PaneScrollBus {
    * mount/unmount effect. A pane subscribes unconditionally (NOT gated on focus) so the wheel can
    * drive it while the chat input — not the pane — holds focus. */
   subscribe(focusId: FocusId, listener: PaneScrollListener): () => void;
+  /** Send an explicit local terminal-viewport command without mutating terminal geometry. */
+  emitTerminalViewport(focusId: FocusId, action: TerminalViewportAction): void;
+  /** Subscribe an embedded terminal surface to local pan/follow commands. */
+  subscribeTerminalViewport(focusId: FocusId, listener: TerminalViewportListener): () => void;
 }
 
 /** Build a pane-scroll bus. Listeners are kept in a per-focus-id set so emit is a direct fan-out with
  * no scan; empty sets are pruned so the map doesn't accumulate ids for unmounted panes. */
 export function createPaneScrollBus(): PaneScrollBus {
   const listeners = new Map<FocusId, Set<PaneScrollListener>>();
+  const viewportListeners = new Map<FocusId, Set<TerminalViewportListener>>();
   return {
     emit(focusId, direction, amount) {
       const set = listeners.get(focusId);
@@ -68,6 +81,22 @@ export function createPaneScrollBus(): PaneScrollBus {
         if (current.size === 0) {
           listeners.delete(focusId);
         }
+      };
+    },
+    emitTerminalViewport(focusId, action) {
+      for (const listener of viewportListeners.get(focusId) ?? []) listener(action);
+    },
+    subscribeTerminalViewport(focusId, listener) {
+      let set = viewportListeners.get(focusId);
+      if (set === undefined) {
+        set = new Set();
+        viewportListeners.set(focusId, set);
+      }
+      set.add(listener);
+      return () => {
+        const current = viewportListeners.get(focusId);
+        current?.delete(listener);
+        if (current?.size === 0) viewportListeners.delete(focusId);
       };
     },
   };

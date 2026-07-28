@@ -22,7 +22,7 @@
  * `ink-testing-library` raw mode *is* supported, so tests drive the live loop unchanged.
  */
 
-import { type Key, useInput, useStdin } from 'ink';
+import { type Key, useApp, useInput, useStdin } from 'ink';
 import { useEffect, useRef } from 'react';
 import {
   type ChatInputHandler,
@@ -42,7 +42,7 @@ import { selectActiveMode } from '../input/modeStore.js';
 import type { PanelStoreApi } from '../input/panelStore.js';
 import type { PanelId } from '../input/panels.js';
 import { keyUsageStore } from '../store/keyUsage/keyUsageStore.js';
-import type { Wheel } from '../terminal/StdinShim.js';
+import type { StdinRoute, Wheel } from '../terminal/StdinShim.js';
 import type { Chord } from '../terminal/translate.js';
 import { useInputStores } from './useInputStores.js';
 
@@ -133,6 +133,9 @@ export interface TerminalEvents {
   on(event: 'wheel', listener: (wheel: Wheel) => void): unknown;
   off(event: 'chord', listener: (chord: Chord) => void): unknown;
   off(event: 'wheel', listener: (wheel: Wheel) => void): unknown;
+  /** Select raw terminal or normal Ink ownership. Present on the live StdinShim, intentionally
+   * optional for pre-shim tests and noninteractive renderers. */
+  setRoute?(route: StdinRoute): void;
 }
 
 /**
@@ -228,6 +231,7 @@ export function useRootInput(
   terminalEvents?: TerminalEvents,
 ): void {
   const { panels, focus, keymaps, modes, bindings, paneScroll, workspace } = useInputStores();
+  const { exit } = useApp();
   // Only claim raw mode when the terminal supports it (see the raw-mode note above).
   const { isRawModeSupported } = useStdin();
 
@@ -306,6 +310,16 @@ export function useRootInput(
       const outcome = dispatchKey(input, key, ctx);
       if (outcome.action !== undefined) {
         keyUsageStore.getState().recordUse(outcome.action);
+      }
+      // Ink's built-in Ctrl-C exit is disabled at the live render boundary so an interactive
+      // terminal mode can receive it. Preserve the normal Murder exit everywhere else: only an
+      // explicit mode opt-in that actually consumed this event suppresses exit.
+      if (
+        input === 'c' &&
+        key.ctrl &&
+        !(ctx.activeMode?.captureCtrlC === true && outcome.layer === 'mode' && outcome.handled)
+      ) {
+        exit();
       }
     }
   };
@@ -386,4 +400,20 @@ export function useRootInput(
       terminalEvents.off('wheel', onWheel);
     };
   }, [terminalEvents]);
+
+  // The mode stack is the one source of stdin ownership. A terminal route is installed synchronously
+  // on enter/exit, before any bytes are handed to Ink; modes without one retain normal Ink input.
+  useEffect(() => {
+    if (terminalEvents?.setRoute === undefined) return;
+    const apply = (): void => {
+      terminalEvents.setRoute?.(selectActiveMode(modes)?.stdinRoute ?? { kind: 'ink' });
+    };
+    apply();
+    const unwatchModes = modes.subscribe(apply);
+    const unwatchFocus = focus.subscribe(apply);
+    return () => {
+      unwatchModes();
+      unwatchFocus();
+    };
+  }, [focus, modes, terminalEvents]);
 }

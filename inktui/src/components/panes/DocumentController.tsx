@@ -1,8 +1,10 @@
-import { type JSX, memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useApplicationClient } from '../../hooks/useApplicationClient.js';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { type GotoIntent, useGotoLine } from '../../hooks/useGotoLine.js';
-import { usePanelKeymap, usePaneScrollBus } from '../../hooks/useInputStores.js';
+import { useInputStores, usePanelKeymap, usePaneScrollBus } from '../../hooks/useInputStores.js';
 import { stageDocFocusId } from '../../input/focusIds.js';
+import { selectResolvedFocus } from '../../input/focusStore.js';
 import type { PanelKeymap } from '../../input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import {
@@ -13,6 +15,13 @@ import {
 import { DOC_DIR } from '../../store/docView/docViewSlice.js';
 import type { AppStore } from '../../store/store.js';
 import { useTheme } from '../../theme/themeStore.js';
+import type { TerminalInputLease } from '../../application/ApplicationClient.js';
+import { matchReservedPaneNavigation, TerminalInputWriter } from '../../terminal/rawEditorInput.js';
+import { adaptTerminalUpdate } from '../../terminalSurface/protocolAdapter.js';
+import {
+  FOLLOW_VIEWPORT_TERMINAL_SIZING,
+  type TerminalSurfaceUpdate,
+} from '../../terminalSurface/types.js';
 import {
   DocumentSurface,
   documentContentInnerHeight,
@@ -21,10 +30,31 @@ import {
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { computeDocumentWindow } from './shared/scrollWindow.js';
 import { usePaneScrollState } from './shared/usePaneScrollState.js';
+import { TranscriptPane } from './TranscriptPane.js';
 
 const DOC_SCROLL_STEP = 1;
 
-type DocumentIntent = 'close' | 'scrollDown' | 'scrollUp' | 'pageDown' | 'pageUp' | 'spawnPlanner';
+type DocumentIntent =
+  | 'close'
+  | 'edit'
+  | 'scrollDown'
+  | 'scrollUp'
+  | 'pageDown'
+  | 'pageUp'
+  | 'spawnPlanner';
+
+type DocumentEditorState =
+  | { readonly status: 'inactive'; readonly error?: string }
+  | { readonly status: 'starting' }
+  | {
+      readonly status: 'active';
+      readonly documentPath: string;
+      readonly terminalSessionId: string;
+      readonly inputError?: string;
+    };
+
+const EDITOR_RESIZE_DEBOUNCE_MS = 100;
+const EDITOR_STATUS_POLL_MS = 500;
 
 const EMPTY_DOCUMENT_KEYMAP: PanelKeymap<DocumentIntent | GotoIntent> = {
   keymap: [],
@@ -48,6 +78,172 @@ export const DocumentController = memo(function DocumentController({
   const spawnPlanner = useAppStore((state) => state.actions.plans.spawnPlanner);
   const focusId = stageDocFocusId(open.name);
   const theme = useTheme();
+  const bus = useApplicationClient();
+  const { modes, focus } = useInputStores();
+  const editorModeId = `document-editor:${focusId}`;
+  const [editor, setEditor] = useState<DocumentEditorState>({ status: 'inactive' });
+  const [editorUpdate, setEditorUpdate] = useState<TerminalSurfaceUpdate | null>(null);
+  const editorRef = useRef(editor);
+  const inputWriterRef = useRef<TerminalInputWriter | null>(null);
+  const lifecycleGeneration = useRef(0);
+  editorRef.current = editor;
+
+  const createInputWriter = useCallback(
+    (terminalInput: TerminalInputLease): TerminalInputWriter => {
+      let writer: TerminalInputWriter;
+      writer = new TerminalInputWriter(
+        bus,
+        terminalInput.streamId,
+        terminalInput.sessionId,
+        terminalInput.leaseId,
+        terminalInput.fence,
+        () => {
+          if (inputWriterRef.current !== writer) return;
+          // The raw route's isActive predicate immediately turns false, so new bytes are never
+          // forwarded under a stale lease. The editor frame remains visible as a read-only surface.
+          inputWriterRef.current = null;
+          setEditor((current) =>
+            current.status === 'active'
+              ? { ...current, inputError: 'editor input unavailable; reconnect to regain control' }
+              : current,
+          );
+        },
+      );
+      return writer;
+    },
+    [bus],
+  );
+
+  const stopEditorPresentation = useCallback(() => {
+    lifecycleGeneration.current += 1;
+    inputWriterRef.current?.close();
+    inputWriterRef.current = null;
+    modes.getState().exit(editorModeId);
+    setEditorUpdate(null);
+    const inactive: DocumentEditorState = { status: 'inactive' };
+    editorRef.current = inactive;
+    setEditor(inactive);
+  }, [editorModeId, modes]);
+
+  const startEditor = useCallback(async () => {
+    if (editorRef.current.status !== 'inactive') return;
+    const starting: DocumentEditorState = { status: 'starting' };
+    const generation = lifecycleGeneration.current + 1;
+    lifecycleGeneration.current = generation;
+    editorRef.current = starting;
+    setEditor(starting);
+    try {
+      const viewportColumns = documentContentInnerWidth(presentation.width);
+      const viewportRows = Math.max(1, documentContentInnerHeight(presentation.height));
+      const result = await bus.command('document.editor.start', {
+        kind: open.kind,
+        name: open.name,
+        columns: viewportColumns,
+        rows: viewportRows,
+      });
+      if (lifecycleGeneration.current !== generation) return;
+      const terminalInput = await bus.openTerminalInput(result.terminal_session_id);
+      if (lifecycleGeneration.current !== generation) return;
+      const writer = createInputWriter(terminalInput);
+      inputWriterRef.current = writer;
+      const active: DocumentEditorState = {
+        status: 'active',
+        documentPath: result.document_path,
+        terminalSessionId: result.terminal_session_id,
+      };
+      editorRef.current = active;
+      setEditor(active);
+      modes.getState().enter({
+        id: editorModeId,
+        presentation: 'inlayout',
+        passThrough: true,
+        captureCtrlC: true,
+        restoreFocus: false,
+        stdinRoute: {
+          kind: 'terminal',
+          isActive: () =>
+            inputWriterRef.current !== null && selectResolvedFocus(focus).id === focusId,
+          consumeReservedChord(buffer) {
+            const match = matchReservedPaneNavigation(buffer);
+            if (match.direction !== undefined && match.result.kind === 'matched') {
+              focus.getState().navigate(match.direction);
+            }
+            return match.result;
+          },
+          write(bytes) {
+            inputWriterRef.current?.enqueue(bytes);
+          },
+        },
+        render: () => null,
+        keymap: [],
+        onIntent() {},
+        onUncaptured(_input, _key) {
+          if (selectResolvedFocus(focus).id !== focusId) return false;
+          // Bytes normally never reach this parser while the raw route is active. If route
+          // activation races one Ink event, swallow it rather than reconstructing altered bytes.
+          return true;
+        },
+      });
+    } catch (cause) {
+      if (lifecycleGeneration.current !== generation) return;
+      const inactive: DocumentEditorState = {
+        status: 'inactive',
+        error: cause instanceof Error ? cause.message : String(cause),
+      };
+      editorRef.current = inactive;
+      setEditor(inactive);
+    }
+  }, [
+    bus,
+    createInputWriter,
+    editorModeId,
+    focus,
+    focusId,
+    modes,
+    open.kind,
+    open.name,
+    presentation.height,
+    presentation.width,
+  ]);
+
+  // A socket reconnect never reuses an old writer lease or its sequence numbers. Input remains
+  // visibly read-only while reconnecting, then receives a fresh stream/fence only after acquire.
+  useEffect(() => {
+    const reconnectable = bus as typeof bus & {
+      onConnect?: (listener: () => void) => () => void;
+      onDisconnect?: (listener: () => void) => () => void;
+    };
+    const onDisconnect = (): void => inputWriterRef.current?.close('disconnected');
+    const onConnect = (): void => {
+      const current = editorRef.current;
+      if (current.status !== 'active' || inputWriterRef.current !== null) return;
+      void bus
+        .openTerminalInput(current.terminalSessionId)
+        .then((lease) => {
+          const latest = editorRef.current;
+          if (
+            latest.status !== 'active' ||
+            latest.terminalSessionId !== current.terminalSessionId ||
+            inputWriterRef.current !== null
+          ) {
+            return;
+          }
+          inputWriterRef.current = createInputWriter(lease);
+          setEditor((state) => {
+            if (state.status !== 'active') return state;
+            const { inputError: _inputError, ...rest } = state;
+            return rest;
+          });
+        })
+        .catch(() => {});
+    };
+    const unhookConnect = reconnectable.onConnect?.(onConnect);
+    const unhookDisconnect = reconnectable.onDisconnect?.(onDisconnect);
+    return () => {
+      unhookConnect?.();
+      unhookDisconnect?.();
+    };
+  }, [bus, createInputWriter]);
 
   const [scroll, setScroll] = usePaneScrollState(focusId);
   const styles: DocumentStyles = useMemo(
@@ -92,6 +288,7 @@ export const DocumentController = memo(function DocumentController({
     () => ({
       keymap: [
         ...goto.entries,
+        { chord: { input: 'i' }, intent: 'edit', description: 'edit' },
         { chord: { key: { return: true } }, intent: 'close', description: 'close' },
         { chord: { key: { escape: true } }, intent: 'close', description: 'close' },
         { chord: { input: 'j' }, intent: 'scrollDown', description: 'scroll down' },
@@ -121,6 +318,9 @@ export const DocumentController = memo(function DocumentController({
           case 'close':
             closeAction();
             return;
+          case 'edit':
+            void startEditor();
+            return;
           case 'scrollDown':
             setScroll((current) => Math.min(current + DOC_SCROLL_STEP, maxScroll));
             return;
@@ -139,7 +339,17 @@ export const DocumentController = memo(function DocumentController({
         }
       },
     }),
-    [closeAction, effectiveHeight, goto, maxScroll, open.kind, open.name, setScroll, spawnPlanner],
+    [
+      closeAction,
+      effectiveHeight,
+      goto,
+      maxScroll,
+      open.kind,
+      open.name,
+      setScroll,
+      spawnPlanner,
+      startEditor,
+    ],
   );
   usePanelKeymap(focusId, presentation.focused ? keymap : EMPTY_DOCUMENT_KEYMAP);
 
@@ -158,6 +368,52 @@ export const DocumentController = memo(function DocumentController({
     [focusId, paneScroll, setScroll],
   );
 
+  useEffect(() => {
+    if (editor.status !== 'active') return;
+    return bus.attachTerminal(editor.terminalSessionId, (update) => {
+      setEditorUpdate(adaptTerminalUpdate(update));
+    });
+  }, [bus, editor]);
+
+  useEffect(() => {
+    if (editor.status !== 'active') return;
+    const timer = setTimeout(() => {
+      const viewportColumns = documentContentInnerWidth(presentation.width);
+      const viewportRows = Math.max(1, documentContentInnerHeight(presentation.height));
+      void bus
+        .command('document.editor.resize', {
+          terminal_session_id: editor.terminalSessionId,
+          columns: viewportColumns,
+          rows: viewportRows,
+        })
+        .catch(() => {});
+    }, EDITOR_RESIZE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [bus, editor, presentation.height, presentation.width]);
+
+  useEffect(() => {
+    if (editor.status !== 'active') return;
+    const timer = setInterval(() => {
+      void bus
+        .command('document.editor.status', { terminal_session_id: editor.terminalSessionId })
+        .then((result) => {
+          if (result.status === 'exited') stopEditorPresentation();
+        })
+        .catch(() => {});
+    }, EDITOR_STATUS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [bus, editor, stopEditorPresentation]);
+
+  useEffect(
+    () => () => {
+      lifecycleGeneration.current += 1;
+      inputWriterRef.current?.close();
+      inputWriterRef.current = null;
+      modes.getState().exit(editorModeId);
+    },
+    [editorModeId, modes],
+  );
+
   // Persisted pane scroll survives re-layout, but it must not remain beyond the new rendered tail
   // after a resize or display-mode switch.
   useEffect(() => {
@@ -166,19 +422,46 @@ export const DocumentController = memo(function DocumentController({
     }
   }, [clampedScroll, scroll, setScroll]);
 
+  const title = `.murder/${DOC_DIR[open.kind]}/${open.name}.md`;
   return (
     <AllocatedPaneFrame id={focusId} presentation={presentation}>
-      <DocumentSurface
-        width={presentation.width}
-        height={presentation.height}
-        focused={presentation.focused}
-        title={`.murder/${DOC_DIR[open.kind]}/${open.name}.md`}
-        rows={documentLayout.rows}
-        scroll={clampedScroll}
-        gotoPending={goto.pending}
-        status={status === 'idle' ? 'ready' : status}
-        error={error}
-      />
+      {editor.status === 'active' ? (
+        <TranscriptPane
+          width={presentation.width}
+          height={presentation.height}
+          focused={presentation.focused}
+          title={`${open.name} [editor${editor.inputError === undefined ? '' : ' — read-only'}]`}
+          footerLeft=""
+          footerRight=""
+          turns={[]}
+          viewMode="tmux"
+          scrollUp={0}
+          gotoLine={null}
+          tmuxUpdate={editorUpdate}
+          tmuxWaitingText="[waiting for editor frame…]"
+          terminalSizingPolicy={FOLLOW_VIEWPORT_TERMINAL_SIZING}
+        />
+      ) : (
+        <DocumentSurface
+          width={presentation.width}
+          height={presentation.height}
+          focused={presentation.focused}
+          title={title}
+          rows={documentLayout.rows}
+          scroll={clampedScroll}
+          gotoPending={goto.pending}
+          status={
+            editor.status === 'starting'
+              ? 'loading'
+              : editor.error !== undefined
+                ? 'error'
+                : status === 'idle'
+                  ? 'ready'
+                  : status
+          }
+          error={editor.status === 'inactive' ? (editor.error ?? error) : error}
+        />
+      )}
     </AllocatedPaneFrame>
   );
 });

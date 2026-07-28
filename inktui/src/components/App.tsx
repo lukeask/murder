@@ -62,6 +62,7 @@ import {
   type FocusId,
   type FocusTarget,
   selectResolvedFocus,
+  stageTranscriptFocusId,
 } from '../input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import {
@@ -640,6 +641,7 @@ function Shell({
     workspace,
     panels,
     paneUi,
+    paneScroll,
   } = useInputStores();
   const appStore = useAppStoreApi();
   const bus = useApplicationClient();
@@ -1205,6 +1207,9 @@ function Shell({
     },
     setPaneViewMode: (agentId, mode) => {
       appStore.getState().actions.conversations.setPaneViewMode(agentId, mode);
+    },
+    terminalViewport: (agentId, action) => {
+      paneScroll.emitTerminalViewport(stageTranscriptFocusId(agentId), action);
     },
     resolveRenameTarget: () => {
       const state = appStore.getState();

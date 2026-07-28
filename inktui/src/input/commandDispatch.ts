@@ -23,6 +23,7 @@
 
 import type { ChatViewMode } from '../store/conversations/conversationsSlice.js';
 import type { PushOptions } from '../store/toast/toastStore.js';
+import type { TerminalViewportAction } from './paneScrollBus.js';
 
 /**
  * The action references `dispatchCommand` needs, shaped from what the chat-input intercept site has
@@ -63,6 +64,8 @@ export interface CommandCtx {
   /** Rename a plan on disk + in the DB (and retarget a live planner when present). Wraps
    * `plan.rename`. */
   readonly renamePlan: (oldName: string, newName: string) => void;
+  /** Pan a harness's local terminal viewport or return it to cursor-follow mode. */
+  readonly terminalViewport?: (agentId: string, action: TerminalViewportAction) => void;
 }
 
 /** The rename subject resolved from chat/doc context for the single-arg `:rename <new>` form. */
@@ -76,7 +79,9 @@ const NAME_RE = /^[A-Za-z0-9_-]+$/;
 /** Plan filename stem guard — mirrors `plan_ops._validate_plan_filename_stem` (client-side preflight). */
 function isValidPlanStem(name: string): boolean {
   const stem = name.trim();
-  return stem.length > 0 && !stem.includes('/') && !stem.includes('\\') && stem !== '.' && stem !== '..';
+  return (
+    stem.length > 0 && !stem.includes('/') && !stem.includes('\\') && stem !== '.' && stem !== '..'
+  );
 }
 
 /** Parse `:rename` args: one token renames the resolved target; two tokens rename a named plan. */
@@ -150,6 +155,45 @@ const COMMANDS: Readonly<Record<string, CommandHandler>> = {
   },
   tmux(_args, agentId, ctx) {
     setViewMode(agentId, 'tmux', ctx);
+  },
+  'terminal-pan'(args, agentId, ctx) {
+    if (agentId === null) {
+      ctx.pushToast('no harness terminal to pan', { ttlMs: 4000 });
+      return;
+    }
+    const [direction, rawAmount, ...extra] = args.trim().toLowerCase().split(/\s+/);
+    const amount = rawAmount === undefined ? 1 : Number.parseInt(rawAmount, 10);
+    if (
+      extra.length > 0 ||
+      !['left', 'right', 'up', 'down'].includes(direction ?? '') ||
+      !Number.isSafeInteger(amount) ||
+      amount <= 0
+    ) {
+      ctx.pushToast('usage: :terminal-pan <left|right|up|down> [cells]', {
+        severity: 'error',
+      });
+      return;
+    }
+    if (ctx.terminalViewport === undefined) {
+      ctx.pushToast('terminal viewport control is unavailable', { severity: 'error' });
+      return;
+    }
+    ctx.terminalViewport(agentId, {
+      kind: 'pan',
+      deltaColumns: direction === 'left' ? -amount : direction === 'right' ? amount : 0,
+      deltaRows: direction === 'up' ? -amount : direction === 'down' ? amount : 0,
+    });
+  },
+  'terminal-follow'(_args, agentId, ctx) {
+    if (agentId === null) {
+      ctx.pushToast('no harness terminal to follow', { ttlMs: 4000 });
+      return;
+    }
+    if (ctx.terminalViewport === undefined) {
+      ctx.pushToast('terminal viewport control is unavailable', { severity: 'error' });
+      return;
+    }
+    ctx.terminalViewport(agentId, { kind: 'follow_cursor' });
   },
 
   /** `:resume` — stub. The v0 surface for resuming is the history panel's `r` keybind; point there. */

@@ -56,6 +56,7 @@
 
 import type { ReactNode } from 'react';
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import type { StdinRoute } from '../terminal/StdinShim.js';
 import type { FocusId, FocusStoreApi } from './focusStore.js';
 import type { PanelKeymap } from './keymap.js';
 
@@ -77,6 +78,18 @@ export interface Mode<Intent extends string = string> extends PanelKeymap<Intent
   /** When `true`, a captured key the mode's keymap does not match falls through to the lower
    * dispatch layers; default `false` (capture everything). See the module doc. */
   readonly passThrough?: boolean;
+  /** Opt out of Ink's process-wide Ctrl-C exit while this mode consumes Ctrl-C. The root input
+   * owner still exits normally when the mode is not active, does not consume the chord, or focus
+   * has moved away from the mode's surface. */
+  readonly captureCtrlC?: boolean;
+  /**
+   * Optional raw stdin owner. The root stdin hook installs this route only while this mode is the
+   * stack top; `StdinShim` then bypasses Ink entirely for active terminal bytes.
+   */
+  readonly stdinRoute?: StdinRoute;
+  /** Modal modes restore the focus saved on entry by default. In-layout terminal ownership follows
+   * pane focus instead, so navigation-driven teardown opts out to avoid bouncing focus back. */
+  readonly restoreFocus?: boolean;
   /** Optional bottom-bar hints this mode contributes. When present, the bottom bar shows THESE
    * instead of the focused panel's keys for the duration of the mode (the mode captures input, so its
    * keys are the only relevant ones — e.g. the spawn wizard's `j/k nav · enter confirm · esc cancel`).
@@ -173,7 +186,7 @@ export function createModeStore(focus: FocusStoreApi): ModeStoreApi {
         // focus, so popping it must not move the highlight out from under the top mode.
         if (target === topIndex) {
           const frame = state.stack[topIndex];
-          if (frame !== undefined) {
+          if (frame !== undefined && frame.mode.restoreFocus !== false) {
             focus.getState().focus(frame.savedFocus);
           }
         }

@@ -14,8 +14,11 @@ import type {
   QueryMethod,
   QueryParams,
   QueryResult,
-  TerminalFrame,
+  TerminalAttachMode,
   TerminalFrameListener,
+  TerminalInputBatch,
+  TerminalInputLease,
+  TerminalUpdate,
   Unsubscribe,
 } from './ApplicationClient.js';
 import { unwrapReadReply } from './normalizeReply.js';
@@ -53,6 +56,12 @@ export interface RecordedTerminalAttach {
   readonly sessionId: string | null;
 }
 
+export interface RecordedTerminalInput extends TerminalInputBatch {}
+export interface RecordedTerminalInputLeaseAction {
+  readonly kind: 'renew' | 'close';
+  readonly lease: TerminalInputLease;
+}
+
 export type QueryHandler<M extends QueryMethod> = (params: QueryParams<M>) => unknown;
 export type CommandHandler<M extends CommandMethod> = (params: CommandParams<M>) => unknown;
 export type HydrateHandler = (
@@ -67,6 +76,9 @@ export class FakeApplicationClient implements ApplicationClient {
   private readonly recordedCommands: RecordedCommandCall[] = [];
   private readonly recordedHydrates: RecordedHydrateCall[] = [];
   private readonly recordedTerminals: RecordedTerminalAttach[] = [];
+  private readonly recordedTerminalInputs: RecordedTerminalInput[] = [];
+  private readonly recordedTerminalInputLeaseActions: RecordedTerminalInputLeaseAction[] = [];
+  private readonly terminalInputWatchers = new Map<string, Set<(error: Error) => void>>();
   private readonly hydrations = new Set<Hydration>();
   private readonly terminals = new Set<TerminalAttachment>();
   private hydrateHandler: HydrateHandler | undefined;
@@ -138,6 +150,14 @@ export class FakeApplicationClient implements ApplicationClient {
 
   get terminalAttachCalls(): readonly RecordedTerminalAttach[] {
     return [...this.recordedTerminals];
+  }
+
+  get terminalInputCalls(): readonly RecordedTerminalInput[] {
+    return [...this.recordedTerminalInputs];
+  }
+
+  get terminalInputLeaseActions(): readonly RecordedTerminalInputLeaseAction[] {
+    return [...this.recordedTerminalInputLeaseActions];
   }
 
   get subscriberCount(): number {
@@ -213,11 +233,53 @@ export class FakeApplicationClient implements ApplicationClient {
     );
   }
 
-  attachTerminal(sessionId: string | null, listener: TerminalFrameListener): Unsubscribe {
+  attachTerminal(
+    sessionId: string | null,
+    listener: TerminalFrameListener,
+    _mode: TerminalAttachMode = 'raw',
+  ): Unsubscribe {
     const attachment: TerminalAttachment = { sessionId, listener };
     this.recordedTerminals.push({ sessionId });
     this.terminals.add(attachment);
     return () => this.terminals.delete(attachment);
+  }
+
+  openTerminalInput(sessionId: string): Promise<TerminalInputLease> {
+    return Promise.resolve({
+      streamId: `fake-terminal-input:${sessionId}`,
+      sessionId,
+      leaseId: `fake-lease:${sessionId}`,
+      fence: 1,
+    });
+  }
+
+  renewTerminalInput(lease: TerminalInputLease): Promise<TerminalInputLease> {
+    this.recordedTerminalInputLeaseActions.push({ kind: 'renew', lease });
+    return Promise.resolve(lease);
+  }
+
+  closeTerminalInput(lease: TerminalInputLease): Promise<void> {
+    this.recordedTerminalInputLeaseActions.push({ kind: 'close', lease });
+    return Promise.resolve();
+  }
+
+  sendTerminalInput(batch: TerminalInputBatch): boolean {
+    this.recordedTerminalInputs.push(batch);
+    return true;
+  }
+
+  watchTerminalInput(streamId: string, listener: (error: Error) => void): Unsubscribe {
+    const listeners = this.terminalInputWatchers.get(streamId) ?? new Set();
+    listeners.add(listener);
+    this.terminalInputWatchers.set(streamId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.terminalInputWatchers.delete(streamId);
+    };
+  }
+
+  emitTerminalInputFailure(streamId: string, message = 'terminal input failed'): void {
+    this.terminalInputWatchers.get(streamId)?.forEach((listener) => listener(new Error(message)));
   }
 
   /** Emit a projection invalidation to standing hydration listeners. */
@@ -232,27 +294,32 @@ export class FakeApplicationClient implements ApplicationClient {
     }
   }
 
-  emitTerminal(sessionId: string | null, frame: TerminalFrame | string, sequence = 1): void {
-    const value: TerminalFrame =
-      typeof frame === 'string'
+  emitTerminal(sessionId: string | null, update: TerminalUpdate | string, sequence = 1): void {
+    const value: TerminalUpdate =
+      typeof update === 'string'
         ? {
             type: 'terminal.frame',
             subscription_id: 'fake-terminal',
             sequence,
             session_id: sessionId ?? 'supervisor',
             captured_at: new Date().toISOString(),
-            columns: Math.max(1, frame.length),
-            rows: Math.max(1, frame.split('\n').length),
+            columns: Math.max(1, update.length),
+            rows: Math.max(1, update.split('\n').length),
             encoding: 'utf-8',
-            data: frame,
+            data: update,
             reset: true,
           }
-        : frame;
+        : update;
     for (const attachment of [...this.terminals]) {
       if (attachment.sessionId === sessionId) {
         attachment.listener(value);
       }
     }
+  }
+
+  /** Deliver any raw-stream contract variant without altering byte payloads. */
+  emitTerminalUpdate(sessionId: string | null, update: TerminalUpdate): void {
+    this.emitTerminal(sessionId, update);
   }
 
   private observeCursor(cursor: number | null | undefined): void {

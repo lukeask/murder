@@ -10,6 +10,7 @@ import type {
   CommandMethod,
   CommandParams,
   CommandResult,
+  ProjectionSnapshot,
   ProjectionTopic,
   QueryMethod,
   QueryParams,
@@ -17,12 +18,27 @@ import type {
   TerminalChunk,
   TerminalFrame as TerminalFrameContract,
   TerminalFrameMessage,
-  ProjectionSnapshot,
+  TerminalKeyframe,
+  TerminalStreamGap,
 } from '../generated/applicationProtocol.js';
 
+/** Fenced raw-terminal writer context. A new stream identity is issued whenever ownership is
+ * (re)acquired, so stale sequence numbers cannot be replayed under a new lease. */
+export interface TerminalInputLease {
+  readonly streamId: string;
+  readonly sessionId: string;
+  readonly leaseId: string;
+  readonly fence: number;
+}
+
+export interface TerminalInputBatch extends TerminalInputLease {
+  readonly inputSequence: number;
+  readonly data: string;
+}
+
 export type ApplicationPayload = any;
-export type { CommandMethod, CommandParams, CommandResult, QueryMethod, QueryParams, QueryResult };
 export type { CommandMethods, QueryMethods } from '../generated/applicationProtocol.js';
+export type { CommandMethod, CommandParams, CommandResult, QueryMethod, QueryParams, QueryResult };
 
 export interface ProjectionInvalidation {
   readonly type: 'projection.invalidate';
@@ -54,8 +70,19 @@ export interface HydrateResult extends HydrateReply {
 }
 
 export type TerminalFrame = TerminalFrameMessage['frame'];
-export type TerminalUpdate = TerminalFrameContract | TerminalChunk;
+/**
+ * Raw terminal stream delivery. Chunks remain base64 at this boundary: the
+ * terminal parser, not this transport client, owns byte decoding.  The legacy
+ * UTF-8 `TerminalFrame` remains a replace-state compatibility variant.
+ */
+export type TerminalUpdate =
+  | TerminalFrameContract
+  | TerminalKeyframe
+  | TerminalChunk
+  | TerminalStreamGap
+  | { readonly type: 'terminal.resynced'; readonly keyframe: TerminalKeyframe };
 export type TerminalFrameListener = (update: TerminalUpdate) => void;
+export type TerminalAttachMode = 'raw' | 'replace';
 
 export interface ApplicationClient {
   query<M extends QueryMethod>(name: M, params: QueryParams<M>): Promise<QueryResult<M>>;
@@ -80,8 +107,23 @@ export interface ApplicationClient {
   ): Promise<HydrateResult>;
 
   /**
-   * Attach the replace-frame terminal stream for `sessionId`. The synchronous disposer removes the
-   * reconnect intent and sends `terminal.detach` when the stream has reached the server.
+   * Attach a terminal stream for `sessionId`. Native surfaces use ordered raw VT; legacy
+   * transcript consumers can explicitly request complete replacement frames during migration.
    */
-  attachTerminal(sessionId: string | null, listener: TerminalFrameListener): Unsubscribe;
+  attachTerminal(
+    sessionId: string | null,
+    listener: TerminalFrameListener,
+    mode?: TerminalAttachMode,
+  ): Unsubscribe;
+
+  /** Acquire the service's raw-terminal writer lease for a session. */
+  openTerminalInput(sessionId: string): Promise<TerminalInputLease>;
+  /** Renew an acquired writer lease without changing its input-stream sequence space. */
+  renewTerminalInput(lease: TerminalInputLease): Promise<TerminalInputLease>;
+  /** Release a writer lease when the interactive surface loses ownership. */
+  closeTerminalInput(lease: TerminalInputLease): Promise<void>;
+  /** Send one base64-encoded raw-byte batch without a request/reply round trip. */
+  sendTerminalInput(batch: TerminalInputBatch): boolean;
+  /** Reports a terminal stream failure (stale lease/fence, sequence gap, or writer failure). */
+  watchTerminalInput(streamId: string, listener: (error: Error) => void): Unsubscribe;
 }
