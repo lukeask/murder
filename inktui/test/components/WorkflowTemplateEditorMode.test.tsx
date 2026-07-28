@@ -9,7 +9,7 @@ import { MouseProvider } from '@ink-tools/ink-mouse';
 import { Box, render as inkRender } from 'ink';
 import type { JSX } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CommandParams } from '../../src/application/ApplicationClient.js';
+import type { CommandParams, QueryParams } from '../../src/application/ApplicationClient.js';
 import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { BottomBar } from '../../src/components/BottomBar.js';
 import { Overlay } from '../../src/components/Overlay.js';
@@ -19,6 +19,8 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { createAppStore } from '../../src/store/store.js';
 import type { WorkflowTemplate, WorkflowNodeTemplate } from '../../src/store/workflows/workflowsSlice.js';
+import { compileWorkflowTemplate } from '../../src/workflowEditor/compile.js';
+import { fromWire, toWire } from '../../src/workflowEditor/wire.js';
 
 const tick = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 15));
@@ -103,6 +105,53 @@ function Surface({
   );
 }
 
+function stubWorkflowCompile(fake: FakeApplicationClient): void {
+  fake.stubQuery('workflow.compile', (params: QueryParams<'workflow.compile'>) => {
+    const template = params.template;
+    if (template == null) {
+      return {
+        ok: false,
+        expanded_template: { name: '', stages: [] },
+        inputs: [],
+        issues: [
+          {
+            code: 'unknown_prompt_template' as const,
+            message: 'template is required in tests',
+            severity: 'error' as const,
+          },
+        ],
+      };
+    }
+    const promptTemplates = new Map(Object.entries(params.prompt_templates ?? {}));
+    const compiled = compileWorkflowTemplate(fromWire(template), promptTemplates);
+    return {
+      ok: !compiled.issues.some((issue) => issue.severity === 'error'),
+      expanded_template: toWire(compiled.expanded),
+      inputs: compiled.fields.map((field) => ({
+        name: field.name,
+        label: field.label,
+        kind: field.kind,
+        required: field.required,
+        default: field.defaultValue === '' ? null : field.defaultValue,
+        inferred: template.inputs?.[field.name] === undefined,
+      })),
+      issues: compiled.issues.map((issue) => ({
+        code: issue.code,
+        message: issue.message,
+        severity: issue.severity,
+        ...(issue.templateName === undefined ? {} : { template_name: issue.templateName }),
+        ...(issue.inputName === undefined ? {} : { input_name: issue.inputName }),
+        ...(issue.stageKey === undefined
+          ? {}
+          : {
+              stage_id:
+                compiled.expanded.stages.find((stage) => stage.key === issue.stageKey)?.id ?? null,
+            }),
+      })),
+    };
+  });
+}
+
 function setup(
   options: {
     readonly columns?: number;
@@ -110,6 +159,7 @@ function setup(
     readonly put?: unknown;
     readonly remote?: WorkflowTemplate;
     readonly templates?: readonly { readonly name: string; readonly body: string }[];
+    readonly compile?: unknown;
   } = {},
 ) {
   const definition = options.definition ?? workflow();
@@ -119,6 +169,8 @@ function setup(
   const remote = options.remote ?? definition;
   fake.stubQuery('workflows.get', { ok: true, workflows: [remote], revision: 'remote-r2' });
   fake.stubQuery('workflow.runs.get', { ok: true, run: null, waits: [], error: null });
+  if (options.compile === undefined) stubWorkflowCompile(fake);
+  else fake.stubQuery('workflow.compile', options.compile);
   fake.stubCommand(
     'workflow.put',
     options.put ??
@@ -624,6 +676,13 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('run');
     await tick();
     expect(app.stdout.lastFrame()).toContain('Run  [target=]  region=');
+    expect(app.fake.queryCalls.some((call) => call.name === 'workflow.compile')).toBe(true);
+    expect(
+      app.fake.queryCalls.find((call) => call.name === 'workflow.compile')?.params,
+    ).toMatchObject({
+      template: expect.objectContaining({ name: 'release' }),
+      prompt_templates: expect.any(Object),
+    });
     app.mode.onUncaptured?.('p', {} as never);
     app.mode.onIntent('argsNext');
     app.mode.onUncaptured?.('u', {} as never);
@@ -667,6 +726,13 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('run');
     await tick();
     expect(app.stdout.lastFrame()).toContain('Run  [subject=]  risk_area=');
+    expect(
+      app.fake.queryCalls.find((call) => call.name === 'workflow.compile')?.params,
+    ).toMatchObject({
+      prompt_templates: expect.objectContaining({
+        'review-context': 'Review {subject}.\nCheck specifically for {risk_area}.',
+      }),
+    });
     expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')).toBeUndefined();
     app.close();
   });
@@ -683,6 +749,46 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     expect(app.stdout.lastFrame()).toContain('Unknown prompt template :missing-template:');
     expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')).toBeUndefined();
+    app.close();
+  });
+
+  it('blocks wizard submit when a required declared input is blank', async () => {
+    const definition = workflow({
+      inputs: {
+        target: { label: 'Deploy target', kind: 'text', required: true },
+      },
+      stages: [
+        stage('build', 'Build {target}', [], { instructions: 'Deploy {target}' }),
+      ],
+    });
+    const app = setup({ definition });
+    await tick();
+    app.mode.onIntent('run');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('Run  [Deploy target=]');
+    app.mode.onIntent('enter');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain("required input 'target' is not filled");
+    expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')).toBeUndefined();
+    app.close();
+  });
+
+  it('falls back to client compile when workflow.compile RPC fails', async () => {
+    const definition = workflow({
+      stages: [
+        stage('build', 'Build {target}', [], { instructions: 'Deploy {target}' }),
+      ],
+    });
+    const app = setup({
+      definition,
+      compile: () => {
+        throw new Error('offline');
+      },
+    });
+    await tick();
+    app.mode.onIntent('run');
+    await tick();
+    expect(app.stdout.lastFrame()).toContain('Run  [target=]');
     app.close();
   });
 });

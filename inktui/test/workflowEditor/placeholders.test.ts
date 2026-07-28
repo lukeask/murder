@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { compileWorkflowTemplate } from '../../src/workflowEditor/compile.js';
+import {
+  compileWorkflowTemplate,
+  requiredInputIssues,
+  wizardFieldsFromCompileResult,
+} from '../../src/workflowEditor/compile.js';
 import type { EditorWorkflow } from '../../src/workflowEditor/model.js';
 import { collectPlaceholders } from '../../src/workflowEditor/placeholders.js';
 
@@ -104,20 +108,19 @@ describe('compileWorkflowTemplate', () => {
     expect(compiled.placeholders).toEqual(['ok']);
   });
 
-  it('uses declared input labels/defaults when provided', () => {
+  it('uses declared input labels/defaults from the workflow model', () => {
     const workflow: EditorWorkflow = {
       name: 'labeled',
       description: '',
       mode: 'static',
       stages: [stage('work', '{subject}', '{risk_area}')],
-    };
-
-    const compiled = compileWorkflowTemplate(workflow, new Map(), {
-      declaredInputs: {
+      inputs: {
         subject: { label: 'What should be reviewed?', kind: 'text', required: true },
         risk_area: { label: 'Particular risk area', default: 'correctness', kind: 'text' },
       },
-    });
+    };
+
+    const compiled = compileWorkflowTemplate(workflow, new Map());
 
     expect(compiled.fields).toEqual([
       {
@@ -134,6 +137,23 @@ describe('compileWorkflowTemplate', () => {
         required: false,
         defaultValue: 'correctness',
       },
+    ]);
+  });
+
+  it('keeps declared-only inputs ahead of inferred discoveries', () => {
+    const workflow: EditorWorkflow = {
+      name: 'declared-first',
+      description: '',
+      mode: 'static',
+      inputs: {
+        unused: { label: 'Unused', required: false },
+      },
+      stages: [stage('work', '{target}', '')],
+    };
+    const compiled = compileWorkflowTemplate(workflow, new Map());
+    expect(compiled.fields.map((field) => field.name)).toEqual(['unused', 'target']);
+    expect(compiled.issues).toEqual([
+      expect.objectContaining({ code: 'unused_input', inputName: 'unused', severity: 'warning' }),
     ]);
   });
 
@@ -159,6 +179,76 @@ describe('compileWorkflowTemplate', () => {
         kind: 'text',
         required: false,
         defaultValue: '',
+      },
+    ]);
+  });
+});
+
+describe('requiredInputIssues', () => {
+  it('flags blank required fields after defaults/args merge', () => {
+    expect(
+      requiredInputIssues(
+        [
+          { name: 'title', label: 'Title', kind: 'text', required: true, defaultValue: '' },
+          { name: 'prompt', label: 'Prompt', kind: 'multiline', required: false, defaultValue: '' },
+        ],
+        { title: '  ', prompt: '' },
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        code: 'required_input_missing',
+        inputName: 'title',
+      }),
+    ]);
+    expect(
+      requiredInputIssues(
+        [{ name: 'title', label: 'Title', kind: 'text', required: true, defaultValue: '' }],
+        { title: 'Ship it' },
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('wizardFieldsFromCompileResult', () => {
+  it('maps workflow.compile RPC inputs/issues into wizard fields', () => {
+    const mapped = wizardFieldsFromCompileResult({
+      ok: true,
+      expanded_template: { name: 'review', stages: [] },
+      inputs: [
+        {
+          name: 'subject',
+          label: 'What should be reviewed?',
+          kind: 'text',
+          required: true,
+          default: null,
+          inferred: false,
+        },
+        {
+          name: 'risk_area',
+          label: 'risk_area',
+          kind: 'text',
+          required: false,
+          default: 'correctness',
+          inferred: true,
+        },
+      ],
+      issues: [],
+    });
+    expect(mapped.ok).toBe(true);
+    expect(mapped.fields).toEqual([
+      {
+        name: 'subject',
+        label: 'What should be reviewed?',
+        kind: 'text',
+        required: true,
+        defaultValue: '',
+      },
+      {
+        name: 'risk_area',
+        label: 'risk_area',
+        kind: 'text',
+        required: false,
+        defaultValue: 'correctness',
       },
     ]);
   });

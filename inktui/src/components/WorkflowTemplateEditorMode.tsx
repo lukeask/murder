@@ -27,7 +27,10 @@ import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
 import { useTheme } from '../theme/themeStore.js';
 import {
   compileWorkflowTemplate,
+  requiredInputIssues,
+  wizardFieldsFromCompileResult,
   type WizardField,
+  type WorkflowCompileIssue,
 } from '../workflowEditor/compile.js';
 import { type GraphLayout, layoutWorkflow } from '../workflowEditor/layout.js';
 import type {
@@ -404,46 +407,81 @@ export function workflowTemplateEditorMode(
       refresh();
       return;
     }
-    const runWith = (args: Record<string, string>): void => {
-      // Start uses the existing RPC; server snapshots the saved definition so later template edits
-      // cannot rewrite an already-started run. Client compile is wizard/preview only until a
-      // workflow.compile RPC exists in the generated protocol.
+    const runWith = (fields: readonly WizardField[], args: Record<string, string>): void => {
+      const missing = requiredInputIssues(fields, args);
+      if (missing.length > 0) {
+        const first = missing[0];
+        s.serverIssues = [];
+        s.feedback = first?.message ?? 'Required workflow input is not filled.';
+        s.status = 'error';
+        refresh();
+        return;
+      }
+      // Start still goes through workflow.start; the server compiles authoritatively and snapshots
+      // the saved definition so later template edits cannot rewrite an already-started run.
       void app.getState().actions.workflows.run(s.draft.name, args);
       s.interaction = { kind: 'normal' };
       refresh();
     };
-    const ask = (): void => {
-      const templateBodies = new Map(
-        [...selectTemplatesByName(app.getState().templates.items)].map(([name, record]) => [
-          name,
-          record.body,
-        ]),
-      );
-      const compiled = compileWorkflowTemplate(s.draft, templateBodies);
-      if (compiled.issues.length > 0) {
-        const first = compiled.issues[0];
-        s.serverIssues = [];
-        s.feedback = first?.message ?? 'Workflow template compile failed.';
-        s.status = 'error';
-        if (first?.stageKey !== undefined) focusStage(first.stageKey);
-        refresh();
-        return;
-      }
-      if (compiled.fields.length === 0) {
-        runWith({});
+    const openWizard = (fields: readonly WizardField[]): void => {
+      if (fields.length === 0) {
+        runWith(fields, {});
         return;
       }
       s.feedback = null;
       s.status = 'idle';
       s.interaction = {
         kind: 'wizard',
-        fields: compiled.fields,
-        values: Object.fromEntries(
-          compiled.fields.map((field) => [field.name, field.defaultValue]),
-        ),
+        fields,
+        values: Object.fromEntries(fields.map((field) => [field.name, field.defaultValue])),
         cursor: 0,
       };
       refresh();
+    };
+    const failCompile = (issue: WorkflowCompileIssue | undefined): void => {
+      s.serverIssues = [];
+      s.feedback = issue?.message ?? 'Workflow template compile failed.';
+      s.status = 'error';
+      if (issue?.stageKey !== undefined) focusStage(issue.stageKey);
+      else if (issue?.stageId !== undefined) {
+        const match = s.draft.stages.find((stage) => stage.id === issue.stageId);
+        if (match !== undefined) focusStage(match.key);
+      }
+      refresh();
+    };
+    const ask = (): void => {
+      const templateBodies = Object.fromEntries(
+        [...selectTemplatesByName(app.getState().templates.items)].map(([name, record]) => [
+          name,
+          record.body,
+        ]),
+      );
+      const templateMap = new Map(Object.entries(templateBodies));
+      void app
+        .getState()
+        .actions.workflows.compile({
+          template: toWire(s.draft),
+          promptTemplates: templateBodies,
+        })
+        .then((result) => {
+          const mapped = wizardFieldsFromCompileResult(result);
+          const blocking = mapped.issues.find((issue) => issue.severity === 'error');
+          if (!mapped.ok || blocking !== undefined) {
+            failCompile(blocking ?? mapped.issues[0]);
+            return;
+          }
+          openWizard(mapped.fields);
+        })
+        .catch(() => {
+          // Offline / RPC error: fall back to client-side compile for wizard preview.
+          const compiled = compileWorkflowTemplate(s.draft, templateMap);
+          const blocking = compiled.issues.find((issue) => issue.severity === 'error');
+          if (blocking !== undefined) {
+            failCompile(blocking);
+            return;
+          }
+          openWizard(compiled.fields);
+        });
     };
     if (!workflowEqual(s.base, s.draft)) save(ask);
     else ask();
@@ -663,7 +701,17 @@ export function workflowTemplateEditorMode(
       }
       if (s.interaction.kind === 'wizard') {
         if (intent === 'enter') {
-          void app.getState().actions.workflows.run(s.draft.name, s.interaction.values);
+          const fields = s.interaction.fields;
+          const values = { ...s.interaction.values };
+          const missing = requiredInputIssues(fields, values);
+          if (missing.length > 0) {
+            const first = missing[0];
+            s.feedback = first?.message ?? 'Required workflow input is not filled.';
+            s.status = 'error';
+            refresh();
+            return;
+          }
+          void app.getState().actions.workflows.run(s.draft.name, values);
           s.interaction = { kind: 'normal' };
           refresh();
         } else if (intent === 'escape') {

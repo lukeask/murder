@@ -22,7 +22,11 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { ApplicationClient, CommandResult } from '../../application/ApplicationClient.js';
+import type {
+  ApplicationClient,
+  CommandResult,
+  QueryResult,
+} from '../../application/ApplicationClient.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { WorkflowTemplate } from './workflowsSlice.js';
@@ -60,6 +64,15 @@ export interface WorkflowsActions {
    * toasts the run ticket id; a failure toasts the error (mirroring the optimistic-commit error path).
    */
   run(name: string, args: Record<string, string>): Promise<void>;
+  /**
+   * Preview-compile a workflow template draft (or a saved name) via `workflow.compile`.
+   * Pass `promptTemplates` to override the userspace registry (unsaved prompt-template edits).
+   */
+  compile(params: {
+    readonly template?: WorkflowTemplate | null;
+    readonly name?: string | null;
+    readonly promptTemplates?: Readonly<Record<string, string>> | null;
+  }): Promise<QueryResult<'workflow.compile'>>;
   /** Atomic server-validated upsert. The editor is the only caller; it never changes canonical state
    * until this returns ok. */
   put(workflow: WorkflowTemplate, originalName: string | null): Promise<CommandResult<'workflow.put'>>;
@@ -177,6 +190,16 @@ export function createWorkflowsActions(
         // Mirror the commit() error path: a fire failure surfaces via the global toast.
         toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       }
+    },
+
+    async compile(params): Promise<QueryResult<'workflow.compile'>> {
+      return bus.query('workflow.compile', {
+        ...(params.template === undefined ? {} : { template: params.template }),
+        ...(params.name === undefined ? {} : { name: params.name }),
+        ...(params.promptTemplates === undefined
+          ? {}
+          : { prompt_templates: params.promptTemplates }),
+      });
     },
 
     async put(workflow, originalName): Promise<CommandResult<'workflow.put'>> {
