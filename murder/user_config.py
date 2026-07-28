@@ -750,7 +750,7 @@ def _workflow_registry_records(path: Path) -> list[dict[str, Any]]:
         if definition.name in names:
             raise ValueError("workflow registry contains duplicate workflow names")
         names.add(definition.name)
-        records.append(definition.model_dump(mode="json"))
+        records.append(definition.dump_for_registry())
     return sorted(records, key=lambda record: str(record["name"]))
 
 
@@ -800,7 +800,7 @@ def put_workflow(
             return WorkflowRegistryMutation(False, records, revision, [issue])
 
         updated = [item for item in records if item["name"] != replace_name]
-        updated.append(definition.model_dump(mode="json"))
+        updated.append(definition.dump_for_registry())
         updated.sort(key=lambda item: str(item["name"]))
         from murder.state.storage.filesystem import atomic_write_text  # noqa: PLC0415
 
@@ -886,7 +886,7 @@ def _normalize_workflows(records: Any) -> list[dict[str, Any]]:
                 continue
             if validate_workflow(defn):
                 continue
-            by_name[defn.name] = defn.model_dump(mode="json")
+            by_name[defn.name] = defn.dump_for_registry()
     return [by_name[n] for n in sorted(by_name)]
 
 

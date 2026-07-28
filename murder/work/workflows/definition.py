@@ -31,6 +31,23 @@ from murder.app.protocol.common import ApplicationModel
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+WorkflowInputKind = Literal["text", "multiline"]
+
+
+class WorkflowInputDecl(BaseModel):
+    """Optional author-declared metadata for a ``{placeholder}`` workflow input.
+
+    Placeholders discovered in stage fields are always inferred; declarations
+    only refine labels, kinds, defaults, requiredness, and ordering. Keys are
+    placeholder names (``[A-Za-z0-9_-]+``).
+    """
+
+    label: str | None = None
+    kind: WorkflowInputKind = "text"
+    required: bool = False
+    default: str | None = None
+
+
 class StageDef(BaseModel):
     """One agent node (stage) within a workflow template.
 
@@ -66,7 +83,20 @@ class WorkflowDef(BaseModel):
     description: str = ""
     # Reserved for generative ticket expansion; only "static" is honored today.
     mode: Literal["static", "generative"] = "static"
+    # Optional declared inputs; undeclared ``{placeholders}`` are still inferred.
+    inputs: dict[str, WorkflowInputDecl] = Field(default_factory=dict)
     stages: list[StageDef] = Field(default_factory=list)
+
+    def dump_for_registry(self) -> dict:
+        """Canonical JSON-shaped dump for userspace registry persistence.
+
+        Empty ``inputs`` is omitted so registries without declared inputs keep
+        their pre-existing YAML shape.
+        """
+        data = self.model_dump(mode="json")
+        if not data.get("inputs"):
+            data.pop("inputs", None)
+        return data
 
 
 # Preferred terminology aliases (no behavior / schema change).

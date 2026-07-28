@@ -13,9 +13,17 @@ used in persisted/API payloads for now.
 
 from __future__ import annotations
 
+from murder.work.workflows.compile import (
+    CompileWorkflowTemplateParams,
+    CompileWorkflowTemplateResult,
+    WorkflowCompileIssue,
+    WorkflowInput,
+    compile_workflow_template,
+)
 from murder.work.workflows.definition import (
     StageDef,
     WorkflowDef,
+    WorkflowInputDecl,
     WorkflowIssue,
     WorkflowNodeTemplate,
     WorkflowTemplate,
@@ -24,11 +32,17 @@ from murder.work.workflows.definition import (
 )
 
 __all__ = [
+    "CompileWorkflowTemplateParams",
+    "CompileWorkflowTemplateResult",
     "StageDef",
+    "WorkflowCompileIssue",
     "WorkflowDef",
+    "WorkflowInput",
+    "WorkflowInputDecl",
     "WorkflowIssue",
     "WorkflowNodeTemplate",
     "WorkflowTemplate",
+    "compile_workflow_template",
     "validate_workflow",
     "workflow_issues",
 ]

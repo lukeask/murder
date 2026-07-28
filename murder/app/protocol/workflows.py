@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, JsonValue, field_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
 from murder.app.protocol.common import ApplicationModel
+from murder.work.workflows.compile import WorkflowCompileIssue, WorkflowInput
 from murder.work.workflows.definition import WorkflowDef, WorkflowIssue
 from murder.work.workflows.runtime import (
     ExternalWorkflowSignal,
@@ -104,6 +105,38 @@ class StartWorkflowResult(ApplicationModel):
     created_ticket_ids: list[str]
 
 
+class CompileWorkflowParams(ApplicationModel):
+    """Params for ``workflow.compile``.
+
+    Provide either an inline ``template`` (editor draft) or a saved registry
+    ``name``. Optional ``prompt_templates`` overrides the userspace registry.
+    """
+
+    template: WorkflowDef | None = None
+    name: str | None = None
+    prompt_templates: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def require_template_or_name(self) -> CompileWorkflowParams:
+        if self.template is None and not (self.name and self.name.strip()):
+            raise ValueError("template or name is required")
+        if self.name is not None:
+            text = self.name.strip()
+            if not text:
+                raise ValueError("name must be non-empty")
+            self.name = text
+        return self
+
+
+class CompileWorkflowResult(ApplicationModel):
+    """Result for ``workflow.compile``."""
+
+    ok: bool
+    expanded_template: WorkflowDef
+    inputs: list[WorkflowInput] = Field(default_factory=list)
+    issues: list[WorkflowCompileIssue] = Field(default_factory=list)
+
+
 class ListWorkflowRunsParams(ApplicationModel):
     status: WorkflowStatus | None = None
     definition_name: str | None = None
@@ -150,6 +183,8 @@ class SignalWorkflowResult(ApplicationModel):
 
 
 __all__ = [
+    "CompileWorkflowParams",
+    "CompileWorkflowResult",
     "GetWorkflowRunParams",
     "GetWorkflowRunResult",
     "GetWorkflowsParams",
@@ -166,4 +201,6 @@ __all__ = [
     "SignalWorkflowResult",
     "StartWorkflowParams",
     "StartWorkflowResult",
+    "WorkflowCompileIssue",
+    "WorkflowInput",
 ]
