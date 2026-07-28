@@ -95,6 +95,62 @@ describe('selectWorkflowPanelRows', () => {
       }),
     ]);
   });
+
+  it('emits a missing node when snapshot stage is absent from stage_map', () => {
+    const rows = selectWorkflowPanelRows(
+      [
+        run({
+          stage_map: { a: 'T-a' },
+        }),
+      ],
+      [ticket({ id: 'T-a', title: 'Alpha' })],
+    );
+
+    expect(rows.map((r) => r.kind)).toEqual(['run', 'node', 'node']);
+    expect(rows[2]).toMatchObject({
+      kind: 'node',
+      stageId: 'b',
+      ticketId: '?b',
+      status: 'missing',
+      title: 'Stage B',
+      ticket: null,
+    });
+  });
+
+  it('emits stage_map-only keys after snapshot stages so claimed tickets still appear', () => {
+    const rows = selectWorkflowPanelRows(
+      [
+        run({
+          definition_snapshot: {
+            name: 'review',
+            stages: [{ id: 'a', title: 'Stage A' }],
+          },
+          stage_map: { a: 'T-a', extra: 'T-extra' },
+        }),
+      ],
+      [ticket({ id: 'T-a', title: 'Alpha' }), ticket({ id: 'T-extra', title: 'Extra' })],
+    );
+
+    expect(rows[0]).toMatchObject({ kind: 'run', nodeCount: 2 });
+    expect(rows.map((r) => (r.kind === 'node' ? r.stageId : r.kind))).toEqual(['run', 'a', 'extra']);
+    expect(rows[2]).toMatchObject({
+      kind: 'node',
+      stageId: 'extra',
+      ticketId: 'T-extra',
+      title: 'Extra',
+    });
+    expect(rows.some((r) => r.kind === 'legacy-ticket-run')).toBe(false);
+  });
+
+  it('skips legacy rows when includeLegacy is false', () => {
+    const rows = selectWorkflowPanelRows(
+      [],
+      [ticket({ id: 'T-solo', title: 'Standalone' })],
+      new Set(),
+      { includeLegacy: false },
+    );
+    expect(rows).toEqual([]);
+  });
 });
 
 describe('selectWorkflowsPanelView', () => {
@@ -122,5 +178,68 @@ describe('selectWorkflowsPanelView', () => {
       openTicketId: 'T-a',
       idCell: 'T-a',
     });
+  });
+
+  it('sets openTicketId null for missing stage nodes so Enter does not open a fake ticket', () => {
+    const workflowRuns: WorkflowRunsState = {
+      ...initialWorkflowRunsState,
+      runs: [run({ stage_map: { a: 'T-a' } })],
+      listStatus: 'ready',
+    };
+    const tickets = {
+      ...initialTicketsState,
+      rows: [ticket({ id: 'T-a', title: 'Alpha' })],
+      status: 'ready' as const,
+    };
+    const view = selectWorkflowsPanelView(workflowRuns, tickets);
+    const missing = view.rows.find((r) => r.kind === 'node' && r.idCell.startsWith('?'));
+    expect(missing).toMatchObject({
+      kind: 'node',
+      openTicketId: null,
+      idCell: '?b',
+    });
+  });
+
+  it('does not emit legacy ticket rows while the runs list is still loading', () => {
+    const workflowRuns: WorkflowRunsState = {
+      ...initialWorkflowRunsState,
+      runs: [],
+      listStatus: 'loading',
+    };
+    const tickets = {
+      ...initialTicketsState,
+      rows: [
+        ticket({ id: 'T-parent' }),
+        ticket({ id: 'T-a' }),
+        ticket({ id: 'T-solo', title: 'Standalone' }),
+      ],
+      status: 'ready' as const,
+    };
+    const view = selectWorkflowsPanelView(workflowRuns, tickets);
+    expect(view.status).toBe('loading');
+    expect(view.rows).toEqual([]);
+    expect(view.isEmpty).toBe(true);
+  });
+
+  it('emits legacy rows once the runs list is ready', () => {
+    const workflowRuns: WorkflowRunsState = {
+      ...initialWorkflowRunsState,
+      runs: [],
+      listStatus: 'ready',
+    };
+    const tickets = {
+      ...initialTicketsState,
+      rows: [ticket({ id: 'T-solo', title: 'Standalone' })],
+      status: 'ready' as const,
+    };
+    const view = selectWorkflowsPanelView(workflowRuns, tickets);
+    expect(view.status).toBe('ready');
+    expect(view.rows).toEqual([
+      expect.objectContaining({
+        kind: 'legacy-ticket-run',
+        openTicketId: 'T-solo',
+        groupId: 'ticket:T-solo',
+      }),
+    ]);
   });
 });
