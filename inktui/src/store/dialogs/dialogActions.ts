@@ -33,6 +33,14 @@ export interface QuickCreateResult {
   readonly title: string;
 }
 
+/** Reply from launching the built-in one-node ``ticket`` workflow via ``workflow.start``. */
+export interface StartBuiltinTicketResult {
+  readonly workflow_id: string;
+  readonly run_ticket_id: string;
+  readonly ticket_id: string;
+  readonly title: string;
+}
+
 /** Reply from the LIVE `ticket.next_id` RPC. Python returns `ticket_id` (not `next_id`). */
 export interface NextIdResult {
   readonly ticket_id: string;
@@ -76,6 +84,15 @@ export interface DialogActions {
    */
   quickCreateTicket(title: string): Promise<QuickCreateResult>;
   /**
+   * Launch the built-in ``ticket`` workflow via ``workflow.start`` (one-node run).
+   * Prefer this when configured harness/model defaults make the template runnable;
+   * fall back to {@link quickCreateTicket} for unconfigured planned tickets.
+   */
+  startBuiltinTicket(args: {
+    readonly title: string;
+    readonly prompt?: string;
+  }): Promise<StartBuiltinTicketResult>;
+  /**
    * Fetch the next free ticket id via `ticket.next_id`.
    */
   fetchNextTicketId(): Promise<NextIdResult>;
@@ -107,6 +124,25 @@ export function createDialogActions(bus: ApplicationClient): DialogActions {
         handled: result['handled'] === true,
         ticket_id: String(result['ticket_id'] ?? ''),
         title: String(result['title'] ?? title),
+      };
+    },
+
+    async startBuiltinTicket(args): Promise<StartBuiltinTicketResult> {
+      const title = args.title.trim();
+      const reply = await bus.command('workflow.start', {
+        name: 'ticket',
+        args: {
+          title,
+          prompt: args.prompt ?? '',
+        },
+      });
+      const stageIds = reply.stage_ticket_ids ?? {};
+      const ticketId = String(stageIds['work'] ?? reply.run_ticket_id ?? '');
+      return {
+        workflow_id: String(reply.workflow_id ?? ''),
+        run_ticket_id: String(reply.run_ticket_id ?? ''),
+        ticket_id: ticketId,
+        title,
       };
     },
 

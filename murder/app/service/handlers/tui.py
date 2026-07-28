@@ -150,7 +150,7 @@ def register(
             # Turn the lookup miss into a client-facing message (KeyError's
             # repr would leak as a bare name); mirrors other handlers'
             # bad-input -> ValueError contract.
-            raise ValueError(f"no saved workflow named {name!r}") from exc
+            raise ValueError(f"no workflow named {name!r}") from exc
 
         # Kick only THIS run's stages: kickoff_ready(only=tid) spawns a stage
         # only if it's an eligible root, so downstream/dep-gated stages and

@@ -54,6 +54,9 @@ class WorkflowDef(BaseModel):
     # persisted state machines; changing semantics requires a new version.
     definition_version: int = Field(default=1, ge=1)
     description: str = ""
+    # Built-in templates (e.g. ``ticket``) are merged at read/launch time and
+    # never persisted in the userspace registry.
+    builtin: bool = False
     # Reserved for generative ticket expansion; only "static" is honored today.
     mode: Literal["static", "generative"] = "static"
     stages: list[StageDef] = Field(default_factory=list)
@@ -172,7 +175,11 @@ def workflow_issues(defn: WorkflowDef) -> list[WorkflowIssue]:  # noqa: PLR0912
         # them here turns that downstream parse error into an actionable, launch-
         # time complaint — and it matches the feature's intent: a stage is a
         # deliberate "this harness, this model" agent invocation.
-        if not stage.harness:
+        #
+        # Built-in templates (launch-oriented ``ticket``) may omit harness/model in
+        # the stored shape; ``prepare_workflow_for_launch`` fills configured
+        # defaults before materialize, so skip these checks for builtins.
+        if not defn.builtin and not stage.harness:
             issues.append(
                 WorkflowIssue(
                     code="missing_harness",
@@ -181,7 +188,7 @@ def workflow_issues(defn: WorkflowDef) -> list[WorkflowIssue]:  # noqa: PLR0912
                     stage_id=stage.id,
                 )
             )
-        if not stage.model:
+        if not defn.builtin and not stage.model:
             issues.append(
                 WorkflowIssue(
                     code="missing_model",
