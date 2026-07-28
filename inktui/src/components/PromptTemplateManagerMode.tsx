@@ -28,13 +28,14 @@ import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js'
 import { plainTextTopology } from '../input/textEditor/topology.js';
 import type { AppStore, AppStoreApi } from '../store/store.js';
 import type { TemplateRecord } from '../store/templates/templatesSlice.js';
-import type { WorkflowDef } from '../store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
 import { useTheme } from '../theme/themeStore.js';
 import {
   collectBodyPlaceholders,
   collectUnknownInlineRefs,
   expandInlinePreview,
   findWorkflowReferences,
+  formatWorkflowTemplateRef,
   previewBodyFlat,
   validateTemplateName,
   type WorkflowTemplateRef,
@@ -58,7 +59,7 @@ export interface PromptTemplateManagerModeOptions {
   readonly templates?: readonly TemplateRecord[];
   readonly templateActions?: PromptTemplateActions;
   /** Workflow templates used for referential warnings (tests / callers without store). */
-  readonly workflows?: readonly WorkflowDef[];
+  readonly workflows?: readonly WorkflowTemplate[];
 }
 
 type ListRow =
@@ -98,7 +99,7 @@ type Intent =
 
 interface ManagerState {
   templates: readonly TemplateRecord[];
-  workflows: readonly WorkflowDef[];
+  workflows: readonly WorkflowTemplate[];
   actions: PromptTemplateActions;
   cursor: number;
   interaction: Interaction;
@@ -110,8 +111,16 @@ function buildRows(templates: readonly TemplateRecord[]): readonly ListRow[] {
   return [{ kind: 'create' }, ...templates.map((t) => ({ kind: 'template' as const, name: t.name }))];
 }
 
-function workflowNameSet(workflows: readonly WorkflowDef[]): ReadonlySet<string> {
+function workflowNameSet(workflows: readonly WorkflowTemplate[]): ReadonlySet<string> {
   return new Set(workflows.map((w) => w.name));
+}
+
+function refsWillKeepOldNameNotice(
+  oldName: string,
+  newName: string,
+  refs: readonly WorkflowTemplateRef[],
+): string {
+  return `Rename :${oldName}: → :${newName}:? ${refs.length} workflow ref(s) will keep :${oldName}: (y/n)`;
 }
 
 /**
@@ -288,7 +297,7 @@ export function promptTemplateManagerMode(
     const refs = findWorkflowReferences(oldName, s.workflows);
     if (refs.length > 0) {
       s.interaction = { kind: 'confirmRename', oldName, newName, refs };
-      s.notice = `Rename :${oldName}: → :${newName}:? ${refs.length} workflow ref(s) will keep the old name (y/n)`;
+      s.notice = refsWillKeepOldNameNotice(oldName, newName, refs);
       refresh();
       return;
     }
@@ -367,7 +376,7 @@ export function promptTemplateManagerMode(
 
   function syncFromStore(
     items: readonly TemplateRecord[],
-    workflows: readonly WorkflowDef[],
+    workflows: readonly WorkflowTemplate[],
     actions: PromptTemplateActions,
   ): void {
     s.actions = actions;
@@ -594,7 +603,7 @@ function PromptTemplateManagerDialog({
   readonly store: AppStoreApi | null;
   readonly syncFromStore: (
     items: readonly TemplateRecord[],
-    workflows: readonly WorkflowDef[],
+    workflows: readonly WorkflowTemplate[],
     actions: PromptTemplateActions,
   ) => void;
 }): JSX.Element {
@@ -647,6 +656,10 @@ function PromptTemplateManagerDialog({
     bodyForPreview === null ? null : expandInlinePreview(bodyForPreview, registry);
   const workflowRefs =
     selectedName === null ? [] : findWorkflowReferences(selectedName, s.workflows);
+  const confirmingRefs =
+    s.interaction.kind === 'confirmRename' || s.interaction.kind === 'confirmDelete'
+      ? s.interaction.refs
+      : null;
 
   const editingName =
     s.interaction.kind === 'createName' || s.interaction.kind === 'rename';
@@ -736,7 +749,31 @@ function PromptTemplateManagerDialog({
           borderColor={theme.borderBlurred}
           paddingX={1}
         >
-          {editingBody ? (
+          {confirmingRefs !== null ? (
+            <>
+              <Text color={theme.warning}>
+                {s.interaction.kind === 'confirmRename'
+                  ? `workflow refs that will keep :${s.interaction.oldName}:`
+                  : s.interaction.kind === 'confirmDelete'
+                    ? `workflow refs that will break if :${s.interaction.name}: is deleted:`
+                    : 'workflow refs:'}
+              </Text>
+              <Box flexDirection="column" flexGrow={1}>
+                {confirmingRefs.length === 0 ? (
+                  <Text color={theme.muted}>{'  '}(none)</Text>
+                ) : (
+                  confirmingRefs.map((ref) => (
+                    <Text
+                      key={`${ref.workflowName}/${ref.stageId}.${ref.field}`}
+                      color={theme.text}
+                    >
+                      {`  ${formatWorkflowTemplateRef(ref)}`}
+                    </Text>
+                  ))
+                )}
+              </Box>
+            </>
+          ) : editingBody ? (
             <>
               <Text color={theme.muted}>
                 {`body · :${s.interaction.kind === 'editBody' ? s.interaction.name : ''}:`}
@@ -755,7 +792,7 @@ function PromptTemplateManagerDialog({
               <Text color={theme.text} wrap="truncate-end">
                 {previewBodyFlat(bodyForPreview)}
               </Text>
-              <Box marginTop={1} flexDirection="column">
+              <Box marginTop={1} flexDirection="column" flexGrow={1}>
                 <Text color={theme.muted}>
                   {placeholders.length === 0
                     ? 'inputs: (none)'
@@ -766,17 +803,19 @@ function PromptTemplateManagerDialog({
                     ? 'unknown refs: (none)'
                     : `unknown refs: ${unknownRefs.map((n) => `:${n}:`).join(', ')}`}
                 </Text>
-                <Text
-                  color={workflowRefs.length > 0 ? theme.warning : theme.muted}
-                  wrap="truncate-end"
-                >
+                <Text color={workflowRefs.length > 0 ? theme.warning : theme.muted}>
                   {workflowRefs.length === 0
                     ? 'used by workflows: (none)'
-                    : `used by: ${workflowRefs
-                        .slice(0, 4)
-                        .map((r) => `${r.workflowName}/${r.stageId}.${r.field}`)
-                        .join(', ')}${workflowRefs.length > 4 ? '…' : ''}`}
+                    : `used by (${workflowRefs.length}):`}
                 </Text>
+                {workflowRefs.map((ref) => (
+                  <Text
+                    key={`${ref.workflowName}/${ref.stageId}.${ref.field}`}
+                    color={theme.warning}
+                  >
+                    {`  ${formatWorkflowTemplateRef(ref)}`}
+                  </Text>
+                ))}
                 {expansion !== null ? (
                   <Text color={theme.muted} wrap="truncate-end">
                     {`expansion: ${previewBodyFlat(expansion.text, 120)}`}
@@ -800,11 +839,13 @@ function PromptTemplateManagerDialog({
 
       <Box marginTop={1} flexShrink={0}>
         <Text dimColor>
-          {editingBody
-            ? 'enter: save · shift+enter: newline · esc: cancel'
-            : editingName
-              ? 'enter: confirm · esc: cancel'
-              : 'j/k: navigate · enter: edit · r: rename · n: new · d: delete · esc: close'}
+          {confirmingRefs !== null
+            ? 'y: confirm · n/esc: cancel'
+            : editingBody
+              ? 'enter: save · shift+enter: newline · esc: cancel'
+              : editingName
+                ? 'enter: confirm · esc: cancel'
+                : 'j/k: navigate · enter: edit · r: rename · n: new · d: delete · esc: close'}
         </Text>
       </Box>
     </Box>
@@ -813,7 +854,7 @@ function PromptTemplateManagerDialog({
 
 const EMPTY_STORE_STATE = {
   templates: { items: [] as readonly TemplateRecord[] },
-  workflows: { items: [] as readonly WorkflowDef[] },
+  workflows: { items: [] as readonly WorkflowTemplate[] },
   actions: {
     templates: { remove() {}, rename() {}, save() {} },
   },

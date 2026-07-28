@@ -2,10 +2,10 @@
  * Workflows actions — the *only* code that calls the bus for the workflow registry (rule 3).
  *
  * Three RPCs, mirroring the templates pair plus a fire verb:
- *  - `tui.load_workflows {}` → `{ ok, workflows: WorkflowTemplate[] }` — load the persisted registry.
- *  - `tui.save_workflows { workflows }` → `{ ok, workflows }` — persist it; the reply carries the
+ *  - `workflows.get {}` → `{ ok, workflows: WorkflowTemplate[] }` — load the persisted registry.
+ *  - `workflows.set { workflows }` → `{ ok, workflows }` — persist it; the reply carries the
  *    NORMALIZED list, so a successful save SYNCS the slice to `result.workflows`.
- *  - `tui.run_workflow { name, args }` → `{ ok, run_ticket_id, stage_ticket_ids, created_ticket_ids }`
+ *  - `workflow.start { name, args }` → `{ ok, run_ticket_id, stage_ticket_ids, created_ticket_ids }`
  *    — FIRE a saved workflow: the backend materializes the ticket tree + spawns crows. Fire-and-forget
  *    from the UI's view — the materialized tickets/crows arrive via the normal snapshot stream.
  * Declared via a `declare module` augmentation of the shared {@link RpcMethods} registry, so the
@@ -15,7 +15,7 @@
  * ## Optimistic local-first writes
  *
  * `save`/`remove`/`rename` mutate the local `items` immediately (the registry must feel instant) and
- * THEN fire `tui.save_workflows` with the new list. On success the slice is replaced with the server's
+ * THEN fire `workflows.set` with the new list. On success the slice is replaced with the server's
  * normalized echo. A save rejection sets `error` + toasts but does NOT roll back the local list — the
  * user's intent stands for the session; a reconnect re-loads from the persisted truth (matching
  * templates/favorites).
@@ -37,14 +37,14 @@ import type { WorkflowTemplate } from './workflowsSlice.js';
 /** The workflows actions, bound to one {@link ApplicationClient} + store handle. */
 export interface WorkflowsActions {
   /**
-   * Load the persisted workflows via `tui.load_workflows` (once, at startup). Ref-swaps the slice to
+   * Load the persisted workflows via `workflows.get` (once, at startup). Ref-swaps the slice to
    * `loading`, then `ready` with the loaded list (or `error` on rejection — never thrown past the
    * action, so the startup prime stays fire-and-forget).
    */
   load(): Promise<void>;
   /**
    * Upsert a workflow by name (replace the def if the name exists, else append), then persist via
-   * `tui.save_workflows`. On success the slice syncs to the server's normalized echo. Local-first.
+   * `workflows.set`. On success the slice syncs to the server's normalized echo. Local-first.
    */
   save(defn: WorkflowTemplate): Promise<void>;
   /** Delete the workflow with `name`, then persist the reduced list. Local-first. */
@@ -55,7 +55,7 @@ export interface WorkflowsActions {
    */
   rename(oldName: string, newName: string): Promise<void>;
   /**
-   * FIRE a saved workflow via `tui.run_workflow`. Fire-and-forget from the UI's view — the backend
+   * FIRE a saved workflow via `workflow.start`. Fire-and-forget from the UI's view — the backend
    * materializes the ticket tree + crows, which arrive via the normal snapshot stream. A success
    * toasts the run ticket id; a failure toasts the error (mirroring the optimistic-commit error path).
    */
@@ -67,7 +67,7 @@ export interface WorkflowsActions {
   delete(name: string): Promise<CommandResult<'workflow.delete'>>;
 }
 
-/** Project a `tui.load_workflows` reply's list defensively (the wire may omit it). */
+/** Project a `workflows.get` reply's list defensively (the wire may omit it). */
 function toItems(workflows: readonly WorkflowTemplate[] | undefined): readonly WorkflowTemplate[] {
   return workflows ?? [];
 }
@@ -92,7 +92,7 @@ export function createWorkflowsActions(
   store: StoreApi<AppStore>,
 ): WorkflowsActions {
   /**
-   * Ref-swap the local list (optimistic), then persist via `tui.save_workflows`. On success replace
+   * Ref-swap the local list (optimistic), then persist via `workflows.set`. On success replace
    * the slice with the server's normalized echo; on failure set `error` + toast (NO rollback).
    */
   async function commit(next: readonly WorkflowTemplate[]): Promise<void> {

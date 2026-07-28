@@ -1,14 +1,15 @@
-"""Reusable, userspace-global workflow definitions.
+"""Reusable, userspace-global workflow definitions and preferred runtime aliases.
 
 A workflow template (``WorkflowTemplate`` / ``WorkflowDef``) describes a
 pipeline of agent *nodes* that later get materialized into project tickets
-(materialization lives elsewhere). This package owns only the definition model
-and its pure validation; storage and RPC plumbing mirror the templates registry
-in ``murder.user_config`` / the service host.
+(materialization lives elsewhere). This package owns the definition model and
+its pure validation; storage and RPC plumbing mirror the templates registry in
+``murder.user_config`` / the service host.
 
-Prefer ``WorkflowTemplate`` and ``WorkflowNodeTemplate`` in new code; the
-``WorkflowDef`` / ``StageDef`` names remain the concrete classes and the names
-used in persisted/API payloads for now.
+Prefer ``WorkflowTemplate`` / ``WorkflowNodeTemplate`` and ``WorkflowRun`` /
+``WorkflowNodeRun`` in new code. ``WorkflowDef`` / ``StageDef`` and
+``WorkflowRunRecord`` / ``StageRunState`` remain the concrete classes (and the
+names used in persisted/API payloads) for now.
 """
 
 from __future__ import annotations
@@ -38,6 +39,10 @@ from murder.work.workflows.definition import (
     validate_workflow,
     workflow_issues,
 )
+from murder.work.workflows.runtime import (
+    WorkflowNodeRun,
+    WorkflowRun,
+)
 
 __all__ = [
     "CompileWorkflowTemplateParams",
@@ -49,7 +54,9 @@ __all__ = [
     "WorkflowInput",
     "WorkflowInputDecl",
     "WorkflowIssue",
+    "WorkflowNodeRun",
     "WorkflowNodeTemplate",
+    "WorkflowRun",
     "WorkflowTemplate",
     "compile_workflow_template",
     "get_builtin_workflow",

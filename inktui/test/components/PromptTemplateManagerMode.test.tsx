@@ -14,13 +14,14 @@ import {
   collectBodyPlaceholders,
   collectUnknownInlineRefs,
   findWorkflowReferences,
+  formatWorkflowTemplateRef,
   validateTemplateName,
 } from '../../src/components/promptTemplates/refs.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import type { WorkflowDef } from '../../src/store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate } from '../../src/store/workflows/workflowsSlice.js';
 
 const ESC = '\x1b';
 
@@ -76,7 +77,34 @@ const sampleWorkflow = {
       depends_on: [],
     },
   ],
-} as unknown as WorkflowDef;
+} as unknown as WorkflowTemplate;
+
+const multiRefWorkflows = [
+  sampleWorkflow,
+  {
+    name: 'ship',
+    description: '',
+    mode: 'static',
+    stages: [
+      {
+        id: 'plan',
+        title: 'Plan with :greet:',
+        instructions: 'Also :greet: here',
+        harness: 'claude_code',
+        model: 'default',
+        depends_on: [],
+      },
+      {
+        id: 'do',
+        title: 'Do',
+        instructions: 'Ignore :other:',
+        harness: 'claude_code',
+        model: 'default',
+        depends_on: ['plan'],
+      },
+    ],
+  },
+] as unknown as WorkflowTemplate[];
 
 describe('promptTemplates/refs helpers', () => {
   it('collects placeholders and unknown inline refs', () => {
@@ -90,6 +118,9 @@ describe('promptTemplates/refs helpers', () => {
     expect(findWorkflowReferences('greet', [sampleWorkflow])).toEqual([
       { workflowName: 'review', stageId: 's1', field: 'instructions' },
     ]);
+    expect(formatWorkflowTemplateRef({ workflowName: 'review', stageId: 's1', field: 'title' })).toBe(
+      'review/s1.title',
+    );
     expect(validateTemplateName('ok', null, [])).toBeNull();
     expect(validateTemplateName('bad!', null, [])).toContain('invalid');
     expect(validateTemplateName('x', null, [{ name: 'x' }])).toContain('already exists');
@@ -187,6 +218,54 @@ describe('PromptTemplateManagerMode', () => {
     expect(renamed).toHaveLength(0);
   });
 
+  it('rename with workflow refs lists every affected site and confirms before renaming', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { handle, renamed } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(
+      promptTemplateManagerMode(stores.modes, null, {
+        templates: [{ name: 'greet', body: 'hi' }],
+        templateActions: handle,
+        workflows: multiRefWorkflows,
+      }),
+    );
+    await tick();
+    stdin.write('j');
+    await tick();
+    const preview = lastFrame() ?? '';
+    expect(preview).toContain('review/s1.instructions');
+    expect(preview).toContain('ship/plan.title');
+    expect(preview).toContain('ship/plan.instructions');
+    expect(preview).not.toContain('…');
+
+    stdin.write('r');
+    await tick();
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    stdin.write('\x7f');
+    await tick();
+    stdin.write('h');
+    stdin.write('i');
+    await tick();
+    stdin.write('\r');
+    await tick();
+
+    const confirm = lastFrame() ?? '';
+    expect(confirm).toContain('will keep :greet:');
+    expect(confirm).toContain('workflow refs that will keep :greet:');
+    expect(confirm).toContain('review/s1.instructions');
+    expect(confirm).toContain('ship/plan.title');
+    expect(confirm).toContain('ship/plan.instructions');
+    expect(renamed).toHaveLength(0);
+
+    stdin.write('y');
+    await tick();
+    expect(renamed).toContainEqual(['greet', 'hi']);
+    expect(lastFrame()).toContain('still use :greet:');
+  });
+
   it('delete confirms and removes; warns when workflows reference it', async () => {
     const stores = createInputStores(['notes'], 'notes');
     const { handle, removed } = fakeActions();
@@ -201,10 +280,12 @@ describe('PromptTemplateManagerMode', () => {
     await tick();
     stdin.write('j');
     await tick();
-    expect(lastFrame()).toContain('used by:');
+    expect(lastFrame()).toContain('used by (1):');
+    expect(lastFrame()).toContain('review/s1.instructions');
     stdin.write('d');
     await tick();
     expect(lastFrame()).toContain('referenced by');
+    expect(lastFrame()).toContain('review/s1.instructions');
     stdin.write('y');
     await tick();
     expect(removed).toContainEqual('greet');

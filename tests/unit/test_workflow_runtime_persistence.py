@@ -29,6 +29,7 @@ from murder.state.persistence.workflow_runs import (
     require_workflow_run,
 )
 from murder.work.workflows.definition import StageDef, WorkflowDef
+from murder.work.workflows import WorkflowNodeRun, WorkflowRun
 from murder.work.workflows.runtime import (
     ActivityFinishedSignal,
     ActivityWait,
@@ -50,8 +51,6 @@ from murder.work.workflows.runtime import (
     TimerFiredSignal,
     TimerWait,
     VersionedState,
-    WorkflowNodeRun,
-    WorkflowRun,
     WorkflowRunRecord,
     WorkflowSignalPayload,
     WorkflowSignalRecord,
