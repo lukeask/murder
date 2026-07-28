@@ -59,6 +59,7 @@ type NewTicketIntent =
   | 'deleteAll'
   | 'focusNext'
   | 'focusPrev'
+  | 'newline'
   | 'submit'
   | 'dismiss';
 
@@ -162,6 +163,9 @@ export function newTicketMode(
             },
           ] as const)
         : []),
+      // Shift+Enter must precede bare Enter: unlisted shift is don't-care, first-match-wins.
+      // Inserts a newline in Instructions; no-op while Title is focused.
+      { chord: { key: { shift: true, return: true } }, intent: 'newline', description: 'newline' },
       // Enter: submit.
       { chord: { key: { return: true } }, intent: 'submit', description: 'create ticket' },
       // Escape: dismiss.
@@ -219,6 +223,13 @@ export function newTicketMode(
             refresh();
           }
           break;
+        case 'newline': {
+          if (s.focus === 'prompt') {
+            setActiveEditor(editTicket(activeEditor(), { type: 'insertNewline' }, s.focus));
+            refresh();
+          }
+          break;
+        }
         case 'submit': {
           if (s.title.text.trim().length === 0) {
             s.error = 'Ticket title is required.';
@@ -361,7 +372,7 @@ function NewTicketDialog({
       <Box marginTop={1}>
         <Text dimColor>
           {showPrompt
-            ? 'enter: start  tab: field  esc: cancel  ctrl+u: clear'
+            ? 'enter: start  shift+enter: newline  tab: field  esc: cancel  ctrl+u: clear'
             : 'enter: create esc: cancel ctrl+u: clear'}
         </Text>
       </Box>

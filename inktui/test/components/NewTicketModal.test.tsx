@@ -17,9 +17,11 @@ import { Overlay } from '../../src/components/Overlay.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
+import { matchKeymap } from '../../src/input/keymap.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import { createDialogActions } from '../../src/store/dialogs/dialogActions.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+import { makeKey } from '../input/key.js';
 
 const ESC = '\x1b';
 
@@ -193,6 +195,45 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     });
     expect(bus.commandCalls.find((c) => c.name === 'ticket.quick_create')).toBeUndefined();
     expect(onSubmit).toHaveBeenCalledWith('t101', 'fix bug');
+  });
+
+  it('Shift+Enter on Instructions inserts newline; keymap lists it before bare Enter', async () => {
+    const stores = createInputStores(['tickets'], 'tickets');
+    const bus = new FakeApplicationClient();
+    bus.stubCommand('workflow.start', {
+      ok: true,
+      workflow_id: 'wf-1',
+      run_ticket_id: 't100',
+      stage_ticket_ids: { work: 't101' },
+      created_ticket_ids: ['t100', 't101'],
+    });
+    const actions = createDialogActions(bus);
+    const mode = newTicketMode(stores.modes, actions, { preferBuiltinTicket: true });
+    // Regression: bare `{ return }` before `{ shift, return }` would steal Shift+Enter as submit.
+    expect(matchKeymap(mode.keymap, '', makeKey({ return: true, shift: true }))).toBe('newline');
+    expect(matchKeymap(mode.keymap, '', makeKey({ return: true }))).toBe('submit');
+
+    stores.modes.getState().enter(mode);
+    const { stdin } = render(<Harness stores={stores} />);
+    await tick();
+    for (const ch of 'title') stdin.write(ch);
+    await tick();
+    stdin.write('\t');
+    await tick();
+    for (const ch of 'line1') stdin.write(ch);
+    await tick();
+    mode.onIntent('newline');
+    await tick();
+    for (const ch of 'line2') stdin.write(ch);
+    await tick();
+    stdin.write('\r');
+    await tick();
+    await tick();
+    await tick();
+
+    expect(bus.commandCalls.find((c) => c.name === 'workflow.start')?.params).toMatchObject({
+      args: { title: 'title', prompt: 'line1\nline2' },
+    });
   });
 
   it('successful submit pushes NO error toast', async () => {

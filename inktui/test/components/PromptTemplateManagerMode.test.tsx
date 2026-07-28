@@ -20,8 +20,10 @@ import {
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
+import { matchKeymap } from '../../src/input/keymap.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
 import type { WorkflowTemplate } from '../../src/store/workflows/workflowsSlice.js';
+import { makeKey } from '../input/key.js';
 
 const ESC = '\x1b';
 
@@ -186,6 +188,37 @@ describe('PromptTemplateManagerMode', () => {
     stdin.write('\r'); // save
     await tick();
     expect(saved).toContainEqual(['new', 'body']);
+  });
+
+  it('Shift+Enter in body inserts newline; keymap lists it before bare Enter', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { handle, saved } = fakeActions();
+    const mode = promptTemplateManagerMode(stores.modes, null, {
+      templates: [],
+      templateActions: handle,
+    });
+    // Regression: bare `{ return }` before `{ shift, return }` would steal Shift+Enter as save.
+    expect(matchKeymap(mode.keymap, '', makeKey({ return: true, shift: true }))).toBe('newline');
+    expect(matchKeymap(mode.keymap, '', makeKey({ return: true }))).toBe('enter');
+
+    const { stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(mode);
+    await tick();
+    stdin.write('\r'); // begin create on + New
+    await tick();
+    for (const ch of 'multi') stdin.write(ch);
+    await tick();
+    stdin.write('\r'); // name → body
+    await tick();
+    stdin.write('a');
+    await tick();
+    mode.onIntent('newline');
+    await tick();
+    stdin.write('b');
+    await tick();
+    stdin.write('\r'); // save
+    await tick();
+    expect(saved).toContainEqual(['multi', 'a\nb']);
   });
 
   it('renames via r and rejects collisions', async () => {
