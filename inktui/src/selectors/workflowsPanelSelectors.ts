@@ -225,6 +225,7 @@ function toNodeView(
 ): WorkflowPanelRowView {
   const cells = ticketCells(row.ticket, now);
   const title = row.ticket?.title ?? row.title;
+  const missing = row.status === 'missing';
   return {
     id: `${row.workflowId}:${row.stageId}`,
     kind: 'node',
@@ -232,7 +233,8 @@ function toNodeView(
     titleCell: `${CHILD_INDENT}${truncate(title, TITLE_WIDTH)}`,
     ...cells,
     depth: 1,
-    openTicketId: row.ticketId,
+    // Synthetic `?stageId` placeholders must not open TicketEditorMode.
+    openTicketId: missing ? null : row.ticketId,
     groupId: null,
   };
 }
@@ -265,13 +267,44 @@ function byLastUpdateDesc(a: TicketRow, b: TicketRow): number {
 }
 
 /**
+ * Snapshot stage order, then any `stage_map` keys the snapshot omitted (so claimed tickets
+ * still render as nodes instead of vanishing or becoming legacy).
+ */
+function stageOrderForRun(
+  stages: readonly SnapshotStage[],
+  stageMap: Readonly<Record<string, string>>,
+): readonly SnapshotStage[] {
+  if (stages.length === 0) {
+    return Object.keys(stageMap).map((id) => ({ id, title: id }));
+  }
+  const seen = new Set(stages.map((s) => s.id));
+  const extras: SnapshotStage[] = [];
+  for (const id of Object.keys(stageMap)) {
+    if (!seen.has(id)) {
+      extras.push({ id, title: id });
+    }
+  }
+  return extras.length === 0 ? stages : [...stages, ...extras];
+}
+
+export interface SelectWorkflowPanelRowsOptions {
+  /**
+   * When false, skip legacy ticket rows. Use until `workflow.runs.list` is ready/error so
+   * hydrated schedule tickets are not briefly mis-labeled as standalone runs.
+   */
+  readonly includeLegacy?: boolean;
+}
+
+/**
  * Flatten runs + tickets into panel domain rows. `collapsedGroupIds` hides node rows under a run.
  */
 export function selectWorkflowPanelRows(
   runs: readonly WorkflowRunListItem[],
   tickets: readonly TicketRow[],
   collapsedGroupIds: ReadonlySet<string> = new Set(),
+  options: SelectWorkflowPanelRowsOptions = {},
 ): readonly WorkflowPanelRow[] {
+  const includeLegacy = options.includeLegacy !== false;
   const ticketsById = new Map(tickets.map((t) => [t.id, t] as const));
   const claimedTicketIds = new Set<string>();
   const parentTicketIds = new Set<string>();
@@ -292,10 +325,7 @@ export function selectWorkflowPanelRows(
   for (const run of orderedRuns) {
     const stages = stagesFromSnapshot(run.definition_snapshot);
     const stageMap = run.stage_map ?? {};
-    const stageOrder =
-      stages.length > 0
-        ? stages
-        : Object.keys(stageMap).map((id) => ({ id, title: id }));
+    const stageOrder = stageOrderForRun(stages, stageMap);
 
     rows.push({
       kind: 'run',
@@ -340,23 +370,25 @@ export function selectWorkflowPanelRows(
     }
   }
 
-  const legacyTickets = tickets
-    .filter((t) => !claimedTicketIds.has(t.id) && !parentTicketIds.has(t.id))
-    .slice()
-    .sort(byLastUpdateDesc);
+  if (includeLegacy) {
+    const legacyTickets = tickets
+      .filter((t) => !claimedTicketIds.has(t.id) && !parentTicketIds.has(t.id))
+      .slice()
+      .sort(byLastUpdateDesc);
 
-  for (const ticket of legacyTickets) {
-    const syntheticId = `ticket:${ticket.id}` as const;
-    rows.push({
-      kind: 'legacy-ticket-run',
-      syntheticId,
-      templateName: 'Ticket',
-      ticketId: ticket.id,
-      status: ticket.status,
-      title: ticket.title,
-      createdAt: ticket.lastUpdateAt,
-      ticket,
-    });
+    for (const ticket of legacyTickets) {
+      const syntheticId = `ticket:${ticket.id}` as const;
+      rows.push({
+        kind: 'legacy-ticket-run',
+        syntheticId,
+        templateName: 'Ticket',
+        ticketId: ticket.id,
+        status: ticket.status,
+        title: ticket.title,
+        createdAt: ticket.lastUpdateAt,
+        ticket,
+      });
+    }
   }
 
   return rows;
@@ -368,11 +400,11 @@ export function selectWorkflowsPanelView(
   collapsedGroupIds: ReadonlySet<string> = new Set(),
   now: number = Date.now(),
 ): WorkflowsPanelView {
-  const domainRows = selectWorkflowPanelRows(
-    workflowRuns.runs,
-    tickets.rows,
-    collapsedGroupIds,
-  );
+  const listReady = workflowRuns.listStatus === 'ready' || workflowRuns.listStatus === 'error';
+  const domainRows = selectWorkflowPanelRows(workflowRuns.runs, tickets.rows, collapsedGroupIds, {
+    // Hold legacy until runs list is authoritative so stage/parent tickets aren't flash-labeled.
+    includeLegacy: listReady,
+  });
   const rows = domainRows.map((row) => {
     switch (row.kind) {
       case 'run':
@@ -386,7 +418,6 @@ export function selectWorkflowsPanelView(
     }
   });
 
-  const listReady = workflowRuns.listStatus === 'ready' || workflowRuns.listStatus === 'error';
   const ticketsReady = tickets.status === 'ready' || tickets.status === 'error';
   let status: WorkflowsPanelView['status'] = 'ready';
   let error: string | null = null;

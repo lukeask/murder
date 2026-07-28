@@ -74,17 +74,43 @@ export const WorkflowsController = memo(function WorkflowsController({
     refresh();
   }, [refresh]);
 
-  const toggleGroup = useCallback((groupId: string) => {
-    setCollapsedGroupIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) {
-        next.delete(groupId);
-      } else {
-        next.add(groupId);
+  const toggleGroup = useCallback(
+    (groupId: string) => {
+      const rowsNow = viewRowsRef.current;
+      const headerIdx = rowsNow.findIndex((r) => r.kind === 'run' && r.groupId === groupId);
+      const wasCollapsed = collapsedGroupIds.has(groupId);
+      let hiddenBelow = 0;
+      if (headerIdx >= 0 && !wasCollapsed) {
+        for (let i = headerIdx + 1; i < rowsNow.length; i += 1) {
+          if (rowsNow[i]!.depth === 0) {
+            break;
+          }
+          hiddenBelow += 1;
+        }
       }
-      return next;
-    });
-  }, []);
+
+      setCollapsedGroupIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(groupId)) {
+          next.delete(groupId);
+        } else {
+          next.add(groupId);
+        }
+        return next;
+      });
+
+      // Preserve selection identity: collapsing shrinks absolute indices below the header.
+      if (!wasCollapsed && headerIdx >= 0 && hiddenBelow > 0) {
+        const cur = cursorRef.current;
+        if (cur > headerIdx && cur <= headerIdx + hiddenBelow) {
+          setCursor(headerIdx);
+        } else if (cur > headerIdx + hiddenBelow) {
+          setCursor(cur - hiddenBelow);
+        }
+      }
+    },
+    [collapsedGroupIds, setCursor],
+  );
 
   const activateRow = useCallback(
     (row: WorkflowPanelRowView | undefined) => {
