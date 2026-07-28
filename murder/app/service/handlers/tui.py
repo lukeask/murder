@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Any
 from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.protocol.subscriptions import ProjectionTopic
 from murder.app.protocol.workflows import (
+    DeleteWorkflowParams,
     GetWorkflowsParams,
+    PutWorkflowParams,
     SetWorkflowsParams,
     StartWorkflowParams,
 )
@@ -78,10 +80,11 @@ def register(
         return {"ok": True, "templates": save_templates(templates)}
 
     def _tui_load_workflows(body: dict[str, Any]) -> dict[str, Any]:
-        from murder.user_config import load_workflows
+        from murder.user_config import read_workflow_registry
 
         GetWorkflowsParams.model_validate(body or {})
-        return {"ok": True, "workflows": load_workflows()}
+        registry = read_workflow_registry()
+        return {"ok": True, "workflows": registry.workflows, "revision": registry.revision}
 
     def _tui_save_workflows(body: dict[str, Any]) -> dict[str, Any]:
         from murder.user_config import save_workflows
@@ -89,6 +92,41 @@ def register(
         params = SetWorkflowsParams.model_validate(body)
         workflows = [item.model_dump(mode="json") for item in params.workflows]
         return {"ok": True, "workflows": save_workflows(workflows)}
+
+    def _tui_put_workflow(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import put_workflow
+
+        params = PutWorkflowParams.model_validate(body)
+        mutation = put_workflow(
+            params.workflow.model_dump(mode="json"),
+            original_name=params.original_name,
+            expected_revision=params.expected_revision,
+        )
+        workflow = params.workflow.model_dump(mode="json") if mutation.ok else None
+        return {
+            "ok": mutation.ok,
+            "workflow": workflow,
+            "workflows": mutation.workflows,
+            "revision": mutation.revision,
+            "issues": mutation.issues,
+            "conflict": mutation.conflict,
+        }
+
+    def _tui_delete_workflow(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import delete_workflow
+
+        params = DeleteWorkflowParams.model_validate(body)
+        mutation = delete_workflow(
+            params.name,
+            expected_revision=params.expected_revision,
+        )
+        return {
+            "ok": mutation.ok,
+            "workflows": mutation.workflows,
+            "revision": mutation.revision,
+            "issues": mutation.issues,
+            "conflict": mutation.conflict,
+        }
 
     async def _tui_run_workflow(body: dict[str, Any]) -> dict[str, Any]:
         from murder.work.workflows.launch import run_workflow_by_name
@@ -108,11 +146,11 @@ def register(
 
         try:
             result = run_workflow_by_name(db, host.repo_root, name, args)
-        except KeyError:
+        except KeyError as exc:
             # Turn the lookup miss into a client-facing message (KeyError's
             # repr would leak as a bare name); mirrors other handlers'
             # bad-input -> ValueError contract.
-            raise ValueError(f"no saved workflow named {name!r}")
+            raise ValueError(f"no saved workflow named {name!r}") from exc
 
         # Kick only THIS run's stages: kickoff_ready(only=tid) spawns a stage
         # only if it's an eligible root, so downstream/dep-gated stages and
@@ -122,6 +160,7 @@ def register(
 
         return {
             "ok": True,
+            "workflow_id": result.workflow_id,
             "run_ticket_id": result.run_ticket_id,
             "stage_ticket_ids": result.stage_ticket_ids,
             "created_ticket_ids": result.created_ticket_ids,
@@ -162,20 +201,18 @@ def register(
         return {"ok": True, "themes": themes, "id": new_id}
 
     host.register_application_query(QueryName.FAVORITES_GET, _tui_load_favorites)
-    host.register_application_query(
-        QueryName.SPAWN_FAVORITES_GET, _tui_load_spawn_favorites
-    )
+    host.register_application_query(QueryName.SPAWN_FAVORITES_GET, _tui_load_spawn_favorites)
     host.register_application_query(QueryName.TEMPLATES_GET, _tui_load_templates)
     host.register_application_query(QueryName.THEMES_GET, _tui_load_themes)
     host.register_application_query(QueryName.WORKFLOWS_GET, _tui_load_workflows)
     host.register_application_command(CommandName.FAVORITES_SET, _tui_save_favorites)
-    host.register_application_command(
-        CommandName.SPAWN_FAVORITES_SET, _tui_save_spawn_favorites
-    )
+    host.register_application_command(CommandName.SPAWN_FAVORITES_SET, _tui_save_spawn_favorites)
     host.register_application_command(CommandName.TEMPLATES_SET, _tui_save_templates)
     host.register_application_command(CommandName.THEMES_SET, _tui_save_themes)
     host.register_application_command(CommandName.THEME_IMPORT, _tui_import_theme)
     host.register_application_command(CommandName.WORKFLOWS_SET, _tui_save_workflows)
+    host.register_application_command(CommandName.WORKFLOW_PUT, _tui_put_workflow)
+    host.register_application_command(CommandName.WORKFLOW_DELETE, _tui_delete_workflow)
     host.register_application_command(CommandName.WORKFLOW_START, _tui_run_workflow)
     if projections is not None:
         projections.register(ProjectionTopic.FAVORITES, lambda: _tui_load_favorites({}))
