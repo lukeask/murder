@@ -1,13 +1,13 @@
-"""Materialize a workflow definition into a tree of project tickets.
+"""Materialize a workflow template into a tree of project tickets.
 
-Launching a workflow turns a reusable ``WorkflowDef`` into rows in the current
-project's ``state.db``: one ``planned`` parent "run" ticket plus one ``ready``
-ticket per stage, wired by dependencies. No new engine runs the pipeline — the
-*existing* scheduler does. ``compute_ready`` already gates a ``ready`` ticket on
-its deps being ``done``/``archived``, so marking *every* stage ``ready`` (even
-downstream ones) lets the scheduler spawn a crow per stage exactly when its
-upstream finishes. The parent stays ``planned`` forever so the scheduler never
-spawns a crow for the container itself.
+Launching a workflow turns a reusable ``WorkflowTemplate`` (``WorkflowDef``)
+into rows in the current project's ``state.db``: one ``planned`` parent "run"
+ticket plus one ``ready`` ticket per node, wired by dependencies. No new engine
+runs the pipeline — the *existing* scheduler does. ``compute_ready`` already
+gates a ``ready`` ticket on its deps being ``done``/``archived``, so marking
+*every* stage ``ready`` (even downstream ones) lets the scheduler spawn a crow
+per stage exactly when its upstream finishes. The parent stays ``planned``
+forever so the scheduler never spawns a crow for the container itself.
 
 This is a deep module: callers hand it ``(defn, args)`` and get back a tree of
 ticket ids. The id allocation, topological ordering, ``.md`` rendering,

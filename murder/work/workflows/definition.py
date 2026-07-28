@@ -1,10 +1,15 @@
 """Workflow definition model + pure validation.
 
-This is a deep module: the surface is ``WorkflowDef`` + ``validate_workflow``,
-while the dependency-graph reasoning (uniqueness, dangling refs, cycle
-detection) stays hidden inside ``validate_workflow``. Validation is deliberately
-I/O-free so the storage layer (``murder.user_config.save_workflows``) and tests
-can drive it without touching the filesystem.
+Preferred names going forward: ``WorkflowTemplate`` (alias of ``WorkflowDef``)
+and ``WorkflowNodeTemplate`` (alias of ``StageDef``). Persisted/API shapes still
+use the legacy class names; new code should prefer the aliases.
+
+This is a deep module: the surface is ``WorkflowTemplate`` / ``WorkflowDef`` +
+``validate_workflow``, while the dependency-graph reasoning (uniqueness,
+dangling refs, cycle detection) stays hidden inside ``validate_workflow``.
+Validation is deliberately I/O-free so the storage layer
+(``murder.user_config.save_workflows``) and tests can drive it without touching
+the filesystem.
 
 Several fields (``gate``, ``mode``) are reserved for the coordination layer that
 isn't built yet; only their default value is honored today. They live in the
@@ -27,12 +32,13 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class StageDef(BaseModel):
-    """One agent stage within a workflow.
+    """One agent node (stage) within a workflow template.
 
-    ``instructions`` is the brief handed to the agent; it may carry
-    ``{placeholder}`` tokens filled in at launch. ``worktree`` is a *named* tree:
-    stages sharing a name are intended to share a checkout, so a later stage can
-    build on an earlier one's edits.
+    Prefer the ``WorkflowNodeTemplate`` alias in new code. ``instructions`` is
+    the brief handed to the agent; it may carry ``{placeholder}`` tokens filled
+    in at launch. ``worktree`` is a *named* tree: nodes sharing a name are
+    intended to share a checkout, so a later node can build on an earlier one's
+    edits.
     """
 
     id: str  # stage-local; ^[A-Za-z0-9_-]+$, unique within a workflow
@@ -47,7 +53,11 @@ class StageDef(BaseModel):
 
 
 class WorkflowDef(BaseModel):
-    """A reusable pipeline of stages, keyed by ``name``."""
+    """A reusable pipeline of stages, keyed by ``name``.
+
+    Prefer the ``WorkflowTemplate`` alias in new code. ``WorkflowDef`` remains
+    the concrete class (and the name used in persisted/API payloads) for now.
+    """
 
     name: str  # firing key; ^[A-Za-z0-9_-]+$
     # Definition versions are compatibility boundaries for already-running
@@ -57,6 +67,11 @@ class WorkflowDef(BaseModel):
     # Reserved for generative ticket expansion; only "static" is honored today.
     mode: Literal["static", "generative"] = "static"
     stages: list[StageDef] = Field(default_factory=list)
+
+
+# Preferred terminology aliases (no behavior / schema change).
+WorkflowNodeTemplate = StageDef
+WorkflowTemplate = WorkflowDef
 
 
 WorkflowIssueCode = Literal[

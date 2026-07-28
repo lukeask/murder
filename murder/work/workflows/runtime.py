@@ -53,7 +53,11 @@ class VersionedState(WorkflowContract):
 
 
 class WorkflowRunRecord(WorkflowContract):
-    """Authoritative current record for one workflow execution."""
+    """Authoritative current record for one workflow execution.
+
+    Prefer the ``WorkflowRun`` alias in new code. ``WorkflowRunRecord`` remains
+    the concrete class (and the name used in persistence) for now.
+    """
 
     workflow_id: UUID
     definition_name: str = Field(min_length=1)
@@ -86,6 +90,10 @@ class WorkflowRunRecord(WorkflowContract):
         return json.dumps(self.definition_snapshot or {}, separators=(",", ":"), sort_keys=True)
 
 
+# Preferred terminology alias (no behavior / schema change).
+WorkflowRun = WorkflowRunRecord
+
+
 class WorkflowStateMigrationRecord(WorkflowContract):
     migration_id: UUID
     workflow_id: UUID
@@ -111,6 +119,11 @@ class StageStatus(StrEnum):
 
 
 class StageRunState(WorkflowContract):
+    """Per-node run state within a workflow execution.
+
+    Prefer the ``WorkflowNodeRun`` alias in new code.
+    """
+
     stage_id: str = Field(min_length=1)
     status: StageStatus
     activity_id: UUID | None = None
@@ -118,6 +131,10 @@ class StageRunState(WorkflowContract):
     attempts: int = Field(default=0, ge=0)
     result_ref: UUID | None = None
     error: str | None = None
+
+
+# Preferred terminology alias (no behavior / schema change).
+WorkflowNodeRun = StageRunState
 
 
 class StaticDagWorkflowStateV1(WorkflowContract):

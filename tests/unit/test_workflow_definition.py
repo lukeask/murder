@@ -11,7 +11,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from murder.work.workflows import StageDef, WorkflowDef, validate_workflow, workflow_issues
+from murder.work.workflows import (
+    StageDef,
+    WorkflowDef,
+    WorkflowNodeTemplate,
+    WorkflowTemplate,
+    validate_workflow,
+    workflow_issues,
+)
 
 
 def _stage(**kw) -> StageDef:
@@ -258,3 +265,25 @@ def test_every_validation_issue_code_has_stable_path_metadata() -> None:
         assert by_code[code].stage_id is not None
     for code in ("self_dependency", "unknown_dependency", "duplicate_dependency"):
         assert by_code[code].dependency_id is not None
+
+
+def test_preferred_terminology_aliases() -> None:
+    """WorkflowTemplate / WorkflowNodeTemplate are identity aliases, not copies."""
+
+    assert WorkflowTemplate is WorkflowDef
+    assert WorkflowNodeTemplate is StageDef
+
+    template = WorkflowTemplate(
+        name="ship_it",
+        stages=[
+            WorkflowNodeTemplate(
+                id="plan",
+                title="Plan",
+                harness="codex",
+                model="gpt-5",
+            ),
+        ],
+    )
+    assert validate_workflow(template) == []
+    assert isinstance(template, WorkflowDef)
+    assert isinstance(template.stages[0], StageDef)

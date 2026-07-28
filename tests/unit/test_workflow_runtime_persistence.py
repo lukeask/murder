@@ -50,6 +50,8 @@ from murder.work.workflows.runtime import (
     TimerFiredSignal,
     TimerWait,
     VersionedState,
+    WorkflowNodeRun,
+    WorkflowRun,
     WorkflowRunRecord,
     WorkflowSignalPayload,
     WorkflowSignalRecord,
@@ -813,3 +815,10 @@ def test_load_decision_input_is_finite_current_state_not_history_replay() -> Non
     assert len(decision.waits) == 1
     assert len(decision.signals) == FINITE_SIGNAL_LIMIT
     assert decision.now == NOW
+
+
+def test_preferred_runtime_terminology_aliases() -> None:
+    """WorkflowRun / WorkflowNodeRun are identity aliases, not copies."""
+
+    assert WorkflowRun is WorkflowRunRecord
+    assert WorkflowNodeRun is StageRunState

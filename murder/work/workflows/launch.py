@@ -1,10 +1,10 @@
-"""Launch a saved workflow by name into the current project.
+"""Launch a saved workflow template by name into the current project.
 
 The userspace registry (``~/.config/murder/workflows.yaml``) stores reusable
-``WorkflowDef`` dumps; launching one resolves it by name and hands it to
-``materialize_workflow``, which does all the real work (id allocation, ticket
-tree, dep wiring). This module is the thin name->definition lookup that sits in
-front of that deep module, so the RPC handler stays a shell.
+``WorkflowTemplate`` (``WorkflowDef``) dumps; launching one resolves it by name
+and hands it to ``materialize_workflow``, which does all the real work (id
+allocation, ticket tree, dep wiring). This module is the thin name->definition
+lookup that sits in front of that deep module, so the RPC handler stays a shell.
 """
 
 from __future__ import annotations
