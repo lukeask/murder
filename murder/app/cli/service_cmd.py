@@ -117,19 +117,22 @@ def _live_service_sessions() -> list[ServiceSession]:
     return sessions
 
 
-async def _socket_is_connectable(socket_path: Path, *, timeout_s: float = 0.5) -> bool:
-    # The application boundary is WebSocket-only.  Lifecycle probing is not an
-    # application request and therefore deliberately does not open a client
-    # protocol connection; the lock owner is the service authority.
-    del socket_path, timeout_s
-    return True
-
-
 async def _supervisor_is_live(repo: Path, socket_path: Path) -> bool:
+    """Return whether the lock owner has published this repo's endpoint.
+
+    Acquiring the repo lock happens near the beginning of service startup, well
+    before the application listener is ready.  The session registry entry is
+    written atomically only after ``ApplicationSocketServer.start`` has bound
+    its listener, so it is the readiness barrier clients need.  Merely seeing a
+    live lock owner would let a cold-starting service escape this wait and make
+    the TUI fail with "no WebSocket endpoint is published".
+    """
+    del socket_path  # retained in the private API while callers still pass a readiness path
     pid = read_lock_pid(lock_path(repo))
-    return bool(
-        pid is not None and _pid_is_alive(pid) and await _socket_is_connectable(socket_path)
-    )
+    if pid is None or not _pid_is_alive(pid) or not lock_is_held(lock_path(repo)):
+        return False
+    name = project_session_name(repo)
+    return any(session.name == name and session.pid == pid for session in list_service_sessions())
 
 
 def _live_lock_owner_pid(repo: Path) -> int | None:
@@ -165,7 +168,10 @@ async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
         return False
 
     proc: subprocess.Popen[bytes] | None = None
-    delays = (0.25, 0.5, 1.0, 1.0, 1.0, 1.0)
+    # Cold boots can spend several seconds reconciling persisted harness state
+    # before the application listener is bound.  Keep the quick initial probes,
+    # then allow enough time for that bounded startup work to finish.
+    delays = (0.25, 0.5, *(1.0 for _ in range(30)))
     for delay in delays:
         # The repo lock is acquired before the socket opens.  Respect its live
         # owner during that readiness gap instead of spawning a doomed
@@ -190,7 +196,7 @@ async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
                     proc = None
                     continue
                 raise RuntimeError(f"supervisor process exited during startup (code {rc})")
-    raise RuntimeError("supervisor did not become ready within 5s")
+    raise RuntimeError("supervisor did not become ready within 30s")
 
 
 async def _ensure_supervisor(repo: Path, socket_path: Path) -> None:

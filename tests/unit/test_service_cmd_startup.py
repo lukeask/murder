@@ -8,6 +8,9 @@ import pytest
 
 from murder.app.cli import service_cmd
 from murder.state.storage.filesystem import acquire_flock, lock_is_held, release_flock
+from murder.state.storage.service_registry import ServiceSession, project_session_name
+
+SERVICE_PID = 123
 
 
 def test_lock_is_held_ignores_stale_lockfile(tmp_path: Path) -> None:
@@ -36,6 +39,42 @@ def test_live_lock_owner_ignores_reused_pid_in_stale_file(
     monkeypatch.setattr(service_cmd, "_pid_is_alive", lambda _pid: True)
 
     assert service_cmd._live_lock_owner_pid(tmp_path) is None
+
+
+async def test_supervisor_is_not_ready_until_matching_endpoint_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    lock = tmp_path / ".murder" / ".lock"
+    lock.parent.mkdir()
+    lock.write_text(f"{SERVICE_PID}\n", encoding="ascii")
+    monkeypatch.setattr(service_cmd, "_pid_is_alive", lambda pid: pid == SERVICE_PID)
+    monkeypatch.setattr(service_cmd, "lock_is_held", lambda _path: True)
+    monkeypatch.setattr(service_cmd, "list_service_sessions", lambda: [])
+
+    assert await service_cmd._supervisor_is_live(tmp_path, lock) is False
+
+
+async def test_supervisor_is_ready_after_matching_endpoint_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    lock = tmp_path / ".murder" / ".lock"
+    lock.parent.mkdir()
+    lock.write_text(f"{SERVICE_PID}\n", encoding="ascii")
+    session = ServiceSession(
+        name=project_session_name(tmp_path),
+        basename="repo",
+        path_hash="hash",
+        repo_root=tmp_path,
+        pid=SERVICE_PID,
+        websocket_url="ws://127.0.0.1:9001/api/ws",
+    )
+    monkeypatch.setattr(service_cmd, "_pid_is_alive", lambda pid: pid == SERVICE_PID)
+    monkeypatch.setattr(service_cmd, "lock_is_held", lambda _path: True)
+    monkeypatch.setattr(service_cmd, "list_service_sessions", lambda: [session])
+
+    assert await service_cmd._supervisor_is_live(tmp_path, lock) is True
 
 
 async def test_ensure_supervisor_waits_for_live_lock_owner(
