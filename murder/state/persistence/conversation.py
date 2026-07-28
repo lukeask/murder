@@ -29,7 +29,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
+from murder.facts.contracts import ProjectionInputDraft
+from murder.facts.log import append_projection_input
 from murder.state.persistence.agents import (
     append_agent_message,
     get_agent_messages,
@@ -42,6 +45,28 @@ from murder.state.persistence.agents import (
 
 # (role, text) — deliberately a plain tuple for UI transcript rendering.
 Turn = tuple[str, str]
+
+
+def _invalidate_conversations(conn: sqlite3.Connection, subject_key: str) -> None:
+    """Append a durable key-only invalidation for the conversations snapshot."""
+    row = conn.execute(
+        "SELECT COALESCE(MAX(generation), -1) + 1 AS generation "
+        "FROM projection_inputs WHERE projection = 'conversations' AND subject_key = ?",
+        (subject_key,),
+    ).fetchone()
+    generation = int(row["generation"])
+    append_projection_input(
+        conn,
+        ProjectionInputDraft(
+            input_id=uuid5(
+                NAMESPACE_URL,
+                f"conversations:{subject_key}:{generation}",
+            ),
+            projection="conversations",
+            subject_key=subject_key,
+            generation=generation,
+        ),
+    )
 
 
 def read_conversation(conn: sqlite3.Connection, agent_id: str) -> list[Turn]:
@@ -58,9 +83,15 @@ def clear(conn: sqlite3.Connection, agent_id: str) -> None:
     prior session's interleaved stream. ``conversation_id`` is the ``agent_id``
     (one live conversation per agent, 1.c).
     """
+    existed = conn.execute(
+        "SELECT 1 FROM conversations WHERE conversation_id = ?",
+        (agent_id,),
+    ).fetchone()
     replace_agent_messages(conn, agent_id, [])
     conn.execute("DELETE FROM conversation_blocks WHERE conversation_id = ?", (agent_id,))
     conn.execute("DELETE FROM conversations WHERE conversation_id = ?", (agent_id,))
+    if existed is not None:
+        _invalidate_conversations(conn, agent_id)
 
 
 def merge_transcript(
@@ -90,6 +121,7 @@ def merge_transcript(
 # JSON conversation-block path (conversations + conversation_blocks tables)
 # ---------------------------------------------------------------------------
 
+
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
@@ -106,7 +138,7 @@ BLOCK_KINDS: tuple[str, ...] = (
     "plan_update",
     "agent_event",
     "choice_prompt",
-    "notice",                # service-injected; see append_notice
+    "notice",  # service-injected; see append_notice
 )
 
 
@@ -128,7 +160,7 @@ def segment_to_block_kind(seg: dict[str, Any]) -> str:
 class ConversationBlock:
     """In-memory representation of a single conversation_blocks row."""
 
-    id: int | None          # None before first DB write
+    id: int | None  # None before first DB write
     conversation_id: str
     ordinal: int
     kind: str
@@ -168,6 +200,7 @@ def block_to_wire(block: ConversationBlock) -> dict[str, Any]:
 # Conversation-level CRUD
 # ---------------------------------------------------------------------------
 
+
 def upsert_conversation(
     conn: sqlite3.Connection,
     *,
@@ -198,8 +231,15 @@ def upsert_conversation(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                conversation_id, agent_id, harness, model, harness_session_id,
-                live_state, status, now, now,
+                conversation_id,
+                agent_id,
+                harness,
+                model,
+                harness_session_id,
+                live_state,
+                status,
+                now,
+                now,
             ),
         )
     else:
@@ -215,8 +255,13 @@ def upsert_conversation(
              WHERE conversation_id = ?
             """,
             (
-                harness, model, harness_session_id, live_state,
-                status, now, conversation_id,
+                harness,
+                model,
+                harness_session_id,
+                live_state,
+                status,
+                now,
+                conversation_id,
             ),
         )
 
@@ -227,10 +272,13 @@ def set_conversation_status(
     status: str,
 ) -> None:
     """Transition conversation status (in_progress → complete | stale)."""
-    conn.execute(
-        "UPDATE conversations SET status = ?, updated_at = ? WHERE conversation_id = ?",
-        (status, _now(), conversation_id),
+    cur = conn.execute(
+        "UPDATE conversations SET status = ?, updated_at = ? "
+        "WHERE conversation_id = ? AND status IS NOT ?",
+        (status, _now(), conversation_id, status),
     )
+    if cur.rowcount:
+        _invalidate_conversations(conn, conversation_id)
 
 
 def set_queued_message(
@@ -243,10 +291,13 @@ def set_queued_message(
     DB-owns-runtime: the queued line the TUI renders survives a service or
     client restart because it lives here, not in agent memory alone.
     """
-    conn.execute(
-        "UPDATE conversations SET queued_message = ?, updated_at = ? WHERE conversation_id = ?",
-        (message, _now(), conversation_id),
+    cur = conn.execute(
+        "UPDATE conversations SET queued_message = ?, updated_at = ? "
+        "WHERE conversation_id = ? AND queued_message IS NOT ?",
+        (message, _now(), conversation_id, message),
     )
+    if cur.rowcount:
+        _invalidate_conversations(conn, conversation_id)
 
 
 def get_queued_message(
@@ -270,19 +321,22 @@ def set_harness_session_id(
     harness_session_id: str,
 ) -> None:
     """Record the resume session id captured from the harness on graceful exit."""
-    conn.execute(
+    cur = conn.execute(
         """
         UPDATE conversations
            SET harness_session_id = ?, updated_at = ?
-         WHERE conversation_id = ?
+         WHERE conversation_id = ? AND harness_session_id IS NOT ?
         """,
-        (harness_session_id, _now(), conversation_id),
+        (harness_session_id, _now(), conversation_id, harness_session_id),
     )
+    if cur.rowcount:
+        _invalidate_conversations(conn, conversation_id)
 
 
 # ---------------------------------------------------------------------------
 # Block-level persistence
 # ---------------------------------------------------------------------------
+
 
 def _seal_live_block(conn: sqlite3.Connection, conversation_id: str) -> None:
     """Seal the single mutable trailing block for this conversation, if any."""
@@ -517,6 +571,86 @@ def read_conversation_blocks(
     ]
 
 
+def _restore_parsed_turn_order(
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    parsed_segments: Sequence[dict[str, Any]],
+) -> dict[int, int]:
+    """Restore user/assistant interleaving without trusting parsed user payloads.
+
+    User rows are authoritative and are written at the send boundary. Parsed
+    user segments are therefore used only as exact-text position anchors; their
+    payloads never enter storage. This repairs the case where several user rows
+    land before a cumulative harness projection appends their assistant replies.
+
+    Returns changed block-id → ordinal mappings so already-built change objects
+    can carry the corrected position.
+    """
+    blocks = read_conversation_blocks(conn, conversation_id)
+    users = [block for block in blocks if block.kind == "user"]
+    # Notices are service-injected and have no parsed-segment counterpart.
+    non_users = [block for block in blocks if block.kind not in {"user", "notice"}]
+    if not users or not non_users:
+        return {}
+
+    unused_users = list(users)
+    non_user_idx = 0
+    ordered_ids: list[int] = []
+    matched_user = False
+    for segment in parsed_segments:
+        if segment.get("type") == "user":
+            text = segment.get("text")
+            if not isinstance(text, str):
+                continue
+            body = text.strip()
+            match_idx = next(
+                (
+                    idx
+                    for idx, block in enumerate(unused_users)
+                    if str(block.payload.get("text", "")).strip() == body
+                ),
+                None,
+            )
+            if match_idx is None:
+                continue
+            block = unused_users.pop(match_idx)
+            if block.id is not None:
+                ordered_ids.append(block.id)
+                matched_user = True
+            continue
+        if non_user_idx < len(non_users):
+            block = non_users[non_user_idx]
+            non_user_idx += 1
+            if block.id is not None:
+                ordered_ids.append(block.id)
+
+    # With no trustworthy user anchor, preserve the established authoritative
+    # order rather than letting parser noise reposition user content.
+    if not matched_user:
+        return {}
+    placed = set(ordered_ids)
+    ordered_ids.extend(
+        block.id for block in blocks if block.id is not None and block.id not in placed
+    )
+    current_ids = [block.id for block in blocks if block.id is not None]
+    if ordered_ids == current_ids:
+        return {}
+
+    offset = len(blocks) + 1
+    conn.execute(
+        "UPDATE conversation_blocks SET ordinal = ordinal + ? WHERE conversation_id = ?",
+        (offset, conversation_id),
+    )
+    changed: dict[int, int] = {}
+    for ordinal, block_id in enumerate(ordered_ids):
+        conn.execute(
+            "UPDATE conversation_blocks SET ordinal = ? WHERE id = ?",
+            (ordinal, block_id),
+        )
+        changed[block_id] = ordinal
+    return changed
+
+
 def read_user_texts(conn: sqlite3.Connection, conversation_id: str) -> list[str]:
     """Return the text of every ground-truth ``user`` block, in order.
 
@@ -548,8 +682,7 @@ def read_conversation_doc(
     conversation_chunk_summaries, read via ``read_chunk_summaries``.
     """
     conv_row = conn.execute(
-        "SELECT harness, live_state FROM conversations"
-        " WHERE conversation_id = ?",
+        "SELECT harness, live_state FROM conversations WHERE conversation_id = ?",
         (conversation_id,),
     ).fetchone()
     if conv_row is None:
@@ -568,6 +701,7 @@ def read_conversation_doc(
 # ---------------------------------------------------------------------------
 # Condensed-view chunk summaries (TUIchat Phase 4)
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class ChunkSummary:
@@ -623,6 +757,7 @@ def write_chunk_summary(
             "INSERT OR IGNORE INTO chunk_summary_blocks (summary_id, block_id) VALUES (?, ?)",
             (summary_id, int(bid)),
         )
+    _invalidate_conversations(conn, conversation_id)
     return summary_id
 
 
@@ -666,6 +801,7 @@ def read_chunk_summaries(
 # ---------------------------------------------------------------------------
 # Merge: reconcile a freshly parsed TranscriptDoc against stored blocks
 # ---------------------------------------------------------------------------
+
 
 def merge_conversation_doc(
     conn: sqlite3.Connection,
@@ -768,9 +904,7 @@ def merge_conversation_doc(
         else:
             # New segment beyond stored history: seal previous live block,
             # then append.
-            new_block = append_block(
-                conn, conversation_id, seg, received_at=ts, seal_previous=True
-            )
+            new_block = append_block(conn, conversation_id, seg, received_at=ts, seal_previous=True)
             result.append(new_block)
 
     return read_conversation_blocks(conn, conversation_id)
@@ -922,6 +1056,7 @@ def _get_agent_id(conn: sqlite3.Connection, conversation_id: str) -> str:
 # Ground-truth user blocks + server-side projection (Phase 1.c)
 # ---------------------------------------------------------------------------
 
+
 def append_user_message(
     conn: sqlite3.Connection,
     agent_id: str,
@@ -960,6 +1095,7 @@ def append_user_message(
         payload["client_message_id"] = client_message_id.strip()
     block = append_block(conn, conv_id, payload, received_at=ts)
     append_agent_message(conn, agent_id, "user", body, captured_at=ts)
+    _invalidate_conversations(conn, conv_id)
     return block
 
 
@@ -985,12 +1121,14 @@ def append_notice(
     conv_id = conversation_id or agent_id
     ts = received_at or _now()
     upsert_conversation(conn, conversation_id=conv_id, agent_id=agent_id)
-    return append_block(
+    block = append_block(
         conn,
         conv_id,
         {"type": "notice", "severity": severity, "message": body},
         received_at=ts,
     )
+    _invalidate_conversations(conn, conv_id)
+    return block
 
 
 def _doc_to_flat_turns(doc: dict[str, Any]) -> list[Turn]:
@@ -1058,6 +1196,10 @@ def project_parsed_doc_with_changes(
     conv_id = conversation_id or agent_id
     segments = doc.get("segments", [])
     non_user = [s for s in segments if not (isinstance(s, dict) and s.get("type") == "user")]
+    previous_metadata = conn.execute(
+        "SELECT harness, live_state, status FROM conversations WHERE conversation_id = ?",
+        (conv_id,),
+    ).fetchone()
     upsert_conversation(
         conn,
         conversation_id=conv_id,
@@ -1071,9 +1213,21 @@ def project_parsed_doc_with_changes(
         non_user,
         received_at=received_at,
     )
+    reordered = _restore_parsed_turn_order(conn, conv_id, segments)
+    for change in changes:
+        if change.block.id in reordered:
+            change.block.ordinal = reordered[change.block.id]
 
     merged = read_conversation_doc(conn, conv_id) or {"segments": []}
     replace_agent_messages(conn, agent_id, _doc_to_flat_turns(merged), captured_at=received_at)
+    metadata_changed = (
+        previous_metadata is None
+        or (doc.get("harness") is not None and doc.get("harness") != previous_metadata["harness"])
+        or (doc.get("state") is not None and doc.get("state") != previous_metadata["live_state"])
+        or previous_metadata["status"] != "in_progress"
+    )
+    if changes or metadata_changed or reordered:
+        _invalidate_conversations(conn, conv_id)
     return merged, changes
 
 
@@ -1092,4 +1246,6 @@ def mark_stale_conversations(conn: sqlite3.Connection) -> int:
         " updated_at = ? WHERE status = 'in_progress'",
         (_now(),),
     )
+    if cur.rowcount:
+        _invalidate_conversations(conn, "*")
     return cur.rowcount
