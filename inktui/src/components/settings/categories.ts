@@ -17,7 +17,7 @@ export const SETTINGS_CATEGORIES = [
   { id: 'bars', label: 'Bars', items: BAR_ITEMS },
   { id: 'harnesses', label: 'Harnesses', items: HARNESS_ITEMS },
   { id: 'llm', label: 'LLM Functionality', items: LLM_ITEMS },
-  { id: 'templates', label: 'Templates', items: TEMPLATE_ITEMS },
+  { id: 'templates', label: 'Prompt Templates', items: TEMPLATE_ITEMS },
   { id: 'keybindings', label: 'Keybindings', items: KEYBINDING_ITEMS },
   { id: 'workspaces', label: 'Workspaces', items: WORKSPACE_ITEMS },
 ] satisfies readonly [SettingsCategory, ...SettingsCategory[]];

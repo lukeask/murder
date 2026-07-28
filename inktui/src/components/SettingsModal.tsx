@@ -83,7 +83,6 @@ import type {
   DocumentDisplayMode,
 } from '../store/settings/settingsSlice.js';
 import type { AppStore } from '../store/store.js';
-import type { TemplateRecord } from '../store/templates/templatesSlice.js';
 import type { ThemeRecord } from '../store/themes/themesSlice.js';
 import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
 import { DEFAULT_THEME_ID, listThemeRecords, type ThemeId } from '../theme/palettes.js';
@@ -101,14 +100,12 @@ import {
 } from './settings/items/harnesses.js';
 import { REBINDABLE, RESERVED_KEYS } from './settings/items/keybindings.js';
 import { ENV_PROVIDERS, mergedTiers, tierNames } from './settings/items/llm.js';
-import { TEMPLATE_NAME_RE } from './settings/items/templates.js';
 import type { SettingsCategoryId, SettingsRow } from './settings/types.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 /** Content widths must match the corresponding `TextEditorDisplay` allocations below. */
 const SETTINGS_LLM_FORM_EDITOR_WIDTH = 50;
 const SETTINGS_THEME_IMPORT_EDITOR_WIDTH = 48;
-const SETTINGS_TEMPLATE_EDITOR_WIDTH = 42;
 const SETTINGS_PROVIDER_EDITOR_WIDTH = 36;
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (the printable/capture router needs it).
@@ -144,6 +141,8 @@ const BUILTIN_POLICY_TEMPLATES: Readonly<
 export interface SettingsModeOptions {
   /** Called when the modal is dismissed (after the mode exits). */
   readonly onDismiss?: () => void;
+  /** Open PromptTemplateManagerMode from the Templates category row. */
+  readonly openPromptTemplates?: () => void;
 }
 
 /** The stable mode id for idempotent re-enter. */
@@ -153,19 +152,16 @@ export const SETTINGS_MODE_ID = 'settings';
  * selectable even when disabled — the cursor can rest on it (to show the notice), but `confirm` is a
  * no-op there. */
 function isSelectable(row: SettingsRow): boolean {
-  return row.kind !== 'header' && row.kind !== 'tier' && row.kind !== 'templateEmpty';
+  return row.kind !== 'header' && row.kind !== 'tier';
 }
 
-/** A text-entry target — either a provider field (api_key / local base_url) or a template rename. */
+/** A text-entry target — a provider field (api_key / local base_url) or theme import. */
 type EditTarget =
   | {
       readonly kind: 'provider';
       readonly provider: LlmProviderId;
       readonly field: 'api_key' | 'base_url';
     }
-  | { readonly kind: 'templateRename'; readonly name: string }
-  | { readonly kind: 'templateCreateName' }
-  | { readonly kind: 'templateCreateBody'; readonly name: string }
   | { readonly kind: 'themeImport' };
 
 type LlmForm =
@@ -269,18 +265,6 @@ interface SettingsState {
   llmFormEditing: boolean;
   /** The action currently capturing its next-key rebind, or `null` when not capturing. */
   capturing: ActionId | null;
-  /** The live saved templates (browse/preview/rename/delete source). Synced from the app store. */
-  templates: readonly TemplateRecord[];
-  /** The templates action handle (rename/remove). Synced from the app store. */
-  templateActions: {
-    remove(name: string): void;
-    rename(oldName: string, newName: string): void;
-    save(name: string, body: string): void;
-  };
-  /** The template whose body is previewed under the cursor, or `null` when the cursor is elsewhere. */
-  previewTemplate: TemplateRecord | null;
-  /** The template name pending a delete confirm ("(y/n)"), or `null` when not confirming. */
-  confirmingDelete: string | null;
   /** The custom theme id pending delete confirm, or `null`. */
   confirmingThemeDelete: string | null;
   /** The live saved themes (theme picker source). Synced from the app store. */
@@ -355,12 +339,6 @@ export function settingsMode(
     readonly effectiveCrow?: readonly string[];
     readonly llm?: LlmWire;
     readonly llmEnv?: LlmEnvWire;
-    readonly templates?: readonly TemplateRecord[];
-    readonly templateActions?: {
-      remove(name: string): void;
-      rename(oldName: string, newName: string): void;
-      save(name: string, body: string): void;
-    };
     readonly themes?: readonly ThemeRecord[];
     readonly themeActions?: {
       importTheme(json: string): Promise<string>;
@@ -375,7 +353,6 @@ export function settingsMode(
   const initialStartupRogue: StartupRogueWire | null = current.startupRogue ?? null;
   const initialStartupRogueModels = current.startupRogueModels ?? {};
   const initialStartupRogueEfforts = current.startupRogueEfforts ?? {};
-  const initialTemplates: readonly TemplateRecord[] = current.templates ?? [];
   const initialThemes: readonly ThemeRecord[] = current.themes ?? listThemeRecords();
   const initialCategoryId: SettingsCategoryId = 'appearance';
   const initialRows = buildCategoryRows(initialCategoryId, {
@@ -383,7 +360,7 @@ export function settingsMode(
     startupRogue: initialStartupRogue,
     startupRogueModels: initialStartupRogueModels,
     startupRogueEfforts: initialStartupRogueEfforts,
-    templates: initialTemplates,
+    templates: [],
     themes: initialThemes,
     barWidgets: current.barWidgets ?? {},
     codexControlBackend: current.codexControlBackend ?? 'harness_parse',
@@ -430,10 +407,6 @@ export function settingsMode(
     llmForm: null,
     llmFormEditing: false,
     capturing: null,
-    templates: initialTemplates,
-    templateActions: current.templateActions ?? { remove() {}, rename() {}, save() {} },
-    previewTemplate: null,
-    confirmingDelete: null,
     confirmingThemeDelete: null,
     themes: initialThemes,
     themeActions: current.themeActions ?? {
@@ -465,7 +438,6 @@ export function settingsMode(
       s.capturing !== null ||
       s.editing !== null ||
       s.llmFormEditing ||
-      s.confirmingDelete !== null ||
       s.confirmingThemeDelete !== null
     );
   }
@@ -476,7 +448,7 @@ export function settingsMode(
       startupRogue: s.startupRogue,
       startupRogueModels: s.startupRogueModels,
       startupRogueEfforts: s.startupRogueEfforts,
-      templates: s.templates,
+      templates: [],
       themes: s.themes,
       barWidgets: s.barWidgets,
       codexControlBackend: s.codexControlBackend,
@@ -504,7 +476,6 @@ export function settingsMode(
     s.rows = buildRowsFor(category.id);
     const savedCursor = s.rowCursors[category.id] ?? 0;
     s.cursor = firstSelectableFrom(s.rows, Math.min(savedCursor, s.rows.length - 1));
-    s.previewTemplate = null;
     s.notice = null;
     refresh();
   }
@@ -545,7 +516,6 @@ export function settingsMode(
       restoreThemePreview();
     }
     s.activePane = 'categories';
-    s.previewTemplate = null;
     s.notice = null;
     refresh();
   }
@@ -575,13 +545,6 @@ export function settingsMode(
           setTheme(row.value);
         } else if (prev?.kind === 'theme') {
           restoreThemePreview();
-        }
-        // Live template preview: stash the body when the cursor lands on a template row, clear it when
-        // it leaves the section (read-only — never mutates the registry).
-        if (row.kind === 'template') {
-          s.previewTemplate = s.templates.find((t) => t.name === row.name) ?? null;
-        } else {
-          s.previewTemplate = null;
         }
         s.notice = null;
         s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
@@ -953,10 +916,6 @@ export function settingsMode(
     switch (s.editing?.kind) {
       case 'themeImport':
         return SETTINGS_THEME_IMPORT_EDITOR_WIDTH;
-      case 'templateRename':
-      case 'templateCreateName':
-      case 'templateCreateBody':
-        return SETTINGS_TEMPLATE_EDITOR_WIDTH;
       case 'provider':
         return SETTINGS_PROVIDER_EDITOR_WIDTH;
       default:
@@ -1192,18 +1151,6 @@ export function settingsMode(
     if (s.editing === null) {
       return;
     }
-    if (s.editing.kind === 'templateRename') {
-      commitTemplateRename();
-      return;
-    }
-    if (s.editing.kind === 'templateCreateName') {
-      commitTemplateCreateName();
-      return;
-    }
-    if (s.editing.kind === 'templateCreateBody') {
-      commitTemplateCreateBody();
-      return;
-    }
     if (s.editing.kind === 'themeImport') {
       void commitThemeImport();
       return;
@@ -1223,114 +1170,9 @@ export function settingsMode(
     refresh();
   }
 
-  /** Begin an inline rename of the template under the cursor, seeding the buffer with its name. */
-  function beginTemplateRename(name: string): void {
-    s.editing = { kind: 'templateRename', name };
-    setEditValue(name);
-    s.notice = 'Rename template. Enter to save, Esc to cancel.';
-    refresh();
-  }
-
-  function validateTemplateName(name: string, originalName: string | null): string | null {
-    if (name === '') {
-      return 'Template name cannot be empty';
-    }
-    if (!TEMPLATE_NAME_RE.test(name)) {
-      return `"${name}" is invalid — use letters, digits, _ or - only`;
-    }
-    if (name !== originalName && s.templates.some((t) => t.name === name)) {
-      return `A template named "${name}" already exists`;
-    }
-    return null;
-  }
-
-  function beginTemplateCreate(): void {
-    s.editing = { kind: 'templateCreateName' };
-    setEditValue('');
-    s.previewTemplate = null;
-    s.notice = 'New template name. Enter to continue, Esc to cancel.';
-    refresh();
-  }
-
-  function commitTemplateCreateName(): void {
-    if (s.editing === null || s.editing.kind !== 'templateCreateName') {
-      return;
-    }
-    const name = s.editValue.trim();
-    const error = validateTemplateName(name, null);
-    if (error !== null) {
-      s.notice = error;
-      refresh();
-      return;
-    }
-    s.editing = { kind: 'templateCreateBody', name };
-    setEditValue('');
-    s.notice = 'Template body. Enter to save, Esc to cancel.';
-    refresh();
-  }
-
-  function commitTemplateCreateBody(): void {
-    if (s.editing === null || s.editing.kind !== 'templateCreateBody') {
-      return;
-    }
-    const name = s.editing.name;
-    const body = s.editValue;
-    s.templateActions.save(name, body);
-    s.editing = null;
-    setEditValue('');
-    s.notice = null;
-    rebuildRows();
-    refresh();
-  }
-
-  /** Commit a template rename: validate the new name (non-empty, `[A-Za-z0-9_-]+`, no collision with a
-   * different existing template), then dispatch `rename` + rebuild. On a bad name, keep editing. */
-  function commitTemplateRename(): void {
-    if (s.editing === null || s.editing.kind !== 'templateRename') {
-      return;
-    }
-    const oldName = s.editing.name;
-    const newName = s.editValue.trim();
-    const error = validateTemplateName(newName, oldName);
-    if (error !== null) {
-      s.notice = error;
-      refresh();
-      return;
-    }
-    s.editing = null;
-    setEditValue('');
-    s.previewTemplate = null;
-    s.notice = null;
-    if (newName !== oldName) {
-      s.templateActions.rename(oldName, newName);
-    }
-    rebuildRows();
-    refresh();
-  }
-
-  /** Enter the delete-confirm state for the template under the cursor (the next `y` removes it). */
-  function beginTemplateDelete(name: string): void {
-    s.confirmingDelete = name;
-    s.notice = `delete "${name}"? (y/n)`;
-    refresh();
-  }
-
   function beginThemeDelete(id: string): void {
     s.confirmingThemeDelete = id;
     s.notice = `delete theme "${id}"? (y/n)`;
-    refresh();
-  }
-
-  /** Apply / cancel a pending template delete. `confirmed` removes it + rebuilds; otherwise cancels. */
-  function resolveTemplateDelete(confirmed: boolean): void {
-    const name = s.confirmingDelete;
-    s.confirmingDelete = null;
-    s.notice = null;
-    if (confirmed && name !== null) {
-      s.previewTemplate = null;
-      s.templateActions.remove(name);
-      rebuildRows();
-    }
     refresh();
   }
 
@@ -1379,33 +1221,6 @@ export function settingsMode(
       const message = error instanceof Error ? error.message : String(error);
       s.notice = message;
     }
-    refresh();
-  }
-
-  /** Sync the live templates registry + action handle from the app store into the closure state. Called
-   * by the render component when the store's `templates.items` (or actions) change, so the section
-   * tracks `:save`/external edits live. Rebuilds rows only when the item list actually changed. */
-  function syncTemplates(
-    items: readonly TemplateRecord[],
-    templateActions: {
-      remove(name: string): void;
-      rename(oldName: string, newName: string): void;
-      save(name: string, body: string): void;
-    },
-  ): void {
-    s.templateActions = templateActions;
-    const changed =
-      items.length !== s.templates.length ||
-      items.some((t, i) => t.name !== s.templates[i]?.name || t.body !== s.templates[i]?.body);
-    if (!changed) {
-      return;
-    }
-    s.templates = items;
-    // Keep an active preview in sync with the new body (or drop it if the template is gone).
-    if (s.previewTemplate !== null) {
-      s.previewTemplate = items.find((t) => t.name === s.previewTemplate?.name) ?? null;
-    }
-    rebuildRows();
     refresh();
   }
 
@@ -1592,11 +1407,8 @@ export function settingsMode(
       case 'role':
         selectRole(row.role, row.tier);
         break;
-      case 'templateCreate':
-        beginTemplateCreate();
-        break;
-      case 'template':
-        beginTemplateRename(row.name);
+      case 'templateOpen':
+        opts.openPromptTemplates?.();
         break;
       case 'themeImport':
         beginThemeImport();
@@ -1635,11 +1447,6 @@ export function settingsMode(
       s.capturing = null;
       s.notice = null;
       refresh();
-      return;
-    }
-    if (s.confirmingDelete !== null) {
-      // Esc during a delete-confirm cancels the delete only (stay in the modal).
-      resolveTemplateDelete(false);
       return;
     }
     if (s.confirmingThemeDelete !== null) {
@@ -1730,11 +1537,7 @@ export function settingsMode(
             }
           } else if (s.editing !== null) {
             commitEdit();
-          } else if (
-            s.capturing === null &&
-            s.confirmingDelete === null &&
-            s.confirmingThemeDelete === null
-          ) {
+          } else if (s.capturing === null && s.confirmingThemeDelete === null) {
             confirm();
           }
           break;
@@ -1806,19 +1609,6 @@ export function settingsMode(
         applyCapture(s.capturing, input);
         return true;
       }
-      // Delete-confirm mode: the next `y` removes the template; `n` cancels (Esc also cancels via the
-      // keymap → dismiss). Any other printable is swallowed (the confirm stays up).
-      if (s.confirmingDelete !== null) {
-        if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return) {
-          return false;
-        }
-        if (input === 'y' || input === 'Y') {
-          resolveTemplateDelete(true);
-        } else if (input === 'n' || input === 'N') {
-          resolveTemplateDelete(false);
-        }
-        return true;
-      }
       if (s.confirmingThemeDelete !== null) {
         if (input.length === 0 || key.ctrl || key.meta || key.escape || key.return) {
           return false;
@@ -1862,13 +1652,9 @@ export function settingsMode(
         deleteLlmFormTarget();
         return true;
       }
-      // `d` on a template row opens a delete confirm (an unobtrusive key; only acts on a template).
+      // `d` on a custom theme row opens a delete confirm.
       if (input === 'd') {
         const row = s.rows[s.cursor];
-        if (row?.kind === 'template') {
-          beginTemplateDelete(row.name);
-          return true;
-        }
         if (row?.kind === 'theme' && !row.builtin) {
           beginThemeDelete(row.value);
           return true;
@@ -1878,33 +1664,11 @@ export function settingsMode(
       return false; // other chars are not actions here — swallow under the modal
     },
     render: () => (
-      <SettingsDialog state={s} syncTemplates={syncTemplates} syncThemes={syncThemes} />
+      <SettingsDialog state={s} syncThemes={syncThemes} />
     ),
   };
 
   return mode;
-}
-
-/** Read the live templates registry + action handle from the {@link AppStoreContext}, tolerating a
- * missing provider (tests render the modal without an `<AppStoreProvider>`). Returns `null` when there
- * is no store; otherwise a `{ items, actions }` snapshot that re-renders on a `templates.items` change.
- * `useStoreWithEqualityFn` is called unconditionally (rules of hooks) — when the provider is absent the
- * subscription resolves against `EMPTY_TEMPLATES`, a stable empty snapshot, and we return `null`. */
-function useLiveTemplates(): {
-  items: readonly TemplateRecord[];
-  actions: {
-    remove(name: string): void;
-    rename(oldName: string, newName: string): void;
-    save(name: string, body: string): void;
-  };
-} | null {
-  const store = useContext(AppStoreContext);
-  const snapshot = useStoreWithEqualityFn(
-    store ?? EMPTY_STORE,
-    (st: AppStore) => ({ items: st.templates.items, actions: st.actions.templates }),
-    shallow,
-  );
-  return store === null ? null : snapshot;
 }
 
 function useLiveThemes(): {
@@ -1927,10 +1691,8 @@ function useLiveThemes(): {
  * `shallow` compare never sees a new ref (a fresh object each call would trip React's "getSnapshot
  * should be cached" infinite-loop guard). */
 const EMPTY_STORE_STATE = {
-  templates: { items: [] as readonly TemplateRecord[] },
   themes: { items: [] as readonly ThemeRecord[] },
   actions: {
-    templates: { remove() {}, rename() {}, save() {} },
     themes: {
       async importTheme() {
         return '';
@@ -1943,7 +1705,7 @@ const EMPTY_STORE_STATE = {
 } as unknown as AppStore;
 
 /** A stable no-op store standing in for `useStoreWithEqualityFn` when no `<AppStoreProvider>` is
- * mounted (the templates section then runs purely off the opening `current.templates`). Returns the
+ * mounted. Returns the
  * one frozen {@link EMPTY_STORE_STATE} so the subscription is referentially stable. */
 const EMPTY_STORE = {
   getState: () => EMPTY_STORE_STATE,
@@ -1982,18 +1744,9 @@ const KITTY_WORKSPACE_MAPPING_WARNING =
 
 function SettingsDialog({
   state: s,
-  syncTemplates,
   syncThemes,
 }: {
   readonly state: SettingsState;
-  readonly syncTemplates: (
-    items: readonly TemplateRecord[],
-    actions: {
-      remove(name: string): void;
-      rename(oldName: string, newName: string): void;
-      save(name: string, body: string): void;
-    },
-  ) => void;
   readonly syncThemes: (
     items: readonly ThemeRecord[],
     actions: {
@@ -2009,16 +1762,7 @@ function SettingsDialog({
   const { rows: termRows } = useTerminalSize();
   const kitty = useKittySupport();
   const ctrlAvailable = kitty === true;
-  // Live templates registry + action handle from the app store (so `:save`/external edits track here).
-  // The store is optional: tests that render the modal without an <AppStoreProvider> get `null` here
-  // and the modal just runs off whatever `current.templates` it was opened with.
-  const live = useLiveTemplates();
   const liveThemes = useLiveThemes();
-  useEffect(() => {
-    if (live !== null) {
-      syncTemplates(live.items, live.actions);
-    }
-  }, [live, syncTemplates]);
   useEffect(() => {
     if (liveThemes !== null) {
       syncThemes(liveThemes.items, liveThemes.actions);
@@ -2315,21 +2059,6 @@ function SettingsDialog({
           </Box>
         )}
 
-        {s.previewTemplate !== null && (
-          <Box
-            marginTop={1}
-            flexShrink={0}
-            flexDirection="column"
-            borderStyle="round"
-            borderColor={theme.muted}
-            paddingX={1}
-          >
-            <Text color={theme.muted}>{`preview · :${s.previewTemplate.name}:`}</Text>
-            <Text color={theme.text} wrap="truncate-end">
-              {previewBody(s.previewTemplate.body)}
-            </Text>
-          </Box>
-        )}
 
         {s.categoryId === 'workspaces' &&
           s.showKittyWorkspaceMappingWarning &&
@@ -2353,16 +2082,6 @@ function SettingsDialog({
       </Box>
     </Box>
   );
-}
-
-/** Flatten a template body into a single preview line (newlines → `⏎`, trimmed, capped at 200 chars
- * with an ellipsis). The `<Text wrap="truncate-end">` clamps it to the dialog width on top of this. */
-function previewBody(body: string): string {
-  const flat = body.replace(/\s*\n\s*/g, ' ⏎ ').trim();
-  if (flat === '') {
-    return '(empty)';
-  }
-  return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
 }
 
 /** The maximum number of section rows shown at once — a scroll-by-cursor window so the modal shows
@@ -3048,64 +2767,14 @@ function RowView({
     );
   }
 
-  if (row.kind === 'templateEmpty') {
-    return (
-      <Box flexShrink={0}>
-        <Text color={theme.muted}>
-          {'  '}
-          no templates
-        </Text>
-      </Box>
-    );
-  }
-
-  if (row.kind === 'templateCreate') {
-    const creatingName = s.editing?.kind === 'templateCreateName';
-    const creatingBody = s.editing?.kind === 'templateCreateBody';
-    const creatingBodyName = s.editing?.kind === 'templateCreateBody' ? s.editing.name : null;
+  if (row.kind === 'templateOpen') {
     const color = focused ? theme.warning : theme.text;
     return (
       <Box flexShrink={0}>
         <Text color={color} bold={focused}>
           {cursor}
-          {creatingName ? 'name ' : creatingBody ? `body :${creatingBodyName}: ` : '+ New Template'}
+          Open Prompt Templates…
         </Text>
-        {creatingName || creatingBody ? (
-          <TextEditorDisplay
-            state={s.editEditor}
-            width={SETTINGS_TEMPLATE_EDITOR_WIDTH}
-            placeholder={creatingName ? '(name)' : '(body)'}
-            focused
-            color={theme.text}
-          />
-        ) : null}
-      </Box>
-    );
-  }
-
-  if (row.kind === 'template') {
-    const renaming = s.editing?.kind === 'templateRename' && s.editing.name === row.name;
-    const confirming = s.confirmingDelete === row.name;
-    const color = focused ? theme.warning : theme.text;
-    return (
-      <Box flexShrink={0}>
-        <Text color={color} bold={focused}>
-          {cursor}
-          {`:${renaming ? '' : row.name}`}
-        </Text>
-        {renaming ? (
-          <TextEditorDisplay
-            state={s.editEditor}
-            width={SETTINGS_TEMPLATE_EDITOR_WIDTH}
-            placeholder="(name)"
-            focused
-            color={theme.text}
-          />
-        ) : (
-          <Text color={confirming ? theme.warning : theme.muted}>
-            {confirming ? '  delete? (y/n)' : ''}
-          </Text>
-        )}
       </Box>
     );
   }
