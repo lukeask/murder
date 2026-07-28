@@ -3,7 +3,7 @@
  * Used by {@link ../PromptTemplateManagerMode.js} for preview / rename-delete guards.
  */
 
-import type { WorkflowDef } from '../../store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate } from '../../store/workflows/workflowsSlice.js';
 
 /** Inline `:name:` macros inside a body (or workflow field). */
 export const INLINE_TEMPLATE_RE = /:([A-Za-z0-9_-]+):/g;
@@ -17,6 +17,11 @@ export interface WorkflowTemplateRef {
   readonly workflowName: string;
   readonly stageId: string;
   readonly field: 'title' | 'instructions';
+}
+
+/** Compact `workflow/stage.field` label for referential warnings. */
+export function formatWorkflowTemplateRef(ref: WorkflowTemplateRef): string {
+  return `${ref.workflowName}/${ref.stageId}.${ref.field}`;
 }
 
 /** Distinct `{placeholder}` names in first-appearance order. */
@@ -80,7 +85,7 @@ export function expandInlinePreview(
 /** Find workflow-template fields that contain `:templateName:` as an inline ref. */
 export function findWorkflowReferences(
   templateName: string,
-  workflows: readonly WorkflowDef[],
+  workflows: readonly WorkflowTemplate[],
 ): readonly WorkflowTemplateRef[] {
   const needle = `:${templateName}:`;
   const refs: WorkflowTemplateRef[] = [];

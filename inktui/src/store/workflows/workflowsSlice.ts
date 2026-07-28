@@ -5,8 +5,8 @@
  *
  * Like {@link ../templates/templatesSlice.js templates} (its sibling pattern), this is none of the
  * `{ rows, status, error }` snapshot-re-pull shape the list-slice factory serves. The state is a list
- * of {@link WorkflowTemplate} records plus a load lifecycle, loaded once via `tui.load_workflows` and
- * persisted via `tui.save_workflows` (never snapshot-invalidated). So — like `favorites`, `templates`,
+ * of {@link WorkflowTemplate} records plus a load lifecycle, loaded once via `workflows.get` and
+ * persisted via `workflows.set` (never snapshot-invalidated). So — like `favorites`, `templates`,
  * and `conversations` — this is a hand-written slice with its own shape.
  *
  * ## What a workflow template is
@@ -45,7 +45,7 @@ export type WorkflowDef = WorkflowTemplate;
 
 /**
  * The workflows slice state. `items` is the registry (canonical/normalized after a save); `status`
- * makes the initial `tui.load_workflows` lifecycle explicit so a selector/component can tell "not
+ * makes the initial `workflows.get` lifecycle explicit so a selector/component can tell "not
  * loaded yet" from "loaded, none defined". `error` carries a failed load/save message. All readonly
  * — ref-swapped wholesale on change.
  */
@@ -60,7 +60,7 @@ export interface WorkflowsState {
   readonly revision: string;
 }
 
-/** The initial, pre-load slice value. A fresh store has not called `tui.load_workflows` yet. */
+/** The initial, pre-load slice value. A fresh store has not called `workflows.get` yet. */
 export const initialWorkflowsState: WorkflowsState = {
   items: [],
   status: 'idle',
