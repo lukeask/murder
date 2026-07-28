@@ -91,9 +91,7 @@ export type SettingsRow =
   | { readonly id: string; readonly kind: 'llmFeaturePolicy'; readonly feature: string }
   | { readonly id: string; readonly kind: 'tier'; readonly name: string }
   | { readonly id: string; readonly kind: 'role'; readonly role: string; readonly tier: string }
-  | { readonly id: string; readonly kind: 'templateCreate' }
-  | { readonly id: string; readonly kind: 'template'; readonly name: string }
-  | { readonly id: string; readonly kind: 'templateEmpty' }
+  | { readonly id: string; readonly kind: 'templateOpen' }
   | { readonly id: string; readonly kind: 'binding'; readonly action: ActionId }
   | {
       readonly id: string;

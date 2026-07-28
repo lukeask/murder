@@ -120,6 +120,7 @@ import { helpMode } from './HelpOverlay.js';
 import { newPlanMode } from './NewPlanModal.js';
 import { newTicketMode } from './NewTicketModal.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
+import { promptTemplateManagerMode } from './PromptTemplateManagerMode.js';
 import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
@@ -915,6 +916,10 @@ function Shell({
     );
   };
 
+  const openPromptTemplatesHandler = (): void => {
+    modes.getState().enter(promptTemplateManagerMode(modes, appStore));
+  };
+
   // `alt+o` / `ctrl+o` → open the settings modal. Reads the persisted slice at call time so the modal opens
   // reflecting the live preferences; commits route back through `actions.settings.update`. The slice
   // stores `theme`/`keyOverrides` opaquely, so we narrow them onto the modal's typed shape here (an
@@ -925,36 +930,41 @@ function Shell({
     const storeState = appStore.getState();
     const theme: ThemeId = hasTheme(settings.theme) ? settings.theme : DEFAULT_THEME_ID;
     modes.getState().enter(
-      settingsMode(modes, settingsActions, {
-        modifier: settings.modifier,
-        theme,
-        paneGap: settings.paneGap,
-        workspaceCount: settings.workspaceCount,
-        vimMode: settings.vimMode,
-        barWidgets: settings.barWidgets,
-        defaultChatViewMode: settings.defaultChatViewMode,
-        documentDisplayMode: settings.documentDisplayMode,
-        codexControlBackend: settings.codexControlBackend,
-        cursorControlBackend: settings.cursorControlBackend,
-        claudeControlBackend: settings.claudeControlBackend,
-        startupRogue: settings.startupRogue,
-        startupRogueModels: settings.startupRogueModels,
-        startupRogueEfforts: settings.startupRogueEfforts,
-        keyOverrides: settings.keyOverrides as Record<string, string>,
-        collaboratorHarness: settings.collaboratorHarness,
-        effectiveCollaborator: settings.effectiveCollaboratorHarness,
-        plannerHarness: settings.plannerHarness,
-        effectivePlanner: settings.effectivePlannerHarness,
-        crowHarnesses: settings.crowHarnesses,
-        effectiveCrow: settings.effectiveCrowHarnesses,
-        llm: settings.llm,
-        llmEnv: settings.llmEnv,
-        themes: storeState.themes.items,
-        themeActions: {
-          importTheme: (json) => storeState.actions.themes.importTheme(json),
-          remove: (id) => storeState.actions.themes.remove(id),
+      settingsMode(
+        modes,
+        settingsActions,
+        {
+          modifier: settings.modifier,
+          theme,
+          paneGap: settings.paneGap,
+          workspaceCount: settings.workspaceCount,
+          vimMode: settings.vimMode,
+          barWidgets: settings.barWidgets,
+          defaultChatViewMode: settings.defaultChatViewMode,
+          documentDisplayMode: settings.documentDisplayMode,
+          codexControlBackend: settings.codexControlBackend,
+          cursorControlBackend: settings.cursorControlBackend,
+          claudeControlBackend: settings.claudeControlBackend,
+          startupRogue: settings.startupRogue,
+          startupRogueModels: settings.startupRogueModels,
+          startupRogueEfforts: settings.startupRogueEfforts,
+          keyOverrides: settings.keyOverrides as Record<string, string>,
+          collaboratorHarness: settings.collaboratorHarness,
+          effectiveCollaborator: settings.effectiveCollaboratorHarness,
+          plannerHarness: settings.plannerHarness,
+          effectivePlanner: settings.effectivePlannerHarness,
+          crowHarnesses: settings.crowHarnesses,
+          effectiveCrow: settings.effectiveCrowHarnesses,
+          llm: settings.llm,
+          llmEnv: settings.llmEnv,
+          themes: storeState.themes.items,
+          themeActions: {
+            importTheme: (json) => storeState.actions.themes.importTheme(json),
+            remove: (id) => storeState.actions.themes.remove(id),
+          },
         },
-      }),
+        { openPromptTemplates: openPromptTemplatesHandler },
+      ),
     );
   };
 
