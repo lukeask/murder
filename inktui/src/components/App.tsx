@@ -29,8 +29,8 @@ import {
   useState,
 } from 'react';
 import type { ApplicationClient } from '../application/ApplicationClient.js';
-import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import { ApplicationClientProvider, useApplicationClient } from '../hooks/useApplicationClient.js';
+import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import {
   type InputStores,
   InputStoresProvider,
@@ -123,6 +123,7 @@ import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { TopBar } from './TopBar.js';
+import { workflowEditorMode } from './WorkflowEditorMode.js';
 import { WorkspaceSlideOverlay } from './WorkspaceSlideOverlay.js';
 
 /**
@@ -1210,6 +1211,23 @@ function Shell({
     },
     terminalViewport: (agentId, action) => {
       paneScroll.emitTerminalViewport(stageTranscriptFocusId(agentId), action);
+    },
+    openWorkflows: (name) => {
+      const workflow =
+        name === null
+          ? undefined
+          : appStore.getState().workflows.items.find((item) => item.name === name);
+      if (name !== null && workflow === undefined) {
+        toastStore.getState().push(`workflow “${name}” was not found`, { severity: 'error' });
+        return;
+      }
+      modes.getState().enter(
+        workflowEditorMode(modes, appStore, {
+          ...(workflow === undefined ? {} : { workflow }),
+          harnessModels: createHarnessModelsActions(bus),
+          worktreeOptions: createWorktreeOptionsActions(bus),
+        }),
+      );
     },
     resolveRenameTarget: () => {
       const state = appStore.getState();

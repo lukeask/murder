@@ -60,7 +60,7 @@ function spawnSubmitPayload(bus: FakeApplicationClient): Record<string, unknown>
     (c) =>
       c.name === 'crow.spawn_rogue',
   );
-  return (call?.params as { payload: Record<string, unknown> }).payload;
+  return (call?.params ?? {}) as Record<string, unknown>;
 }
 
 function kickoffSubmitPayload(bus: FakeApplicationClient): Record<string, unknown> | undefined {
@@ -68,7 +68,7 @@ function kickoffSubmitPayload(bus: FakeApplicationClient): Record<string, unknow
     (c) =>
       c.name === 'agent.message',
   );
-  return call ? (call.params as { payload: Record<string, unknown> }).payload : undefined;
+  return call?.params as Record<string, unknown> | undefined;
 }
 
 function RootInput({ spawn }: { readonly spawn?: () => void }): null {
@@ -99,10 +99,9 @@ function setup(spawnContext: SpawnContext | null = null) {
   const stores = createInputStores(['notes'], 'notes');
   const bus = new FakeApplicationClient();
   bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
-  bus.stubQuery('command.get', {
-    ok: true,
-    status: 'done',
-    result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
+  bus.stubCommand('crow.spawn_rogue', {
+    handled: true,
+    agent_id: 'rogue-001',
   });
   // No harness_models.list stub → fetch rejects → static fallback.
   const actions = createSpawnActions(bus);
@@ -570,10 +569,9 @@ describe('H4 — spawn payload contract (real spawn action)', () => {
   function liveStubBus(): FakeApplicationClient {
     const bus = new FakeApplicationClient();
     bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
-    bus.stubQuery('command.get', {
-      ok: true,
-      status: 'done',
-      result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
+    bus.stubCommand('crow.spawn_rogue', {
+      handled: true,
+      agent_id: 'rogue-001',
     });
     return bus;
   }
@@ -718,10 +716,9 @@ describe('SpawnWizardModal — spawn favorites (the two new behavioral contracts
     const stores = createInputStores(['notes'], 'notes');
     const bus = new FakeApplicationClient();
     bus.stubAllCommands({ ok: true, command_id: 'cmd-1' });
-    bus.stubQuery('command.get', {
-      ok: true,
-      status: 'done',
-      result_json: JSON.stringify({ handled: true, agent_id: 'rogue-001' }),
+    bus.stubCommand('crow.spawn_rogue', {
+      handled: true,
+      agent_id: 'rogue-001',
     });
     bus.stubQuery('spawn_favorites.get', { ok: true, favorites: [ONE_FAVORITE] });
     bus.stubCommand('spawn_favorites.set', (p) => ({

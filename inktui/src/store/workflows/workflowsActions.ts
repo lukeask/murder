@@ -22,9 +22,7 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { ApplicationClient } from '../../application/ApplicationClient.js';
-import type { CommandParams } from '../../application/ApplicationClient.js';
-import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
+import type { ApplicationClient, CommandResult } from '../../application/ApplicationClient.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { WorkflowDef } from './workflowsSlice.js';
@@ -35,7 +33,6 @@ import type { WorkflowDef } from './workflowsSlice.js';
  * Shapes mirror the bus contract: a {@link WorkflowDef} list round-tripped for load/save, and a fire
  * verb returning the materialized ticket ids.
  */
-
 
 /** The workflows actions, bound to one {@link ApplicationClient} + store handle. */
 export interface WorkflowsActions {
@@ -63,11 +60,31 @@ export interface WorkflowsActions {
    * toasts the run ticket id; a failure toasts the error (mirroring the optimistic-commit error path).
    */
   run(name: string, args: Record<string, string>): Promise<void>;
+  /** Atomic server-validated upsert. The editor is the only caller; it never changes canonical state
+   * until this returns ok. */
+  put(workflow: WorkflowDef, originalName: string | null): Promise<CommandResult<'workflow.put'>>;
+  /** Atomic revision-checked deletion. */
+  delete(name: string): Promise<CommandResult<'workflow.delete'>>;
 }
 
 /** Project a `tui.load_workflows` reply's list defensively (the wire may omit it). */
 function toItems(workflows: readonly WorkflowDef[] | undefined): readonly WorkflowDef[] {
   return workflows ?? [];
+}
+
+function acceptRegistry(
+  store: StoreApi<AppStore>,
+  result: { readonly workflows: readonly WorkflowDef[]; readonly revision: string },
+): void {
+  store.setState((state) => ({
+    workflows: {
+      ...state.workflows,
+      items: result.workflows,
+      revision: result.revision,
+      status: 'ready',
+      error: null,
+    },
+  }));
 }
 
 export function createWorkflowsActions(
@@ -83,17 +100,13 @@ export function createWorkflowsActions(
       workflows: { ...state.workflows, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.command(
-        'workflows.set',
-        { workflows: next } as unknown as CommandParams<'workflows.set'>,
-      );
+      const reply = await bus.command('workflows.set', { workflows: next });
       store.setState({
         workflows: {
-          items: toItems(
-            asCommandResult<'workflows.set', { workflows: readonly WorkflowDef[] }>(reply).workflows,
-          ),
+          items: toItems(reply.workflows),
           status: 'ready',
           error: null,
+          revision: store.getState().workflows.revision,
         },
       });
     } catch (error: unknown) {
@@ -113,11 +126,10 @@ export function createWorkflowsActions(
         const reply = await bus.query('workflows.get', {});
         store.setState({
           workflows: {
-            items: toItems(
-              asQueryResult<'workflows.get', { workflows: readonly WorkflowDef[] }>(reply).workflows,
-            ),
+            items: toItems(reply.workflows),
             status: 'ready',
             error: null,
+            revision: reply.revision,
           },
         });
       } catch (error: unknown) {
@@ -156,12 +168,53 @@ export function createWorkflowsActions(
         const reply = await bus.command('workflow.start', { name, args });
         // Fire confirmation: the run ticket is the root of the materialized tree; the tickets/crows
         // themselves arrive via the snapshot stream (this action does not poll them).
+        if (reply.workflow_id !== undefined) {
+          void store.getState().actions.workflowRuns.setActive(reply.workflow_id);
+        }
         toastStore.getState().push(`fired :${name}: → ${reply.run_ticket_id}`);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         // Mirror the commit() error path: a fire failure surfaces via the global toast.
         toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
       }
+    },
+
+    async put(workflow, originalName): Promise<CommandResult<'workflow.put'>> {
+      const expectedRevision = store.getState().workflows.revision;
+      const result = await bus.command('workflow.put', {
+        workflow,
+        original_name: originalName,
+        expected_revision: expectedRevision,
+      });
+      if (result.ok) acceptRegistry(store, result);
+      else
+        store.setState((state) => ({
+          workflows: {
+            ...state.workflows,
+            error: result.conflict
+              ? 'workflow registry changed remotely'
+              : (result.issues?.[0]?.message ?? 'workflow was rejected'),
+          },
+        }));
+      return result;
+    },
+
+    async delete(name): Promise<CommandResult<'workflow.delete'>> {
+      const result = await bus.command('workflow.delete', {
+        name,
+        expected_revision: store.getState().workflows.revision,
+      });
+      if (result.ok) acceptRegistry(store, result);
+      else
+        store.setState((state) => ({
+          workflows: {
+            ...state.workflows,
+            error: result.conflict
+              ? 'workflow registry changed remotely'
+              : (result.issues?.[0]?.message ?? 'workflow was rejected'),
+          },
+        }));
+      return result;
     },
   };
 }

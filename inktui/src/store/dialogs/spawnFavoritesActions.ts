@@ -26,8 +26,6 @@
  */
 
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
-import type { CommandParams } from '../../application/ApplicationClient.js';
-import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 
 /** A named bundle of the wizard's first-step choices, re-spawnable in one pick. */
 export interface SpawnFavorite {
@@ -71,10 +69,7 @@ export function createSpawnFavoritesActions(bus: ApplicationClient): SpawnFavori
       try {
         const reply = await bus.query('spawn_favorites.get', {});
         // Coerce the readonly wire list to a mutable array for the caller.
-        return [
-          ...asQueryResult<'spawn_favorites.get', { favorites: readonly SpawnFavorite[] }>(reply)
-            .favorites,
-        ];
+        return [...reply.favorites];
       } catch {
         // RPC / transport error — opening the wizard must not fail; degrade to no favorites.
         return [];
@@ -85,12 +80,9 @@ export function createSpawnFavoritesActions(bus: ApplicationClient): SpawnFavori
       // Let a rejection propagate — the wizard catches it to toast (intentional vs `load`).
       const reply = await bus.command(
         'spawn_favorites.set',
-        { favorites } as unknown as CommandParams<'spawn_favorites.set'>,
+        { favorites },
       );
-      return [
-        ...asCommandResult<'spawn_favorites.set', { favorites: readonly SpawnFavorite[] }>(reply)
-          .favorites,
-      ];
+      return [...reply.favorites];
     },
   };
 }

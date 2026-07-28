@@ -46,6 +46,7 @@ describe('createAppStore — projection hydration', () => {
           'templates',
           'themes',
           'workflows',
+          'workflow_runs',
           'settings',
         ],
         cursor: null,
@@ -56,6 +57,52 @@ describe('createAppStore — projection hydration', () => {
       projections: { cursor: 42, mode: 'cold' },
     });
     expect(store.getState().roster.rows[0]?.agentId).toBe('agent-1');
+    dispose();
+  });
+
+  it('refreshes only the active workflow run for a workflow_runs invalidation', async () => {
+    const fake = new FakeApplicationClient();
+    fake.stubQuery('workflow.runs.get', {
+      ok: false,
+      run: null,
+      waits: [],
+      error: 'not_found',
+    });
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    await store.getState().actions.workflowRuns.setActive('run-1');
+    expect(fake.queryCalls).toHaveLength(1);
+
+    fake.emitInvalidation({
+      type: 'projection.invalidate',
+      projection: 'workflow_runs',
+      subject_key: 'run-1',
+      generation: 1,
+      source_fact_id: null,
+    });
+    await flush();
+
+    expect(fake.queryCalls).toEqual([
+      {
+        name: 'workflow.runs.get',
+        params: { workflow_id: 'run-1', include_waits: false },
+      },
+      {
+        name: 'workflow.runs.get',
+        params: { workflow_id: 'run-1', include_waits: false },
+      },
+    ]);
+
+    fake.emitInvalidation({
+      type: 'projection.invalidate',
+      projection: 'approvals',
+      subject_key: 'approval-1',
+      generation: 1,
+      source_fact_id: null,
+    });
+    await flush();
+    expect(fake.queryCalls).toHaveLength(2);
     dispose();
   });
 

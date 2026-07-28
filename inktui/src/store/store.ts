@@ -140,6 +140,15 @@ import {
   type WorkflowDef,
   type WorkflowsState,
 } from './workflows/workflowsSlice.js';
+import {
+  createWorkflowRunsActions,
+  type WorkflowRunsActions,
+} from './workflowRuns/workflowRunsActions.js';
+import {
+  createWorkflowRunsSlice,
+  initialWorkflowRunsState,
+  type WorkflowRunsState,
+} from './workflowRuns/workflowRunsSlice.js';
 
 /** Every slice's actions, grouped by domain. Components dispatch through here; the bus is reached
  * only via these (rule 3). One key per slice — copy the `roster` line to add a domain. */
@@ -158,6 +167,7 @@ export interface AppActions {
   templates: TemplatesActions;
   themes: ThemesActions;
   workflows: WorkflowsActions;
+  workflowRuns: WorkflowRunsActions;
   docView: DocViewActions;
   settings: SettingsActions;
 }
@@ -193,6 +203,7 @@ export interface AppStore {
   templates: TemplatesState;
   themes: ThemesState;
   workflows: WorkflowsState;
+  workflowRuns: WorkflowRunsState;
   docView: DocViewState;
   settings: SettingsState;
   hydration: HydrationState;
@@ -237,6 +248,7 @@ export function createAppStore(bus: ApplicationClient): {
     ...createTemplatesSlice(...a),
     ...createThemesSlice(...a),
     ...createWorkflowsSlice(...a),
+    ...createWorkflowRunsSlice(...a),
     ...createDocViewSlice(...a),
     ...createSettingsSlice(...a),
     hydration: initialHydrationState,
@@ -260,6 +272,7 @@ export function createAppStore(bus: ApplicationClient): {
     templates: createTemplatesActions(bus, store),
     themes: createThemesActions(bus, store),
     workflows: createWorkflowsActions(bus, store),
+    workflowRuns: createWorkflowRunsActions(bus, store),
     docView: createDocViewActions(bus, store),
     settings: createSettingsActions(bus, store),
   };
@@ -284,6 +297,7 @@ const HYDRATE_TOPICS: readonly ProjectionTopic[] = [
   'templates',
   'themes',
   'workflows',
+  'workflow_runs',
   'settings',
 ];
 
@@ -395,10 +409,12 @@ function routeProjectionInvalidation(
     case 'settings':
       void actions.settings.load();
       return;
+    case 'workflow_runs':
+      void actions.workflowRuns.refresh();
+      return;
     case 'approvals':
     case 'permissions':
     case 'sessions':
-    case 'workflow_runs':
     case 'activities':
       // No store slices yet — subscription is live so future slices can attach without a protocol
       // change. Queries exist for approvals/permissions but are unused until UI needs them.
@@ -450,12 +466,16 @@ function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots):
     store.setState({ themes: { items, status: 'ready', error: null } });
   }
 
-  const workflows = snapshotAs<{ workflows?: readonly WorkflowDef[] }>(snapshots, 'workflows');
+  const workflows = snapshotAs<{ workflows?: readonly WorkflowDef[]; revision?: string }>(snapshots, 'workflows');
   if (workflows !== undefined) {
     store.setState({
-      workflows: { items: workflows.workflows ?? [], status: 'ready', error: null },
+      workflows: { items: workflows.workflows ?? [], revision: workflows.revision ?? '', status: 'ready', error: null },
     });
   }
+
+  // The projection is subscribed even when no editor/run monitor is open. An active run is fetched
+  // through workflow.runs.get because that typed record, rather than a ticket snapshot, is runtime
+  // truth; projection invalidations above refresh only this slice.
 
   const settings = snapshotAs<{ settings?: SettingsWire }>(snapshots, 'settings');
   if (settings !== undefined) {
@@ -592,6 +612,7 @@ export const initialAppState: Pick<
   | 'templates'
   | 'themes'
   | 'workflows'
+  | 'workflowRuns'
   | 'docView'
   | 'settings'
   | 'hydration'
@@ -610,6 +631,7 @@ export const initialAppState: Pick<
   templates: initialTemplatesState,
   themes: initialThemesState,
   workflows: initialWorkflowsState,
+  workflowRuns: initialWorkflowRunsState,
   docView: initialDocViewState,
   settings: initialSettingsState,
   hydration: initialHydrationState,

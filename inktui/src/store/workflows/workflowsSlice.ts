@@ -23,29 +23,18 @@
  */
 
 import type { StateCreator } from 'zustand';
+import type { QueryResult } from '../../application/ApplicationClient.js';
 import type { AppStore } from '../store.js';
 
 /** One stage of a workflow: a node in the ticket tree the backend materializes on fire. Mirrors the
  * backend stage dict. `depends_on` lists sibling stage ids this stage gates behind. */
-export interface WorkflowStageDef {
-  readonly id: string;
-  readonly title: string;
-  readonly instructions: string;
-  readonly harness: string;
-  readonly model: string;
-  readonly worktree: string;
-  readonly depends_on: readonly string[];
-  readonly gate: string;
-}
+export type WorkflowStageDef = NonNullable<
+  QueryResult<'workflows.get'>['workflows'][number]['stages']
+>[number];
 
 /** One named workflow: `name` is the `:name` leading-fire key, `stages` the ordered ticket-tree spec
  * the backend materializes when the workflow fires. Mirrors the backend `WorkflowDef` dict. */
-export interface WorkflowDef {
-  readonly name: string;
-  readonly description: string;
-  readonly mode: string;
-  readonly stages: readonly WorkflowStageDef[];
-}
+export type WorkflowDef = QueryResult<'workflows.get'>['workflows'][number];
 
 /**
  * The workflows slice state. `items` is the registry (canonical/normalized after a save); `status`
@@ -60,6 +49,8 @@ export interface WorkflowsState {
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   /** Set when the last load/save rejected; cleared on the next success. */
   readonly error: string | null;
+  /** Opaque server-side registry version used for atomic workflow mutations. */
+  readonly revision: string;
 }
 
 /** The initial, pre-load slice value. A fresh store has not called `tui.load_workflows` yet. */
@@ -67,6 +58,7 @@ export const initialWorkflowsState: WorkflowsState = {
   items: [],
   status: 'idle',
   error: null,
+  revision: '',
 };
 
 /**

@@ -66,6 +66,8 @@ export interface CommandCtx {
   readonly renamePlan: (oldName: string, newName: string) => void;
   /** Pan a harness's local terminal viewport or return it to cursor-follow mode. */
   readonly terminalViewport?: (agentId: string, action: TerminalViewportAction) => void;
+  /** Open the full-screen workflow editor. The optional workflow name selects an existing definition. */
+  readonly openWorkflows?: (name: string | null) => void;
 }
 
 /** The rename subject resolved from chat/doc context for the single-arg `:rename <new>` form. */
@@ -94,10 +96,14 @@ function parseRenameArgs(
   }
   const parts = trimmed.split(/\s+/);
   if (parts.length === 1) {
-    return { mode: 'single', newName: parts[0]! };
+    const newName = parts[0];
+    return newName === undefined ? null : { mode: 'single', newName };
   }
   if (parts.length === 2) {
-    return { mode: 'dual', oldName: parts[0]!, newName: parts[1]! };
+    const [oldName, newName] = parts;
+    return oldName === undefined || newName === undefined
+      ? null
+      : { mode: 'dual', oldName, newName };
   }
   return null;
 }
@@ -113,6 +119,19 @@ type CommandHandler = (args: string, agentId: string | null, ctx: CommandCtx) =>
  * command surface. Adding a command = adding one entry here (and one Help "Commands" row).
  */
 const COMMANDS: Readonly<Record<string, CommandHandler>> = {
+  /** `:workflows [name]` — open the graph editor, optionally on a named workflow. */
+  workflows(args, _agentId, ctx) {
+    if (ctx.openWorkflows === undefined) {
+      ctx.pushToast('workflow editor is unavailable', { severity: 'error' });
+      return;
+    }
+    const name = args.trim();
+    if (name.includes(' ')) {
+      ctx.pushToast('usage: :workflows [name]', { severity: 'error' });
+      return;
+    }
+    ctx.openWorkflows(name === '' ? null : name);
+  },
   /** `:help` — open the help overlay (same as `?`). */
   help(_args, _agentId, ctx) {
     ctx.openHelp();

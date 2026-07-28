@@ -21,6 +21,7 @@ interface FakeCtx {
   resolveRenameTarget: Mock;
   renameRogue: Mock;
   renamePlan: Mock;
+  openWorkflows: Mock;
   dismiss?: Mock;
 }
 
@@ -39,6 +40,7 @@ function makeCtx(withDismiss = false): FakeCtx {
     resolveRenameTarget: vi.fn(() => null),
     renameRogue: vi.fn(),
     renamePlan: vi.fn(),
+    openWorkflows: vi.fn(),
   };
   if (withDismiss) {
     base.dismiss = vi.fn();
@@ -87,6 +89,15 @@ describe('dispatchCommand — : commands', () => {
     const handled = dispatchCommand(':help', AGENT, ctx);
     expect(handled).toBe(true);
     expect(ctx.openHelp).toHaveBeenCalledOnce();
+  });
+
+  it(':workflows opens the graph editor, optionally at a named workflow', () => {
+    const ctx = makeCtx();
+    expect(dispatchCommand(':workflows', AGENT, ctx)).toBe(true);
+    expect(ctx.openWorkflows).toHaveBeenLastCalledWith(null);
+
+    expect(dispatchCommand(':workflows release', AGENT, ctx)).toBe(true);
+    expect(ctx.openWorkflows).toHaveBeenLastCalledWith('release');
   });
 
   it(':note <text> captures a note with the body', () => {

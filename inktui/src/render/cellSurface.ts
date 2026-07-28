@@ -31,7 +31,34 @@ export interface TextRun {
   readonly style: CellStyle;
 }
 
+export interface SurfaceRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 const EMPTY_STYLE: CellStyle = {};
+const N = 1;
+const E = 2;
+const S = 4;
+const W = 8;
+const CONNECTION_GLYPHS: Readonly<Record<number, string>> = {
+  [N | S]: '│',
+  [E | W]: '─',
+  [E | S]: '┌',
+  [W | S]: '┐',
+  [E | N]: '└',
+  [W | N]: '┘',
+  [N | E | S]: '├',
+  [N | W | S]: '┤',
+  [E | S | W]: '┬',
+  [N | E | W]: '┴',
+  [N | E | S | W]: '┼',
+};
+const GLYPH_CONNECTIONS = new Map(
+  Object.entries(CONNECTION_GLYPHS).map(([mask, glyph]) => [glyph, Number(mask)]),
+);
 
 function styleKey(style: CellStyle): string {
   return `${style.fg ?? ''}\0${style.bg ?? ''}\0${style.bold === true ? '1' : '0'}\0${
@@ -81,6 +108,98 @@ export function putText(
       surface.cells[indexOf(surface, cx, y)] = { char: normalizeChar(chars[i] ?? ' '), style };
     }
   }
+  return surface;
+}
+
+/** Put one clipped cell. These mutating drawing helpers share the surface's intentionally mutable backing array. */
+export function putCell(
+  surface: CellSurface,
+  x: number,
+  y: number,
+  char: string,
+  style: CellStyle = EMPTY_STYLE,
+): CellSurface {
+  if (x >= 0 && x < surface.width && y >= 0 && y < surface.height) {
+    surface.cells[indexOf(surface, x, y)] = { char: normalizeChar(char), style };
+  }
+  return surface;
+}
+
+export function putClippedText(
+  surface: CellSurface,
+  x: number,
+  y: number,
+  width: number,
+  text: string,
+  style: CellStyle = EMPTY_STYLE,
+): CellSurface {
+  return putText(surface, x, y, Array.from(text).slice(0, Math.max(0, width)).join(''), style);
+}
+
+export function drawHorizontal(
+  surface: CellSurface,
+  x1: number,
+  x2: number,
+  y: number,
+  connectionMask: number = 0,
+  style: CellStyle = EMPTY_STYLE,
+): CellSurface {
+  const from = Math.min(x1, x2);
+  const to = Math.max(x1, x2);
+  for (let x = from; x <= to; x += 1) {
+    mergeConnectionCell(surface, x, y, E | W | connectionMask, style);
+  }
+  return surface;
+}
+
+export function drawVertical(
+  surface: CellSurface,
+  x: number,
+  y1: number,
+  y2: number,
+  connectionMask: number = 0,
+  style: CellStyle = EMPTY_STYLE,
+): CellSurface {
+  const from = Math.min(y1, y2);
+  const to = Math.max(y1, y2);
+  for (let y = from; y <= to; y += 1) {
+    mergeConnectionCell(surface, x, y, N | S | connectionMask, style);
+  }
+  return surface;
+}
+
+function mergeConnectionCell(
+  surface: CellSurface,
+  x: number,
+  y: number,
+  mask: number,
+  style: CellStyle,
+): void {
+  if (x < 0 || x >= surface.width || y < 0 || y >= surface.height) return;
+  const current = surface.cells[indexOf(surface, x, y)] as Cell;
+  const merged = (GLYPH_CONNECTIONS.get(current.char) ?? 0) | mask;
+  putCell(surface, x, y, CONNECTION_GLYPHS[merged] ?? (merged & (N | S) ? '│' : '─'), style);
+}
+
+export function drawBox(
+  surface: CellSurface,
+  rect: SurfaceRect,
+  style: CellStyle = EMPTY_STYLE,
+): CellSurface {
+  if (rect.width <= 0 || rect.height <= 0) return surface;
+  if (rect.width === 1 || rect.height === 1) {
+    for (let y = rect.y; y < rect.y + rect.height; y += 1)
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) putCell(surface, x, y, '─', style);
+    return surface;
+  }
+  drawHorizontal(surface, rect.x + 1, rect.x + rect.width - 2, rect.y, 0, style);
+  drawHorizontal(surface, rect.x + 1, rect.x + rect.width - 2, rect.y + rect.height - 1, 0, style);
+  drawVertical(surface, rect.x, rect.y + 1, rect.y + rect.height - 2, 0, style);
+  drawVertical(surface, rect.x + rect.width - 1, rect.y + 1, rect.y + rect.height - 2, 0, style);
+  putCell(surface, rect.x, rect.y, '┌', style);
+  putCell(surface, rect.x + rect.width - 1, rect.y, '┐', style);
+  putCell(surface, rect.x, rect.y + rect.height - 1, '└', style);
+  putCell(surface, rect.x + rect.width - 1, rect.y + rect.height - 1, '┘', style);
   return surface;
 }
 

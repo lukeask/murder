@@ -96,7 +96,7 @@ describe('TerminalSurfaceStore native VT stream', () => {
 
     let sequence = 0;
     for (const byte of bytes) {
-      store.ingest(rawChunk(++sequence, Uint8Array.of(byte)));
+      store.ingest(adaptTerminalUpdate(rawChunk(++sequence, Uint8Array.of(byte))));
     }
 
     const state = store.exportState();

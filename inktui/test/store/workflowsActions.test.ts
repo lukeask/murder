@@ -41,10 +41,10 @@ function wf(name: string, description = ''): WorkflowDef {
         title: 'stage one',
         instructions: 'do {input}',
         harness: 'crow',
-        model: '',
-        worktree: '',
+        model: 'gpt-5',
+        worktree: null,
         depends_on: [],
-        gate: '',
+        gate: 'auto',
       },
     ],
   };
@@ -54,13 +54,20 @@ function setup() {
   const fake = new FakeApplicationClient();
   // Default stubs so an unrelated load/save/run resolves; tests override as needed. The save stub
   // echoes back the submitted workflows (the backend normalizes; tests that care override this).
-  fake.stubQuery('workflows.get', { ok: true, workflows: [] });
+  fake.stubQuery('workflows.get', { ok: true, workflows: [], revision: 'rev-0' });
   fake.stubCommand('workflows.set', (params) => ({ ok: true, workflows: params.workflows }));
   fake.stubCommand('workflow.start', {
     ok: true,
+    workflow_id: 'run-1',
     run_ticket_id: 'T-run',
     stage_ticket_ids: {},
     created_ticket_ids: [],
+  });
+  fake.stubQuery('workflow.runs.get', {
+    ok: false,
+    run: null,
+    waits: [],
+    error: 'not_found',
   });
   fake.stubQuery('roster.get', { invalidation_key: 'iv', sessions: [] });
   const { store, dispose } = createAppStore(fake);
@@ -75,7 +82,11 @@ describe('workflows actions', () => {
 
   it('load() fires workflows.get and fills the registry', async () => {
     const { fake, store, dispose } = setup();
-    fake.stubQuery('workflows.get', { ok: true, workflows: [wf('alpha'), wf('beta')] });
+    fake.stubQuery('workflows.get', {
+      ok: true,
+      workflows: [wf('alpha'), wf('beta')],
+      revision: 'rev-loaded',
+    });
 
     await store.getState().actions.workflows.load();
 
@@ -83,6 +94,7 @@ describe('workflows actions', () => {
     const { workflows } = store.getState();
     expect(workflows.status).toBe('ready');
     expect(workflows.items.map((w) => w.name)).toEqual(['alpha', 'beta']);
+    expect(workflows.revision).toBe('rev-loaded');
     dispose();
   });
 
@@ -154,6 +166,135 @@ describe('workflows actions', () => {
     expect(toasts).toHaveLength(1);
     expect(toasts[0]?.text).toBe('fired :wf: → T-run');
     expect(errorToasts()).toHaveLength(0);
+    expect(store.getState().workflowRuns.activeWorkflowId).toBe('run-1');
+    dispose();
+  });
+
+  it('put() leaves canonical state unchanged until the server accepts it', async () => {
+    const { fake, store, dispose } = setup();
+    store.setState({
+      workflows: {
+        items: [wf('old')],
+        revision: 'rev-1',
+        status: 'ready',
+        error: null,
+      },
+    });
+    let finish:
+      | ((result: {
+          ok: true;
+          workflow: WorkflowDef;
+          workflows: readonly WorkflowDef[];
+          revision: string;
+          issues: readonly [];
+          conflict: false;
+        }) => void)
+      | undefined;
+    fake.stubCommand(
+      'workflow.put',
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+
+    const pending = store.getState().actions.workflows.put(wf('new'), null);
+    await Promise.resolve();
+    expect(store.getState().workflows.items).toEqual([wf('old')]);
+    finish?.({
+      ok: true,
+      workflow: wf('new'),
+      workflows: [wf('new'), wf('old')],
+      revision: 'rev-2',
+      issues: [],
+      conflict: false,
+    });
+    await pending;
+
+    expect(store.getState().workflows).toMatchObject({
+      items: [wf('new'), wf('old')],
+      revision: 'rev-2',
+      error: null,
+    });
+    expect(fake.commandCalls.at(-1)?.params).toEqual({
+      workflow: wf('new'),
+      original_name: null,
+      expected_revision: 'rev-1',
+    });
+    dispose();
+  });
+
+  it('put() rejection and revision conflict never mutate the canonical registry', async () => {
+    const { fake, store, dispose } = setup();
+    const canonical = {
+      items: [wf('old')],
+      revision: 'rev-1',
+      status: 'ready' as const,
+      error: null,
+    };
+    store.setState({ workflows: canonical });
+    fake.stubCommand('workflow.put', {
+      ok: false,
+      workflow: null,
+      workflows: [wf('old')],
+      revision: 'rev-1',
+      issues: [
+        {
+          code: 'no_stages',
+          message: 'workflow has no stages',
+          path: ['stages'],
+          severity: 'error',
+        },
+      ],
+      conflict: false,
+    });
+
+    await store.getState().actions.workflows.put(wf('new'), null);
+    expect(store.getState().workflows.items).toEqual(canonical.items);
+    expect(store.getState().workflows.revision).toBe('rev-1');
+    expect(store.getState().workflows.error).toBe('workflow has no stages');
+
+    fake.stubCommand('workflow.put', {
+      ok: false,
+      workflow: null,
+      workflows: [wf('remote')],
+      revision: 'rev-2',
+      issues: [],
+      conflict: true,
+    });
+    await store.getState().actions.workflows.put(wf('new'), null);
+    expect(store.getState().workflows.items).toEqual(canonical.items);
+    expect(store.getState().workflows.revision).toBe('rev-1');
+    expect(store.getState().workflows.error).toBe('workflow registry changed remotely');
+    dispose();
+  });
+
+  it('delete() uses the current revision and accepts only the returned canonical snapshot', async () => {
+    const { fake, store, dispose } = setup();
+    store.setState({
+      workflows: {
+        items: [wf('a'), wf('b')],
+        revision: 'rev-1',
+        status: 'ready',
+        error: null,
+      },
+    });
+    fake.stubCommand('workflow.delete', {
+      ok: true,
+      workflows: [wf('b')],
+      revision: 'rev-2',
+      issues: [],
+      conflict: false,
+    });
+
+    await store.getState().actions.workflows.delete('a');
+
+    expect(fake.commandCalls.at(-1)).toMatchObject({
+      name: 'workflow.delete',
+      params: { name: 'a', expected_revision: 'rev-1' },
+    });
+    expect(store.getState().workflows.items).toEqual([wf('b')]);
+    expect(store.getState().workflows.revision).toBe('rev-2');
     dispose();
   });
 
