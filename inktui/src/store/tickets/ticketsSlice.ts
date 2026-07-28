@@ -1,5 +1,6 @@
 /**
- * Tickets slice — domain state for the tickets list (panel 4).
+ * Tickets slice — domain state for schedule ticket rows (scheduler data; the Workflows panel joins
+ * these to workflow runs via stage_map).
  *
  * Copied from {@link ../roster/rosterSlice.js} per the copy recipe. Changes vs. the roster:
  *  - Row shape mirrors {@link ScheduleTicketRow} from `murder/app/protocol/read_models.py`

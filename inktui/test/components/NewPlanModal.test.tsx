@@ -77,7 +77,7 @@ function Harness({
 
 /** Build stores with tickets panel focused (the prior focus to restore). */
 function setup() {
-  const stores = createInputStores(['tickets'], 'tickets');
+  const stores = createInputStores(['workflows'], 'workflows');
   const bus = new FakeApplicationClient();
   const actions = createDialogActions(bus);
 
@@ -125,7 +125,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
     stdin.write(ESC);
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull();
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored
+    expect(stores.focus.getState().intendedId).toBe('workflows'); // prior focus restored
   });
 
   it('auto path: body → Enter → Enter (auto radio) submits with auto_name + body + message', async () => {
@@ -241,7 +241,7 @@ describe('NewPlanModal — super+p new-plan wizard', () => {
 
 describe('global chords — alt+p and alt+t', () => {
   it('alt+p fires the newPlan handler', async () => {
-    const stores = createInputStores(['tickets'], 'tickets');
+    const stores = createInputStores(['workflows'], 'workflows');
     const newPlanFn = vi.fn();
     const { stdin } = render(<Harness stores={stores} newPlan={newPlanFn} />);
     await tick();
@@ -252,7 +252,7 @@ describe('global chords — alt+p and alt+t', () => {
   });
 
   it('alt+t fires cycleChatView, NOT newTicket (TUIchat-3 rebind)', async () => {
-    const stores = createInputStores(['tickets'], 'tickets');
+    const stores = createInputStores(['workflows'], 'workflows');
     const newTicketFn = vi.fn();
     const cycleChatViewFn = vi.fn();
     const { stdin } = render(

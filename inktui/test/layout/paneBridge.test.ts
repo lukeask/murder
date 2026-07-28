@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { crowsSurfaceRowsFromView } from '../../src/components/panes/CrowsController.js';
 import { DocumentController } from '../../src/components/panes/DocumentController.js';
 import { historySurfaceRowsFromView } from '../../src/components/panes/HistoryController.js';
-import { ticketsSurfaceRowsFromView } from '../../src/components/panes/TicketsController.js';
+import { workflowsSurfaceRowsFromView } from '../../src/components/panes/WorkflowsController.js';
 import { TranscriptController } from '../../src/components/panes/TranscriptController.js';
 import { treeSurfaceDataFromView } from '../../src/components/panes/TreeController.js';
 import { usageSurfaceGroupsFromState } from '../../src/components/panes/UsageController.js';
@@ -19,7 +19,7 @@ import type { PaneAllocation, PaneRequest } from '../../src/layout/paneLayoutTyp
 import type { AgentIdentity } from '../../src/selectors/agentIdentity.js';
 import type { CrowsView } from '../../src/selectors/crowsSelectors.js';
 import type { HistoryRowView } from '../../src/selectors/historySelectors.js';
-import type { TicketRowView } from '../../src/selectors/ticketsSelectors.js';
+import type { WorkflowPanelRowView } from '../../src/selectors/workflowsPanelSelectors.js';
 import type { TransitCursor, TransitView } from '../../src/selectors/transitSelectors.js';
 import type { RosterRow } from '../../src/store/roster/rosterSlice.js';
 import { type AppStore, initialAppState } from '../../src/store/store.js';
@@ -455,11 +455,12 @@ describe('crowsSurfaceRowsFromView', () => {
   });
 });
 
-describe('ticketsSurfaceRowsFromView', () => {
-  it('drops selector-only fields while preserving explicit ticket pane cells', () => {
-    const rows: TicketRowView[] = [
+describe('workflowsSurfaceRowsFromView', () => {
+  it('drops selector-only fields while preserving explicit workflow pane cells', () => {
+    const rows: WorkflowPanelRowView[] = [
       {
         id: 'T-1',
+        kind: 'legacy-ticket-run',
         idCell: 'T-1',
         titleCell: 'Implement pane bridge',
         statusCell: '◕',
@@ -472,14 +473,16 @@ describe('ticketsSurfaceRowsFromView', () => {
         modelCell: 'gpt-5.5',
         planCell: 'panes',
         worktreeCell: 'paneswarm',
-        rowParity: 1,
-        depth: 2,
+        depth: 0,
+        openTicketId: 'T-1',
+        groupId: 'ticket:T-1',
       },
     ];
 
-    expect(ticketsSurfaceRowsFromView(rows)).toEqual([
+    expect(workflowsSurfaceRowsFromView(rows)).toEqual([
       {
         id: 'T-1',
+        kind: 'legacy-ticket-run',
         idCell: 'T-1',
         titleCell: 'Implement pane bridge',
         statusCell: '◕',

@@ -10,7 +10,7 @@
  * switch scattered across the dispatcher.
  *
  * Screen positions (from the plan's Layout section):
- *   1 plans · 2 notes · 3 reports · 4 tickets · 5 history   → the left region
+ *   1 plans · 2 notes · 3 reports · 4 workflows · 5 history → the left region
  *   8 tree · 9 usage · 0 crows                              → the right region
  *   6–7 reserved — deliberately absent so an unbound digit is a no-op.
  */
@@ -21,7 +21,7 @@ export type PanelId =
   | 'plans'
   | 'notes'
   | 'reports'
-  | 'tickets'
+  | 'workflows'
   | 'history'
   | 'usage'
   | 'tree'
@@ -55,7 +55,7 @@ export const PANELS: readonly PanelPlacement[] = [
   { id: 'plans', digit: 1, region: 'left' },
   { id: 'notes', digit: 2, region: 'left' },
   { id: 'reports', digit: 3, region: 'left' },
-  { id: 'tickets', digit: 4, region: 'left' },
+  { id: 'workflows', digit: 4, region: 'left' },
   { id: 'history', digit: 5, region: 'left' },
   { id: 'tree', digit: 8, region: 'right' },
   { id: 'usage', digit: 9, region: 'right' },

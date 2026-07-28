@@ -1,9 +1,9 @@
 /**
- * TicketsSurface — store-free, dimension-driven tickets list (2-row × up-to-5-column layout).
+ * WorkflowsSurface — store-free, dimension-driven run-first workflows list
+ * (2-row × up-to-5-column layout).
  *
  * Accepts explicit `width`/`height` (full allocation including border, title, footer, padding).
- * A local layout router picks a display mode; rendering branches on that mode only. Matches the old
- * {@link ../TicketsSurface.tsx} multi-column Ledger layout at large sizes.
+ * A local layout router picks a display mode; rendering branches on that mode only.
  */
 
 import type { InkMouseEvent } from '@ink-tools/ink-mouse';
@@ -15,7 +15,7 @@ import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
 import { formatDocTreeName } from './docTreeIndent.js';
 
-const PANEL_TITLE = 'Tickets';
+const PANEL_TITLE = 'Workflows';
 
 const LINES_PER_ENTRY = 2;
 
@@ -34,16 +34,19 @@ const STATUS_GAP = 1;
 /** Status glyph column budget. */
 const STATUS_COLS = 1;
 
-export type TicketsStatusTone = 'error' | 'success' | 'warning' | 'blocked' | 'neutral';
+export type WorkflowsStatusTone = 'error' | 'success' | 'warning' | 'blocked' | 'neutral';
 
-export type TicketsDisplayMode = 'full' | 'compact' | 'minimal' | 'tiny';
+export type WorkflowsDisplayMode = 'full' | 'compact' | 'minimal' | 'tiny';
 
-export interface TicketsSurfaceRow {
+export type WorkflowsSurfaceRowKind = 'run' | 'node' | 'legacy-ticket-run';
+
+export interface WorkflowsSurfaceRow {
   readonly id: string;
+  readonly kind: WorkflowsSurfaceRowKind;
   readonly idCell: string;
   readonly titleCell: string;
   readonly statusCell: string;
-  readonly statusTone: TicketsStatusTone;
+  readonly statusTone: WorkflowsStatusTone;
   readonly lastUpdateCell: string;
   readonly depsCell: string;
   readonly depsSatisfied: boolean;
@@ -54,18 +57,18 @@ export interface TicketsSurfaceRow {
   readonly worktreeCell: string;
 }
 
-export interface TicketsSurfaceProps {
+export interface WorkflowsSurfaceProps {
   /** Full pane allocation width (border box). */
   readonly width: number;
   /** Full pane allocation height (border box). */
   readonly height: number;
   readonly focused: boolean;
   readonly theme: Theme;
-  readonly rows: readonly TicketsSurfaceRow[];
+  readonly rows: readonly WorkflowsSurfaceRow[];
   readonly cursor?: number;
   readonly status?: 'ready' | 'loading' | 'error';
   readonly error?: string | null;
-  /** Left-click a list row (absolute index). Opens the ticket editor when wired. */
+  /** Left-click a list row (absolute index). Opens the ticket editor / toggles a run. */
   readonly onRowClick?: (index: number) => void;
 }
 
@@ -80,7 +83,7 @@ function innerHeight(height: number): number {
 /**
  * Deterministic size router — centralizes what the pane shows at each allocation.
  */
-export function layout(width: number, height: number): TicketsDisplayMode {
+export function layout(width: number, height: number): WorkflowsDisplayMode {
   const w = innerWidth(width);
   const h = innerHeight(height);
   if (h < 4 || w < 14) {
@@ -95,24 +98,24 @@ export function layout(width: number, height: number): TicketsDisplayMode {
   return 'full';
 }
 
-function linesPerEntryForMode(mode: TicketsDisplayMode): number {
+function linesPerEntryForMode(mode: WorkflowsDisplayMode): number {
   return mode === 'minimal' || mode === 'tiny' ? 1 : LINES_PER_ENTRY;
 }
 
 /** Body lines for a mode at a given row count (header excluded). */
-function bodyLinesForMode(mode: TicketsDisplayMode, rowCount: number): number {
+function bodyLinesForMode(mode: WorkflowsDisplayMode, rowCount: number): number {
   return rowCount * linesPerEntryForMode(mode);
 }
 
 /**
  * Downgrade to single-line when multi-line rows + header would not fit without windowing
- * every ticket — prefer showing more tickets on one line.
+ * every row — prefer showing more rows on one line.
  */
 export function heightAwareMode(
-  mode: TicketsDisplayMode,
+  mode: WorkflowsDisplayMode,
   innerH: number,
   rowCount: number,
-): TicketsDisplayMode {
+): WorkflowsDisplayMode {
   if (mode === 'tiny' || rowCount === 0) {
     return mode;
   }
@@ -129,11 +132,11 @@ export function heightAwareMode(
 /** Inner width at which the 5-column Ledger layout is used instead of priority rows. */
 const MULTI_COL_INNER_W = 72;
 
-function shouldUseMultiColumnLedger(mode: TicketsDisplayMode, innerW: number): boolean {
+function shouldUseMultiColumnLedger(mode: WorkflowsDisplayMode, innerW: number): boolean {
   return mode === 'full' && innerW >= MULTI_COL_INNER_W;
 }
 
-function maxColumnsForMode(mode: TicketsDisplayMode): number {
+function maxColumnsForMode(mode: WorkflowsDisplayMode): number {
   switch (mode) {
     case 'full':
       return 5;
@@ -148,7 +151,7 @@ function maxColumnsForMode(mode: TicketsDisplayMode): number {
   }
 }
 
-function showColumnHeader(mode: TicketsDisplayMode): boolean {
+function showColumnHeader(mode: WorkflowsDisplayMode): boolean {
   return mode === 'full' || mode === 'compact';
 }
 
@@ -159,7 +162,7 @@ interface PriorityRowLayout {
   readonly showPlan: boolean;
 }
 
-function priorityRowLayout(innerW: number, mode: TicketsDisplayMode): PriorityRowLayout {
+function priorityRowLayout(innerW: number, mode: WorkflowsDisplayMode): PriorityRowLayout {
   const reserved = MARKER_COLS + STATUS_GAP + STATUS_COLS;
   const none = {
     showUpdated: false,
@@ -195,7 +198,7 @@ function truncateId(id: string, maxLen: number): string {
   return id.slice(0, maxLen);
 }
 
-function statusToneColor(tone: TicketsStatusTone, theme: Theme): string {
+function statusToneColor(tone: WorkflowsStatusTone, theme: Theme): string {
   switch (tone) {
     case 'error':
       return theme.error;
@@ -211,7 +214,7 @@ function statusToneColor(tone: TicketsStatusTone, theme: Theme): string {
 }
 
 function fitLine1Extras(
-  row: TicketsSurfaceRow,
+  row: WorkflowsSurfaceRow,
   rowLayout: PriorityRowLayout,
   innerW: number,
 ): { readonly showDeps: boolean; readonly showHarness: boolean; readonly showPlan: boolean } {
@@ -229,11 +232,11 @@ function fitLine1Extras(
   return { showDeps, showHarness, showPlan };
 }
 
-function renderPriorityTicketEntry(
-  row: TicketsSurfaceRow,
+function renderPriorityWorkflowEntry(
+  row: WorkflowsSurfaceRow,
   ctx: LedgerEntryContext,
   innerW: number,
-  mode: TicketsDisplayMode,
+  mode: WorkflowsDisplayMode,
   theme: Theme,
 ): React.ReactNode {
   const marker = ctx.selected ? '▌ ' : '  ';
@@ -282,8 +285,8 @@ function renderPriorityTicketEntry(
   );
 }
 
-function renderTicketEntry(
-  row: TicketsSurfaceRow,
+function renderWorkflowEntry(
+  row: WorkflowsSurfaceRow,
   ctx: LedgerEntryContext,
   theme: Theme,
   innerW: number,
@@ -327,7 +330,7 @@ function renderTicketEntry(
   );
 }
 
-function renderTicketsHeader(columns: number, mode: TicketsDisplayMode): React.ReactNode {
+function renderWorkflowsHeader(columns: number, mode: WorkflowsDisplayMode): React.ReactNode {
   if (!showColumnHeader(mode)) {
     return null;
   }
@@ -362,7 +365,7 @@ function renderTicketsHeader(columns: number, mode: TicketsDisplayMode): React.R
   );
 }
 
-function renderPriorityHeader(mode: TicketsDisplayMode, innerW: number): React.ReactNode {
+function renderPriorityHeader(mode: WorkflowsDisplayMode, innerW: number): React.ReactNode {
   if (!showColumnHeader(mode) || innerW < 18) {
     return null;
   }
@@ -377,7 +380,7 @@ function renderPriorityHeader(mode: TicketsDisplayMode, innerW: number): React.R
 }
 
 function renderTinyEntry(
-  row: TicketsSurfaceRow,
+  row: WorkflowsSurfaceRow,
   ctx: LedgerEntryContext,
   innerW: number,
   theme: Theme,
@@ -404,7 +407,7 @@ function renderTinyEntry(
   );
 }
 
-function TicketsList({
+function WorkflowsList({
   rows,
   cursor,
   focused,
@@ -416,12 +419,12 @@ function TicketsList({
   theme,
   onRowClick,
 }: {
-  readonly rows: readonly TicketsSurfaceRow[];
+  readonly rows: readonly WorkflowsSurfaceRow[];
   readonly cursor: number;
   readonly focused: boolean;
   readonly width: number;
   readonly height: number;
-  readonly displayMode: TicketsDisplayMode;
+  readonly displayMode: WorkflowsDisplayMode;
   readonly status: 'ready' | 'loading' | 'error';
   readonly error: string | null;
   readonly theme: Theme;
@@ -434,7 +437,7 @@ function TicketsList({
   const rowClickProps =
     onRowClick !== undefined
       ? {
-          onRowClick: (_row: TicketsSurfaceRow, index: number, event: InkMouseEvent) => {
+          onRowClick: (_row: WorkflowsSurfaceRow, index: number, event: InkMouseEvent) => {
             claimMouseClick(event);
             onRowClick(index);
           },
@@ -454,7 +457,7 @@ function TicketsList({
   if (rows.length === 0) {
     return (
       <Text dimColor wrap="truncate">
-        no tickets
+        no workflows
       </Text>
     );
   }
@@ -488,9 +491,9 @@ function TicketsList({
         maxColumns={maxColumns}
         availableWidth={innerW}
         availableHeight={innerH}
-        header={(columns) => renderTicketsHeader(columns, displayMode)}
+        header={(columns) => renderWorkflowsHeader(columns, displayMode)}
         rowKey={(row) => row.id}
-        renderEntry={(row, ctx) => renderTicketEntry(row, ctx, theme, innerW)}
+        renderEntry={(row, ctx) => renderWorkflowEntry(row, ctx, theme, innerW)}
         {...rowClickProps}
       />
     );
@@ -508,13 +511,13 @@ function TicketsList({
       availableHeight={innerH}
       header={() => renderPriorityHeader(displayMode, innerW)}
       rowKey={(row) => row.id}
-      renderEntry={(row, ctx) => renderPriorityTicketEntry(row, ctx, innerW, displayMode, theme)}
+      renderEntry={(row, ctx) => renderPriorityWorkflowEntry(row, ctx, innerW, displayMode, theme)}
       {...rowClickProps}
     />
   );
 }
 
-export const TicketsSurface = memo(function TicketsSurface({
+export const WorkflowsSurface = memo(function WorkflowsSurface({
   width,
   height,
   focused,
@@ -524,7 +527,7 @@ export const TicketsSurface = memo(function TicketsSurface({
   status = 'ready',
   error = null,
   onRowClick,
-}: TicketsSurfaceProps): React.JSX.Element {
+}: WorkflowsSurfaceProps): React.JSX.Element {
   const baseMode = layout(width, height);
   const padding = paneHorizontalPaddingForWidth(width);
   const rowCount = rows.length;
@@ -553,7 +556,7 @@ export const TicketsSurface = memo(function TicketsSurface({
         overflowAbove={overflowAbove}
         overflowBelow={overflowBelow}
       >
-        <TicketsList
+        <WorkflowsList
           rows={rows}
           cursor={clampedCursor}
           focused={focused}

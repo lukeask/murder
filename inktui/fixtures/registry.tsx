@@ -14,7 +14,7 @@ import { HistorySurface } from '../src/components/panes/HistorySurface.js';
 import { NotesSurface } from '../src/components/panes/NotesSurface.js';
 import { PlansSurface } from '../src/components/panes/PlansSurface.js';
 import { ReportsSurface } from '../src/components/panes/ReportsSurface.js';
-import { TicketsSurface } from '../src/components/panes/TicketsSurface.js';
+import { WorkflowsSurface } from '../src/components/panes/WorkflowsSurface.js';
 import { TranscriptPane } from '../src/components/panes/TranscriptPane.js';
 import { TreeSurface } from '../src/components/panes/TreeSurface.js';
 import { UsageSurface } from '../src/components/panes/UsageSurface.js';
@@ -51,7 +51,7 @@ import {
   usageGroups,
 } from './data/paneFixtureData.js';
 import type { FixtureSize } from './renderInkFixture.js';
-import { ticketFixtureToSurfaceRows } from './ticketsPanelFixture.js';
+import { workflowFixtureToSurfaceRows } from './workflowsPanelFixture.js';
 import type { PaneFixture } from './types.js';
 
 const PANE_SIZES: readonly FixtureSize[] = [
@@ -401,15 +401,15 @@ export const paneFixtures: readonly PaneFixture[] = [
     ),
   },
   {
-    id: 'tickets-panel',
-    description: 'Store-free TicketsSurface with explicit width/height contract.',
+    id: 'workflows-panel',
+    description: 'Store-free WorkflowsSurface with explicit width/height contract.',
     sizes: TICKETS_SURFACE_SIZES,
     data: ticketRows,
     render: ({ data, focused, width, height }) => {
       const theme = getTheme();
       return (
-        <TicketsSurface
-          rows={ticketFixtureToSurfaceRows(data as readonly TicketFixtureRow[])}
+        <WorkflowsSurface
+          rows={workflowFixtureToSurfaceRows(data as readonly TicketFixtureRow[])}
           focused={focused}
           theme={theme}
           width={width}

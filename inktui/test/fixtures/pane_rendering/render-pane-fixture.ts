@@ -8,7 +8,7 @@ const PANE_ALIASES = new Map<string, string>([
   ['plans', 'plans-panel'],
   ['notes', 'notes-panel'],
   ['reports', 'reports-panel'],
-  ['tickets', 'tickets-panel'],
+  ['workflows', 'workflows-panel'],
   ['crows', 'crows-panel'],
   ['roster', 'roster-panel'],
   ['history', 'history-panel'],

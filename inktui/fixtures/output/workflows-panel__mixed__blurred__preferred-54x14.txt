@@ -1,9 +1,9 @@
-╭─ Tickets ──────────────────────────────────────────╮
-│ no tickets                                         │
-│                                                    │
-│                                                    │
-│                                                    │
-│                                                    │
+╭─ Workflows ────────────────────────────────────────╮
+│   id / title                      status / updated │
+│   T-104 ok codex —                               ● │
+│  Pane fixtures for exact border-box sizing Jun. 21 │
+│   T-099 T-088 claude —                           ⊘ │
+│  Long ticket title that must clip cleanly  Jun. 21 │
 │                                                    │
 │                                                    │
 │                                                    │

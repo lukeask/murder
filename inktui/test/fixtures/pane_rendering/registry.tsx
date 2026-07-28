@@ -197,7 +197,7 @@ function renderTicketEntry(row: TicketFixtureRow, ctx: LedgerEntryContext): Reac
   );
 }
 
-function TicketsFixture({
+function WorkflowsFixture({
   rows,
   focused,
   width,
@@ -209,9 +209,9 @@ function TicketsFixture({
   readonly height: number;
 }): React.JSX.Element {
   return (
-    <Pane title="Tickets" focused={focused} overflowBelow={rows.length > 2 ? 1 : 0}>
+    <Pane title="Workflows" focused={focused} overflowBelow={rows.length > 2 ? 1 : 0}>
       {rows.length === 0 ? (
-        <Text dimColor>no tickets</Text>
+        <Text dimColor>no workflows</Text>
       ) : (
         <Ledger
           rows={rows}
@@ -685,12 +685,12 @@ export const paneFixtures: readonly PaneFixture[] = [
     ),
   },
   {
-    id: 'tickets-panel',
-    description: 'Store-free TicketsSurface body wrapper with responsive multi-column rows.',
+    id: 'workflows-panel',
+    description: 'Store-free WorkflowsSurface body wrapper with responsive multi-column rows.',
     sizes: TICKETS_SURFACE_SIZES,
     data: ticketRows,
     render: ({ data, focused, width, height }) => (
-      <TicketsFixture
+      <WorkflowsFixture
         rows={data as readonly TicketFixtureRow[]}
         focused={focused}
         width={width}

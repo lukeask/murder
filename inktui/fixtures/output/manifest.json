@@ -579,100 +579,100 @@
       "file": "resource-row__overflow__blurred__minimum-20x5.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "mixed",
       "focused": true,
       "width": 54,
       "height": 14,
-      "file": "tickets-panel__mixed__focused__preferred-54x14.txt"
+      "file": "workflows-panel__mixed__focused__preferred-54x14.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "mixed",
       "focused": false,
       "width": 54,
       "height": 14,
-      "file": "tickets-panel__mixed__blurred__preferred-54x14.txt"
+      "file": "workflows-panel__mixed__blurred__preferred-54x14.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "mixed",
       "focused": true,
       "width": 30,
       "height": 8,
-      "file": "tickets-panel__mixed__focused__cramped-30x8.txt"
+      "file": "workflows-panel__mixed__focused__cramped-30x8.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "mixed",
       "focused": false,
       "width": 30,
       "height": 8,
-      "file": "tickets-panel__mixed__blurred__cramped-30x8.txt"
+      "file": "workflows-panel__mixed__blurred__cramped-30x8.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "mixed",
       "focused": true,
       "width": 25,
       "height": 5,
-      "file": "tickets-panel__mixed__focused__minimum-25x5.txt"
+      "file": "workflows-panel__mixed__focused__minimum-25x5.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "mixed",
       "focused": false,
       "width": 25,
       "height": 5,
-      "file": "tickets-panel__mixed__blurred__minimum-25x5.txt"
+      "file": "workflows-panel__mixed__blurred__minimum-25x5.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "empty",
       "focused": true,
       "width": 54,
       "height": 14,
-      "file": "tickets-panel__empty__focused__preferred-54x14.txt"
+      "file": "workflows-panel__empty__focused__preferred-54x14.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "empty",
       "focused": false,
       "width": 54,
       "height": 14,
-      "file": "tickets-panel__empty__blurred__preferred-54x14.txt"
+      "file": "workflows-panel__empty__blurred__preferred-54x14.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "empty",
       "focused": true,
       "width": 30,
       "height": 8,
-      "file": "tickets-panel__empty__focused__cramped-30x8.txt"
+      "file": "workflows-panel__empty__focused__cramped-30x8.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "empty",
       "focused": false,
       "width": 30,
       "height": 8,
-      "file": "tickets-panel__empty__blurred__cramped-30x8.txt"
+      "file": "workflows-panel__empty__blurred__cramped-30x8.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "empty",
       "focused": true,
       "width": 25,
       "height": 5,
-      "file": "tickets-panel__empty__focused__minimum-25x5.txt"
+      "file": "workflows-panel__empty__focused__minimum-25x5.txt"
     },
     {
-      "fixtureId": "tickets-panel",
+      "fixtureId": "workflows-panel",
       "dataId": "empty",
       "focused": false,
       "width": 25,
       "height": 5,
-      "file": "tickets-panel__empty__blurred__minimum-25x5.txt"
+      "file": "workflows-panel__empty__blurred__minimum-25x5.txt"
     },
     {
       "fixtureId": "crows-panel",

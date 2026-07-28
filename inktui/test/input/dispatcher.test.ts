@@ -112,7 +112,7 @@ describe('layer 0 — active-mode capture', () => {
   it('routes a matching key to the active mode (handled), nothing below fires', () => {
     onModeIntent.mockClear();
     const h = handlers();
-    const out = dispatchKey('y', makeKey(), ctx('tickets', h, {}, captureMode()));
+    const out = dispatchKey('y', makeKey(), ctx('workflows', h, {}, captureMode()));
     expect(onModeIntent).toHaveBeenCalledWith('confirm');
     expect(out).toEqual({ layer: 'mode', handled: true, action: 'mode:confirm' });
     expect(h.focusPanel).not.toHaveBeenCalled();
@@ -163,7 +163,7 @@ describe('layer 0 — active-mode capture', () => {
     };
     const h = handlers();
     // 'a' is not in the mode keymap, but onUncaptured returns true → mode consumed it.
-    const out = dispatchKey('a', makeKey(), ctx('tickets', h, {}, modeWithUncaptured));
+    const out = dispatchKey('a', makeKey(), ctx('workflows', h, {}, modeWithUncaptured));
     expect(consumed).toEqual(['a']);
     expect(out).toEqual({ layer: 'mode', handled: true });
     expect(h.focusPanel).not.toHaveBeenCalled();
@@ -499,7 +499,7 @@ describe('layer 3 — focused panel keymap', () => {
   it('does NOT fire the panel intent when a different panel is focused', () => {
     onIntent.mockClear();
     // 'a' is plans' key, but tickets is focused (and declares nothing) → no intent.
-    const out = dispatchKey('a', makeKey(), ctx('tickets', handlers(), { plans: plansKeymap }));
+    const out = dispatchKey('a', makeKey(), ctx('workflows', handlers(), { plans: plansKeymap }));
     expect(onIntent).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'panel', handled: false });
   });
@@ -687,7 +687,7 @@ describe('global.murder — ctrl+m arm + the pending confirm check', () => {
   it('while pending, alt+m (meta) is NOT the confirm — it cancels and falls through', () => {
     const h = handlers();
     h.murderPending.mockReturnValue(true);
-    dispatchKey('m', makeKey({ meta: true }), ctx('tickets', h));
+    dispatchKey('m', makeKey({ meta: true }), ctx('workflows', h));
     expect(h.murderConfirm).not.toHaveBeenCalled();
     expect(h.murderCancel).toHaveBeenCalledTimes(1);
   });

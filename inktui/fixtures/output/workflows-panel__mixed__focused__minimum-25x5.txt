@@ -1,4 +1,4 @@
-┏━ Tickets ━━━━━━━━━━━━━┓
+┏━ Workflows ━━━━━━━━━━━┓
 ┃▌ T-104 Pane fixture… ●┃
 ┃  T-099 Long ticket … ⊘┃
 ┃                       ┃

@@ -33,7 +33,7 @@ const MOBILE_TAB_DEFS: readonly {
 }[] = [
   { id: 'chat', icon: 'message-square', Pane: Stage },
   { id: 'crows', icon: 'crosshair', Pane: RosterPanel },
-  { id: 'tickets', icon: 'ticket', Pane: TicketsPanel },
+  { id: 'workflows', icon: 'ticket', Pane: TicketsPanel },
   { id: 'plans', icon: 'file-text', Pane: PlansPanel },
   { id: 'notes', icon: 'file-text', Pane: NotesPanel },
   { id: 'reports', icon: 'file-text', Pane: ReportsPanel },

@@ -52,7 +52,7 @@ function Harness({
 
 /** Build stores with the tickets panel focused (the focus to restore), and a confirm mode entered. */
 function setup(onChoose: (c: ConfirmChoice) => void) {
-  const stores = createInputStores(['tickets'], 'tickets');
+  const stores = createInputStores(['workflows'], 'workflows');
   const enter = () =>
     stores.modes.getState().enter(confirmMode(stores.modes, { message: 'Delete it?', onChoose }));
   return { stores, enter };
@@ -77,7 +77,7 @@ describe('ConfirmModal — reference transient mode', () => {
     expect(onChoose).toHaveBeenCalledWith('confirm');
     expect(selectActiveMode(stores.modes)).toBeNull(); // dismissed
     expect(lastFrame()).not.toContain('Delete it?'); // overlay gone
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored
+    expect(stores.focus.getState().intendedId).toBe('workflows'); // prior focus restored
   });
 
   it('Esc dismisses (no confirm), restoring focus', async () => {
@@ -90,7 +90,7 @@ describe('ConfirmModal — reference transient mode', () => {
     await tick();
     expect(onChoose).toHaveBeenCalledWith('dismiss');
     expect(selectActiveMode(stores.modes)).toBeNull();
-    expect(stores.focus.getState().intendedId).toBe('tickets');
+    expect(stores.focus.getState().intendedId).toBe('workflows');
   });
 
   it('captures exclusively: ctrl+f does NOT focus chat while the modal is up', async () => {
@@ -102,7 +102,7 @@ describe('ConfirmModal — reference transient mode', () => {
     // ctrl+f (\x06) would normally focus chat (a global chord); under the capturing modal it must not.
     stdin.write('\x06');
     await tick();
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // focus unmoved
+    expect(stores.focus.getState().intendedId).toBe('workflows'); // focus unmoved
     expect(selectActiveMode(stores.modes)?.id).toBe('confirm'); // modal still up
     expect(onChoose).not.toHaveBeenCalled();
   });

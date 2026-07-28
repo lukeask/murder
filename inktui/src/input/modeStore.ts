@@ -38,7 +38,7 @@
  * Modes stack: a mode opened over a mode pushes; `exit()` pops the top, `exit(id)` removes that id
  * wherever it sits. The *active* mode is the stack top — the dispatcher and overlay read only it.
  * Each stack frame records the intended focus that was live when it was pushed, so popping restores
- * exactly the focus the user came from (a dialog opened from the tickets panel returns there; a
+ * exactly the focus the user came from (a dialog opened from the workflows panel returns there; a
  * dialog opened over another dialog returns to that dialog's focus, then to the panel).
  *
  * ## Focus save/restore — one managed transition, not scattered re-homing
