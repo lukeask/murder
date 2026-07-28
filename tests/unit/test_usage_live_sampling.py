@@ -19,7 +19,7 @@ from murder.state.persistence.schema import init_db
 
 
 class _StubUsageAdapter(HarnessAdapter):
-    kind = "codex"
+    kind = "claude_code"
     usage_collection_mode = "tmux_slash"
 
     def startup_cmd(self, cwd: Path) -> list[str]:
@@ -48,6 +48,11 @@ class _HttpOnlyAdapter(_StubUsageAdapter):
     usage_collection_mode = "http"
 
 
+class _CodexHttpAdapter(_StubUsageAdapter):
+    kind = "codex"
+    usage_collection_mode = "http"
+
+
 class _VerifiedUsageControl:
     def __init__(self, status: HarnessUsageStatus | None) -> None:
         self.status = status
@@ -65,7 +70,7 @@ class _FakeAgent:
 
 
 def _config() -> Config:
-    role = HarnessRoleConfig(harness="codex")
+    role = HarnessRoleConfig(harness="claude_code")
     return Config(
         project=ProjectConfig(name="repo"),
         collaborator=role,
@@ -83,10 +88,10 @@ def _db() -> sqlite3.Connection:
 
 def _status() -> HarnessUsageStatus:
     return HarnessUsageStatus(
-        harness="codex",
-        source="slash:/status",
+        harness="claude_code",
+        source="slash:/usage",
         fetched_at="2026-06-04T00:00:00+00:00",
-        windows=[HarnessUsageWindow(name="5h", percent_used=25.0)],
+        windows=[HarnessUsageWindow(name="current_session", percent_used=25.0)],
         raw={"session_id": "live-session-id"},
     )
 
@@ -120,6 +125,17 @@ def test_live_sample_skips_without_a_verified_usage_capability(tmp_path: Path) -
 def test_live_sample_noops_for_side_channel_harness(tmp_path: Path) -> None:
     control = _VerifiedUsageControl(_status())
     agent = _FakeAgent(_HttpOnlyAdapter(), control)
+    ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=_db())
+
+    result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_startup"))
+
+    assert result == LiveSessionUsageResult(outcome="noop", reason="unsupported_harness")
+    assert control.triggers == []
+
+
+def test_live_sample_noops_for_codex_rate_limits_side_channel(tmp_path: Path) -> None:
+    control = _VerifiedUsageControl(_status())
+    agent = _FakeAgent(_CodexHttpAdapter(), control)
     ctx = UsageSamplingContext(config=_config(), repo_root=tmp_path, db=_db())
 
     result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_startup"))

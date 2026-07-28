@@ -18,8 +18,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Nominal 10m cadence; actual sleeps are drawn uniformly in [10m, 20m].
 USAGE_SAMPLE_POLL_INTERVAL_S = 600.0
-USAGE_SAMPLE_POLL_JITTER_FRACTION = 0.20
+USAGE_SAMPLE_POLL_MAX_INTERVAL_S = 1200.0
 
 TRIGGER_USAGE_MANUAL_REFRESH = "manual_refresh"
 TRIGGER_USAGE_MANUAL_KEY = TRIGGER_USAGE_MANUAL_REFRESH
@@ -29,11 +30,13 @@ USAGE_SAMPLE_SERVICE_INTERVAL_MODES = frozenset({"http"})
 
 def jittered_usage_poll_interval_s(
     *,
-    base_s: float = USAGE_SAMPLE_POLL_INTERVAL_S,
-    jitter_fraction: float = USAGE_SAMPLE_POLL_JITTER_FRACTION,
+    min_s: float = USAGE_SAMPLE_POLL_INTERVAL_S,
+    max_s: float = USAGE_SAMPLE_POLL_MAX_INTERVAL_S,
 ) -> float:
-    spread = max(0.0, base_s * jitter_fraction)
-    return random.uniform(max(0.0, base_s - spread), base_s + spread)
+    """Seconds until the next side-channel usage poll (10–20 minutes by default)."""
+    low = min(min_s, max_s)
+    high = max(min_s, max_s)
+    return random.uniform(max(0.0, low), max(0.0, high))
 
 
 def harness_usage_sample_payload(

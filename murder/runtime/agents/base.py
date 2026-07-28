@@ -387,14 +387,23 @@ class HarnessBackedAgent(LifecycleParticipant):
         return fail_result(f"verified model selection {result.outcome.name.lower()}")
 
     async def collect_verified_usage(self, *, trigger: str) -> Any | None:
-        """Collect live usage inside the same serialized session mailbox."""
+        """Collect live usage inside the same serialized session mailbox.
+
+        While the slash overlay is open, pause conversation projection so the
+        typed ``/usage`` probe and the usage panel never land in the user-facing
+        chat transcript.
+        """
 
         if self.verified_harness_control is None:
             return None
-        return await self._run_verified_session_mutation(
-            lambda: self.verified_harness_control.collect_usage(trigger=trigger),
-            required_capability="structured_messages",
-        )
+        self.usage_capture_in_progress = True
+        try:
+            return await self._run_verified_session_mutation(
+                lambda: self.verified_harness_control.collect_usage(trigger=trigger),
+                required_capability="structured_messages",
+            )
+        finally:
+            self.usage_capture_in_progress = False
 
     async def _run_verified_session_mutation(
         self,
@@ -494,7 +503,8 @@ class HarnessBackedAgent(LifecycleParticipant):
             return
         from murder.llm.harnesses.usage_sampling import sample_live_session_usage
 
-        await sample_live_session_usage(self, ctx, "agent_startup")
+        result = await sample_live_session_usage(self, ctx, "agent_startup")
+        self._invalidate_schedule_after_usage(result)
 
     async def _sample_live_usage_on_shutdown(self) -> None:
         ctx = await self._usage_sampling_context()
@@ -502,7 +512,20 @@ class HarnessBackedAgent(LifecycleParticipant):
             return
         from murder.llm.harnesses.usage_sampling import sample_live_session_usage
 
-        await sample_live_session_usage(self, ctx, "agent_shutdown")
+        result = await sample_live_session_usage(self, ctx, "agent_shutdown")
+        self._invalidate_schedule_after_usage(result)
+
+    def _invalidate_schedule_after_usage(self, result: Any) -> None:
+        """Append a schedule projection input so websocket clients refresh usage."""
+        if getattr(result, "outcome", None) != "stored":
+            return
+        runtime = getattr(self, "runtime", None)
+        db = getattr(runtime, "db", None) if runtime is not None else None
+        if db is None:
+            return
+        from murder.runtime.scheduler.projection import invalidate_schedule
+
+        invalidate_schedule(db, subject_key=f"usage:{self.harness.kind}")
 
     async def is_live(self) -> bool:
         from murder.runtime.terminal import tmux

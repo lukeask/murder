@@ -19,7 +19,7 @@ from murder.state.persistence.schema import init_db
 
 
 class _TmuxUsageAdapter(HarnessAdapter):
-    kind = "codex"
+    kind = "claude_code"
     usage_collection_mode = "tmux_slash"
 
     def startup_cmd(self, cwd: Path) -> list[str]:
@@ -61,8 +61,21 @@ class _HttpUsageAdapter(_TmuxUsageAdapter):
         return self._result
 
 
+class _CodexHttpUsageAdapter(_HttpUsageAdapter):
+    kind = "codex"
+    _result = ok_result(
+        HarnessUsageStatus(
+            harness="codex",
+            source="app-server:account/rateLimits/read",
+            fetched_at="2026-06-04T00:00:00+00:00",
+            windows=[HarnessUsageWindow(name="5h", percent_used=25.0)],
+            raw={},
+        )
+    )
+
+
 def _mixed_pool_config() -> Config:
-    role = HarnessRoleConfig(harness="codex", harnesses=["codex", "cursor"])
+    role = HarnessRoleConfig(harness="codex", harnesses=["codex", "cursor", "claude_code"])
     return Config(
         project=ProjectConfig(name="repo"),
         collaborator=role,
@@ -82,11 +95,15 @@ def test_harness_kinds_to_sample_keeps_usage_inventory_broad(monkeypatch) -> Non
     ctx = UsageSamplingContext(config=_mixed_pool_config(), repo_root=Path("/tmp"), db=None)
     monkeypatch.setattr(
         "murder.llm.harnesses.usage_sampling.REGISTRY",
-        {"codex": _TmuxUsageAdapter, "cursor": _HttpUsageAdapter},
+        {
+            "codex": _CodexHttpUsageAdapter,
+            "cursor": _HttpUsageAdapter,
+            "claude_code": _TmuxUsageAdapter,
+        },
     )
 
-    assert harness_kinds_to_sample(ctx, modes=None) == ["codex", "cursor"]
-    assert harness_kinds_to_sample(ctx, modes={"http"}) == ["cursor"]
+    assert harness_kinds_to_sample(ctx, modes=None) == ["codex", "cursor", "claude_code"]
+    assert harness_kinds_to_sample(ctx, modes={"http"}) == ["codex", "cursor"]
 
 
 def test_background_sampler_persists_http_and_skips_tmux_without_terminal_io(
@@ -97,12 +114,16 @@ def test_background_sampler_persists_http_and_skips_tmux_without_terminal_io(
 
     def get_harness(kind: str):
         requested.append(kind)
-        assert kind == "cursor", "tmux usage must not create a legacy probe harness"
-        return _HttpUsageAdapter()
+        assert kind in {"cursor", "codex"}, "tmux usage must not create a legacy probe harness"
+        return _HttpUsageAdapter() if kind == "cursor" else _CodexHttpUsageAdapter()
 
     monkeypatch.setattr(
         "murder.llm.harnesses.usage_sampling.REGISTRY",
-        {"codex": _TmuxUsageAdapter, "cursor": _HttpUsageAdapter},
+        {
+            "codex": _CodexHttpUsageAdapter,
+            "cursor": _HttpUsageAdapter,
+            "claude_code": _TmuxUsageAdapter,
+        },
     )
     monkeypatch.setattr("murder.llm.harnesses.usage_sampling.get_harness", get_harness)
     monkeypatch.setattr(
@@ -113,15 +134,15 @@ def test_background_sampler_persists_http_and_skips_tmux_without_terminal_io(
 
     stored, failures = asyncio.run(sample_harness_usages(ctx))
 
-    assert (stored, failures) == (1, 0)
-    assert requested == ["cursor"]
-    assert inserted == ["cursor"]
+    assert (stored, failures) == (2, 0)
+    assert requested == ["codex", "cursor"]
+    assert inserted == ["codex", "cursor"]
 
 
 def test_tmux_only_background_sampling_is_a_noop_without_a_bound_controller(
     monkeypatch, tmp_path: Path
 ) -> None:
-    role = HarnessRoleConfig(harness="codex")
+    role = HarnessRoleConfig(harness="claude_code")
     config = Config(
         project=ProjectConfig(name="repo"),
         collaborator=role,
@@ -129,7 +150,7 @@ def test_tmux_only_background_sampling_is_a_noop_without_a_bound_controller(
         crow_handler=CrowHandlerConfig(model="test-model"),
     )
     monkeypatch.setattr(
-        "murder.llm.harnesses.usage_sampling.REGISTRY", {"codex": _TmuxUsageAdapter}
+        "murder.llm.harnesses.usage_sampling.REGISTRY", {"claude_code": _TmuxUsageAdapter}
     )
     ctx = UsageSamplingContext(config=config, repo_root=tmp_path, db=_db())
 

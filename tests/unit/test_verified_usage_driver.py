@@ -279,9 +279,11 @@ def test_usage_lowering_is_harness_specific_and_side_channel_or_unsupported_case
             "Escape",
             "Enter",
         ]
-        assert [effect.text for effect in effects if isinstance(effect, SendLiteralKeys)] == [
-            "/usage"
-        ]
+        literals = [effect for effect in effects if isinstance(effect, SendLiteralKeys)]
+        assert [effect.text for effect in literals] == ["/usage"]
+        if isinstance(adapter, ClaudeCodeAdapter):
+            # Claude must type /usage char-by-char; a paste is flagged as suspicious.
+            assert literals[0].inter_key_delay is not None
 
     with pytest.raises(ValueError, match="HTTP evidence"):
         CursorHarnessAdapter().lower(_request(), snapshot)

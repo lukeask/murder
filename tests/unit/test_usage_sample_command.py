@@ -12,7 +12,7 @@ from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
 
 
-def test_jittered_usage_poll_interval_uses_20_percent_bounds(monkeypatch) -> None:
+def test_jittered_usage_poll_interval_uses_10_to_20_minute_bounds(monkeypatch) -> None:
     calls: list[tuple[float, float]] = []
 
     def _uniform(low: float, high: float) -> float:
@@ -23,8 +23,8 @@ def test_jittered_usage_poll_interval_uses_20_percent_bounds(monkeypatch) -> Non
 
     interval = usage_sample_command.jittered_usage_poll_interval_s()
 
-    assert calls == [(480.0, 720.0)]
-    assert interval == 720.0
+    assert calls == [(600.0, 1200.0)]
+    assert interval == 1200.0
 
 
 def test_harness_usage_sample_payload_includes_modes_when_set() -> None:

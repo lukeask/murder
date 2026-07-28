@@ -12,16 +12,18 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+from murder.llm.harnesses import codex_usage
 from murder.llm.harnesses.base import (
     HarnessAdapter,
     UsageCollectionMode,
 )
-from murder.llm.harnesses.models import HarnessModelState
+from murder.llm.harnesses.models import HarnessModelState, HarnessUsageStatus
 from murder.llm.harnesses.parsing import (
     extract_last_message_heuristic,
     normalize_effort,
     strip_ansi,
 )
+from murder.llm.harnesses.results import SimpleResult, fail_result, ok_result
 
 _TAIL_LINES = 30
 
@@ -143,7 +145,9 @@ def _live_prompt_text(pane_text: str) -> str | None:
 
 class CodexAdapter(HarnessAdapter):
     kind: ClassVar[str] = "codex"
-    usage_collection_mode: ClassVar[UsageCollectionMode] = "tmux_slash"
+    # Side-channel via ``codex app-server`` ``account/rateLimits/read`` — same
+    # interval poll loop as Cursor HTTP, never a live ``/status`` overlay.
+    usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
     supported_efforts: ClassVar[tuple[str, ...]] = ("low", "medium", "high", "xhigh")
     crow_system_prompt: ClassVar[str] = "see prompts/crow_codex.md"
     available_startup_models: ClassVar[list[tuple[str, str]]] = [
@@ -218,6 +222,13 @@ class CodexAdapter(HarnessAdapter):
 
     def extract_last_message(self, pane_text: str) -> str | None:
         return extract_last_message_heuristic(pane_text)
+
+    async def collect_usage_status(self, session: str) -> SimpleResult[HarnessUsageStatus]:
+        del session
+        try:
+            return ok_result(await codex_usage.get_usage_status())
+        except Exception as exc:
+            return fail_result(f"codex usage collection failed: {exc}")
 
     def parse_active_model_state(self, pane_text: str) -> HarnessModelState | None:
         clean = strip_ansi(pane_text)

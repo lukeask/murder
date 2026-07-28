@@ -1129,9 +1129,14 @@ class ClaudeCodeAdapter:
         if isinstance(action, CommitPromptSubmission):
             return (SendNamedKey(str(uuid4()), "Enter"),)
         if isinstance(action, RequestUsage):
+            # Type ``/usage`` character-by-character. Pasting the slash command
+            # as one buffer is flagged as suspicious by Anthropic; humanized
+            # keystrokes keep the probe looking like normal composer input.
             return (
                 SendNamedKey(f"{action.action_id}:dismiss", "Escape"),
-                SendLiteralKeys(f"{action.action_id}:usage", "/usage"),
+                SendLiteralKeys(
+                    f"{action.action_id}:usage", "/usage", FAST_HUMANIZED_TYPING
+                ),
                 SendNamedKey(f"{action.action_id}:open-usage", "Enter"),
             )
         if isinstance(action, (DismissOverlay, RestoreComposer, SendInterrupt)):

@@ -360,3 +360,71 @@ def test_sampler_failure_does_not_block_graceful_stop(
 
     assert agent.status == AgentStatus.DONE
     assert not any(name == "send_keys" for name, *_ in fake_tmux.calls)
+
+
+def test_live_usage_store_invalidates_schedule_for_tui(tmp_path: Path, sample_mock: AsyncMock) -> None:
+    from murder.state.persistence.schema import get_db, init_db
+
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    agent = CrowAgent(
+        agent_id="crow-t1",
+        ticket_id="t1",
+        session="murder_test_crow",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=_runtime(conn, tmp_path),
+    )
+    sample_mock.return_value = LiveSessionUsageResult(outcome="stored")
+
+    asyncio.run(agent._sample_live_usage_on_startup())
+
+    subjects = [
+        row["subject_key"]
+        for row in conn.execute(
+            "SELECT subject_key FROM projection_inputs WHERE projection = 'schedule'"
+        ).fetchall()
+    ]
+    assert subjects == ["usage:claude_code"]
+
+
+def test_collect_verified_usage_pauses_projection_for_overlay(tmp_path: Path) -> None:
+    """While /usage is open, project_once must not publish the probe to chat."""
+    from murder.runtime.agents.base import AgentStatus
+    from murder.state.persistence.schema import get_db, init_db
+
+    conn = get_db(tmp_path / "state.db")
+    init_db(conn)
+    agent = CrowAgent(
+        agent_id="crow-t1",
+        ticket_id="t1",
+        session="murder_test_crow",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=_runtime(conn, tmp_path),
+    )
+    seen: list[bool] = []
+
+    async def _collect(*, trigger: str):
+        del trigger
+        seen.append(agent.usage_capture_in_progress)
+        return None
+
+    agent.verified_harness_control = SimpleNamespace(collect_usage=_collect)  # type: ignore[assignment]
+
+    async def _mutation(effect, *, required_capability):
+        del required_capability
+        return await effect()
+
+    agent._run_verified_session_mutation = _mutation  # type: ignore[method-assign]
+
+    asyncio.run(agent.collect_verified_usage(trigger="agent_startup"))
+
+    assert seen == [True]
+    assert agent.usage_capture_in_progress is False
+
+    agent.status = AgentStatus.RUNNING
+    agent.usage_capture_in_progress = True
+    agent._producer = object()  # type: ignore[assignment]
+    # Would otherwise attempt verified ingest; the capture flag short-circuits.
+    asyncio.run(agent.project_once())

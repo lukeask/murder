@@ -259,28 +259,29 @@ def _usage_windows(usage: Mapping[str, Any]) -> tuple[UsageWindow, ...]:
             return tuple(windows)
 
     # ChatGPT account/rateLimits/* shape: primary/secondary usedPercent windows.
-    rate_limits = usage.get("rateLimits")
-    if isinstance(rate_limits, Mapping):
-        mapped: list[UsageWindow] = []
-        for key in ("primary", "secondary"):
-            row = rate_limits.get(key)
-            if not isinstance(row, Mapping):
-                continue
-            percent = row.get("usedPercent")
-            resets_at = row.get("resetsAt")
-            reset_text = None
-            if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool):
-                reset_text = f"resetsAt={int(resets_at)}"
-            mapped.append(
-                UsageWindow(
-                    key,
-                    float(percent) if isinstance(percent, (int, float)) else None,
-                    None,
-                    reset_text,
-                )
+    # Prefer the shared HarnessUsageStatus mapping so labels match the poll path.
+    from murder.llm.harnesses.codex_usage import rate_limits_to_usage_status
+
+    status = rate_limits_to_usage_status(usage)
+    if not status.windows:
+        return ()
+    mapped: list[UsageWindow] = []
+    for window in status.windows:
+        resets_at = None
+        if window.reset_at:
+            try:
+                resets_at = datetime.fromisoformat(window.reset_at)
+            except ValueError:
+                resets_at = None
+        mapped.append(
+            UsageWindow(
+                window.name,
+                window.percent_used,
+                resets_at,
+                window.reset_at,
             )
-        return tuple(mapped)
-    return ()
+        )
+    return tuple(mapped)
 
 
 def _turn_status(turn: object) -> str | None:
