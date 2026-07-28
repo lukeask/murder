@@ -1,10 +1,17 @@
 /**
- * `expandTemplates` tests — the pure `:name:` macro / leading-fill expansion pass. Covers both forms,
- * the leading-vs-inline precedence rule, builtin shadowing, and literal fallthrough on misses.
+ * `expandTemplates` / inline-prompt helpers — pure `:name:` macro / leading-fill expansion.
+ * Covers both forms, the leading-vs-inline precedence rule, builtin shadowing, literal fallthrough,
+ * and the workflow-safe {@link expandInlinePromptTemplates} ExpansionResult surface.
  */
 
 import { describe, expect, it } from 'vitest';
-import { expandTemplates } from '../../src/input/expandTemplates.js';
+import {
+  expandInlinePromptTemplates,
+  expandTemplates,
+  fillPlaceholders,
+  parseLeadingColonName,
+  parseLeadingTemplateInvocation,
+} from '../../src/input/expandTemplates.js';
 
 const registry = new Map<string, string>([
   ['greet', 'hello {who}'],
@@ -72,5 +79,169 @@ describe('expandTemplates — precedence & no-ops', () => {
   it('treats mid-string :name as not-leading (inline scan applies)', () => {
     // `:greet` is not at index 0, so leading-fill does not fire; no `:greet:` inline form either.
     expect(run('say :greet world')).toBe('say :greet world');
+  });
+});
+
+describe('expandInlinePromptTemplates', () => {
+  it('expands a single known :name:', () => {
+    expect(expandInlinePromptTemplates('hi :sig: bye', registry)).toEqual({
+      text: 'hi — sent from murder bye',
+      missing: [],
+      expanded: ['sig'],
+    });
+  });
+
+  it('leaves unknown :name: verbatim and records it in missing', () => {
+    expect(expandInlinePromptTemplates('ratio :nope: here', registry)).toEqual({
+      text: 'ratio :nope: here',
+      missing: ['nope'],
+      expanded: [],
+    });
+  });
+
+  it('expands multiple known macros and records each expanded name once', () => {
+    expect(expandInlinePromptTemplates(':plain: then :sig:', registry)).toEqual({
+      text: 'just text then — sent from murder',
+      missing: [],
+      expanded: ['plain', 'sig'],
+    });
+  });
+
+  it('dedupes repeated expanded and missing names (first-seen order)', () => {
+    expect(expandInlinePromptTemplates(':sig: :nope: :sig: :nope:', registry)).toEqual({
+      text: '— sent from murder :nope: — sent from murder :nope:',
+      missing: ['nope'],
+      expanded: ['sig'],
+    });
+  });
+
+  it('mixes hits and misses in one pass', () => {
+    expect(expandInlinePromptTemplates('a :plain: b :missing: c :sig:', registry)).toEqual({
+      text: 'a just text b :missing: c — sent from murder',
+      missing: ['missing'],
+      expanded: ['plain', 'sig'],
+    });
+  });
+
+  it('does not re-scan expanded bodies (single pass, no recursion)', () => {
+    const templates = new Map<string, string>([['wrap', 'before :sig: after']]);
+    expect(expandInlinePromptTemplates('go :wrap: end', templates)).toEqual({
+      text: 'go before :sig: after end',
+      missing: [],
+      expanded: ['wrap'],
+    });
+  });
+
+  it('does not interpret leading :name args syntax', () => {
+    // Leading form is chat/workflow-fire territory — inline helper only touches `:name:`.
+    expect(expandInlinePromptTemplates(':greet world', registry)).toEqual({
+      text: ':greet world',
+      missing: [],
+      expanded: [],
+    });
+  });
+
+  it('returns empty missing/expanded when there are no macros', () => {
+    expect(expandInlinePromptTemplates('just a plain message', registry)).toEqual({
+      text: 'just a plain message',
+      missing: [],
+      expanded: [],
+    });
+  });
+
+  it('treats empty template map as all-missing', () => {
+    expect(expandInlinePromptTemplates('x :foo: y :bar:', new Map())).toEqual({
+      text: 'x :foo: y :bar:',
+      missing: ['foo', 'bar'],
+      expanded: [],
+    });
+  });
+
+  it('requires closing colon — :name alone is not an inline macro', () => {
+    expect(expandInlinePromptTemplates('say :greet please', registry)).toEqual({
+      text: 'say :greet please',
+      missing: [],
+      expanded: [],
+    });
+  });
+
+  it('allows names with digits, underscore, and hyphen', () => {
+    const templates = new Map<string, string>([
+      ['a1', 'A'],
+      ['under_score', 'U'],
+      ['kebab-case', 'K'],
+    ]);
+    expect(expandInlinePromptTemplates(':a1: :under_score: :kebab-case:', templates)).toEqual({
+      text: 'A U K',
+      missing: [],
+      expanded: ['a1', 'under_score', 'kebab-case'],
+    });
+  });
+});
+
+describe('parseLeadingColonName', () => {
+  it('parses :name at start with remainder', () => {
+    expect(parseLeadingColonName(':greet world')).toEqual({
+      name: 'greet',
+      remainder: ' world',
+    });
+  });
+
+  it('parses :name at EOS with empty remainder', () => {
+    expect(parseLeadingColonName(':greet')).toEqual({ name: 'greet', remainder: '' });
+  });
+
+  it('returns null for inline :name: (trailing colon blocks leading match)', () => {
+    expect(parseLeadingColonName(':greet:')).toBeNull();
+  });
+
+  it('returns null when :name is not at index 0', () => {
+    expect(parseLeadingColonName('say :greet world')).toBeNull();
+  });
+});
+
+describe('parseLeadingTemplateInvocation', () => {
+  it('fills placeholders and returns name/args/text', () => {
+    expect(parseLeadingTemplateInvocation(':pair foo bar', registry)).toEqual({
+      name: 'pair',
+      args: ['foo', 'bar'],
+      text: 'foo and bar',
+    });
+  });
+
+  it('returns null for unknown template name (no builtin check here)', () => {
+    expect(parseLeadingTemplateInvocation(':bogus arg', registry)).toBeNull();
+  });
+
+  it('returns a hit even when name is also a builtin (caller applies shadowing)', () => {
+    const templates = new Map<string, string>([['help', 'docs for {topic}']]);
+    expect(parseLeadingTemplateInvocation(':help usage', templates)).toEqual({
+      name: 'help',
+      args: ['usage'],
+      text: 'docs for usage',
+    });
+  });
+
+  it('returns null for inline :name: form', () => {
+    expect(parseLeadingTemplateInvocation(':plain:', registry)).toBeNull();
+  });
+
+  it('does not re-inline-scan the filled body', () => {
+    const templates = new Map<string, string>([['wrap', 'before :sig: after']]);
+    expect(parseLeadingTemplateInvocation(':wrap', templates)).toEqual({
+      name: 'wrap',
+      args: [],
+      text: 'before :sig: after',
+    });
+  });
+});
+
+describe('fillPlaceholders', () => {
+  it('fills by first-appearance order and leaves unfilled tokens', () => {
+    expect(fillPlaceholders('{a} and {b} and {a}', ['x'])).toBe('x and {b} and x');
+  });
+
+  it('ignores extra args', () => {
+    expect(fillPlaceholders('hello {who}', ['world', 'extra'])).toBe('hello world');
   });
 });
