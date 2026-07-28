@@ -19,6 +19,7 @@ from murder.work.workflows import (
     validate_workflow,
     workflow_issues,
 )
+from murder.work.workflows.builtins import ticket_workflow_template
 
 
 def _stage(**kw) -> StageDef:
@@ -79,7 +80,12 @@ def test_reserved_values_are_warnings_not_legacy_validation_errors() -> None:
     ]
 
 
-def test_stage_requires_harness_and_model() -> None:
+def test_builtin_ticket_skips_missing_harness_model_errors() -> None:
+    defn = ticket_workflow_template()
+    assert validate_workflow(defn) == []
+
+
+def test_non_builtin_still_requires_harness_and_model() -> None:
     defn = WorkflowDef(name="wf", stages=[StageDef(id="a", title="A")])
     errors = validate_workflow(defn)
     assert any("requires a harness" in e for e in errors)

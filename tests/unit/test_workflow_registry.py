@@ -101,7 +101,7 @@ def test_put_rename_replaces_only_original_and_rejects_collisions(tmp_path: Path
         _workflow("release"), original_name="alpha", expected_revision=second.revision, path=path
     )
     assert renamed.ok
-    assert [workflow["name"] for workflow in renamed.workflows] == ["beta", "release"]
+    assert [workflow["name"] for workflow in renamed.workflows] == ["beta", "release", "ticket"]
 
     updated = put_workflow(
         _workflow("beta", description="updated"),
@@ -151,7 +151,9 @@ def test_concurrent_writers_with_one_revision_have_one_winner(tmp_path: Path) ->
 
     assert sum(result.ok for result in results) == 1
     assert sum(result.conflict for result in results) == 1
-    assert len(read_workflow_registry(path).workflows) == 1
+    names = [workflow["name"] for workflow in read_workflow_registry(path).workflows]
+    assert "ticket" in names
+    assert len([name for name in names if name != "ticket"]) == 1
 
 
 def test_reserved_values_are_persisted_with_runtime_warnings(tmp_path: Path) -> None:

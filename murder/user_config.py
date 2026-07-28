@@ -736,6 +736,7 @@ def _workflow_revision(records: list[dict[str, Any]]) -> str:
 def _workflow_registry_records(path: Path) -> list[dict[str, Any]]:
     """Read valid persisted records without silently repairing a registry."""
     from murder.work.workflows import WorkflowDef, validate_workflow  # noqa: PLC0415
+    from murder.work.workflows.builtins import is_builtin_workflow_name  # noqa: PLC0415
 
     raw = load_workflows(path)
     records: list[dict[str, Any]] = []
@@ -745,6 +746,9 @@ def _workflow_registry_records(path: Path) -> list[dict[str, Any]]:
             definition = WorkflowDef.model_validate(record)
         except Exception as exc:  # noqa: BLE001
             raise ValueError("workflow registry contains an invalid definition") from exc
+        # Built-ins are never persisted; skip stale copies left from older clients.
+        if definition.builtin or is_builtin_workflow_name(definition.name):
+            continue
         if validate_workflow(definition):
             raise ValueError("workflow registry contains an invalid definition")
         if definition.name in names:
@@ -754,12 +758,26 @@ def _workflow_registry_records(path: Path) -> list[dict[str, Any]]:
     return sorted(records, key=lambda record: str(record["name"]))
 
 
+def _client_workflows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Persisted registry plus built-in templates for editor / launcher clients."""
+    from murder.work.workflows.builtins import merge_builtin_workflows  # noqa: PLC0415
+
+    return merge_builtin_workflows(records)
+
+
 def read_workflow_registry(path: Path | None = None) -> WorkflowRegistrySnapshot:
-    """Return canonical definitions plus an opaque revision for editor clients."""
+    """Return canonical definitions plus an opaque revision for editor clients.
+
+    The returned ``workflows`` list includes built-in templates. ``revision`` is
+    derived only from the persisted userspace registry so optimistic concurrency
+    stays stable as built-ins evolve.
+    """
     registry_path = path or workflows_path()
     with _locked_workflow_registry(registry_path):
         records = _workflow_registry_records(registry_path)
-        return WorkflowRegistrySnapshot(records, _workflow_revision(records))
+        return WorkflowRegistrySnapshot(
+            _client_workflows(records), _workflow_revision(records)
+        )
 
 
 def put_workflow(
@@ -771,18 +789,48 @@ def put_workflow(
 ) -> WorkflowRegistryMutation:
     """Atomically validate and upsert one workflow using optimistic concurrency."""
     from murder.work.workflows import WorkflowDef, workflow_issues  # noqa: PLC0415
+    from murder.work.workflows.builtins import is_builtin_workflow_name  # noqa: PLC0415
 
     registry_path = path or workflows_path()
     with _locked_workflow_registry(registry_path):
         records = _workflow_registry_records(registry_path)
         revision = _workflow_revision(records)
         if revision != expected_revision:
-            return WorkflowRegistryMutation(False, records, revision, [], conflict=True)
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, [], conflict=True
+            )
 
         definition = WorkflowDef.model_validate(record)
+        if definition.builtin or is_builtin_workflow_name(definition.name):
+            issue = {
+                "code": "invalid_name",
+                "message": f"workflow name {definition.name!r} is a built-in and cannot be overwritten",
+                "path": ["name"],
+                "stage_id": None,
+                "dependency_id": None,
+                "severity": "error",
+            }
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, [issue]
+            )
+        if original_name is not None and is_builtin_workflow_name(original_name):
+            issue = {
+                "code": "invalid_name",
+                "message": f"workflow name {original_name!r} is a built-in and cannot be overwritten",
+                "path": ["name"],
+                "stage_id": None,
+                "dependency_id": None,
+                "severity": "error",
+            }
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, [issue]
+            )
+
         issues = [issue.model_dump(mode="json") for issue in workflow_issues(definition)]
         if any(issue["severity"] == "error" for issue in issues):
-            return WorkflowRegistryMutation(False, records, revision, issues)
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, issues
+            )
 
         target_name = definition.name
         existing_names = {str(item["name"]) for item in records}
@@ -797,7 +845,9 @@ def put_workflow(
                 "dependency_id": None,
                 "severity": "error",
             }
-            return WorkflowRegistryMutation(False, records, revision, [issue])
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, [issue]
+            )
 
         updated = [item for item in records if item["name"] != replace_name]
         updated.append(definition.dump_for_registry())
@@ -805,7 +855,9 @@ def put_workflow(
         from murder.state.storage.filesystem import atomic_write_text  # noqa: PLC0415
 
         atomic_write_text(registry_path, _canonical_workflow_payload(updated))
-        return WorkflowRegistryMutation(True, updated, _workflow_revision(updated), issues)
+        return WorkflowRegistryMutation(
+            True, _client_workflows(updated), _workflow_revision(updated), issues
+        )
 
 
 def delete_workflow(
@@ -815,12 +867,29 @@ def delete_workflow(
     path: Path | None = None,
 ) -> WorkflowRegistryMutation:
     """Atomically delete one workflow using the same revision boundary as put."""
+    from murder.work.workflows.builtins import is_builtin_workflow_name  # noqa: PLC0415
+
     registry_path = path or workflows_path()
     with _locked_workflow_registry(registry_path):
         records = _workflow_registry_records(registry_path)
         revision = _workflow_revision(records)
         if revision != expected_revision:
-            return WorkflowRegistryMutation(False, records, revision, [], conflict=True)
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, [], conflict=True
+            )
+
+        if is_builtin_workflow_name(name):
+            issue = {
+                "code": "invalid_name",
+                "message": f"workflow name {name!r} is a built-in and cannot be deleted",
+                "path": ["name"],
+                "stage_id": None,
+                "dependency_id": None,
+                "severity": "error",
+            }
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, [issue]
+            )
 
         updated = [item for item in records if item["name"] != name]
         if len(updated) == len(records):
@@ -832,12 +901,16 @@ def delete_workflow(
                 "dependency_id": None,
                 "severity": "error",
             }
-            return WorkflowRegistryMutation(False, records, revision, [issue])
+            return WorkflowRegistryMutation(
+                False, _client_workflows(records), revision, [issue]
+            )
 
         from murder.state.storage.filesystem import atomic_write_text  # noqa: PLC0415
 
         atomic_write_text(registry_path, _canonical_workflow_payload(updated))
-        return WorkflowRegistryMutation(True, updated, _workflow_revision(updated), [])
+        return WorkflowRegistryMutation(
+            True, _client_workflows(updated), _workflow_revision(updated), []
+        )
 
 
 def load_workflows(path: Path | None = None) -> list[dict[str, Any]]:
@@ -868,12 +941,15 @@ def _normalize_workflows(records: Any) -> list[dict[str, Any]]:
 
     A record is dropped if pydantic rejects its shape OR ``validate_workflow``
     reports a graph/name problem — the registry never persists a definition that
-    can't later be materialized. Kept defs are re-serialized from the model so the
-    stored form is canonical regardless of the caller's input dict.
+    can't later be materialized. Built-in names / ``builtin: true`` records are
+    also dropped so clients cannot persist over the built-in catalog. Kept defs
+    are re-serialized from the model so the stored form is canonical regardless
+    of the caller's input dict.
     """
     # Imported lazily to avoid a user_config -> work.workflows import cycle and to
     # keep this module importable in contexts that never touch workflows.
     from murder.work.workflows import WorkflowDef, validate_workflow
+    from murder.work.workflows.builtins import is_builtin_workflow_name
 
     by_name: dict[str, dict[str, Any]] = {}
     if isinstance(records, list):
@@ -884,6 +960,8 @@ def _normalize_workflows(records: Any) -> list[dict[str, Any]]:
                 defn = WorkflowDef.model_validate(rec)
             except Exception:  # noqa: BLE001
                 continue
+            if defn.builtin or is_builtin_workflow_name(defn.name):
+                continue
             if validate_workflow(defn):
                 continue
             by_name[defn.name] = defn.dump_for_registry()
@@ -893,8 +971,10 @@ def _normalize_workflows(records: Any) -> list[dict[str, Any]]:
 def save_workflows(records: Any, path: Path | None = None) -> list[dict[str, Any]]:
     """Normalize and atomically persist the workflow registry.
 
-    Returns the normalized canonical list so callers can sync to it.
+    Returns the client-facing list (persisted + built-ins) so callers can sync.
     """
+    from murder.work.workflows.builtins import merge_builtin_workflows
+
     normalized = _normalize_workflows(records)
     wpath = path or workflows_path()
     wpath.parent.mkdir(parents=True, exist_ok=True)
@@ -903,7 +983,7 @@ def save_workflows(records: Any, path: Path | None = None) -> list[dict[str, Any
     tmp.write_text(payload, encoding="utf-8")
     os.chmod(tmp, 0o600)
     tmp.replace(wpath)
-    return normalized
+    return merge_builtin_workflows(normalized)
 
 
 def spawn_favorites_path(path: Path | None = None) -> Path:

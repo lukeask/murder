@@ -94,6 +94,7 @@ import {
 } from '../selectors/conversationsSelectors.js';
 import { submitCommand } from '../store/commandSubmit.js';
 import { createDialogActions } from '../store/dialogs/dialogActions.js';
+import { canLaunchBuiltinTicket } from '../store/dialogs/canLaunchBuiltinTicket.js';
 import { createHarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
 import { createSpawnFavoritesActions } from '../store/dialogs/spawnFavoritesActions.js';
@@ -972,15 +973,20 @@ function Shell({
     );
   };
 
-  // `ctrl+t` → open the new-ticket single-form modal (BUG 1). Mirrors `newPlanHandler`: builds the
-  // dialog actions at call time and enters the modal mode; on success pushes a toast. The ticket id is
-  // delivered by the action but we only surface the title in the toast.
+  // `ctrl+t` → open the new-ticket modal. When Startup Rogue defaults make the built-in
+  // launch-oriented `ticket` workflow runnable, submit goes through `workflow.start`; otherwise
+  // keep `ticket.quick_create` for unconfigured planned tickets.
   const newTicketHandler = (): void => {
     const actions = createDialogActions(bus);
+    const preferBuiltinTicket = canLaunchBuiltinTicket(appStore.getState().settings);
     modes.getState().enter(
       newTicketMode(modes, actions, {
+        preferBuiltinTicket,
         onSubmit(_ticketId, title) {
-          toastStore.getState().push(`ticket "${title}" created`, { ttlMs: 6000 });
+          toastStore.getState().push(
+            preferBuiltinTicket ? `ticket "${title}" started` : `ticket "${title}" created`,
+            { ttlMs: 6000 },
+          );
         },
       }),
     );

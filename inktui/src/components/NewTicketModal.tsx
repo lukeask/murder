@@ -2,12 +2,17 @@
  * `NewTicketModal` — the `ctrl+t` new-ticket popup: a **modal C7M mode** that presents a title
  * field for a new ticket, analogous to the old `:ticket` flow.
  *
+ * ## Launch path
+ *
+ * When {@link NewTicketModeOptions.preferBuiltinTicket} is set (configured harness/model defaults
+ * make the built-in ``ticket`` workflow runnable), submit fires ``workflow.start`` via
+ * {@link DialogActions.startBuiltinTicket}. Otherwise it keeps the temporary
+ * ``ticket.quick_create`` fallback for unconfigured planned tickets.
+ *
  * ## What this delivers vs. `:ticket`
  *
  * The old `:ticket` flow required opening a file editor, blanking the screen. This dialog stays
- * in-TUI (rule 1 — no `$EDITOR`-blank) and fires `ticket.quick_create {title}` (rule 3).
- * On submit, the service creates the ticket and returns its id. The result is delivered to the
- * caller's `onSubmit` callback; the component itself never stores the ticket id.
+ * in-TUI (rule 1 — no `$EDITOR`-blank).
  *
  * ## C13 copy recipe
  *
@@ -17,9 +22,6 @@
  *  - Mutable closure state + `refresh()` to re-render.
  *  - Exit-then-act in `submit`.
  *  - Pure presentational component in `render`.
- *
- * `actions.quickCreateTicket` dispatches the `ticket.quick_create` command kind through the LIVE
- * `command.submit` choke point (handled by `orchestrator_worker.py`).
  */
 
 import type { Key } from 'ink';
@@ -27,7 +29,7 @@ import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
-import { singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
+import { multilineEditorPolicy, singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
 import { reduceEditor } from '../input/textEditor/operations.js';
 import { plainTextProjection } from '../input/textEditor/projection.js';
 import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
@@ -39,6 +41,7 @@ import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 /** Content width shared by the title field renderer and visual-motion geometry. */
 const TITLE_EDITOR_WIDTH = 54;
+const PROMPT_EDITOR_WIDTH = 54;
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
 import '../input/dispatcher.js';
@@ -54,8 +57,12 @@ type NewTicketIntent =
   | 'home'
   | 'end'
   | 'deleteAll'
+  | 'focusNext'
+  | 'focusPrev'
   | 'submit'
   | 'dismiss';
+
+type FocusField = 'title' | 'prompt';
 
 /** Options passed to the mode factory. */
 export interface NewTicketModeOptions {
@@ -63,6 +70,11 @@ export interface NewTicketModeOptions {
   readonly onSubmit?: (ticketId: string, title: string) => void;
   /** Called when the dialog is dismissed without submitting (fired after mode exits). */
   readonly onDismiss?: () => void;
+  /**
+   * When true, submit launches the built-in ``ticket`` workflow (title + optional instructions).
+   * When false/omitted, falls back to ``ticket.quick_create`` (title only).
+   */
+  readonly preferBuiltinTicket?: boolean;
 }
 
 /** The stable mode id so a re-enter is idempotent. */
@@ -71,6 +83,8 @@ export const NEW_TICKET_MODE_ID = 'new-ticket';
 /** Mutable local state inside the mode closure. Not React state — the mode is plain data. */
 interface NewTicketState {
   title: TextEditorState;
+  prompt: TextEditorState;
+  focus: FocusField;
   error: string | null;
 }
 
@@ -80,8 +94,6 @@ interface NewTicketState {
  *
  * The mode is self-dismissing: `submit` calls `modes.exit(id)` before the async RPC
  * (exit-then-act — same as ConfirmModal and NewPlanModal).
- *
- * `actions.quickCreateTicket` → `ticket.quick_create` command kind via the LIVE `command.submit`.
  */
 export function newTicketMode(
   modes: ModeStoreApi,
@@ -89,10 +101,13 @@ export function newTicketMode(
   opts: NewTicketModeOptions = {},
 ): Mode<NewTicketIntent> {
   const id = NEW_TICKET_MODE_ID;
+  const preferBuiltin = opts.preferBuiltinTicket === true;
 
   // Mutable local state in the closure — not React state.
   const s: NewTicketState = {
     title: editorAtEnd(),
+    prompt: editorAtEnd(),
+    focus: 'title',
     error: null,
   };
 
@@ -102,6 +117,15 @@ export function newTicketMode(
     if (current !== undefined) {
       modes.getState().enter(current.mode);
     }
+  }
+
+  function activeEditor(): TextEditorState {
+    return s.focus === 'title' ? s.title : s.prompt;
+  }
+
+  function setActiveEditor(next: TextEditorState): void {
+    if (s.focus === 'title') s.title = next;
+    else s.prompt = next;
   }
 
   const mode: Mode<NewTicketIntent> = {
@@ -124,6 +148,20 @@ export function newTicketMode(
         intent: 'deleteAll',
         description: 'clear field',
       },
+      ...(preferBuiltin
+        ? ([
+            {
+              chord: { key: { tab: true } },
+              intent: 'focusNext' as const,
+              description: 'next field',
+            },
+            {
+              chord: { key: { shift: true, tab: true } },
+              intent: 'focusPrev' as const,
+              description: 'prev field',
+            },
+          ] as const)
+        : []),
       // Enter: submit.
       { chord: { key: { return: true } }, intent: 'submit', description: 'create ticket' },
       // Escape: dismiss.
@@ -132,54 +170,76 @@ export function newTicketMode(
     onIntent(intent) {
       switch (intent) {
         case 'backspace': {
-          s.title = editTicket(s.title, { type: 'backspace' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'backspace' }, s.focus));
           refresh();
           break;
         }
         case 'deleteForward':
-          s.title = editTicket(s.title, { type: 'deleteForward' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'deleteForward' }, s.focus));
           refresh();
           break;
         case 'moveLeft':
-          s.title = editTicket(s.title, { type: 'moveLeft' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'moveLeft' }, s.focus));
           refresh();
           break;
         case 'moveRight':
-          s.title = editTicket(s.title, { type: 'moveRight' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'moveRight' }, s.focus));
           refresh();
           break;
         case 'moveUp':
-          s.title = editTicket(s.title, { type: 'moveVisualUp' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'moveVisualUp' }, s.focus));
           refresh();
           break;
         case 'moveDown':
-          s.title = editTicket(s.title, { type: 'moveVisualDown' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'moveVisualDown' }, s.focus));
           refresh();
           break;
         case 'home':
-          s.title = editTicket(s.title, { type: 'moveLineStart' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'moveLineStart' }, s.focus));
           refresh();
           break;
         case 'end':
-          s.title = editTicket(s.title, { type: 'moveLineEnd' });
+          setActiveEditor(editTicket(activeEditor(), { type: 'moveLineEnd' }, s.focus));
           refresh();
           break;
         case 'deleteAll': {
-          s.title = editorAtEnd();
+          setActiveEditor(editorAtEnd());
           refresh();
           break;
         }
+        case 'focusNext':
+          if (preferBuiltin) {
+            s.focus = s.focus === 'title' ? 'prompt' : 'title';
+            refresh();
+          }
+          break;
+        case 'focusPrev':
+          if (preferBuiltin) {
+            s.focus = s.focus === 'title' ? 'prompt' : 'title';
+            refresh();
+          }
+          break;
         case 'submit': {
           if (s.title.text.trim().length === 0) {
             s.error = 'Ticket title is required.';
+            s.focus = 'title';
             refresh();
             break;
           }
           // Exit-then-act: exit (restores focus) before the async RPC.
           modes.getState().exit(id);
           const title = s.title.text.trim();
-          void actions
-            .quickCreateTicket(title)
+          const prompt = s.prompt.text;
+          const create = preferBuiltin
+            ? actions.startBuiltinTicket({ title, prompt }).then((result) => ({
+                ticket_id: result.ticket_id,
+                title: result.title,
+              }))
+            : actions.quickCreateTicket(title).then((result) => ({
+                ticket_id: result.ticket_id,
+                title: result.title,
+              }));
+          void create
             .then((result) => {
               opts.onSubmit?.(result.ticket_id, result.title);
             })
@@ -204,21 +264,30 @@ export function newTicketMode(
     },
     // onUncaptured: shared decoder rejects Tab/Esc and maps printables to insert commands.
     onUncaptured(input: string, key: Key): boolean {
-      const transition = applyEditorKey(s.title, input, key, {
-        policy: singleLineEditorPolicy,
+      const width = s.focus === 'title' ? TITLE_EDITOR_WIDTH : PROMPT_EDITOR_WIDTH;
+      const transition = applyEditorKey(activeEditor(), input, key, {
+        policy: s.focus === 'title' ? singleLineEditorPolicy : multilineEditorPolicy,
         environment: {
-          width: TITLE_EDITOR_WIDTH,
+          width,
           topology: plainTextTopology,
           projection: plainTextProjection,
         },
       });
       if (transition === null) return false;
-      s.title = transition.state;
+      setActiveEditor(transition.state);
       s.error = null;
       refresh();
       return true;
     },
-    render: () => <NewTicketDialog title={s.title} error={s.error} />,
+    render: () => (
+      <NewTicketDialog
+        title={s.title}
+        prompt={s.prompt}
+        focus={s.focus}
+        error={s.error}
+        showPrompt={preferBuiltin}
+      />
+    ),
   };
 
   return mode;
@@ -227,9 +296,11 @@ export function newTicketMode(
 function editTicket(
   state: TextEditorState,
   command: import('../input/textEditor/commands.js').EditorCommand,
+  focus: FocusField,
 ): TextEditorState {
+  const width = focus === 'title' ? TITLE_EDITOR_WIDTH : PROMPT_EDITOR_WIDTH;
   return reduceEditor(state, command, {
-    width: TITLE_EDITOR_WIDTH,
+    width,
     topology: plainTextTopology,
     projection: plainTextProjection,
   }).state;
@@ -238,10 +309,16 @@ function editTicket(
 /** The dialog's presentation — a pure function of its props (rule 1). No store/bus knowledge. */
 function NewTicketDialog({
   title,
+  prompt,
+  focus,
   error,
+  showPrompt,
 }: {
   readonly title: TextEditorState;
+  readonly prompt: TextEditorState;
+  readonly focus: FocusField;
   readonly error: string | null;
+  readonly showPrompt: boolean;
 }): JSX.Element {
   const theme = useTheme();
   return (
@@ -262,16 +339,31 @@ function NewTicketDialog({
           state={title}
           width={TITLE_EDITOR_WIDTH}
           placeholder="Short description of the work…"
-          focused
+          focused={focus === 'title'}
         />
       </Box>
+      {showPrompt ? (
+        <Box marginTop={1} flexDirection="column">
+          <Text>Instructions:</Text>
+          <TextEditorDisplay
+            state={prompt}
+            width={PROMPT_EDITOR_WIDTH}
+            placeholder="Optional brief for the agent…"
+            focused={focus === 'prompt'}
+          />
+        </Box>
+      ) : null}
       {error !== null && (
         <Box marginTop={1}>
           <Text color={theme.error}>{error}</Text>
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>enter: create esc: cancel ctrl+u: clear</Text>
+        <Text dimColor>
+          {showPrompt
+            ? 'enter: start  tab: field  esc: cancel  ctrl+u: clear'
+            : 'enter: create esc: cancel ctrl+u: clear'}
+        </Text>
       </Box>
     </Box>
   );

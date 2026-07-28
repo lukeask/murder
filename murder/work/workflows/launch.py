@@ -1,11 +1,11 @@
-"""Launch a saved workflow template by name into the current project.
+"""Launch a saved or built-in workflow by name into the current project.
 
 The userspace registry (``~/.config/murder/workflows.yaml``) stores reusable
-``WorkflowTemplate`` (``WorkflowDef``) dumps; launching one resolves it by name,
-compiles it authoritatively (expand ``:foo:``, resolve inputs), and hands the
-expanded snapshot to ``materialize_workflow``. This module is the thin
-name→definition lookup that sits in front of that deep module, so the RPC
-handler stays a shell.
+``WorkflowTemplate`` (``WorkflowDef``) dumps; launching one resolves it by
+name (built-ins first), fills harness/model defaults for built-ins, compiles
+it authoritatively (expand ``:foo:``, resolve inputs), and hands the expanded
+snapshot to ``materialize_workflow``. This module is the thin name→definition
+lookup that sits in front of that deep module, so the RPC handler stays a shell.
 """
 
 from __future__ import annotations
@@ -31,29 +31,43 @@ def run_workflow_by_name(
     *,
     prompt_templates: dict[str, str] | None = None,
 ) -> MaterializeResult:
-    """Load the saved workflow *name*, compile it, and materialize the run.
+    """Load workflow *name* (built-in or userspace registry), prepare, and start.
 
-    Raises KeyError if no workflow with that name is saved; ValueError if the
-    stored definition is invalid or compile/start validation fails.
+    Raises KeyError if no workflow with that name exists; ValueError if the
+    definition is invalid, launch defaults cannot make it runnable, or
+    compile/start validation fails.
     """
-    # Lazy import keeps this module free of cycles: user_config pulls in config
-    # machinery only at call time.
+    # Lazy imports keep this module free of cycles: user_config pulls in config
+    # machinery, and definition/builtins are only needed at call time.
     from murder.user_config import load_workflows  # noqa: PLC0415
+    from murder.work.workflows.builtins import (  # noqa: PLC0415
+        get_builtin_workflow,
+        prepare_workflow_for_launch,
+    )
+    from murder.work.workflows.definition import validate_workflow  # noqa: PLC0415
 
-    # Last match wins, mirroring save_workflows' "last dupe wins" normalization,
-    # so a launch sees the same definition a re-save would persist.
-    found: dict | None = None
-    for d in load_workflows():
-        if d.get("name") == name:
-            found = d
-    if found is None:
-        raise KeyError(name)
+    defn = get_builtin_workflow(name)
+    if defn is None:
+        # Last match wins, mirroring save_workflows' "last dupe wins" normalization,
+        # so a launch sees the same definition a re-save would persist.
+        found: dict | None = None
+        for d in load_workflows():
+            if d.get("name") == name:
+                found = d
+        if found is None:
+            raise KeyError(name)
+        defn = WorkflowDef.model_validate(found)
 
-    defn = WorkflowDef.model_validate(found)
+    resolved = prepare_workflow_for_launch(defn, args)
+    # Built-ins omit harness/model until launch; after prepare they must be concrete.
+    errors = validate_workflow(resolved.model_copy(update={"builtin": False}))
+    if errors:
+        raise ValueError("invalid workflow: " + "; ".join(errors))
+
     return start_workflow_from_def(
         conn,
         repo_root,
-        defn,
+        resolved,
         args,
         prompt_templates=prompt_templates,
     )

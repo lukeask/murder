@@ -156,6 +156,45 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     expect(onSubmit).toHaveBeenCalledWith('t-001', 'my ticket');
   });
 
+  it('preferBuiltinTicket submits via workflow.start with title+prompt args', async () => {
+    const stores = createInputStores(['tickets'], 'tickets');
+    const bus = new FakeApplicationClient();
+    bus.stubCommand('workflow.start', {
+      ok: true,
+      workflow_id: 'wf-1',
+      run_ticket_id: 't100',
+      stage_ticket_ids: { work: 't101' },
+      created_ticket_ids: ['t100', 't101'],
+    });
+    const actions = createDialogActions(bus);
+    const onSubmit = vi.fn();
+    stores.modes.getState().enter(
+      newTicketMode(stores.modes, actions, { preferBuiltinTicket: true, onSubmit }),
+    );
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    await tick();
+    expect(lastFrame()).toContain('Instructions:');
+
+    for (const ch of 'fix bug') stdin.write(ch);
+    await tick();
+    stdin.write('\t'); // focus instructions
+    await tick();
+    for (const ch of 'do it') stdin.write(ch);
+    await tick();
+    stdin.write('\r');
+    await tick();
+    await tick();
+    await tick();
+
+    const startCall = bus.commandCalls.find((c) => c.name === 'workflow.start');
+    expect(startCall?.params).toMatchObject({
+      name: 'ticket',
+      args: { title: 'fix bug', prompt: 'do it' },
+    });
+    expect(bus.commandCalls.find((c) => c.name === 'ticket.quick_create')).toBeUndefined();
+    expect(onSubmit).toHaveBeenCalledWith('t101', 'fix bug');
+  });
+
   it('successful submit pushes NO error toast', async () => {
     const { stores, enter } = setup(); // setup() stubs the command to resolve
     enter();
