@@ -8,12 +8,32 @@ mirror the templates registry in ``murder.user_config`` / the service host.
 
 from __future__ import annotations
 
+from murder.work.workflows.compile import (
+    CompileWorkflowTemplateParams,
+    CompileWorkflowTemplateResult,
+    WorkflowCompileIssue,
+    WorkflowInput,
+    compile_workflow_template,
+)
 from murder.work.workflows.definition import (
     StageDef,
     WorkflowDef,
+    WorkflowInputDecl,
     WorkflowIssue,
     validate_workflow,
     workflow_issues,
 )
 
-__all__ = ["StageDef", "WorkflowDef", "WorkflowIssue", "validate_workflow", "workflow_issues"]
+__all__ = [
+    "CompileWorkflowTemplateParams",
+    "CompileWorkflowTemplateResult",
+    "StageDef",
+    "WorkflowCompileIssue",
+    "WorkflowDef",
+    "WorkflowInput",
+    "WorkflowInputDecl",
+    "WorkflowIssue",
+    "compile_workflow_template",
+    "validate_workflow",
+    "workflow_issues",
+]

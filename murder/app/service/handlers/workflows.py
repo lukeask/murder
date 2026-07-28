@@ -1,4 +1,4 @@
-"""Typed workflow run inspection and signaling application handlers."""
+"""Typed workflow run inspection, signaling, and compile application handlers."""
 
 from __future__ import annotations
 
@@ -9,19 +9,24 @@ from uuid import uuid4
 from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.protocol.subscriptions import ProjectionTopic
 from murder.app.protocol.workflows import (
+    CompileWorkflowParams,
     GetWorkflowRunParams,
     ListWorkflowRunsParams,
     SignalWorkflowParams,
 )
+from murder.app.service.application import ApplicationRegistrar
+from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.state.persistence.workflow_runs import (
     get_workflow_run,
     list_workflow_runs,
     list_workflow_waits,
 )
+from murder.work.workflows.compile import (
+    compile_workflow_template,
+    prompt_template_map,
+)
+from murder.work.workflows.definition import WorkflowDef
 from murder.work.workflows.service import WorkflowRuntime
-
-from murder.app.service.application import ApplicationRegistrar
-from murder.app.service.projection_registry import ProjectionProviderRegistry
 
 
 class WorkflowEffects(Protocol):
@@ -69,6 +74,21 @@ def register(
             "waits": [wait.model_dump(mode="json") for wait in waits],
         }
 
+    def _compile(body: dict[str, Any]) -> dict[str, Any]:
+        params = CompileWorkflowParams.model_validate(body)
+        if params.template is not None:
+            template = params.template
+        else:
+            assert params.name is not None  # validated by CompileWorkflowParams
+            template = _load_workflow_by_name(params.name)
+        templates = (
+            params.prompt_templates
+            if params.prompt_templates is not None
+            else prompt_template_map()
+        )
+        result = compile_workflow_template(template, prompt_templates=templates)
+        return result.model_dump(mode="json")
+
     def _signal(body: dict[str, Any]) -> dict[str, Any]:
         params = SignalWorkflowParams.model_validate(body)
         connection = _db()
@@ -88,8 +108,21 @@ def register(
 
     app.register_application_query(QueryName.WORKFLOW_RUNS_LIST, _runs_list)
     app.register_application_query(QueryName.WORKFLOW_RUNS_GET, _runs_get)
+    app.register_application_query(QueryName.WORKFLOW_COMPILE, _compile)
     app.register_application_command(CommandName.WORKFLOW_SIGNAL, _signal)
     projections.register(ProjectionTopic.WORKFLOW_RUNS, lambda: _runs_list({}))
+
+
+def _load_workflow_by_name(name: str) -> WorkflowDef:
+    from murder.user_config import load_workflows  # noqa: PLC0415
+
+    found: dict | None = None
+    for record in load_workflows():
+        if record.get("name") == name:
+            found = record
+    if found is None:
+        raise ValueError(f"no saved workflow named {name!r}")
+    return WorkflowDef.model_validate(found)
 
 
 __all__ = ["WorkflowEffects", "register"]

@@ -159,6 +159,8 @@ from murder.app.protocol.settings import (
     UpdateSettingsResult,
 )
 from murder.app.protocol.workflows import (
+    CompileWorkflowParams,
+    CompileWorkflowResult,
     DeleteWorkflowParams,
     DeleteWorkflowResult,
     GetWorkflowRunParams,
@@ -241,6 +243,7 @@ _QUERY_MODELS: dict[QueryName, tuple[type[BaseModel], type[BaseModel], bool]] = 
     QueryName.SESSION_WRITER_GET: (GetWriterLeaseParams, GetWriterLeaseResult, False),
     QueryName.WORKFLOW_RUNS_LIST: (ListWorkflowRunsParams, ListWorkflowRunsResult, False),
     QueryName.WORKFLOW_RUNS_GET: (GetWorkflowRunParams, GetWorkflowRunResult, False),
+    QueryName.WORKFLOW_COMPILE: (CompileWorkflowParams, CompileWorkflowResult, False),
 }
 _COMMAND_MODELS: dict[CommandName, tuple[type[BaseModel], type[BaseModel], bool]] = {
     CommandName.HARNESS_ANSWER: (HarnessAnswerParams, HarnessAnswerResult, False),

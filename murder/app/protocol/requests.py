@@ -45,6 +45,7 @@ class QueryName(StrEnum):
     SESSION_WRITER_GET = "session.writer.get"
     WORKFLOW_RUNS_LIST = "workflow.runs.list"
     WORKFLOW_RUNS_GET = "workflow.runs.get"
+    WORKFLOW_COMPILE = "workflow.compile"
 
 
 class CommandName(StrEnum):
