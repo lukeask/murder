@@ -38,7 +38,7 @@ describe('TicketsPanel (DS reskin)', () => {
 
     // DS Panel container + title.
     expect(document.querySelector('.mds-panel')).toBeTruthy();
-    expect(screen.getByText('tickets')).toBeTruthy();
+    expect(screen.getByText('workflows')).toBeTruthy();
     // The title cell renders inside a DS ListRow.
     expect(document.querySelector('.mds-row')).toBeTruthy();
     expect(screen.getByText(/split orchestrator/)).toBeTruthy();

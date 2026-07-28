@@ -1,4 +1,4 @@
-┏━ Tickets ━━━━━━━━━━━━━━━━━━┓
+┏━ Workflows ━━━━━━━━━━━━━━━━┓
 ┃   id/title          status ┃
 ┃ ▌ T-104 ok codex         ● ┃
 ┃  Pane fixtures for exact … ┃

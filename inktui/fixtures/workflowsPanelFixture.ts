@@ -1,12 +1,13 @@
-import type { TicketsSurfaceRow } from '../src/components/panes/TicketsSurface.js';
+import type { WorkflowsSurfaceRow } from '../src/components/panes/WorkflowsSurface.js';
 import type { TicketFixtureRow } from './data/paneFixtureData.js';
 
-/** Map fixture rows to display-ready TicketsSurface rows. */
-export function ticketFixtureToSurfaceRows(
+/** Map fixture rows to display-ready WorkflowsSurface rows (legacy-style standalone tickets). */
+export function workflowFixtureToSurfaceRows(
   rows: readonly TicketFixtureRow[],
-): readonly TicketsSurfaceRow[] {
+): readonly WorkflowsSurfaceRow[] {
   return rows.map((row) => ({
-    id: row.id,
+    id: `ticket:${row.id}`,
+    kind: 'legacy-ticket-run' as const,
     idCell: row.id,
     titleCell: row.title,
     statusCell: row.status,

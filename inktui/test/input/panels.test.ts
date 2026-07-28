@@ -1,6 +1,6 @@
 /**
  * panels.ts mapping tests — the digit→panel single source of truth, with the history panel on
- * ctrl+5 (left rail, after tickets in screen order) and the tree panel on ctrl+8 (right rail,
+ * ctrl+5 (left rail, after workflows in screen order) and the tree panel on ctrl+8 (right rail,
  * before usage in screen order). Reserved digits 6–7 stay unbound.
  */
 
@@ -22,12 +22,12 @@ describe('panels mapping', () => {
     expect(placement).toEqual({ id: 'tree', digit: 8, region: 'right' });
   });
 
-  it('places history after tickets and tree before usage in screen order', () => {
+  it('places history after workflows and tree before usage in screen order', () => {
     expect(PANEL_IDS).toEqual([
       'plans',
       'notes',
       'reports',
-      'tickets',
+      'workflows',
       'history',
       'tree',
       'usage',
@@ -42,7 +42,7 @@ describe('panels mapping', () => {
 
   it('still maps the existing left/right digits', () => {
     expect(panelForDigit('1')).toBe('plans');
-    expect(panelForDigit('4')).toBe('tickets');
+    expect(panelForDigit('4')).toBe('workflows');
     expect(panelForDigit('9')).toBe('usage');
     expect(panelForDigit('0')).toBe('crows');
   });

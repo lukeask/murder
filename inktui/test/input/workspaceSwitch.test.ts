@@ -84,9 +84,9 @@ describe('switchWorkspace (cookbook)', () => {
     switchWorkspace(stores, 1, 'next');
 
     // Make workspace 2 look different, so a restore can't pass by accident.
-    stores.panels.getState().show('tickets');
+    stores.panels.getState().show('workflows');
     stores.chatInput.getState().insert('workspace two draft');
-    stores.paneUi.getState().setCursor('tickets', 7);
+    stores.paneUi.getState().setCursor('workflows', 7);
 
     switchWorkspace(stores, 0, 'prev');
 

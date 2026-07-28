@@ -50,7 +50,7 @@ function Harness({
 
 /** Build stores with the tickets panel focused (prior focus to restore). */
 function setup() {
-  const stores = createInputStores(['tickets'], 'tickets');
+  const stores = createInputStores(['workflows'], 'workflows');
   const bus = new FakeApplicationClient();
 
   // `ticket.quick_create` returns its result directly from `command.submit` (no command.get poll).
@@ -89,7 +89,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull();
     expect(lastFrame()).not.toContain('New Ticket');
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // prior focus restored
+    expect(stores.focus.getState().intendedId).toBe('workflows'); // prior focus restored
   });
 
   it('accepts printable char input, renders updated title value', async () => {
@@ -144,7 +144,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     await tick();
 
     expect(selectActiveMode(stores.modes)).toBeNull(); // modal dismissed
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // focus restored
+    expect(stores.focus.getState().intendedId).toBe('workflows'); // focus restored
 
     // Allow the async command (submit → poll → resolve) to settle.
     await tick();
@@ -210,7 +210,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
   });
 
   it('a rejected ticket create pushes an error toast with the rejection message', async () => {
-    const stores = createInputStores(['tickets'], 'tickets');
+    const stores = createInputStores(['workflows'], 'workflows');
     const bus = new FakeApplicationClient();
     // `ticket.quick_create` routes through `direct application command`; reject at the submit choke point so
     // `quickCreateTicket` rejects. Exit-then-act: the modal is gone before this lands; the toast
@@ -260,7 +260,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     // alt+space (\x1b ) would normally focus chat (a global chord); must be swallowed under the modal.
     stdin.write('\x1b ');
     await tick();
-    expect(stores.focus.getState().intendedId).toBe('tickets'); // focus unmoved
+    expect(stores.focus.getState().intendedId).toBe('workflows'); // focus unmoved
     expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID); // modal still up
   });
 

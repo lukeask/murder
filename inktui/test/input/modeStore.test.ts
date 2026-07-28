@@ -22,7 +22,7 @@ function mode(id: string): Mode {
 
 /** Build input stores with the panels visible and focus on `tickets`, plus the bound mode store. */
 function setup(): { modes: ModeStoreApi; stores: ReturnType<typeof createInputStores> } {
-  const stores = createInputStores(['tickets', 'crows'], 'tickets');
+  const stores = createInputStores(['workflows', 'crows'], 'workflows');
   return { modes: stores.modes, stores };
 }
 
@@ -102,12 +102,12 @@ describe('modeStore — stack semantics', () => {
 describe('modeStore — focus save/restore', () => {
   it('saves focus on enter and restores it on exit', () => {
     const { modes, stores } = setup();
-    expect(stores.focus.getState().intendedId).toBe('tickets');
+    expect(stores.focus.getState().intendedId).toBe('workflows');
     modes.getState().enter(mode('a'));
     // While the mode is up the consumer can move focus freely; exit must restore the entry focus.
     stores.focus.getState().focus('crows');
     modes.getState().exit();
-    expect(stores.focus.getState().intendedId).toBe('tickets');
+    expect(stores.focus.getState().intendedId).toBe('workflows');
   });
 
   it('nested modes restore focus layer by layer (each frame remembers its own entry focus)', () => {
@@ -118,7 +118,7 @@ describe('modeStore — focus save/restore', () => {
     modes.getState().exit(); // pop 'b' → restore crows
     expect(stores.focus.getState().intendedId).toBe('crows');
     modes.getState().exit(); // pop 'a' → restore tickets
-    expect(stores.focus.getState().intendedId).toBe('tickets');
+    expect(stores.focus.getState().intendedId).toBe('workflows');
   });
 
   it('a re-entered mode keeps its ORIGINAL saved focus (does not save its own surface)', () => {
@@ -127,7 +127,7 @@ describe('modeStore — focus save/restore', () => {
     modes.getState().enter(mode('b')); // saves whatever is effective now (tickets)
     modes.getState().enter(mode('a')); // re-enter buried 'a' — must keep its original saved tickets
     modes.getState().exit(); // pop the re-entered 'a'
-    expect(stores.focus.getState().intendedId).toBe('tickets');
+    expect(stores.focus.getState().intendedId).toBe('workflows');
   });
 
   it('exit(id) of a buried frame does NOT move live focus (only the top frame restores)', () => {

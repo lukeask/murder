@@ -100,12 +100,12 @@ describe('focusCandidates (the derived candidate set)', () => {
     expect(
       focusCandidates(
         new Map<FocusId, Rect>([
-          ['tickets', { x: 20, y: 0, width: 1, height: 1 }],
+          ['workflows', { x: 20, y: 0, width: 1, height: 1 }],
           ['plans', { x: 0, y: 0, width: 1, height: 1 }],
           ['stage:transcript:a1', { x: 40, y: 0, width: 1, height: 1 }],
         ]),
       ),
-    ).toEqual(['plans', 'tickets', 'stage:transcript:a1', CHAT_FOCUS]);
+    ).toEqual(['plans', 'workflows', 'stage:transcript:a1', CHAT_FOCUS]);
   });
 
   it('is just chat when nothing is visible/mounted — there is always somewhere to be', () => {
@@ -198,43 +198,43 @@ describe('focusStore — open pane history', () => {
   const stageRect: Rect = { x: 40, y: 0, width: 20, height: 4 };
 
   it('preserves first-open order across remeasure/reorder and appends reopened panes', () => {
-    const panels = createPanelStore(['plans', 'tickets']);
+    const panels = createPanelStore(['plans', 'workflows']);
     const focus = createFocusStore(panels);
 
     focus.getState().markPaneOpened('plans');
     focus.getState().measure('plans', plansRect);
-    focus.getState().markPaneOpened('tickets');
-    focus.getState().measure('tickets', ticketsRect);
+    focus.getState().markPaneOpened('workflows');
+    focus.getState().measure('workflows', ticketsRect);
     focus.getState().markPaneOpened(stagePane);
     focus.getState().measure(stagePane, stageRect);
 
     expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
       'plans',
-      'tickets',
+      'workflows',
       stagePane,
     ]);
 
     focus.getState().markPaneOpened('plans');
     focus.getState().measure('plans', { x: 80, y: 0, width: 20, height: 4 });
-    focus.getState().measure('tickets', { x: 0, y: 0, width: 20, height: 4 });
+    focus.getState().measure('workflows', { x: 0, y: 0, width: 20, height: 4 });
     focus.getState().measure(stagePane, { x: 40, y: 0, width: 20, height: 4 });
 
     expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
       'plans',
-      'tickets',
+      'workflows',
       stagePane,
     ]);
 
     focus.getState().markPaneClosed('plans');
     focus.getState().unmeasure('plans');
 
-    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual(['tickets', stagePane]);
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual(['workflows', stagePane]);
 
     focus.getState().markPaneOpened('plans');
     focus.getState().measure('plans', plansRect);
 
     expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
-      'tickets',
+      'workflows',
       stagePane,
       'plans',
     ]);
@@ -258,10 +258,10 @@ describe('focusStore.navigate (geometry-driven)', () => {
   const chatRect: Rect = { x: 0, y: 4, width: 40, height: 3 };
 
   function setup() {
-    const panels = createPanelStore(['plans', 'tickets']);
+    const panels = createPanelStore(['plans', 'workflows']);
     const focus = createFocusStore(panels);
     focus.getState().measure('plans', plansRect);
-    focus.getState().measure('tickets', ticketsRect);
+    focus.getState().measure('workflows', ticketsRect);
     focus.getState().measure(CHAT_FOCUS, chatRect);
     return { panels, focus };
   }
@@ -270,12 +270,12 @@ describe('focusStore.navigate (geometry-driven)', () => {
     const { focus } = setup();
     focus.getState().focus('plans');
     focus.getState().navigate('right');
-    expect(selectEffectiveFocus(focus)).toBe('tickets');
+    expect(selectEffectiveFocus(focus)).toBe('workflows');
   });
 
   it('moves left from tickets back to plans', () => {
     const { focus } = setup();
-    focus.getState().focus('tickets');
+    focus.getState().focus('workflows');
     focus.getState().navigate('left');
     expect(selectEffectiveFocus(focus)).toBe('plans');
   });
@@ -289,9 +289,9 @@ describe('focusStore.navigate (geometry-driven)', () => {
 
   it('does not move at the layout edge', () => {
     const { focus } = setup();
-    focus.getState().focus('tickets');
+    focus.getState().focus('workflows');
     focus.getState().navigate('right'); // nothing further right
-    expect(selectEffectiveFocus(focus)).toBe('tickets');
+    expect(selectEffectiveFocus(focus)).toBe('workflows');
   });
 
   it('measure dedupes an unchanged rect (keeps map identity)', () => {
@@ -306,14 +306,14 @@ describe('focusGraph — directional tiebreaks', () => {
   const rects = new Map<FocusId, Rect>([
     ['crows', { x: 0, y: 0, width: 10, height: 10 }],
     ['plans', { x: 10, y: 0, width: 10, height: 5 }],
-    ['tickets', { x: 10, y: 5, width: 10, height: 5 }],
+    ['workflows', { x: 10, y: 5, width: 10, height: 5 }],
   ]);
 
   it('prefers previous inhabitance, then most-recent open history, then live projection order', () => {
     const withPrevious: FocusGraphState = {
       ...EMPTY_FOCUS_GRAPH_STATE,
       previouslyInhabitedVertexId: 'plans',
-      openPaneIdsByOpenedAt: ['plans', 'tickets'],
+      openPaneIdsByOpenedAt: ['plans', 'workflows'],
     };
     expect(
       navigateFocus(
@@ -329,7 +329,7 @@ describe('focusGraph — directional tiebreaks', () => {
 
     const withOpenHistory: FocusGraphState = {
       ...EMPTY_FOCUS_GRAPH_STATE,
-      openPaneIdsByOpenedAt: ['plans', 'tickets'],
+      openPaneIdsByOpenedAt: ['plans', 'workflows'],
     };
     expect(
       navigateFocus(
@@ -341,7 +341,7 @@ describe('focusGraph — directional tiebreaks', () => {
         'right',
         withOpenHistory,
       ).focusId,
-    ).toBe('tickets');
+    ).toBe('workflows');
 
     expect(
       navigateFocus(

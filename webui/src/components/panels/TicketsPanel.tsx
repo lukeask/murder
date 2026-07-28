@@ -19,10 +19,10 @@ export function TicketsPanel(): React.JSX.Element {
 
   return (
     <Panel
-      title="tickets"
+      title="workflows"
       count={view.isEmpty ? null : view.rows.length}
       flush
-      data-panel-id="tickets"
+      data-panel-id="workflows"
       actions={
         <IconButton label="New ticket" onClick={openTicket}>
           <Icon name="plus" size={14} />

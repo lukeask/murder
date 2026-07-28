@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 function setup() {
-  const stores = createInputStores(['tickets'], 'tickets');
+  const stores = createInputStores(['workflows'], 'workflows');
   const { store, dispose } = createAppStore(new FakeApplicationClient());
   disposers.push(dispose);
   const onSave = vi.fn();

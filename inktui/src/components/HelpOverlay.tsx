@@ -60,7 +60,7 @@ const PANEL_TITLE: Readonly<Record<string, string>> = {
   plans: 'Plans panel',
   notes: 'Notes panel',
   reports: 'Reports panel',
-  tickets: 'Tickets panel',
+  workflows: 'Workflows panel',
   history: 'History panel',
   usage: 'Usage panel',
   tree: 'Tree panel',

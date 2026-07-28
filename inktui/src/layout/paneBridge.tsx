@@ -6,7 +6,7 @@ import { HistoryController } from '../components/panes/HistoryController.js';
 import { NotesController } from '../components/panes/NotesController.js';
 import { PlansController } from '../components/panes/PlansController.js';
 import { ReportsController } from '../components/panes/ReportsController.js';
-import { TicketsController } from '../components/panes/TicketsController.js';
+import { WorkflowsController } from '../components/panes/WorkflowsController.js';
 import { TranscriptController } from '../components/panes/TranscriptController.js';
 import { TreeController } from '../components/panes/TreeController.js';
 import { UsageController } from '../components/panes/UsageController.js';
@@ -37,7 +37,7 @@ const PANEL_SIZING: Record<PanelId, PaneSizing> = {
   plans: { min: { width: 25, height: 5 }, preferred: { width: 34, height: 14 } },
   notes: { min: { width: 25, height: 5 }, preferred: { width: 34, height: 14 } },
   reports: { min: { width: 25, height: 5 }, preferred: { width: 34, height: 14 } },
-  tickets: { min: { width: 25, height: 5 }, preferred: { width: 42, height: 14 } },
+  workflows: { min: { width: 25, height: 5 }, preferred: { width: 42, height: 14 } },
   history: { min: { width: 25, height: 5 }, preferred: { width: 42, height: 14 } },
   tree: { min: { width: 25, height: 10 }, preferred: { width: 40, height: 13 } },
   usage: { min: { width: 20, height: 5 }, preferred: { width: 34, height: 13 } },
@@ -231,8 +231,8 @@ function renderPanel(panelId: PanelId, presentation: PanePresentation): JSX.Elem
       return <NotesController presentation={presentation} />;
     case 'reports':
       return <ReportsController presentation={presentation} />;
-    case 'tickets':
-      return <TicketsController presentation={presentation} />;
+    case 'workflows':
+      return <WorkflowsController presentation={presentation} />;
     case 'history':
       return <HistoryController presentation={presentation} />;
     case 'tree':

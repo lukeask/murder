@@ -1,4 +1,4 @@
-┏━ Tickets ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┏━ Workflows ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃   id / title                      status / updated ┃
 ┃ ▌ T-104 ok codex —                               ● ┃
 ┃  Pane fixtures for exact border-box sizing Jun. 21 ┃
