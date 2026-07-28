@@ -124,7 +124,7 @@ import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { TopBar } from './TopBar.js';
-import { workflowEditorMode } from './WorkflowEditorMode.js';
+import { workflowTemplateEditorMode } from './WorkflowTemplateEditorMode.js';
 import { WorkspaceSlideOverlay } from './WorkspaceSlideOverlay.js';
 
 /**
@@ -992,7 +992,7 @@ function Shell({
     );
   };
 
-  const openWorkflowEditorHandler = (name: string | null): void => {
+  const openWorkflowTemplateEditorHandler = (name: string | null): void => {
     const workflow =
       name === null
         ? undefined
@@ -1002,7 +1002,7 @@ function Shell({
       return;
     }
     modes.getState().enter(
-      workflowEditorMode(modes, appStore, {
+      workflowTemplateEditorMode(modes, appStore, {
         ...(workflow === undefined ? {} : { workflow }),
         harnessModels: createHarnessModelsActions(bus),
         worktreeOptions: createWorktreeOptionsActions(bus),
@@ -1236,7 +1236,7 @@ function Shell({
     terminalViewport: (agentId, action) => {
       paneScroll.emitTerminalViewport(stageTranscriptFocusId(agentId), action);
     },
-    openWorkflows: openWorkflowEditorHandler,
+    openWorkflows: openWorkflowTemplateEditorHandler,
     resolveRenameTarget: () => {
       const state = appStore.getState();
       const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
@@ -1295,7 +1295,7 @@ function Shell({
       spawn: spawnHandler,
       openSettings: openSettingsHandler,
       newPlan: newPlanHandler,
-      openWorkflowEditor: () => openWorkflowEditorHandler(null),
+      openWorkflowTemplateEditor: () => openWorkflowTemplateEditorHandler(null),
       newTicket: newTicketHandler,
       cycleChatView: cycleChatViewHandler,
       quickNote: quickNoteHandler,
@@ -1366,7 +1366,7 @@ function Shell({
     return <WorkspaceSlideOverlay />;
   }
   // Fullscreen modes still keep the BottomBar so mode-specific hints stay discoverable (the workflow
-  // graph editor declares interaction-aware hints; without this chrome those keys are invisible).
+  // workflow template editor declares interaction-aware hints; without this chrome those keys are invisible).
   // Panels / TopBar / chat stay suppressed — only the hint rail rides along under the Overlay.
   if (active !== null && presentationHidesLayout(active.presentation)) {
     return (

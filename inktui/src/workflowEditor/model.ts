@@ -1,4 +1,4 @@
-/** Framework-free document model for the workflow editor. Local keys intentionally survive invalid IDs. */
+/** Framework-free document model for the workflow template editor. Local keys intentionally survive invalid IDs. */
 export type StageKey = string;
 
 export type StageGate = 'auto' | 'human' | 'conditional';

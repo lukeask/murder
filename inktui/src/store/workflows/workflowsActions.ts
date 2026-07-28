@@ -2,7 +2,7 @@
  * Workflows actions — the *only* code that calls the bus for the workflow registry (rule 3).
  *
  * Three RPCs, mirroring the templates pair plus a fire verb:
- *  - `tui.load_workflows {}` → `{ ok, workflows: WorkflowDef[] }` — load the persisted registry.
+ *  - `tui.load_workflows {}` → `{ ok, workflows: WorkflowTemplate[] }` — load the persisted registry.
  *  - `tui.save_workflows { workflows }` → `{ ok, workflows }` — persist it; the reply carries the
  *    NORMALIZED list, so a successful save SYNCS the slice to `result.workflows`.
  *  - `tui.run_workflow { name, args }` → `{ ok, run_ticket_id, stage_ticket_ids, created_ticket_ids }`
@@ -25,12 +25,12 @@ import type { StoreApi } from 'zustand';
 import type { ApplicationClient, CommandResult } from '../../application/ApplicationClient.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
-import type { WorkflowDef } from './workflowsSlice.js';
+import type { WorkflowTemplate } from './workflowsSlice.js';
 
 /**
  * The workflow-registry RPC declarations, augmenting the shared {@link RpcMethods} registry without
  * editing the frozen C1/C2 bus files (rule 4 — the seam). Keys distinct from every other slice's.
- * Shapes mirror the bus contract: a {@link WorkflowDef} list round-tripped for load/save, and a fire
+ * Shapes mirror the bus contract: a {@link WorkflowTemplate} list round-tripped for load/save, and a fire
  * verb returning the materialized ticket ids.
  */
 
@@ -46,7 +46,7 @@ export interface WorkflowsActions {
    * Upsert a workflow by name (replace the def if the name exists, else append), then persist via
    * `tui.save_workflows`. On success the slice syncs to the server's normalized echo. Local-first.
    */
-  save(defn: WorkflowDef): Promise<void>;
+  save(defn: WorkflowTemplate): Promise<void>;
   /** Delete the workflow with `name`, then persist the reduced list. Local-first. */
   remove(name: string): Promise<void>;
   /**
@@ -62,19 +62,19 @@ export interface WorkflowsActions {
   run(name: string, args: Record<string, string>): Promise<void>;
   /** Atomic server-validated upsert. The editor is the only caller; it never changes canonical state
    * until this returns ok. */
-  put(workflow: WorkflowDef, originalName: string | null): Promise<CommandResult<'workflow.put'>>;
+  put(workflow: WorkflowTemplate, originalName: string | null): Promise<CommandResult<'workflow.put'>>;
   /** Atomic revision-checked deletion. */
   delete(name: string): Promise<CommandResult<'workflow.delete'>>;
 }
 
 /** Project a `tui.load_workflows` reply's list defensively (the wire may omit it). */
-function toItems(workflows: readonly WorkflowDef[] | undefined): readonly WorkflowDef[] {
+function toItems(workflows: readonly WorkflowTemplate[] | undefined): readonly WorkflowTemplate[] {
   return workflows ?? [];
 }
 
 function acceptRegistry(
   store: StoreApi<AppStore>,
-  result: { readonly workflows: readonly WorkflowDef[]; readonly revision: string },
+  result: { readonly workflows: readonly WorkflowTemplate[]; readonly revision: string },
 ): void {
   store.setState((state) => ({
     workflows: {
@@ -95,7 +95,7 @@ export function createWorkflowsActions(
    * Ref-swap the local list (optimistic), then persist via `tui.save_workflows`. On success replace
    * the slice with the server's normalized echo; on failure set `error` + toast (NO rollback).
    */
-  async function commit(next: readonly WorkflowDef[]): Promise<void> {
+  async function commit(next: readonly WorkflowTemplate[]): Promise<void> {
     store.setState((state) => ({
       workflows: { ...state.workflows, items: next, status: 'ready', error: null },
     }));
@@ -140,7 +140,7 @@ export function createWorkflowsActions(
       }
     },
 
-    async save(defn: WorkflowDef): Promise<void> {
+    async save(defn: WorkflowTemplate): Promise<void> {
       const current = store.getState().workflows.items;
       const exists = current.some((w) => w.name === defn.name);
       const next = exists

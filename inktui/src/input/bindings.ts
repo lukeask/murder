@@ -50,7 +50,7 @@ export type ActionId =
   | 'global.spawn' // alt+s — open the spawn wizard (chat-focus scoped, see dispatcher)
   | 'global.cycleChatView' // alt+t / ctrl+t — cycle the focused pane's transcript view (verbose→condensed→tmux)
   | 'global.newPlan' // alt+p — open the new-plan popup
-  | 'global.workflowEditor' // alt+g — open the workflow graph editor
+  | 'global.workflowEditor' // alt+g — open the workflow template editor
   | 'global.settings' // alt+o / ctrl+o — open the settings modal
   | 'global.quickNote' // ctrl+n — open the quick-note capture (plain, not command-modified)
   | 'global.keyHelp' // ? — open the keybinding help overlay (see the ACTIONS note on reachability)
@@ -150,7 +150,7 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
   'global.workflowEditor': {
     id: 'global.workflowEditor',
     default: command('g'),
-    description: 'workflow graph',
+    description: 'workflow template editor',
     rebindable: true,
   },
   'global.settings': {

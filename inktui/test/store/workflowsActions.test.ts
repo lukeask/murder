@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
 import { createAppStore } from '../../src/store/store.js';
 import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
-import type { WorkflowDef } from '../../src/store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate } from '../../src/store/workflows/workflowsSlice.js';
 import { selectWorkflowsByName } from '../../src/store/workflows/workflowsSlice.js';
 
 /** All live error toasts on the singleton at the current instant. */
@@ -30,7 +30,7 @@ function liveToasts() {
 }
 
 /** A minimal, fully-shaped workflow def for tests (one trivial stage). */
-function wf(name: string, description = ''): WorkflowDef {
+function wf(name: string, description = ''): WorkflowTemplate {
   return {
     name,
     description,
@@ -183,8 +183,8 @@ describe('workflows actions', () => {
     let finish:
       | ((result: {
           ok: true;
-          workflow: WorkflowDef;
-          workflows: readonly WorkflowDef[];
+          workflow: WorkflowTemplate;
+          workflows: readonly WorkflowTemplate[];
           revision: string;
           issues: readonly [];
           conflict: false;

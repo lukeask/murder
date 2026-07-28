@@ -91,7 +91,7 @@ describe('dispatchCommand — : commands', () => {
     expect(ctx.openHelp).toHaveBeenCalledOnce();
   });
 
-  it(':workflows opens the graph editor, optionally at a named workflow', () => {
+  it(':workflows opens the workflow template editor, optionally at a named workflow', () => {
     const ctx = makeCtx();
     expect(dispatchCommand(':workflows', AGENT, ctx)).toBe(true);
     expect(ctx.openWorkflows).toHaveBeenLastCalledWith(null);

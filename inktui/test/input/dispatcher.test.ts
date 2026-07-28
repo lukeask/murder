@@ -29,8 +29,8 @@ interface SpyHandlers {
   readonly spawn: ReturnType<typeof vi.fn<GlobalHandlers['spawn']>>;
   readonly cycleChatView: ReturnType<typeof vi.fn<GlobalHandlers['cycleChatView']>>;
   readonly newPlan: ReturnType<typeof vi.fn<GlobalHandlers['newPlan']>>;
-  readonly openWorkflowEditor: ReturnType<
-    typeof vi.fn<NonNullable<GlobalHandlers['openWorkflowEditor']>>
+  readonly openWorkflowTemplateEditor: ReturnType<
+    typeof vi.fn<NonNullable<GlobalHandlers['openWorkflowTemplateEditor']>>
   >;
   readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
   readonly openSettings: ReturnType<typeof vi.fn<GlobalHandlers['openSettings']>>;
@@ -60,7 +60,7 @@ function handlers(): SpyHandlers {
     spawn: vi.fn<GlobalHandlers['spawn']>(),
     cycleChatView: vi.fn<GlobalHandlers['cycleChatView']>(),
     newPlan: vi.fn<GlobalHandlers['newPlan']>(),
-    openWorkflowEditor: vi.fn<NonNullable<GlobalHandlers['openWorkflowEditor']>>(),
+    openWorkflowTemplateEditor: vi.fn<NonNullable<GlobalHandlers['openWorkflowTemplateEditor']>>(),
     newTicket: vi.fn<GlobalHandlers['newTicket']>(),
     openSettings: vi.fn<GlobalHandlers['openSettings']>(),
     quickNote: vi.fn<GlobalHandlers['quickNote']>(),
@@ -284,10 +284,10 @@ describe('layer 1 — global chords', () => {
     expect(out).toEqual({ layer: 'global', handled: true, action: 'global.newPlan' });
   });
 
-  it('alt+g opens the workflow graph editor', () => {
+  it('alt+g opens the workflow template editor', () => {
     const h = handlers();
     const out = dispatchKey('g', makeKey({ meta: true }), ctx('plans', h));
-    expect(h.openWorkflowEditor).toHaveBeenCalledOnce();
+    expect(h.openWorkflowTemplateEditor).toHaveBeenCalledOnce();
     expect(out).toEqual({
       layer: 'global',
       handled: true,

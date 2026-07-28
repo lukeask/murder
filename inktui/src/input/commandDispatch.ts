@@ -66,7 +66,7 @@ export interface CommandCtx {
   readonly renamePlan: (oldName: string, newName: string) => void;
   /** Pan a harness's local terminal viewport or return it to cursor-follow mode. */
   readonly terminalViewport?: (agentId: string, action: TerminalViewportAction) => void;
-  /** Open the full-screen workflow editor. The optional workflow name selects an existing definition. */
+  /** Open the full-screen workflow template editor. The optional workflow name selects an existing definition. */
   readonly openWorkflows?: (name: string | null) => void;
 }
 
@@ -119,10 +119,10 @@ type CommandHandler = (args: string, agentId: string | null, ctx: CommandCtx) =>
  * command surface. Adding a command = adding one entry here (and one Help "Commands" row).
  */
 const COMMANDS: Readonly<Record<string, CommandHandler>> = {
-  /** `:workflows [name]` — open the graph editor, optionally on a named workflow. */
+  /** `:workflows [name]` — open the workflow template editor, optionally on a named workflow. */
   workflows(args, _agentId, ctx) {
     if (ctx.openWorkflows === undefined) {
-      ctx.pushToast('workflow editor is unavailable', { severity: 'error' });
+      ctx.pushToast('workflow template editor is unavailable', { severity: 'error' });
       return;
     }
     const name = args.trim();
