@@ -1,7 +1,8 @@
 """Cursor usage API client.
 
 Cursor does not expose usage through the interactive agent CLI. This module
-reads the local Cursor auth token and calls Cursor's current-period usage API.
+reads a local Cursor auth token (agent CLI ``auth.json`` and/or IDE
+``state.vscdb``) and calls Cursor's current-period usage API.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -24,7 +26,10 @@ from murder.llm.harnesses.usage import utc_now_iso
 
 LOGGER = logging.getLogger(__name__)
 
-AUTH_URL = "https://api2.cursor.sh/auth/token"
+# Cursor retired POST /auth/token; OAuth refresh lives at /oauth/token.
+AUTH_URL = "https://api2.cursor.sh/oauth/token"
+# Public Cursor IDE OAuth client id (used by the desktop app for refresh).
+CURSOR_OAUTH_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
 WIRE_VARINT = 0
 WIRE_FIXED64 = 1
@@ -37,7 +42,7 @@ class CursorUsageError(Exception):
 
 
 class CursorNotInstalledError(CursorUsageError):
-    """Cursor DB not found."""
+    """No local Cursor auth store was found."""
 
 
 class CursorNotAuthenticatedError(CursorUsageError):
@@ -51,12 +56,24 @@ class CursorAPIError(CursorUsageError):
         self.message = message
 
 
+@dataclass(frozen=True, slots=True)
+class _TokenPair:
+    access: str | None
+    refresh: str | None
+    source: str
+
+
 def _db_path() -> str:
     if sys.platform == "darwin":
         return os.path.expanduser(
             "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
         )
     return os.path.expanduser("~/.config/Cursor/User/globalStorage/state.vscdb")
+
+
+def _agent_auth_path() -> str:
+    # Cursor Agent CLI login store (distinct from the desktop IDE state.vscdb).
+    return os.path.expanduser("~/.config/cursor/auth.json")
 
 
 def _read_db_keys(*keys: str) -> dict[str, str]:
@@ -76,6 +93,52 @@ def _read_db_keys(*keys: str) -> dict[str, str]:
         conn.close()
 
 
+def _read_agent_auth() -> _TokenPair | None:
+    path = _agent_auth_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        LOGGER.warning("could not read Cursor agent auth at %s", path, exc_info=True)
+        return None
+    if not isinstance(data, dict):
+        return None
+    access = data.get("accessToken") or data.get("access_token")
+    refresh = data.get("refreshToken") or data.get("refresh_token")
+    access_s = str(access) if access else None
+    refresh_s = str(refresh) if refresh else None
+    if not access_s and not refresh_s:
+        return None
+    return _TokenPair(access=access_s, refresh=refresh_s, source="agent-auth.json")
+
+
+def _read_ide_auth() -> _TokenPair | None:
+    path = _db_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        keys = _read_db_keys("cursorAuth/accessToken", "cursorAuth/refreshToken")
+    except Exception:
+        LOGGER.warning("could not read Cursor IDE auth at %s", path, exc_info=True)
+        return None
+    access = keys.get("cursorAuth/accessToken")
+    refresh = keys.get("cursorAuth/refreshToken")
+    if not access and not refresh:
+        return None
+    return _TokenPair(access=access, refresh=refresh, source="ide-state.vscdb")
+
+
+def _load_token_pairs() -> list[_TokenPair]:
+    pairs: list[_TokenPair] = []
+    for loader in (_read_agent_auth, _read_ide_auth):
+        pair = loader()
+        if pair is not None:
+            pairs.append(pair)
+    return pairs
+
+
 def _jwt_exp(token: str) -> int:
     try:
         payload = token.split(".")[1]
@@ -91,43 +154,109 @@ def _jwt_exp(token: str) -> int:
 def _refresh_token(refresh_token: str) -> str | None:
     request = urllib.request.Request(
         AUTH_URL,
-        data=json.dumps({"refreshToken": refresh_token}).encode(),
+        data=json.dumps(
+            {
+                "grant_type": "refresh_token",
+                "client_id": CURSOR_OAUTH_CLIENT_ID,
+                "refresh_token": refresh_token,
+            }
+        ).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             data = json.loads(response.read())
-            value = data.get("access_token") or data.get("accessToken")
-            if not value:
-                LOGGER.warning("Cursor token refresh returned no access_token")
-            return str(value) if value else None
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")[:500]
+        LOGGER.warning(
+            "Cursor token refresh failed: HTTP %s; body=%s; re-auth may be required",
+            exc.code,
+            body,
+            exc_info=True,
+        )
+        return None
     except Exception:
         LOGGER.warning("Cursor token refresh failed; re-auth may be required", exc_info=True)
         return None
 
+    value = data.get("access_token") or data.get("accessToken")
+    if value:
+        return str(value)
+    if data.get("shouldLogout"):
+        raise CursorNotAuthenticatedError(
+            "Cursor refresh rejected session; re-authenticate Cursor"
+        )
+    LOGGER.warning("Cursor token refresh returned no access_token")
+    return None
 
-def get_access_token() -> str:
-    keys = _read_db_keys("cursorAuth/accessToken", "cursorAuth/refreshToken")
-    access = keys.get("cursorAuth/accessToken")
-    refresh = keys.get("cursorAuth/refreshToken")
 
-    if not access and not refresh:
+def get_access_token(*, force_refresh: bool = False) -> str:
+    pairs = _load_token_pairs()
+    if not pairs:
+        if not os.path.exists(_db_path()) and not os.path.exists(_agent_auth_path()):
+            raise CursorNotInstalledError(
+                f"No Cursor auth store found (checked {_agent_auth_path()} and {_db_path()})"
+            )
         raise CursorNotAuthenticatedError("No Cursor auth tokens found")
 
-    if access and _jwt_exp(access) > time.time() + 60:
-        return access
+    # Prefer the freshest access token that is still usable.
+    if not force_refresh:
+        valid = [
+            (pair, _jwt_exp(pair.access))
+            for pair in pairs
+            if pair.access and _jwt_exp(pair.access) > time.time() + 60
+        ]
+        if valid:
+            valid.sort(key=lambda item: item[1], reverse=True)
+            chosen, _exp = valid[0]
+            LOGGER.debug("using Cursor access token from %s", chosen.source)
+            return chosen.access  # type: ignore[return-value]
 
-    if refresh and (new_token := _refresh_token(refresh)):
-        return new_token
+    # Try refresh tokens from freshest store first; skip dead sessions.
+    ordered = sorted(
+        pairs,
+        key=lambda pair: max(
+            _jwt_exp(pair.access) if pair.access else 0,
+            _jwt_exp(pair.refresh) if pair.refresh else 0,
+        ),
+        reverse=True,
+    )
+    rejected_session = False
+    for pair in ordered:
+        if not pair.refresh:
+            continue
+        try:
+            new_token = _refresh_token(pair.refresh)
+        except CursorNotAuthenticatedError:
+            rejected_session = True
+            LOGGER.info("Cursor refresh rejected session from %s", pair.source)
+            continue
+        if new_token:
+            LOGGER.debug("refreshed Cursor access token via %s", pair.source)
+            return new_token
 
     # Refresh failed or unavailable. An expired access token would only earn a
     # 401 (surfaced later as a generic API error), so flag the auth problem here
     # where it is actionable ("re-auth Cursor") rather than masking it.
-    if access and _jwt_exp(access) > time.time():
-        LOGGER.warning("Cursor access token unrefreshed but not yet expired; using it")
-        return access
+    if not force_refresh:
+        soft = [
+            (pair, _jwt_exp(pair.access))
+            for pair in pairs
+            if pair.access and _jwt_exp(pair.access) > time.time()
+        ]
+        if soft:
+            soft.sort(key=lambda item: item[1], reverse=True)
+            LOGGER.warning(
+                "Cursor access token unrefreshed but not yet expired; using %s",
+                soft[0][0].source,
+            )
+            return soft[0][0].access  # type: ignore[return-value]
 
+    if rejected_session:
+        raise CursorNotAuthenticatedError(
+            "Cursor refresh rejected session; re-authenticate Cursor"
+        )
     raise CursorNotAuthenticatedError(
         "Cursor access token expired and could not be refreshed; re-authenticate Cursor"
     )
@@ -216,9 +345,8 @@ def _ms_iso(ms: int | None) -> str | None:
     return datetime.fromtimestamp(ms / 1000, tz=ZoneInfo("UTC")).isoformat()
 
 
-def get_usage_status() -> HarnessUsageStatus:
-    token = get_access_token()
-    top = _decode_proto(_fetch_raw(token))
+def _status_from_proto(raw: bytes) -> HarnessUsageStatus:
+    top = _decode_proto(raw)
     inner_raw = top.get(3, [b""])[0]
     inner = _decode_proto(inner_raw) if isinstance(inner_raw, bytes) else {}
 
@@ -281,3 +409,16 @@ def get_usage_status() -> HarnessUsageStatus:
             "api_limit": api_limit,
         },
     )
+
+
+def get_usage_status() -> HarnessUsageStatus:
+    token = get_access_token()
+    try:
+        raw = _fetch_raw(token)
+    except CursorAPIError as exc:
+        if exc.status != 401:
+            raise
+        # JWT looked usable but the API rejected it — force a refresh and retry once.
+        token = get_access_token(force_refresh=True)
+        raw = _fetch_raw(token)
+    return _status_from_proto(raw)
