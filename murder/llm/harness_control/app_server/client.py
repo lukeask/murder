@@ -86,6 +86,28 @@ class AppServerClient:
             raise TypeError(f"thread/start result must be an object, got {type(result).__name__}")
         return result
 
+    async def model_list(
+        self,
+        *,
+        cursor: str | None = None,
+        include_hidden: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Return one page of the account-specific Codex model catalog."""
+        result = await self.connection.request(
+            "model/list",
+            _omit_none(
+                {
+                    "cursor": cursor,
+                    "includeHidden": include_hidden,
+                    "limit": limit,
+                }
+            ),
+        )
+        if not isinstance(result, dict):
+            raise TypeError(f"model/list result must be an object, got {type(result).__name__}")
+        return result
+
     async def thread_resume(self, thread_id: str, **kwargs: Any) -> dict[str, Any]:
         params = _omit_none({"threadId": thread_id, **kwargs})
         result = await self.connection.request("thread/resume", params)

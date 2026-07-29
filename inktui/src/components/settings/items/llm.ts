@@ -4,8 +4,8 @@ import { headerRow } from '../types.js';
 
 /** Canonical remote adapters always appear, even before the user configures one. */
 export const BUILTIN_PROVIDER_IDS = ['groq', 'cerebras', 'openrouter', 'openai', 'anthropic'] as const;
-export const PROVIDERS: readonly LlmProviderId[] = ['groq', 'cerebras', 'openrouter', 'local'];
-export const ENV_PROVIDERS: ReadonlySet<string> = new Set(['groq', 'cerebras', 'openrouter']);
+export const PROVIDERS: readonly LlmProviderId[] = ['groq', 'cerebras', 'openrouter', 'openai', 'anthropic', 'local'];
+export const ENV_PROVIDERS: ReadonlySet<string> = new Set(['groq', 'cerebras', 'openrouter', 'openai', 'anthropic']);
 export const ROLES: readonly string[] = ['notetaker', 'crow_handler', 'codebase_map'];
 export const BUILTIN_TIERS: Readonly<Record<string, LlmTierWire>> = {
   cheap: { provider: 'groq', model: 'openai/gpt-oss-120b', auto_free: true },
@@ -27,7 +27,7 @@ export function tierNames(llm: LlmWire): readonly string[] {
 }
 
 export function llmEnvValue(env: LlmEnvWire, provider: LlmProviderId): boolean {
-  return provider !== 'local' && env[provider];
+  return provider !== 'local' && Boolean(env[provider]);
 }
 
 const llmNavigationItem: SettingsItem = {

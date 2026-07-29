@@ -9,6 +9,7 @@ from murder.app.service.command_dispatch import ClaimedCommand, CommandDispatche
 from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx
+from murder.runtime.workers.model_catalog_refresh_worker import model_catalog_refresh_process_target
 from murder.runtime.workers.process_runner import SubprocessWorkerRunner
 from murder.runtime.workers.process_targets import usage_probe_process_target
 from murder.state.persistence.commands import upsert_worker_heartbeat
@@ -176,6 +177,12 @@ class Supervisor:
     async def _start_subprocess_runner(self, worker: Worker) -> SubprocessWorkerRunner | None:
         if worker.spec.process_model != "subprocess":
             return None
+        if worker.spec.name == WorkerName.MODEL_CATALOG_REFRESH:
+            runner = SubprocessWorkerRunner(
+                model_catalog_refresh_process_target, name=worker.spec.name
+            )
+            await runner.start()
+            return runner
         if worker.spec.name != WorkerName.USAGE_PROBE:
             return None
         runner = SubprocessWorkerRunner(

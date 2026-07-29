@@ -181,6 +181,7 @@ type LlmForm =
       readonly builtin: boolean;
       name: string;
       endpoint: string;
+      authSource: 'none' | 'environment' | 'key';
       apiKey: string;
       source: 'recommended' | 'discovered' | 'custom';
       include: string;
@@ -556,6 +557,7 @@ export function settingsMode(
         builtin: row.builtin,
         name: provider?.name ?? row.providerId.replaceAll('-', ' '),
         endpoint: provider?.endpoint ?? '',
+        authSource: provider?.auth?.source ?? (provider?.auth?.api_key ? 'key' : 'environment'),
         apiKey: provider?.auth?.api_key ?? provider?.api_key ?? '',
         source: provider?.models?.source ?? 'recommended',
         include: (provider?.models?.include ?? []).join(', '),
@@ -595,6 +597,7 @@ export function settingsMode(
           builtin: false,
           name: '',
           endpoint: '',
+          authSource: 'environment',
           apiKey: '',
           source: 'recommended',
           include: '',
@@ -1159,6 +1162,7 @@ export function settingsMode(
       builtin,
       name: provider?.name ?? providerId?.replaceAll('-', ' ') ?? '',
       endpoint: provider?.endpoint ?? '',
+      authSource: provider?.auth?.source ?? (provider?.auth?.api_key ? 'key' : 'environment'),
       apiKey: provider?.auth?.api_key ?? provider?.api_key ?? '',
       source: provider?.models?.source ?? 'recommended',
       include: (provider?.models?.include ?? []).join(', '),
@@ -1188,7 +1192,7 @@ export function settingsMode(
   }
 
   function formFieldCount(): number {
-    if (s.llmForm?.kind === 'provider') return 9; // basic fields, catalog controls, save, cancel
+    if (s.llmForm?.kind === 'provider') return 10; // basic fields, catalog controls, save, cancel
     if (s.llmForm?.kind === 'policy') return 4; // name, groups, save, cancel
     return 0;
   }
@@ -1237,11 +1241,11 @@ export function settingsMode(
           ? form.name
           : form.field === 1
             ? form.endpoint
-            : form.field === 2
+            : form.field === 3
               ? form.apiKey
-              : form.field === 4
+              : form.field === 5
                 ? form.include
-                : form.field === 5
+                : form.field === 6
                   ? form.exclude
                   : form.overrides
         : form.field === 0
@@ -1259,10 +1263,10 @@ export function settingsMode(
     if (form.kind === 'provider') {
       if (form.field === 0) form.name = s.editValue;
       else if (form.field === 1) form.endpoint = s.editValue;
-      else if (form.field === 2) form.apiKey = s.editValue;
-      else if (form.field === 4) form.include = s.editValue;
-      else if (form.field === 5) form.exclude = s.editValue;
-      else if (form.field === 6) form.overrides = s.editValue;
+      else if (form.field === 3) form.apiKey = s.editValue;
+      else if (form.field === 5) form.include = s.editValue;
+      else if (form.field === 6) form.exclude = s.editValue;
+      else if (form.field === 7) form.overrides = s.editValue;
     } else if (form.field === 0) {
       form.name = s.editValue;
     } else if (form.field === 1) {
@@ -1313,7 +1317,7 @@ export function settingsMode(
       const patch = {
         name: form.name.trim(),
         endpoint: form.endpoint.trim(),
-        auth: { api_key: form.apiKey },
+        auth: { source: form.authSource, api_key: form.authSource === 'key' ? form.apiKey : '***' },
         models,
       };
       if (form.providerId === null) {
@@ -1826,11 +1830,15 @@ export function settingsMode(
             const form = s.llmForm;
             const textField =
               (form.kind === 'provider' &&
-                (form.field <= 2 || (form.field >= 4 && form.field <= 6))) ||
+                (form.field <= 1 || form.field === 3 || (form.field >= 5 && form.field <= 7))) ||
               (form.kind === 'policy' && form.field <= 1);
             if (textField) {
               beginFormTextEdit();
-            } else if (form.kind === 'provider' && form.field === 3) {
+            } else if (form.kind === 'provider' && form.field === 2) {
+              const sources: Array<'none' | 'environment' | 'key'> = ['none', 'environment', 'key'];
+              form.authSource = sources[(sources.indexOf(form.authSource) + 1) % sources.length] ?? 'none';
+              refresh();
+            } else if (form.kind === 'provider' && form.field === 4) {
               const sources: Array<'recommended' | 'discovered' | 'custom'> = [
                 'recommended',
                 'discovered',
@@ -1839,7 +1847,7 @@ export function settingsMode(
               form.source =
                 sources[(sources.indexOf(form.source) + 1) % sources.length] ?? 'recommended';
               refresh();
-            } else if (form.field === (form.kind === 'provider' ? 7 : 2)) {
+            } else if (form.field === (form.kind === 'provider' ? 8 : 2)) {
               saveLlmForm();
             } else {
               cancelLlmForm();
@@ -2211,46 +2219,60 @@ function SettingsDialog({
                       <Text
                         color={
                           s.activePane === 'editor' &&
-                          (s.llmForm.field === 1 || s.llmForm.field === 2)
+                          (s.llmForm.field === 1 || s.llmForm.field === 3)
                             ? theme.warning
                             : theme.text
                         }
                         bold={
                           s.activePane === 'editor' &&
-                          (s.llmForm.field === 1 || s.llmForm.field === 2)
+                          (s.llmForm.field === 1 || s.llmForm.field === 3)
                         }
                         wrap="truncate-end"
-                      >{`${s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2) ? '› ' : '  '}API key: ${s.llmForm.apiKey ? 'set' : 'not set'}; Endpoint`}</Text>
+                      >{`${s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 3) ? '› ' : '  '}Endpoint / API key: ${s.llmForm.authSource === 'key' ? (s.llmForm.apiKey ? 'set' : 'not set') : s.llmForm.authSource}`}</Text>
+                      <Text
+                        color={s.activePane === 'editor' && s.llmForm.field === 2 ? theme.warning : theme.text}
+                        bold={s.activePane === 'editor' && s.llmForm.field === 2}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 2 ? '› ' : '  '}Credential source ${s.llmForm.authSource}  (None / Environment Variable / Key)`}</Text>
+                      {s.llmForm.authSource === 'key' && (
+                        <LlmFormField
+                          label="Pasted API key"
+                          value={s.llmForm.apiKey ? '***' : ''}
+                          editing={s.llmFormEditing && s.llmForm.field === 3}
+                          editEditor={s.editEditor}
+                          focused={s.activePane === 'editor' && s.llmForm.field === 3}
+                          theme={theme}
+                        />
+                      )}
                       <Text
                         color={
-                          s.activePane === 'editor' && s.llmForm.field === 3
+                          s.activePane === 'editor' && s.llmForm.field === 4
                             ? theme.warning
                             : theme.text
                         }
-                        bold={s.activePane === 'editor' && s.llmForm.field === 3}
-                      >{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Models source     ${s.llmForm.source}`}</Text>
+                        bold={s.activePane === 'editor' && s.llmForm.field === 4}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 4 ? '› ' : '  '}Models source     ${s.llmForm.source}`}</Text>
                       <LlmFormField
                         label="Include models"
                         value={s.llmForm.include}
-                        editing={s.llmFormEditing && s.llmForm.field === 4}
-                        editEditor={s.editEditor}
-                        focused={s.activePane === 'editor' && s.llmForm.field === 4}
-                        theme={theme}
-                      />
-                      <LlmFormField
-                        label="Exclude models"
-                        value={s.llmForm.exclude}
                         editing={s.llmFormEditing && s.llmForm.field === 5}
                         editEditor={s.editEditor}
                         focused={s.activePane === 'editor' && s.llmForm.field === 5}
                         theme={theme}
                       />
                       <LlmFormField
-                        label="Model overrides JSON"
-                        value={s.llmForm.overrides}
+                        label="Exclude models"
+                        value={s.llmForm.exclude}
                         editing={s.llmFormEditing && s.llmForm.field === 6}
                         editEditor={s.editEditor}
                         focused={s.activePane === 'editor' && s.llmForm.field === 6}
+                        theme={theme}
+                      />
+                      <LlmFormField
+                        label="Model overrides JSON"
+                        value={s.llmForm.overrides}
+                        editing={s.llmFormEditing && s.llmForm.field === 7}
+                        editEditor={s.editEditor}
+                        focused={s.activePane === 'editor' && s.llmForm.field === 7}
                         theme={theme}
                       />
                       <Text color={theme.muted} wrap="truncate-end">
@@ -2260,14 +2282,19 @@ function SettingsDialog({
                           s.llmForm.overrides,
                         )}
                       </Text>
-                      <Text
-                        color={
-                          s.activePane === 'editor' && s.llmForm.field === 7
-                            ? theme.warning
-                            : theme.text
-                        }
-                        bold={s.activePane === 'editor' && s.llmForm.field === 7}
-                      >{`${s.activePane === 'editor' && s.llmForm.field === 7 ? '› ' : '  '}Save`}</Text>
+                      <Text color={theme.muted} wrap="truncate-end">
+                        {(() => {
+                          const cached = s.llmForm.providerId
+                            ? s.llm.providers?.[s.llmForm.providerId]?.models?.discovered ?? []
+                            : [];
+                          const error = s.llmForm.providerId
+                            ? s.llm.providers?.[s.llmForm.providerId]?.models?.discovery_error
+                            : null;
+                          return error
+                            ? `Catalog refresh error: ${error}`
+                            : `Available models: ${cached.length ? cached.join(', ') : 'not fetched yet'}`;
+                        })()}
+                      </Text>
                       <Text
                         color={
                           s.activePane === 'editor' && s.llmForm.field === 8
@@ -2275,7 +2302,15 @@ function SettingsDialog({
                             : theme.text
                         }
                         bold={s.activePane === 'editor' && s.llmForm.field === 8}
-                      >{`${s.activePane === 'editor' && s.llmForm.field === 8 ? '› ' : '  '}Cancel${s.llmForm.providerId !== null && !s.llmForm.builtin ? '  (d deletes)' : ''}`}</Text>
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 8 ? '› ' : '  '}Save`}</Text>
+                      <Text
+                        color={
+                          s.activePane === 'editor' && s.llmForm.field === 9
+                            ? theme.warning
+                            : theme.text
+                        }
+                        bold={s.activePane === 'editor' && s.llmForm.field === 9}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 9 ? '› ' : '  '}Cancel${s.llmForm.providerId !== null && !s.llmForm.builtin ? '  (d deletes)' : ''}`}</Text>
                     </>
                   )}
                   {s.llmForm?.kind === 'policy' && (

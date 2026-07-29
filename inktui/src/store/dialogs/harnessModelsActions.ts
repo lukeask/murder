@@ -52,13 +52,6 @@ export const STATIC_HARNESS_MODELS: Record<string, readonly HarnessModel[]> = {
     { id: 'opus', label: 'Opus' },
     { id: 'haiku', label: 'Haiku' },
   ],
-  codex: [
-    { id: 'gpt-5.5', label: 'GPT-5.5' },
-    { id: 'gpt-5.4', label: 'GPT-5.4' },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
-    { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex' },
-    { id: 'gpt-5.2', label: 'GPT-5.2' },
-  ],
   cursor: [
     { id: 'composer-2.5', label: 'Composer 2.5' },
     { id: 'auto', label: 'Auto' },

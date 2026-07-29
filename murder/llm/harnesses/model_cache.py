@@ -1,4 +1,4 @@
-"""Live harness model catalog with a configured last-good fallback."""
+"""Live harness model catalog with an in-process last-good cache."""
 
 from __future__ import annotations
 
@@ -30,13 +30,15 @@ def configured_harnesses() -> list[str]:
 
 
 def get_available_models(harness: str) -> list[tuple[str, str]]:
-    """Return the live catalog when available, else a fresh static fallback."""
+    """Return the last successful catalog, or a non-live harness's configured list."""
 
     cached = _CACHE.get(harness)
     if cached:
         return list(cached)
     adapter_cls = REGISTRY.get(harness)
-    return list(adapter_cls.available_startup_models) if adapter_cls is not None else []
+    if adapter_cls is None or harness in LIVE_MODEL_DISCOVERY_HARNESSES:
+        return []
+    return list(adapter_cls.available_startup_models)
 
 
 def clear_model_cache() -> None:
@@ -79,6 +81,10 @@ async def refresh_and_persist_harness_models(
         if models:
             _CACHE[harness] = list(models)
         else:
+            # A failed live probe must never replace a persisted last-good
+            # catalog with an empty or fabricated static list.
+            if harness in LIVE_MODEL_DISCOVERY_HARNESSES:
+                continue
             models = get_available_models(harness)
         if db is None:
             continue

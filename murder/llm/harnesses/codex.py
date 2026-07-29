@@ -150,13 +150,6 @@ class CodexAdapter(HarnessAdapter):
     usage_collection_mode: ClassVar[UsageCollectionMode] = "http"
     supported_efforts: ClassVar[tuple[str, ...]] = ("low", "medium", "high", "xhigh")
     crow_system_prompt: ClassVar[str] = "see prompts/crow_codex.md"
-    available_startup_models: ClassVar[list[tuple[str, str]]] = [
-        ("gpt-5.5", "GPT-5.5"),
-        ("gpt-5.4", "GPT-5.4"),
-        ("gpt-5.4-mini", "GPT-5.4 Mini"),
-        ("gpt-5.3-codex", "GPT-5.3 Codex"),
-        ("gpt-5.2", "GPT-5.2"),
-    ]
 
     def startup_cmd(self, cwd: Path) -> list[str]:
         base_flags = [

@@ -1,4 +1,4 @@
-"""Live model-catalog cache and configured fallback contracts."""
+"""Live model-catalog cache and last-successful persistence contracts."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from murder.llm.harnesses.model_cache import (
     get_available_models,
     refresh_and_persist_harness_models,
 )
-from murder.state.persistence.harness_models import get_all_harness_models
+from murder.state.persistence.harness_models import get_all_harness_models, upsert_harness_models
 from murder.state.persistence.schema import init_db
 
 
@@ -33,9 +33,10 @@ def test_accessor_returns_configured_catalog_and_fresh_list() -> None:
 def test_catalog_covers_all_registered_harnesses_without_capability_probe() -> None:
     assert configured_harnesses() == sorted(REGISTRY)
     assert get_available_models("not_a_harness") == []
+    assert get_available_models("codex") == []
 
 
-def test_refresh_persists_fallback_when_live_probes_fail(
+def test_failed_live_refresh_preserves_the_previously_persisted_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_probes(monkeypatch)
@@ -43,18 +44,24 @@ def test_refresh_persists_fallback_when_live_probes_fail(
     connection.row_factory = sqlite3.Row
     init_db(connection)
 
+    upsert_harness_models(
+        connection,
+        harness="codex",
+        models=[{"id": "last-good", "label": "Last Good"}],
+        fetched_at="2026-01-01T00:00:00+00:00",
+    )
+    connection.commit()
     asyncio.run(refresh_and_persist_harness_models(tmp_path, connection))
 
     rows = get_all_harness_models(connection)
-    assert {row["harness"] for row in rows} == set(configured_harnesses())
+    assert {row["harness"] for row in rows} == {"claude_code", "codex", "pi"}
     assert (
         next(row for row in rows if row["harness"] == "claude_code")["discovery_error"]
         == CATALOG_ADVISORY
     )
-    assert (
-        next(row for row in rows if row["harness"] == "codex")["discovery_error"]
-        == "codex unavailable"
-    )
+    codex = next(row for row in rows if row["harness"] == "codex")
+    assert codex["models"] == [{"id": "last-good", "label": "Last Good"}]
+    assert codex["fetched_at"] == "2026-01-01T00:00:00+00:00"
     assert next(row for row in rows if row["harness"] == "claude_code")["models"] == [
         {"id": model_id, "label": label}
         for model_id, label in REGISTRY["claude_code"].available_startup_models

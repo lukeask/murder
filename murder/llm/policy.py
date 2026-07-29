@@ -180,12 +180,19 @@ class DirectLlmResolver:
             return []
         provider_type = provider.type or provider_id
         catalog = provider.models
-        source = (
-            self.recommended_catalogs
-            if catalog.source == "recommended"
-            else self.discovered_catalogs
-        )
-        base = dict(source.get(provider_type, {})) if catalog.source != "custom" else {}
+        if catalog.source == "recommended":
+            base = dict(self.recommended_catalogs.get(provider_type, {}))
+        elif catalog.source == "discovered":
+            # Catalogs are persisted on each provider instance.  The optional
+            # injected map is retained for callers/tests using the old seam.
+            base = {
+                model_id: CandidateMetadata()
+                for model_id in getattr(catalog, "discovered", [])
+            }
+            if not base:
+                base = dict(self.discovered_catalogs.get(provider_type, {}))
+        else:
+            base = {}
         model_ids = list(base)
         model_ids.extend(model for model in catalog.include if model not in base)
         model_ids = [model for model in model_ids if model not in set(catalog.exclude)]

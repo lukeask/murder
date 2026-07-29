@@ -150,6 +150,8 @@ def default_llm_env() -> dict[str, bool]:
         "groq": bool(os.environ.get("GROQ_API_KEY")),
         "cerebras": bool(os.environ.get("CEREBRAS_API_KEY")),
         "openrouter": bool(os.environ.get("OPENROUTER_API_KEY")),
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
     }
 
 

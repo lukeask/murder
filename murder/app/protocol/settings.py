@@ -135,6 +135,7 @@ class DiscoveredLlmModel(ApplicationModel):
 class DiscoverLlmProviderModelsResult(ApplicationModel):
     ok: Literal[True] = True
     models: list[DiscoveredLlmModel]
+    message: str | None = None
 
 
 class CreateLlmPolicyParams(ApplicationModel):

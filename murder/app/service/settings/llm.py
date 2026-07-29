@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from murder.app.service.settings.ports import SettingsRepository
@@ -151,8 +152,12 @@ async def discover_provider_models(
         raise ValueError(f"unknown provider: {provider_id}")
     definition = get_provider_definition(provider.type or provider_id)
     discovered = await definition.discover_models(provider)
-    provider.models.include = list(dict.fromkeys([*provider.models.include, *discovered]))
-    return cfg, discovered
+    # A successful refresh replaces only the machine cache.  ``include`` is a
+    # user-authored list and must survive every refresh.
+    provider.models.discovered = list(discovered)
+    provider.models.discovery_error = None
+    provider.models.discovered_at = datetime.now(timezone.utc).isoformat()
+    return cfg, list(discovered)
 
 
 def create_policy(cfg: UserConfig, name: Any, policy: Any) -> tuple[UserConfig, str]:

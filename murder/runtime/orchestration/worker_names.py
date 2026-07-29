@@ -15,6 +15,7 @@ class WorkerName(str, Enum):
     CODEBASE_MAP = "codebase-map"
     DONE_SESSION_SWEEPER = "done-session-sweeper"
     HARNESS_VERSION_PROBE = "harness-version-probe"
+    MODEL_CATALOG_REFRESH = "model-catalog-refresh"
     NOTE_SYNC = "note_sync"
     ORCHESTRATOR = "orchestrator"
     PLAN_SYNC = "plan_sync"

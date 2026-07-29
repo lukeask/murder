@@ -44,6 +44,7 @@ UserLlmProviderKind = Literal[
     "openai_compatible",
 ]
 ModelSource = Literal["recommended", "discovered", "custom"]
+AuthSource = Literal["none", "environment", "key"]
 CandidateLocality = Literal["local", "remote", "unknown"]
 CandidateCostClass = Literal["free", "paid", "unknown"]
 
@@ -232,11 +233,19 @@ class UserLlmModelCatalog(BaseModel):
     include: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
     overrides: dict[str, UserLlmModelOverride] = Field(default_factory=dict)
+    # This is deliberately distinct from ``include``: include is the user's
+    # hand-maintained list while this is the last successful provider response.
+    discovered: list[str] = Field(default_factory=list)
+    discovery_error: str | None = None
+    discovered_at: str | None = None
 
 
 class UserLlmProviderAuth(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    # Legacy files had only api_key.  A key means pasted-key mode; absent keys
+    # retain the old environment-backed behaviour for built-in providers.
+    source: AuthSource | None = None
     api_key: str | None = None
 
 
@@ -274,6 +283,13 @@ class UserLlmProviderSettings(BaseModel):
             auth = dict(data.get("auth") or {})
             auth.setdefault("api_key", legacy_key)
             data["auth"] = auth
+        auth = data.get("auth")
+        if isinstance(auth, dict) and "source" not in auth:
+            # Prior config injection used a stored key when present and the
+            # conventional environment variable otherwise.
+            auth = dict(auth)
+            auth["source"] = "key" if auth.get("api_key") else "environment"
+            data["auth"] = auth
         legacy_endpoint = data.pop("base_url", None)
         if legacy_endpoint is not None and "endpoint" not in data:
             data["endpoint"] = legacy_endpoint
@@ -295,6 +311,11 @@ class UserLlmProviderSettings(BaseModel):
     @property
     def base_url(self) -> str | None:
         return self.endpoint
+
+    @property
+    def auth_source(self) -> AuthSource:
+        """Resolved source; old in-memory settings remain environment-backed."""
+        return self.auth.source or ("key" if self.auth.api_key else "environment")
 
 
 class UserLlmExactCandidate(BaseModel):
@@ -583,6 +604,8 @@ _PROVIDER_ENV_MAP: dict[tuple[str, str], str] = {
     ("groq", "api_key"): "GROQ_API_KEY",
     ("cerebras", "api_key"): "CEREBRAS_API_KEY",
     ("openrouter", "api_key"): "OPENROUTER_API_KEY",
+    ("openai", "api_key"): "OPENAI_API_KEY",
+    ("anthropic", "api_key"): "ANTHROPIC_API_KEY",
     ("local", "base_url"): "LOCAL_OPENAI_BASE_URL",
     ("local", "api_key"): "LOCAL_OPENAI_API_KEY",
 }
@@ -600,6 +623,10 @@ def apply_llm_env(user_cfg: UserConfig | None) -> None:
         for attr in ("api_key", "base_url"):
             env_name = _PROVIDER_ENV_MAP.get((provider, attr))
             if env_name is None:
+                continue
+            # Source selection is authoritative.  Do not let a pasted key
+            # silently override a process environment (or vice versa).
+            if attr == "api_key" and settings.auth_source != "key":
                 continue
             value = getattr(settings, attr, None)
             if value:

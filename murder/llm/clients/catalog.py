@@ -7,6 +7,7 @@ client-free in :mod:`murder.llm.policy`.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
@@ -74,6 +75,7 @@ class ProviderDefinition:
     canonical_instance: bool = True
     multiple_instances: bool = False
     discovery_path: str | None = None
+    environment_variable: str | None = None
     _factory: ClientFactory = field(repr=False, compare=False, default=lambda _key, _url: None)  # type: ignore[assignment]
     _endpoint_normalizer: EndpointNormalizer = field(
         repr=False, compare=False, default=lambda endpoint: endpoint.rstrip("/")
@@ -96,13 +98,25 @@ class ProviderDefinition:
     def create_client(self, provider: UserLlmProviderSettings) -> APIClient | None:
         """Build a client from a persisted instance, degrading on missing setup."""
         try:
+            api_key = self.resolve_api_key(provider)
+            if provider.auth_source == "none" or (self.requires_api_key and not api_key):
+                return None
             endpoint = provider.endpoint or self.default_endpoint
             return self._factory(
-                provider.auth.api_key,
+                api_key,
                 self._endpoint_normalizer(endpoint) if endpoint else None,
             )
         except RuntimeError:
             return None
+
+    def resolve_api_key(self, provider: UserLlmProviderSettings) -> str | None:
+        """Return only the credential explicitly selected by the provider."""
+        source = provider.auth_source
+        if source == "none":
+            return None
+        if source == "key":
+            return provider.auth.api_key
+        return os.environ.get(self.environment_variable or "")
 
     async def discover_models(
         self,
@@ -121,9 +135,14 @@ class ProviderDefinition:
         if not endpoint:
             raise ValueError(f"provider {self.type} requires an endpoint for discovery")
         endpoint = self._endpoint_normalizer(endpoint)
+        api_key = self.resolve_api_key(provider)
+        if self.requires_api_key and not api_key:
+            raise ValueError(f"provider {self.type} has no usable credential")
         headers = {"Accept": "application/json"}
-        if provider.auth.api_key:
-            headers["Authorization"] = f"Bearer {provider.auth.api_key}"
+        if self.type == "anthropic":
+            headers.update({"x-api-key": api_key or "", "anthropic-version": "2023-06-01"})
+        elif api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         owns_client = http_client is None
         client = http_client or httpx.AsyncClient(timeout=20.0, headers=headers)
         try:
@@ -235,6 +254,8 @@ PROVIDER_DEFINITIONS: dict[ProviderType, ProviderDefinition] = {
             ModelPreset("llama-3.3-70b-versatile", "Llama 3.3 70B"),
         ),
         _factory=_groq_factory,
+        discovery_path="/models",
+        environment_variable="GROQ_API_KEY",
     ),
     "cerebras": ProviderDefinition(
         "cerebras",
@@ -249,6 +270,8 @@ PROVIDER_DEFINITIONS: dict[ProviderType, ProviderDefinition] = {
             ),
         ),
         _factory=_cerebras_factory,
+        discovery_path="/models",
+        environment_variable="CEREBRAS_API_KEY",
     ),
     "openrouter": ProviderDefinition(
         "openrouter",
@@ -259,6 +282,7 @@ PROVIDER_DEFINITIONS: dict[ProviderType, ProviderDefinition] = {
         presets=(ModelPreset("openai/gpt-4o-mini", "GPT-4o mini"),),
         discovery_path="/models",
         _factory=_openrouter_factory,
+        environment_variable="OPENROUTER_API_KEY",
     ),
     "openai": ProviderDefinition(
         "openai",
@@ -269,6 +293,7 @@ PROVIDER_DEFINITIONS: dict[ProviderType, ProviderDefinition] = {
         presets=(ModelPreset("gpt-4.1-mini", "GPT-4.1 mini"),),
         discovery_path="/models",
         _factory=_openai_factory,
+        environment_variable="OPENAI_API_KEY",
     ),
     "anthropic": ProviderDefinition(
         "anthropic",
@@ -277,7 +302,9 @@ PROVIDER_DEFINITIONS: dict[ProviderType, ProviderDefinition] = {
         (_API_KEY,),
         _REMOTE_PAID,
         presets=(ModelPreset("claude-sonnet-4-20250514", "Claude Sonnet 4"),),
+        discovery_path="/models",
         _factory=_anthropic_factory,
+        environment_variable="ANTHROPIC_API_KEY",
     ),
     "lemonade": ProviderDefinition(
         "lemonade",

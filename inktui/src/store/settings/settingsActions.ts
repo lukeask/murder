@@ -44,11 +44,11 @@ import type {
 
 /** The four user-configurable LLM provider ids (mirrors the Python `UserLlmConfig.providers` keys).
  * `local` is the OpenAI-compatible local endpoint (no api-key env flag). */
-export type LlmProviderId = 'groq' | 'cerebras' | 'openrouter' | 'local';
+export type LlmProviderId = 'groq' | 'cerebras' | 'openrouter' | 'openai' | 'anthropic' | 'local';
 
 /** The provider ids that carry an env-key flag (`local` has none — env beats config.yaml only for
  * these three; see the Python `_settings_payload`'s `llm_env`). */
-export type LlmEnvProviderId = 'groq' | 'cerebras' | 'openrouter';
+export type LlmEnvProviderId = 'groq' | 'cerebras' | 'openrouter' | 'openai' | 'anthropic';
 
 /** The tier `provider` enum (a superset of {@link LlmProviderId} — tiers may point at `anthropic` /
  * `openai` too; mirrors the Python `UserLlmTier.provider`). */
@@ -62,7 +62,7 @@ export interface LlmProviderWire {
   readonly name?: string | null;
   readonly enabled?: boolean;
   readonly endpoint?: string | null;
-  readonly auth?: { readonly api_key?: string | null };
+  readonly auth?: { readonly source?: 'none' | 'environment' | 'key' | null; readonly api_key?: string | null };
   readonly api_key?: string | null;
   readonly base_url?: string | null;
   readonly models?: {
@@ -70,6 +70,9 @@ export interface LlmProviderWire {
     readonly include?: readonly string[];
     readonly exclude?: readonly string[];
     readonly overrides?: Readonly<Record<string, LlmModelOverrideWire>>;
+    readonly discovered?: readonly string[];
+    readonly discovery_error?: string | null;
+    readonly discovered_at?: string | null;
   };
 }
 
@@ -107,7 +110,7 @@ export interface LlmPolicyWire {
 
 /** Whether each env-flagged provider's api key is present in the daemon's environment (env/.env always
  * beats config.yaml). When `true` the config value is ignored — display only. */
-export type LlmEnvWire = Readonly<Record<LlmEnvProviderId, boolean>>;
+export type LlmEnvWire = Readonly<Partial<Record<LlmEnvProviderId, boolean>>>;
 
 /** The auto-spawned-on-boot rogue ("Startup Rogue"). Mirrors the Python `StartupRogueConfig`:
  * `model` empty = the harness adapter's default; `effort` `null` = no reasoning-effort override.

@@ -8,12 +8,16 @@ from murder.app.protocol.requests import CommandName
 from murder.app.service.settings import effective_harness_view
 from murder.app.service.settings import llm as llm_usecases
 from murder.app.service.settings_service import SettingsService
+from murder.runtime.workers.model_catalog_refresh_worker import (
+    provider_has_usable_credentials,
+    request_catalog_refresh,
+)
 
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
 
 
-def register(host: ServiceHost) -> None:
+def register(host: ServiceHost) -> None:  # noqa: PLR0915 - command registration is intentionally flat
     def _repository() -> SettingsService:
         return SettingsService(repo_root=host.repo_root)
 
@@ -30,13 +34,20 @@ def register(host: ServiceHost) -> None:
     def _llm_provider_create(body: dict[str, Any]) -> dict[str, Any]:
         cfg = llm_usecases.load_mutable_config(_repository())
         cfg, provider_id = llm_usecases.create_provider(cfg, body.get("provider"))
-        return _save_reply(cfg, extra={"provider_id": provider_id})
+        reply = _save_reply(cfg, extra={"provider_id": provider_id})
+        if provider_has_usable_credentials(cfg.llm.providers[provider_id]):
+            request_catalog_refresh()
+        return reply
 
     def _llm_provider_update(body: dict[str, Any]) -> dict[str, Any]:
         cfg = llm_usecases.load_mutable_config(_repository())
-        return _save_reply(
-            llm_usecases.update_provider(cfg, body.get("provider_id"), body.get("patch"))
-        )
+        provider_id = body.get("provider_id")
+        reply = _save_reply(llm_usecases.update_provider(cfg, provider_id, body.get("patch")))
+        # The child reloads YAML, so it sees the completed atomic settings save.
+        provider = cfg.llm.providers.get(provider_id) if isinstance(provider_id, str) else None
+        if provider is not None and provider_has_usable_credentials(provider):
+            request_catalog_refresh()
+        return reply
 
     def _llm_provider_delete(body: dict[str, Any]) -> dict[str, Any]:
         cfg = llm_usecases.load_mutable_config(_repository())
@@ -56,13 +67,20 @@ def register(host: ServiceHost) -> None:
 
     async def _llm_provider_discover_models(body: dict[str, Any]) -> dict[str, Any]:
         cfg = llm_usecases.load_mutable_config(_repository())
-        cfg, discovered = await llm_usecases.discover_provider_models(
-            cfg, body.get("provider_id")
-        )
+        provider_id = body.get("provider_id")
+        try:
+            cfg, discovered = await llm_usecases.discover_provider_models(cfg, provider_id)
+            message = None
+        except Exception as exc:  # preserve prior cache and report a usable error state
+            if isinstance(provider_id, str) and cfg.llm and provider_id in cfg.llm.providers:
+                cfg.llm.providers[provider_id].models.discovery_error = str(exc)
+                _repository().save(cfg)
+            return {"ok": True, "models": [], "message": str(exc)}
         _repository().save(cfg)
         return {
             "ok": True,
             "models": [{"id": model_id, "label": model_id} for model_id in discovered],
+            "message": message,
         }
 
     def _llm_policy_create(body: dict[str, Any]) -> dict[str, Any]:

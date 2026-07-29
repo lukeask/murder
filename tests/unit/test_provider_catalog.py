@@ -87,7 +87,7 @@ async def test_compatible_discovery_normalizes_openai_models() -> None:
 
 async def test_discovery_rejects_unsupported_provider() -> None:
     try:
-        await get_provider_definition("anthropic").discover_models(_provider("anthropic"))
+        await get_provider_definition("lemonade").discover_models(_provider("lemonade"))
     except ValueError as exc:
         assert "does not support model discovery" in str(exc)
     else:  # pragma: no cover
