@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from murder.llm.harness_control.acp.protocol import RpcNotification, RpcRequest
+from murder.llm.harness_control.adapters.rpc_model_options import (
+    effort_from_config_options,
+    model_id_from_config_options,
+)
 
 TurnStatus = Literal["idle", "streaming", "completed", "cancelled", "failed"]
 
@@ -257,21 +261,9 @@ def _apply_session_update(state: AcpViewState, update: dict[str, Any]) -> None:
         return
 
     if kind == "config_option_update":
-        # Best-effort: pull model id from common shapes.
         options = update.get("configOptions") or update.get("options")
         if isinstance(options, list):
-            for option in options:
-                if not isinstance(option, dict):
-                    continue
-                option_id = option.get("id") or option.get("name")
-                if option_id in {"model", "modelId"}:
-                    value = option.get("value") or option.get("currentValue")
-                    if isinstance(value, str):
-                        state.model_id = value
-                if option_id in {"mode", "modeId"} and isinstance(
-                    option.get("value") or option.get("currentValue"), str
-                ):
-                    state.current_mode = option.get("value") or option.get("currentValue")
+            apply_config_options(state, options)
         return
 
     if kind == "state_update":
@@ -289,6 +281,26 @@ def _apply_session_update(state: AcpViewState, update: dict[str, Any]) -> None:
         return
 
     # Unknown sessionUpdate kinds: ignore safely.
+
+
+def apply_config_options(state: AcpViewState, options: list[Any]) -> None:
+    """Apply a full ``configOptions`` list (session/new or set_config_option)."""
+    catalog = [option for option in options if isinstance(option, dict)]
+    model_id = model_id_from_config_options(catalog)
+    if model_id is not None:
+        state.model_id = model_id
+    effort = effort_from_config_options(catalog)
+    if effort is not None:
+        state.effort = effort
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_id = option.get("id") or option.get("name")
+        if option_id not in {"mode", "modeId"}:
+            continue
+        value = option.get("value") or option.get("currentValue")
+        if isinstance(value, str) and value.strip():
+            state.current_mode = value.strip()
 
 
 def _content_text(content: Any) -> str | None:
@@ -388,6 +400,7 @@ def _next_stream_id(state: AcpViewState, prefix: str) -> str:
 __all__ = [
     "AcpViewState",
     "TurnStatus",
+    "apply_config_options",
     "apply_notification",
     "apply_server_request",
     "apply_stop_reason",

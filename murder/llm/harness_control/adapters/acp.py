@@ -29,6 +29,10 @@ from murder.llm.harness_control.acp.client import (
 )
 from murder.llm.harness_control.acp.connection import AcpConnection
 from murder.llm.harness_control.adapters.base import HarnessActionAdapter, HarnessObservationAdapter
+from murder.llm.harness_control.adapters.rpc_model_options import (
+    plan_acp_model_config_writes,
+    resolve_acp_model_option_value,
+)
 from murder.llm.harness_control.model.actions import (
     AcpRpcEffect,
     AnswerPermission,
@@ -747,9 +751,51 @@ class AcpHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapter):
         if isinstance(action, SelectModel):
             if connection is None:
                 raise TypeError("SelectModel requires an AcpConnection")
+            session_id = connection.session_id
+            if not session_id:
+                raise ValueError("SelectModel requires connection.session_id")
+            catalog = list(connection.session_config_options)
+            pending = getattr(connection, "pending_config_options", None)
+            if not catalog and isinstance(pending, list):
+                catalog = [option for option in pending if isinstance(option, dict)]
             connection.desired_model = action.model_id
             connection.desired_effort = action.effort
-            return (SleepEffect(f"{prefix}:stage-model", timedelta(0)),)
+            connection.desired_fast_enabled = action.fast_enabled
+            writes = plan_acp_model_config_writes(
+                catalog,
+                model_id=action.model_id,
+                fast_enabled=action.fast_enabled,
+                effort=action.effort,
+            )
+            if not writes:
+                # Already matches live catalog; still nudge a model write so
+                # pending_config_options refresh for active-model readback.
+                writes = [
+                    (
+                        "model",
+                        resolve_acp_model_option_value(
+                            action.model_id,
+                            catalog,
+                            fast_enabled=action.fast_enabled,
+                            effort=action.effort,
+                        ),
+                    )
+                ]
+            # Emit the first write only; AcpEffectTransport finishes remaining
+            # fast/effort params against the post-write catalog.
+            config_id, value = writes[0]
+            return (
+                AcpRpcEffect(
+                    f"{prefix}:set-{config_id}",
+                    method="session/set_config_option",
+                    params={
+                        "sessionId": session_id,
+                        "configId": config_id,
+                        "value": value,
+                    },
+                    expects_response=True,
+                ),
+            )
 
         if isinstance(action, RequestUsage):
             if snapshot.usage.knowledge is Knowledge.PRESENT and snapshot.usage.value is not None:

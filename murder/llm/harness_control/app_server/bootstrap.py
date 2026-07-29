@@ -117,6 +117,13 @@ async def start_app_server_session(
         # effort is applied on turn/start via desired_effort; thread/start may
         # accept model only depending on schema version.
         await client.thread_start(**kwargs)
+        # Seed independent active-model readback from the requested startup
+        # model (thread/start does not echo it). SelectModel later confirms via
+        # config/value/write → pending_active_model.
+        if model is not None and str(model).strip():
+            connection.pending_active_model = str(model).strip()
+        if effort is not None and str(effort).strip():
+            connection.pending_active_effort = str(effort).strip()
     except Exception:
         await connection.aclose()
         raise

@@ -9,6 +9,7 @@ from uuid import uuid4
 from murder.llm.harness_control.acp.connection import AcpConnection
 from murder.llm.harness_control.acp.state import (
     AcpViewState,
+    apply_config_options,
     apply_notification,
     apply_server_request,
     apply_stop_reason,
@@ -72,11 +73,15 @@ class AcpFrameObserver:
         if self._view_state.session_id is not None:
             self._connection.session_id = self._view_state.session_id
 
-        # Prefer connection-desired model/effort when view state has none yet.
-        if self._view_state.model_id is None and self._connection.desired_model:
-            self._view_state.model_id = self._connection.desired_model
-        if self._view_state.effort is None and self._connection.desired_effort:
-            self._view_state.effort = self._connection.desired_effort
+        # Apply RPC-confirmed configOptions (session/new or set_config_option).
+        # Never invent an active model from desired_model alone.
+        pending_config = getattr(self._connection, "pending_config_options", None)
+        if isinstance(pending_config, list):
+            apply_config_options(self._view_state, pending_config)
+            self._connection.session_config_options = [
+                option for option in pending_config if isinstance(option, dict)
+            ]
+            self._connection.pending_config_options = None
 
         # While session/prompt is in flight, ensure the turn reads as streaming.
         if self._connection.prompt_in_flight and self._view_state.turn_status != "streaming":

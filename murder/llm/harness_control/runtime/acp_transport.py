@@ -34,6 +34,57 @@ def _prompt_text(params: dict[str, object] | None) -> str | None:
     return "".join(parts) if parts else None
 
 
+def _stash_prompt_stop_reason(connection: AcpRpcPort, result: object) -> None:
+    stop_reason = "end_turn"
+    if isinstance(result, dict):
+        raw = result.get("stopReason")
+        if isinstance(raw, str) and raw:
+            stop_reason = raw
+    connection.pending_stop_reason = stop_reason  # type: ignore[attr-defined]
+
+
+def _stash_config_options(connection: AcpRpcPort, result: object) -> None:
+    if not isinstance(result, dict):
+        return
+    options = result.get("configOptions")
+    if not isinstance(options, list):
+        return
+    catalog = [option for option in options if isinstance(option, dict)]
+    connection.pending_config_options = catalog  # type: ignore[attr-defined]
+    connection.session_config_options = catalog  # type: ignore[attr-defined]
+
+
+async def _apply_desired_model_params(connection: AcpRpcPort) -> None:
+    """Apply staged fast/effort after a model config write using the live catalog."""
+    from murder.llm.harness_control.adapters.rpc_model_options import (  # noqa: PLC0415
+        plan_acp_model_config_writes,
+    )
+
+    session_id = getattr(connection, "session_id", None)
+    if not isinstance(session_id, str) or not session_id:
+        return
+    catalog = list(getattr(connection, "session_config_options", []) or [])
+    desired_fast = getattr(connection, "desired_fast_enabled", None)
+    desired_effort = getattr(connection, "desired_effort", None)
+    # Model write is owned by the lowered SelectModel effect; only finish params.
+    writes = plan_acp_model_config_writes(
+        catalog,
+        model_id=None,
+        fast_enabled=desired_fast if isinstance(desired_fast, bool) else None,
+        effort=desired_effort if isinstance(desired_effort, str) else None,
+    )
+    for config_id, value in writes:
+        result = await connection.request(
+            "session/set_config_option",
+            {
+                "sessionId": session_id,
+                "configId": config_id,
+                "value": value,
+            },
+        )
+        _stash_config_options(connection, result)
+
+
 class AcpRpcPort(Protocol):
     """Minimal JSON-RPC surface needed to emit ``AcpRpcEffect`` values."""
 
@@ -120,12 +171,12 @@ class AcpEffectTransport:
             # Stash it for AcpFrameObserver so turn_status leaves "streaming"
             # (otherwise the crow stays working/running forever after SUCCEEDED).
             if is_prompt:
-                stop_reason = "end_turn"
-                if isinstance(result, dict):
-                    raw = result.get("stopReason")
-                    if isinstance(raw, str) and raw:
-                        stop_reason = raw
-                self._connection.pending_stop_reason = stop_reason  # type: ignore[attr-defined]
+                _stash_prompt_stop_reason(self._connection, result)
+            elif effect.method == "session/set_config_option":
+                _stash_config_options(self._connection, result)
+                # After a model/config write, finish staged fast/effort against
+                # the refreshed parameterized catalog (Composer slow/fast, etc.).
+                await _apply_desired_model_params(self._connection)
             return
         await self._connection.notify(effect.method, effect.params)
         # session/cancel has no agent reply; signal the frame observer to end the turn.

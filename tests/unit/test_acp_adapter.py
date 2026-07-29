@@ -22,6 +22,7 @@ from murder.llm.harness_control.model.actions import (
     InputProvenance,
     InsertPromptPayload,
     OpenResumePicker,
+    SelectModel,
     SendInterrupt,
     SleepEffect,
 )
@@ -227,6 +228,102 @@ def test_lower_interrupt_yields_session_cancel() -> None:
     assert effect.method == "session/cancel"
     assert effect.params == {"sessionId": "sess-1"}
     assert effect.expects_response is False
+
+
+def test_lower_select_model_uses_set_config_option() -> None:
+    connection = AcpConnection(transport=object())  # type: ignore[arg-type]
+    connection.session_id = "sess-1"
+    connection.session_config_options = [
+        {
+            "id": "model",
+            "category": "model",
+            "type": "select",
+            "currentValue": "grok-4.5",
+            "options": [
+                {"value": "default", "name": "Auto"},
+                {"value": "composer-2.5", "name": "Composer 2.5"},
+                {"value": "grok-4.5", "name": "Cursor Grok 4.5"},
+            ],
+        },
+        {
+            "id": "fast",
+            "category": "model_config",
+            "type": "select",
+            "currentValue": "true",
+            "options": [
+                {"value": "false", "name": "Off"},
+                {"value": "true", "name": "Fast"},
+            ],
+        },
+    ]
+    adapter = AcpHarnessAdapter(connection)
+    effects = adapter.lower(
+        SelectModel(
+            "select-1",
+            "op-1",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "composer-2.5",
+            fast_enabled=False,
+        ),
+        unknown_snapshot(HarnessId("cursor"), captured_at=NOW),
+    )
+    assert len(effects) == 1
+    effect = effects[0]
+    assert isinstance(effect, AcpRpcEffect)
+    assert effect.method == "session/set_config_option"
+    assert effect.expects_response is True
+    assert effect.params == {
+        "sessionId": "sess-1",
+        "configId": "model",
+        "value": "composer-2.5",
+    }
+    assert connection.desired_model == "composer-2.5"
+    assert connection.desired_fast_enabled is False
+
+
+def test_lower_select_model_sets_fast_when_model_already_active() -> None:
+    connection = AcpConnection(transport=object())  # type: ignore[arg-type]
+    connection.session_id = "sess-1"
+    connection.session_config_options = [
+        {
+            "id": "model",
+            "category": "model",
+            "type": "select",
+            "currentValue": "composer-2.5",
+            "options": [
+                {"value": "composer-2.5", "name": "Composer 2.5"},
+            ],
+        },
+        {
+            "id": "fast",
+            "category": "model_config",
+            "type": "select",
+            "currentValue": "true",
+            "options": [
+                {"value": "false", "name": "Off"},
+                {"value": "true", "name": "Fast"},
+            ],
+        },
+    ]
+    adapter = AcpHarnessAdapter(connection)
+    effects = adapter.lower(
+        SelectModel(
+            "select-1",
+            "op-1",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "composer-2.5",
+            fast_enabled=False,
+        ),
+        unknown_snapshot(HarnessId("cursor"), captured_at=NOW),
+    )
+    assert len(effects) == 1
+    effect = effects[0]
+    assert isinstance(effect, AcpRpcEffect)
+    assert effect.params == {
+        "sessionId": "sess-1",
+        "configId": "fast",
+        "value": "false",
+    }
 
 
 def test_lower_answer_permission_uses_selected_outcome() -> None:

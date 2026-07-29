@@ -866,9 +866,39 @@ class CodexAppServerHarnessAdapter(HarnessObservationAdapter, HarnessActionAdapt
         if isinstance(action, SelectModel):
             if connection is None:
                 raise TypeError("SelectModel requires an AppServerConnection")
-            connection.desired_model = action.model_id
+            model_id = action.model_id.strip()
+            if not model_id:
+                raise ValueError("SelectModel requires a non-empty model_id")
+            connection.desired_model = model_id
+            if action.provider is not None and action.provider.strip():
+                connection.desired_model_provider = action.provider.strip()
             connection.desired_effort = action.effort
-            return (SleepEffect(f"{prefix}:stage-model", timedelta(0)),)
+            effects: list[TerminalEffect] = [
+                AppServerRpcEffect(
+                    f"{prefix}:set-model",
+                    method="config/value/write",
+                    params={
+                        "keyPath": "model",
+                        "value": model_id,
+                        "mergeStrategy": "replace",
+                    },
+                    expects_response=True,
+                )
+            ]
+            if action.effort is not None and action.effort.strip():
+                effects.append(
+                    AppServerRpcEffect(
+                        f"{prefix}:set-effort",
+                        method="config/value/write",
+                        params={
+                            "keyPath": "model_reasoning_effort",
+                            "value": action.effort.strip(),
+                            "mergeStrategy": "replace",
+                        },
+                        expects_response=True,
+                    )
+                )
+            return tuple(effects)
 
         if isinstance(action, RequestUsage):
             if snapshot.usage.knowledge is Knowledge.PRESENT and snapshot.usage.value is not None:

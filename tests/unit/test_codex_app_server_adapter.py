@@ -21,6 +21,7 @@ from murder.llm.harness_control.model.actions import (
     InputProvenance,
     InsertPromptPayload,
     OpenResumePicker,
+    SelectModel,
     SendInterrupt,
     SleepEffect,
 )
@@ -196,6 +197,38 @@ def test_lower_interrupt_yields_turn_interrupt() -> None:
     assert effect.method == "turn/interrupt"
     assert effect.params == {"threadId": "thread-1", "turnId": "turn-9"}
     assert effect.expects_response is True
+
+
+def test_lower_select_model_uses_config_value_write() -> None:
+    connection = AppServerConnection(transport=object())  # type: ignore[arg-type]
+    adapter = CodexAppServerHarnessAdapter(connection)
+    effects = adapter.lower(
+        SelectModel(
+            "select-1",
+            "op-1",
+            DuplicatePolicy.AMBIGUOUS_AFTER_EMISSION,
+            "gpt-5.5",
+            effort="high",
+        ),
+        unknown_snapshot(HarnessId("codex"), captured_at=NOW),
+    )
+    model_effect, effort_effect = effects
+    assert isinstance(model_effect, AppServerRpcEffect)
+    assert model_effect.method == "config/value/write"
+    assert model_effect.params == {
+        "keyPath": "model",
+        "value": "gpt-5.5",
+        "mergeStrategy": "replace",
+    }
+    assert isinstance(effort_effect, AppServerRpcEffect)
+    assert effort_effect.method == "config/value/write"
+    assert effort_effect.params == {
+        "keyPath": "model_reasoning_effort",
+        "value": "high",
+        "mergeStrategy": "replace",
+    }
+    assert connection.desired_model == "gpt-5.5"
+    assert connection.desired_effort == "high"
 
 
 def test_tui_only_actions_raise_type_error() -> None:

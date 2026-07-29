@@ -134,6 +134,10 @@ class AppServerConnection:
         self.desired_effort: str | None = None
         # Latest account/rateLimits/read result awaiting observer merge.
         self.latest_rate_limits: dict[str, object] | None = None
+        # Model/effort confirmed by a successful config/value/write (SelectModel).
+        # Consumed by AppServerFrameObserver — not a desired_model mirror.
+        self.pending_active_model: str | None = None
+        self.pending_active_effort: str | None = None
 
     @property
     def started(self) -> bool:

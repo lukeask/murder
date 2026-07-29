@@ -35,7 +35,12 @@ async def test_capture_frame_drains_queues_and_emits_stable_json() -> None:
     connection = AcpConnection(transport=transport)
     await connection.start()
     connection.staged_composer_text = "draft"
-    connection.desired_model = "gpt-5.4"
+    connection.pending_config_options = [
+        {"id": "model", "currentValue": "gpt-5.4"},
+        {"id": "mode", "currentValue": "agent"},
+    ]
+    # desired_* must not invent active-model readback on their own.
+    connection.desired_model = "should-not-appear"
     connection.desired_effort = "medium"
 
     connection.notifications.put_nowait(
@@ -68,7 +73,9 @@ async def test_capture_frame_drains_queues_and_emits_stable_json() -> None:
     assert payload["composer"] == {"text": "draft", "staged": True}
     assert payload["items"][0]["text"] == "hi"
     assert payload["pending_requests"][0]["id"] == "req-1"
-    assert payload["model"] == {"id": "gpt-5.4", "effort": "medium"}
+    assert payload["model"] == {"id": "gpt-5.4", "effort": None}
+    assert connection.pending_config_options is None
+    assert connection.session_config_options[0]["currentValue"] == "gpt-5.4"
     assert connection.session_id == "sess-9"
     assert connection.notifications.empty()
     assert connection.incoming_requests.empty()

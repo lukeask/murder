@@ -29,6 +29,7 @@ def test_cursor_profile_registered() -> None:
     assert agent.argv == ("agent", "acp")
     assert agent.auth_method_id == "cursor_login"
     assert "fs" in agent.client_capabilities
+    assert agent.client_capabilities.get("_meta") == {"parameterizedModelPicker": True}
     assert "cursor/ask_question" in agent.blocking_extension_methods
     assert "cursor/update_todos" in agent.notification_extension_methods
 

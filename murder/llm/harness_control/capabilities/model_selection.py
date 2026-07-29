@@ -9,12 +9,15 @@ picker, parameter, and confirmation key sequence.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum, auto
 from uuid import uuid4
 
+from murder.llm.harness_control.adapters.rpc_model_options import (
+    canonical_model_id,
+    same_model_id,
+)
 from murder.llm.harness_control.model.actions import (
     DismissOverlay,
     DuplicatePolicy,
@@ -142,22 +145,39 @@ def _predicate(
     return PredicateResult(value, predicate_id, refs, snapshot.revision, explanation)
 
 
+def _observed_fast_enabled(model: ModelState) -> bool | None:
+    """Derive fast-mode from effort (slow/fast) or exploded ACP model ids."""
+    if model.effort in {"fast", "slow"}:
+        return model.effort == "fast"
+    model_id = model.model_id
+    lowered = model_id.casefold()
+    if "fast=true" in lowered or lowered.endswith("-fast"):
+        return True
+    if "fast=false" in lowered:
+        return False
+    return None
+
+
 def _model_matches(target: ModelTarget, model: ModelState) -> bool:
-    return (
-        _same_model_id(model.model_id, target.model_id)
-        and (target.provider is None or model.provider == target.provider)
-        and (target.effort is None or model.effort == target.effort)
-    )
+    if not _same_model_id(model.model_id, target.model_id):
+        return False
+    if target.provider is not None and model.provider != target.provider:
+        return False
+    if target.effort is not None and model.effort != target.effort:
+        return False
+    if target.fast_enabled is not None:
+        observed_fast = _observed_fast_enabled(model)
+        if observed_fast is not None and observed_fast != target.fast_enabled:
+            return False
+    return True
 
 
 def _same_model_id(left: str, right: str) -> bool:
-    if left == right:
-        return True
-    return _canonical_model_id(left) == _canonical_model_id(right)
+    return same_model_id(left, right)
 
 
 def _canonical_model_id(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+    return canonical_model_id(value)
 
 
 def active_model_matches(target: ModelTarget, snapshot: ObservationSnapshot) -> PredicateResult:

@@ -82,7 +82,21 @@ class AppServerEffectTransport:
                     rate_limits = candidate if isinstance(candidate, dict) else result
                 if isinstance(rate_limits, dict):
                     # Stash for AppServerFrameObserver → view-state usage.
-                    setattr(self._connection, "latest_rate_limits", rate_limits)
+                    self._connection.latest_rate_limits = rate_limits
+            elif effect.method == "config/value/write":
+                # Successful write confirms the SelectModel target; stash for
+                # independent active-model readback on the next frame.
+                params = effect.params or {}
+                key_path = params.get("keyPath")
+                value = params.get("value")
+                if key_path == "model" and isinstance(value, str) and value.strip():
+                    self._connection.pending_active_model = value.strip()
+                elif (
+                    key_path == "model_reasoning_effort"
+                    and isinstance(value, str)
+                    and value.strip()
+                ):
+                    self._connection.pending_active_effort = value.strip()
             return
         await self._connection.notify(effect.method, effect.params)
 

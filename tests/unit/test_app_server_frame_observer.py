@@ -35,8 +35,11 @@ async def test_capture_frame_drains_queues_and_emits_stable_json() -> None:
     connection = AppServerConnection(transport=transport)
     await connection.start()
     connection.staged_composer_text = "draft"
-    connection.desired_model = "gpt-5.4"
-    connection.desired_effort = "medium"
+    connection.pending_active_model = "gpt-5.4"
+    connection.pending_active_effort = "medium"
+    # desired_* must not invent active-model readback on their own.
+    connection.desired_model = "should-not-appear"
+    connection.desired_effort = "low"
 
     connection.notifications.put_nowait(
         RpcNotification(
@@ -79,6 +82,8 @@ async def test_capture_frame_drains_queues_and_emits_stable_json() -> None:
     assert payload["items"][0]["text"] == "hi"
     assert payload["pending_requests"][0]["id"] == "req-1"
     assert payload["model"] == {"id": "gpt-5.4", "effort": "medium"}
+    assert connection.pending_active_model is None
+    assert connection.pending_active_effort is None
     assert connection.thread_id == "th-9"
     assert connection.current_turn_id == "tu-9"
     assert connection.notifications.empty()

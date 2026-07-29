@@ -16,6 +16,9 @@ PROFILE = AcpAgentProfile(
     client_capabilities={
         "fs": {"readTextFile": False, "writeTextFile": False},
         "terminal": False,
+        # Without this, Cursor ACP collapses each model to one exploded variant
+        # (Composer 2.5 → fast-only) and Murder cannot honor slow/fast settings.
+        "_meta": {"parameterizedModelPicker": True},
     },
     placeholder_cmd=(
         "bash",

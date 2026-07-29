@@ -70,11 +70,16 @@ class AppServerFrameObserver:
             self._connection.thread_id = self._view_state.thread_id
         self._connection.current_turn_id = self._view_state.turn_id
 
-        # Prefer connection-desired model/effort when view state has none yet.
-        if self._view_state.model_id is None and self._connection.desired_model:
-            self._view_state.model_id = self._connection.desired_model
-        if self._view_state.effort is None and self._connection.desired_effort:
-            self._view_state.effort = self._connection.desired_effort
+        # Apply RPC-confirmed model/effort from SelectModel (config/value/write).
+        # Never invent an active model from desired_model alone.
+        pending_model = getattr(self._connection, "pending_active_model", None)
+        if isinstance(pending_model, str) and pending_model.strip():
+            self._view_state.model_id = pending_model.strip()
+            self._connection.pending_active_model = None
+        pending_effort = getattr(self._connection, "pending_active_effort", None)
+        if isinstance(pending_effort, str) and pending_effort.strip():
+            self._view_state.effort = pending_effort.strip()
+            self._connection.pending_active_effort = None
 
         snapshot = to_snapshot_dict(
             self._view_state,

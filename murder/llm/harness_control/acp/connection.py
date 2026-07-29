@@ -134,7 +134,12 @@ class AcpConnection:
         self.staged_composer_text: str = ""
         self.desired_model: str | None = None
         self.desired_effort: str | None = None
+        # Cursor slow/fast maps onto the ACP ``fast`` model_config option when
+        # parameterizedModelPicker is advertised; None = leave agent default.
+        self.desired_fast_enabled: bool | None = None
         self.prompt_in_flight: bool = False
+        # Live ``configOptions`` from session/new or the latest set_config_option.
+        self.session_config_options: list[dict[str, Any]] = []
         # Set by AcpEffectTransport when session/prompt returns (or cancel fires);
         # consumed by AcpFrameObserver on the next capture_frame.
         self.pending_stop_reason: str | None = None
@@ -142,6 +147,10 @@ class AcpConnection:
         # user_message_chunk updates, so the observer consumes this exact client
         # prompt to establish a turn boundary and a transcript user item.
         self.pending_prompt_text: str | None = None
+        # Full configOptions payload awaiting observer merge (session/new or
+        # session/set_config_option). Independent active-model readback — never
+        # invent model ids from desired_model alone.
+        self.pending_config_options: list[dict[str, Any]] | None = None
 
     @property
     def started(self) -> bool:
