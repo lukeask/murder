@@ -1,0 +1,32 @@
+{
+  "id": "kanagawa-wave",
+  "name": "Kanagawa Wave",
+  "variant": "dark",
+  "upstream": "rebelot/kanagawa.nvim",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#16161d",
+    "bg0": "#1f1f28",
+    "bg1": "#2a2a37",
+    "bg2": "#363646",
+    "bg3": "#3f3f52",
+    "bg4": "#48485f",
+    "bg5": "#54546d",
+    "bgVisual": "#2d4f67",
+    "bgRed": "#43242b",
+    "bgGreen": "#2b3328",
+    "bgBlue": "#223249",
+    "bgYellow": "#49443c",
+    "fg": "#dcd7ba",
+    "red": "#e46876",
+    "orange": "#ffa066",
+    "yellow": "#e6c384",
+    "green": "#98bb6c",
+    "aqua": "#7aa89f",
+    "blue": "#7e9cd8",
+    "purple": "#957fb8",
+    "grey0": "#54546d",
+    "grey1": "#727169",
+    "grey2": "#938aa9"
+  }
+}

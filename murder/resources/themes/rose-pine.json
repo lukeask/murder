@@ -1,0 +1,32 @@
+{
+  "id": "rose-pine",
+  "name": "Rosé Pine",
+  "variant": "dark",
+  "upstream": "rose-pine/palette",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#14121f",
+    "bg0": "#191724",
+    "bg1": "#1f1d2e",
+    "bg2": "#26233a",
+    "bg3": "#2d2945",
+    "bg4": "#35304f",
+    "bg5": "#3d385a",
+    "bgVisual": "#403653",
+    "bgRed": "#3a2433",
+    "bgGreen": "#21343a",
+    "bgBlue": "#1f3040",
+    "bgYellow": "#3b3027",
+    "fg": "#e0def4",
+    "red": "#eb6f92",
+    "orange": "#ebbcba",
+    "yellow": "#f6c177",
+    "green": "#6aa8a9",
+    "aqua": "#9ccfd8",
+    "blue": "#31748f",
+    "purple": "#c4a7e7",
+    "grey0": "#6e6a86",
+    "grey1": "#908caa",
+    "grey2": "#b4b0cc"
+  }
+}

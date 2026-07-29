@@ -1,0 +1,32 @@
+{
+  "id": "sonokai",
+  "name": "Sonokai",
+  "variant": "dark",
+  "upstream": "sainnhe/sonokai",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#222327",
+    "bg0": "#2c2e34",
+    "bg1": "#33353f",
+    "bg2": "#363944",
+    "bg3": "#3b3e48",
+    "bg4": "#414550",
+    "bg5": "#4a4f5c",
+    "bgVisual": "#434055",
+    "bgRed": "#55393d",
+    "bgGreen": "#394634",
+    "bgBlue": "#354157",
+    "bgYellow": "#4e432f",
+    "fg": "#e2e2e3",
+    "red": "#fc5d7c",
+    "orange": "#f39660",
+    "yellow": "#e7c664",
+    "green": "#9ed072",
+    "aqua": "#76cce0",
+    "blue": "#85d3f2",
+    "purple": "#b39df3",
+    "grey0": "#595f6f",
+    "grey1": "#7f8490",
+    "grey2": "#a0a4ad"
+  }
+}

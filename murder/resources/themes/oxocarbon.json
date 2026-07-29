@@ -1,0 +1,32 @@
+{
+  "id": "oxocarbon",
+  "name": "Oxocarbon",
+  "variant": "dark",
+  "upstream": "nyoom-engineering/oxocarbon.nvim",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#131313",
+    "bg0": "#161616",
+    "bg1": "#262626",
+    "bg2": "#393939",
+    "bg3": "#525252",
+    "bg4": "#6f6f6f",
+    "bg5": "#8d8d8d",
+    "bgVisual": "#2f3f5c",
+    "bgRed": "#361c28",
+    "bgGreen": "#122f2f",
+    "bgBlue": "#222a39",
+    "bgYellow": "#34301f",
+    "fg": "#d0d0d0",
+    "red": "#ee5396",
+    "orange": "#f58b6a",
+    "yellow": "#d6c66f",
+    "green": "#42be65",
+    "aqua": "#08bdba",
+    "blue": "#78a9ff",
+    "purple": "#be95ff",
+    "grey0": "#525252",
+    "grey1": "#6f6f6f",
+    "grey2": "#8d8d8d"
+  }
+}

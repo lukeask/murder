@@ -1,0 +1,32 @@
+{
+  "id": "cyberdream",
+  "name": "Cyberdream",
+  "variant": "dark",
+  "upstream": "scottmckendry/cyberdream.nvim",
+  "license": "MIT",
+  "palette": {
+    "bgDim": "#111315",
+    "bg0": "#16181a",
+    "bg1": "#1e2124",
+    "bg2": "#25292d",
+    "bg3": "#2c3036",
+    "bg4": "#333840",
+    "bg5": "#3c4048",
+    "bgVisual": "#382a47",
+    "bgRed": "#3b2424",
+    "bgGreen": "#243b28",
+    "bgBlue": "#24324a",
+    "bgYellow": "#3b3924",
+    "fg": "#ffffff",
+    "red": "#ff6e5e",
+    "orange": "#ffbd5e",
+    "yellow": "#f1ff5e",
+    "green": "#5eff6c",
+    "aqua": "#5ef1ff",
+    "blue": "#5ea1ff",
+    "purple": "#bd5eff",
+    "grey0": "#3c4048",
+    "grey1": "#7b8496",
+    "grey2": "#a5adbb"
+  }
+}

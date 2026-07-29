@@ -40,6 +40,11 @@ def test_bundled_theme_jsons_validate_and_cover_shortlist() -> None:
         "catppuccin-mocha",
         "nord",
         "one-dark",
+        "kanagawa-wave",
+        "rose-pine",
+        "sonokai",
+        "oxocarbon",
+        "cyberdream",
     } <= ids
     for raw in builtins:
         assert raw["variant"] in ("light", "dark")
