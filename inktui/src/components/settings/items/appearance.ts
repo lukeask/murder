@@ -3,6 +3,9 @@ import { headerRow } from '../types.js';
 
 export const GAP_OPTIONS: readonly number[] = [0, 1, 2, 3, 4];
 
+/** Radio steps for Background Transparency (0 = solid, 100 = terminal default). */
+export const BACKGROUND_TRANSPARENCY_OPTIONS: readonly number[] = [0, 25, 50, 75, 100];
+
 const themeItem: SettingsItem = {
   id: 'appearance.theme',
   label: 'Theme',
@@ -28,6 +31,21 @@ const paneGapItem: SettingsItem = {
     headerRow(paneGapItem),
     ...GAP_OPTIONS.map(
       (value): SettingsRow => ({ id: `appearance.paneGap:${value}`, kind: 'gap', value }),
+    ),
+  ],
+};
+
+const backgroundTransparencyItem: SettingsItem = {
+  id: 'appearance.backgroundTransparency',
+  label: 'Background Transparency',
+  rows: () => [
+    headerRow(backgroundTransparencyItem),
+    ...BACKGROUND_TRANSPARENCY_OPTIONS.map(
+      (value): SettingsRow => ({
+        id: `appearance.backgroundTransparency:${value}`,
+        kind: 'bgTransparency',
+        value,
+      }),
     ),
   ],
 };
@@ -71,6 +89,7 @@ const documentDisplayItem: SettingsItem = {
 export const APPEARANCE_ITEMS: readonly SettingsItem[] = [
   themeItem,
   paneGapItem,
+  backgroundTransparencyItem,
   defaultChatViewItem,
   documentDisplayItem,
 ];

@@ -43,6 +43,7 @@ function settingsWire(overrides: Partial<SettingsWire> = {}): SettingsWire {
     modifier: 'alt',
     key_overrides: {},
     pane_gap: 0,
+    background_transparency: 100,
     workspace_count: 1,
     vim_mode: false,
     bar_widgets: {},

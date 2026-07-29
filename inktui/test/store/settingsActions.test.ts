@@ -31,6 +31,7 @@ function wire(over: Record<string, unknown> = {}): SettingsWire {
     modifier: 'alt',
     key_overrides: {},
     pane_gap: 0,
+    background_transparency: 100,
     workspace_count: 1,
     vim_mode: false,
     bar_widgets: {},
@@ -104,6 +105,18 @@ describe('settings actions', () => {
     const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
     expect(updates.length).toBe(1);
     expect(updates[0]?.params).toEqual({ settings: { pane_gap: 2 } });
+    dispose();
+  });
+
+  it('update(background_transparency) overlays locally AND persists via settings.update', async () => {
+    const { fake, store, dispose } = setup();
+
+    await store.getState().actions.settings.update({ background_transparency: 50 });
+
+    expect(store.getState().settings.backgroundTransparency).toBe(50);
+    const updates = fake.commandCalls.filter((c) => c.name === 'settings.update');
+    expect(updates.length).toBe(1);
+    expect(updates[0]?.params).toEqual({ settings: { background_transparency: 50 } });
     dispose();
   });
 

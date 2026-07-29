@@ -219,6 +219,7 @@ def build_settings_payload(
         "modifier": tui.modifier,
         "key_overrides": dict(tui.key_overrides),
         "pane_gap": tui.pane_gap,
+        "background_transparency": tui.background_transparency,
         "workspace_count": tui.workspace_count,
         "vim_mode": tui.vim_mode,
         "bar_widgets": {

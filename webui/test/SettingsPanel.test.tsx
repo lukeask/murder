@@ -32,6 +32,7 @@ function stubSettingsUpdate(store: AppStoreApi, bus: FakeApplicationClient): voi
         modifier: s.modifier,
         key_overrides: s.keyOverrides,
         pane_gap: s.paneGap,
+        background_transparency: s.backgroundTransparency,
         vim_mode: s.vimMode,
         default_chat_view_mode: s.defaultChatViewMode,
         document_display_mode: s.documentDisplayMode,

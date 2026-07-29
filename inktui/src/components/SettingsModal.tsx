@@ -16,16 +16,18 @@
  *     Enter and is *reverted* to the persisted value on cancel/Esc or when the cursor leaves the
  *     theme section — so browsing themes never persists a half-pick or affects later navigation.
  *  3. **Pane gap** — a radio over `0`–`4` spaces of inter-pane border gap (live).
- *  4. **Harnesses** — planner (a radio over the 5 harnesses + a "(default)" row that clears the
+ *  4. **Background transparency** — a radio over `0`/`25`/`50`/`75`/`100` (live-previewed like
+ *     theme; wallpaper bleed on Kitty needs the window's `background_opacity` already < 1).
+ *  5. **Harnesses** — planner (a radio over the 5 harnesses + a "(default)" row that clears the
  *     override) and crow (a checkbox pool over the 5 + a "reset to default" row; ≥1 must stay checked).
  *     The effective value is shown when no override is set.
- *  5. **LLM providers** — one row per provider (groq/cerebras first; openrouter/local opt-in)
+ *  6. **LLM providers** — one row per provider (groq/cerebras first; openrouter/local opt-in)
  *     ("set via env" / "set here (***)" / "not set"). Enter on a row enters *text-entry* for the
  *     api_key (or local's base_url): leaving `***` keeps the stored key, `""` clears.
- *  6. **Tiers & roles** — the tiers (built-in cheap/smart + user overrides) read-only as
+ *  7. **Tiers & roles** — the tiers (built-in cheap/smart + user overrides) read-only as
  *     "name → provider/model", and a per-role radio (notetaker / crow_handler) binding a role to a
  *     tier name.
- *  7. **Key bindings** — the rebindable actions from {@link ../input/bindings.js ACTIONS} with their
+ *  8. **Key bindings** — the rebindable actions from {@link ../input/bindings.js ACTIONS} with their
  *     resolved labels. Enter on a binding row enters *capture-next-key* mode: the very next key
  *     (caught by `onUncaptured`) becomes the new chord's key char. Rejected: `ctrl+c/d/z` (reserved),
  *     digits (panel toggles), and any char already bound to another action (collision).
@@ -85,6 +87,7 @@ import type {
 import type { AppStore } from '../store/store.js';
 import type { ThemeRecord } from '../store/themes/themesSlice.js';
 import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
+import { setBackgroundTransparencyPreview } from '../terminal/canvasBackground.js';
 import { DEFAULT_THEME_ID, listThemeRecords, type ThemeId } from '../theme/palettes.js';
 import { setTheme, useTheme } from '../theme/themeStore.js';
 import {
@@ -209,6 +212,10 @@ interface SettingsState {
   theme: ThemeId;
   /** The draft pane-gap (committed via `update` on selection — the layout reacts at once). */
   paneGap: number;
+  /** Persisted background transparency at open — cancel reverts the live preview to this. */
+  persistedBackgroundTransparency: number;
+  /** Draft / live-previewed background transparency (committed on Enter). */
+  backgroundTransparency: number;
   /** The draft workspace count (committed via `update` on selection). */
   workspaceCount: number;
   /** Workspace count at modal open — used to detect the 1 → >1 transition. */
@@ -319,6 +326,7 @@ export function settingsMode(
     readonly modifier: Modifier;
     readonly theme: ThemeId;
     readonly paneGap: number;
+    readonly backgroundTransparency?: number;
     readonly workspaceCount?: number;
     readonly vimMode?: boolean;
     readonly barWidgets?: BarWidgetsConfig;
@@ -379,6 +387,8 @@ export function settingsMode(
     persistedTheme: current.theme,
     theme: current.theme,
     paneGap: current.paneGap,
+    persistedBackgroundTransparency: current.backgroundTransparency ?? 100,
+    backgroundTransparency: current.backgroundTransparency ?? 100,
     workspaceCount: current.workspaceCount ?? 1,
     initialWorkspaceCount: current.workspaceCount ?? 1,
     showKittyWorkspaceMappingWarning: false,
@@ -431,6 +441,14 @@ export function settingsMode(
       s.theme = s.persistedTheme;
       setTheme(s.persistedTheme);
     }
+  }
+
+  /** Drop an uncommitted background-transparency preview when leaving those rows. */
+  function restoreBackgroundTransparencyPreview(): void {
+    if (s.backgroundTransparency !== s.persistedBackgroundTransparency) {
+      s.backgroundTransparency = s.persistedBackgroundTransparency;
+    }
+    setBackgroundTransparencyPreview(null);
   }
 
   function modalIsBusy(): boolean {
@@ -546,6 +564,13 @@ export function settingsMode(
         } else if (prev?.kind === 'theme') {
           restoreThemePreview();
         }
+        // Live background-transparency preview (same commit/revert shape as theme).
+        if (row.kind === 'bgTransparency') {
+          s.backgroundTransparency = row.value;
+          setBackgroundTransparencyPreview(row.value);
+        } else if (prev?.kind === 'bgTransparency') {
+          restoreBackgroundTransparencyPreview();
+        }
         s.notice = null;
         s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
         refresh();
@@ -577,6 +602,16 @@ export function settingsMode(
   function selectGap(value: number): void {
     s.paneGap = value;
     void actions.update({ pane_gap: value });
+    s.notice = null;
+    refresh();
+  }
+
+  /** Commit background transparency (optimistic). Preview clears so the slice value drives paint. */
+  function selectBackgroundTransparency(value: number): void {
+    s.backgroundTransparency = value;
+    s.persistedBackgroundTransparency = value;
+    setBackgroundTransparencyPreview(null);
+    void actions.update({ background_transparency: value });
     s.notice = null;
     refresh();
   }
@@ -1321,6 +1356,9 @@ export function settingsMode(
       case 'gap':
         selectGap(row.value);
         break;
+      case 'bgTransparency':
+        selectBackgroundTransparency(row.value);
+        break;
       case 'workspaceCount':
         selectWorkspaceCount(row.value);
         break;
@@ -1457,6 +1495,7 @@ export function settingsMode(
     if (s.theme !== s.persistedTheme) {
       setTheme(s.persistedTheme);
     }
+    setBackgroundTransparencyPreview(null);
     modes.getState().exit(id);
     opts.onDismiss?.();
   }
@@ -2299,6 +2338,26 @@ function RowView({
           {'  '}
           {preview}
         </Text>
+      </Box>
+    );
+  }
+
+  if (row.kind === 'bgTransparency') {
+    const selected = row.value === s.persistedBackgroundTransparency;
+    const mark = selected ? '(•) ' : '( ) ';
+    const color = focused ? theme.warning : theme.text;
+    const label =
+      row.value === 100 ? '100% (terminal)' : row.value === 0 ? '0% (solid)' : `${row.value}%`;
+    return (
+      <Box flexShrink={0}>
+        <Text color={color} bold={focused}>
+          {cursor}
+          {mark}
+          {label}
+        </Text>
+        {focused ? (
+          <Text color={theme.muted}>{'  '}wallpaper needs transparent kitty</Text>
+        ) : null}
       </Box>
     );
   }

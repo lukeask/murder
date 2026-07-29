@@ -42,6 +42,7 @@ export type SettingsRow =
     }
   | { readonly id: string; readonly kind: 'themeImport' }
   | { readonly id: string; readonly kind: 'gap'; readonly value: number }
+  | { readonly id: string; readonly kind: 'bgTransparency'; readonly value: number }
   | { readonly id: string; readonly kind: 'workspaceCount'; readonly value: number }
   | { readonly id: string; readonly kind: 'vim'; readonly value: boolean }
   | { readonly id: string; readonly kind: 'chatView'; readonly value: DefaultChatViewMode }

@@ -22,6 +22,8 @@ import type { Palette, ThemeVariant } from './palettes.js';
  * behavior exactly; light overrides keep the bands legible.
  */
 interface SurfaceRoles {
+  /** Full-window canvas fill when background transparency is below 100%. */
+  canvasBg: string;
   rowSelectedBg: string;
   rowAltBg: string;
   panelHeaderBg: string;
@@ -34,6 +36,7 @@ function surfaceRoles(palette: Palette, variant: ThemeVariant): SurfaceRoles {
     // Repoint them onto the *darker* end of the light surface ramp (and the saturated `bgGreen`
     // for the selected row) so each band reads against the pale background while staying gentle.
     return {
+      canvasBg: palette.bg0, // pale paper — the light scheme's base surface
       rowSelectedBg: palette.bgGreen, // tinted green wash — distinct against fffbef paper
       rowAltBg: palette.bg2, // one perceptible step down from the base paper
       panelHeaderBg: palette.bg4, // darker band so a header reads as a header
@@ -41,6 +44,7 @@ function surfaceRoles(palette: Palette, variant: ThemeVariant): SurfaceRoles {
     };
   }
   return {
+    canvasBg: palette.bg0,
     rowSelectedBg: palette.bgGreen,
     rowAltBg: palette.bg1,
     panelHeaderBg: palette.bg0,
@@ -61,6 +65,11 @@ export function buildTheme(palette: Palette, variant: ThemeVariant) {
     text: palette.fg,
     /** De-emphasized text used where Ink's `dimColor` isn't enough (project name, inactive labels). */
     muted: palette.grey1,
+
+    // ── Canvas (background transparency) ───────────────────────────────────────────────────────
+    /** Full-window fill when `background_transparency` < 100. Omitted at 100% so the terminal
+     * default (and wallpaper, if the emulator is translucent) shows through. */
+    canvasBg: surfaces.canvasBg,
 
     // ── Panel chrome / focus ───────────────────────────────────────────────────────────────────
     /** Border + title of the pane that holds focus. */

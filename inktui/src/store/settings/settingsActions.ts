@@ -132,6 +132,8 @@ export interface SettingsWire {
   readonly key_overrides: Readonly<Record<string, string>>;
   /** Spaces of inter-pane-border gap (0–4). Mirrors the Python `TuiUserConfig.pane_gap`. */
   readonly pane_gap: number;
+  /** Canvas see-through percent (0–100). Optional for older daemon snapshots. */
+  readonly background_transparency?: number;
   /** Number of virtual workspaces (1–9). Mirrors the Python `TuiUserConfig.workspace_count`. */
   readonly workspace_count: number;
   /** Whether vim-style editing is enabled in the chat input. Mirrors `TuiUserConfig.vim_mode`. */
@@ -190,6 +192,7 @@ export interface SettingsPatch {
   modifier?: SettingsModifier;
   key_overrides?: Readonly<Record<string, string>>;
   pane_gap?: number;
+  background_transparency?: number;
   workspace_count?: number;
   vim_mode?: boolean;
   bar_widgets?: BarWidgetsConfig;
@@ -262,6 +265,7 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     modifier: wire.modifier ?? prev.modifier,
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
+    backgroundTransparency: wire.background_transparency ?? prev.backgroundTransparency,
     workspaceCount: wire.workspace_count ?? prev.workspaceCount,
     vimMode: wire.vim_mode ?? prev.vimMode,
     barWidgets: wire.bar_widgets ?? prev.barWidgets,
@@ -334,6 +338,9 @@ export function createSettingsActions(bus: ApplicationClient, store: StoreApi<Ap
           ...(partial.modifier !== undefined ? { modifier: partial.modifier } : {}),
           ...(partial.key_overrides !== undefined ? { keyOverrides: partial.key_overrides } : {}),
           ...(partial.pane_gap !== undefined ? { paneGap: partial.pane_gap } : {}),
+          ...(partial.background_transparency !== undefined
+            ? { backgroundTransparency: partial.background_transparency }
+            : {}),
           ...(partial.workspace_count !== undefined
             ? { workspaceCount: partial.workspace_count }
             : {}),

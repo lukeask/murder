@@ -308,6 +308,19 @@ describe('SettingsModal', () => {
     expect(patches).toContainEqual({ pane_gap: 1 });
   });
 
+  it('selecting a background-transparency option commits via update', async () => {
+    const { stores, patches, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    stdin.write('l');
+    await tick();
+    await walkUntilFocused(stdin, lastFrame, '50%');
+    stdin.write('\r');
+    await tick();
+    expect(patches).toContainEqual({ background_transparency: 50 });
+  });
+
   it('selecting Markdown document display commits immediately', async () => {
     const { stores, patches, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
