@@ -118,8 +118,17 @@ class Supervisor:
     async def stop_all(self) -> None:
         if self._ctx.shutdown is not None:
             self._ctx.shutdown.set()
-        for name in list(self._states.keys()):
-            await self.stop_worker(name)
+        # Snapshot names before concurrent stop_worker calls mutate _states.
+        names = list(self._states.keys())
+
+        async def _stop_one(name: WorkerName) -> None:
+            try:
+                await self.stop_worker(name)
+            except Exception:
+                LOGGER.debug("worker %r raised during stop_all", name, exc_info=True)
+
+        if names:
+            await asyncio.gather(*(_stop_one(name) for name in names))
         if self._reaper_task is not None:
             self._reaper_task.cancel()
             await _await_cancelled_task(self._reaper_task, label="supervisor:command-reaper")
