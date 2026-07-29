@@ -423,3 +423,18 @@ def test_settings_payload_projects_overrides_and_effective() -> None:
     assert payload["effective_crow_harnesses"] == ["cursor"]
     assert payload["llm"]["providers"]["groq"]["auth"]["api_key"] == "***"
     assert payload["llm_env"]["groq"] is True
+
+
+def test_background_transparency_patch_and_payload() -> None:
+    mutation = apply_settings_patch(UserConfig(), {"background_transparency": 50})
+    assert mutation.config.tui.background_transparency == 50
+    payload = build_settings_payload(
+        mutation.config,
+        effective=EffectiveHarnessView(
+            collaborator="claude_code",
+            planner="claude_code",
+            crow=("claude_code",),
+        ),
+    )
+    assert payload["background_transparency"] == 50
+    assert UserConfig().tui.background_transparency == 100

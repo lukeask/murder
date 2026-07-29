@@ -14,6 +14,7 @@ from murder.app.service.handlers import (
     image,
     llm_settings,
     plan,
+    report,
     roster,
     sessions,
     settings,
@@ -68,6 +69,7 @@ def register_all(
     )
     ticket.register(legacy_host)
     plan.register(legacy_host)
+    report.register(legacy_host)
     image.register(legacy_host)
     tui.register(legacy_host, projections)
     workflows.register(

@@ -54,6 +54,7 @@ class CommandName(StrEnum):
     TICKET_SAVE_BODY = "ticket.save_body"
     TICKET_SCHEDULE = "ticket.schedule"
     PLAN_CREATE = "plan.create"
+    REPORT_CREATE = "report.create"
     SETTINGS_UPDATE = "settings.update"
     LLM_SETTINGS_SET_DISABLED = "llm.settings.set_disabled"
     LLM_PROVIDER_CREATE = "llm.provider.create"

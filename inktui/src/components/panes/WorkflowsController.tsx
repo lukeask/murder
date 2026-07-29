@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
+import { getPanelCreateActions } from '../../create/panelCreateActions.js';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { usePanelKeymap } from '../../hooks/useInputStores.js';
 import type { PanelKeymap } from '../../input/keymap.js';
@@ -11,12 +12,19 @@ import {
 import { useTheme } from '../../theme/themeStore.js';
 import { useTicketEditor } from '../TicketEditorMode.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
+import {
+  dataIndexFromCursor,
+  listRowCountWithCreate,
+  onEnterCreateOrOpen,
+} from './shared/createListRow.js';
 import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 import { WorkflowsSurface, type WorkflowsSurfaceRow } from './WorkflowsSurface.js';
 
 type WorkflowsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'open';
 
 type SurfaceStatus = 'ready' | 'loading' | 'error';
+
+const CREATE_LABEL = '+ new workflow';
 
 function surfaceStatus(status: 'idle' | 'loading' | 'ready' | 'error'): SurfaceStatus {
   return status === 'loading' || status === 'error' ? status : 'ready';
@@ -59,7 +67,8 @@ export const WorkflowsController = memo(function WorkflowsController({
   const theme = useTheme();
   const rows = useMemo(() => workflowsSurfaceRowsFromView(view.rows), [view.rows]);
   const openEditor = useTicketEditor();
-  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('workflows', rows.length);
+  const rowCount = listRowCountWithCreate(rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('workflows', rowCount);
   const cursorRef = useRef(cursor);
   const viewRowsRef = useRef(view.rows);
   cursorRef.current = cursor;
@@ -100,11 +109,16 @@ export const WorkflowsController = memo(function WorkflowsController({
       });
 
       // Preserve selection identity: collapsing shrinks absolute indices below the header.
+      // Cursor 0 is the create row; data rows are shifted +1 in the surface cursor.
       if (!wasCollapsed && headerIdx >= 0 && hiddenBelow > 0) {
         const cur = cursorRef.current;
-        if (cur > headerIdx && cur <= headerIdx + hiddenBelow) {
-          setCursor(headerIdx);
-        } else if (cur > headerIdx + hiddenBelow) {
+        const dataCursor = dataIndexFromCursor(cur);
+        if (dataCursor === null) {
+          return;
+        }
+        if (dataCursor > headerIdx && dataCursor <= headerIdx + hiddenBelow) {
+          setCursor(headerIdx + 1);
+        } else if (dataCursor > headerIdx + hiddenBelow) {
           setCursor(cur - hiddenBelow);
         }
       }
@@ -128,16 +142,24 @@ export const WorkflowsController = memo(function WorkflowsController({
     [openEditor, toggleGroup],
   );
 
+  const onCreate = useCallback(() => {
+    getPanelCreateActions().newWorkflow();
+  }, []);
+
   const openAtCursor = useCallback(() => {
-    activateRow(viewRowsRef.current[cursorRef.current]);
-  }, [activateRow]);
+    onEnterCreateOrOpen(cursorRef.current, onCreate, (dataIndex) => {
+      activateRow(viewRowsRef.current[dataIndex]);
+    });
+  }, [activateRow, onCreate]);
 
   const onRowClick = useCallback(
     (index: number) => {
       setCursor(index);
-      activateRow(viewRowsRef.current[index]);
+      onEnterCreateOrOpen(index, onCreate, (dataIndex) => {
+        activateRow(viewRowsRef.current[dataIndex]);
+      });
     },
-    [activateRow, setCursor],
+    [activateRow, onCreate, setCursor],
   );
 
   const keymap: PanelKeymap<WorkflowsIntent> = useMemo(
@@ -157,7 +179,7 @@ export const WorkflowsController = memo(function WorkflowsController({
         {
           chord: { key: { return: true } },
           intent: 'open',
-          description: 'open node / toggle run',
+          description: 'create / open node / toggle run',
         },
       ],
       onIntent(intent) {
@@ -192,6 +214,7 @@ export const WorkflowsController = memo(function WorkflowsController({
         theme={theme}
         rows={rows}
         cursor={cursor}
+        createLabel={CREATE_LABEL}
         status={surfaceStatus(view.status)}
         error={view.error}
         onRowClick={onRowClick}

@@ -1,5 +1,6 @@
 import { type JSX, memo, useCallback, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
+import { getPanelCreateActions } from '../../create/panelCreateActions.js';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { useBindings, usePanelKeymap } from '../../hooks/useInputStores.js';
 import type { PanelKeymap } from '../../input/keymap.js';
@@ -9,9 +10,17 @@ import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { PlansSurface } from './PlansSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
+import {
+  dataIndexFromCursor,
+  isCreateCursor,
+  listRowCountWithCreate,
+  onEnterCreateOrOpen,
+} from './shared/createListRow.js';
 import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 
 type PlansIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open' | 'spawnPlanner';
+
+const CREATE_LABEL = '+ new plan';
 
 export interface PlansControllerProps {
   readonly presentation: PanePresentation;
@@ -29,26 +38,36 @@ export const PlansController = memo(function PlansController({
   const toggleDoc = useDocView('plan');
   const view = usePlansView(plans, favorites);
   const theme = useTheme();
-  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('plans', view.rows.length);
+  const rowCount = listRowCountWithCreate(view.rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('plans', rowCount);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const rowIdAtCursor = useCallback(
-    (): string | null => view.rows[cursor]?.id ?? null,
-    [cursor, view.rows],
-  );
+  const rowIdAtCursor = useCallback((): string | null => {
+    const dataIndex = dataIndexFromCursor(cursor);
+    if (dataIndex === null) {
+      return null;
+    }
+    return view.rows[dataIndex]?.id ?? null;
+  }, [cursor, view.rows]);
+
+  const onCreate = useCallback(() => {
+    getPanelCreateActions().newPlan();
+  }, []);
 
   const onRowClick = useCallback(
     (index: number) => {
       setCursor(index);
-      const id = view.rows[index]?.id;
-      if (id !== undefined) {
-        toggleDoc(id);
-      }
+      onEnterCreateOrOpen(index, onCreate, (dataIndex) => {
+        const id = view.rows[dataIndex]?.id;
+        if (id !== undefined) {
+          toggleDoc(id);
+        }
+      });
     },
-    [setCursor, toggleDoc, view.rows],
+    [onCreate, setCursor, toggleDoc, view.rows],
   );
 
   const keymap: PanelKeymap<PlansIntent> = useMemo(
@@ -66,7 +85,7 @@ export const PlansController = memo(function PlansController({
         },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
-        { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
+        { chord: { key: { return: true } }, intent: 'open', description: 'view doc / create' },
         { chord: { input: 'p' }, intent: 'spawnPlanner', description: 'spawn planner' },
       ],
       onIntent(intent) {
@@ -81,6 +100,9 @@ export const PlansController = memo(function PlansController({
             void refresh();
             return;
           case 'star': {
+            if (isCreateCursor(cursor)) {
+              return;
+            }
             const id = rowIdAtCursor();
             if (id !== null) {
               void toggleFavorite(id);
@@ -88,13 +110,18 @@ export const PlansController = memo(function PlansController({
             return;
           }
           case 'open': {
-            const id = rowIdAtCursor();
-            if (id !== null) {
-              toggleDoc(id);
-            }
+            onEnterCreateOrOpen(cursor, onCreate, (dataIndex) => {
+              const id = view.rows[dataIndex]?.id;
+              if (id !== undefined) {
+                toggleDoc(id);
+              }
+            });
             return;
           }
           case 'spawnPlanner': {
+            if (isCreateCursor(cursor)) {
+              return;
+            }
             const id = rowIdAtCursor();
             if (id !== null) {
               void spawnPlanner(id);
@@ -106,7 +133,19 @@ export const PlansController = memo(function PlansController({
         }
       },
     }),
-    [bindings, moveDown, moveUp, refresh, rowIdAtCursor, spawnPlanner, toggleDoc, toggleFavorite],
+    [
+      bindings,
+      cursor,
+      moveDown,
+      moveUp,
+      onCreate,
+      refresh,
+      rowIdAtCursor,
+      spawnPlanner,
+      toggleDoc,
+      toggleFavorite,
+      view.rows,
+    ],
   );
   usePanelKeymap('plans', keymap);
 
@@ -119,6 +158,7 @@ export const PlansController = memo(function PlansController({
         theme={theme}
         rows={view.rows}
         cursor={cursor}
+        createLabel={CREATE_LABEL}
         status={view.status}
         error={view.error}
         onRowClick={onRowClick}

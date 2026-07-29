@@ -14,6 +14,8 @@ import type { Theme } from '../../theme/buildTheme.js';
 import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
 import { formatDocTreeName } from './docTreeIndent.js';
+import { CreateRow } from './shared/CreateRow.js';
+import { dataIndexFromCursor, isCreateCursor } from './shared/createListRow.js';
 
 const PANEL_TITLE = 'Workflows';
 
@@ -66,9 +68,11 @@ export interface WorkflowsSurfaceProps {
   readonly theme: Theme;
   readonly rows: readonly WorkflowsSurfaceRow[];
   readonly cursor?: number;
+  /** When set, a 1-line “+ create” row is always shown above the ledger (index 0). */
+  readonly createLabel?: string;
   readonly status?: 'ready' | 'loading' | 'error';
   readonly error?: string | null;
-  /** Left-click a list row (absolute index). Opens the ticket editor / toggles a run. */
+  /** Left-click a list row (absolute index, including create at 0 when createLabel is set). */
   readonly onRowClick?: (index: number) => void;
 }
 
@@ -417,6 +421,7 @@ function WorkflowsList({
   status,
   error,
   theme,
+  createLabel,
   onRowClick,
 }: {
   readonly rows: readonly WorkflowsSurfaceRow[];
@@ -428,10 +433,15 @@ function WorkflowsList({
   readonly status: 'ready' | 'loading' | 'error';
   readonly error: string | null;
   readonly theme: Theme;
+  readonly createLabel?: string;
   readonly onRowClick?: (index: number) => void;
 }): React.JSX.Element {
   const innerW = innerWidth(width);
   const innerH = innerHeight(height);
+  const showCreate = createLabel !== undefined;
+  const createSelected = showCreate && focused && isCreateCursor(cursor);
+  const ledgerCursor = showCreate ? (dataIndexFromCursor(cursor) ?? -1) : cursor;
+  const ledgerHeight = showCreate ? Math.max(1, innerH - 1) : innerH;
   const multiCol = shouldUseMultiColumnLedger(displayMode, innerW);
   const maxColumns = maxColumnsForMode(displayMode);
   const rowClickProps =
@@ -439,81 +449,109 @@ function WorkflowsList({
       ? {
           onRowClick: (_row: WorkflowsSurfaceRow, index: number, event: InkMouseEvent) => {
             claimMouseClick(event);
-            onRowClick(index);
+            onRowClick(showCreate ? index + 1 : index);
           },
         }
       : {};
 
+  const createRowEl =
+    showCreate && createLabel !== undefined ? (
+      <CreateRow
+        label={createLabel}
+        selected={createSelected}
+        width={innerW}
+        {...(onRowClick !== undefined
+          ? {
+              onClick: (event) => {
+                claimMouseClick(event);
+                onRowClick(0);
+              },
+            }
+          : {})}
+      />
+    ) : null;
+
   if (status === 'error') {
     return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
   }
-  if (status === 'loading' && rows.length === 0) {
+  if (status === 'loading' && rows.length === 0 && !showCreate) {
     return (
       <Text dimColor wrap="truncate">
         loading…
       </Text>
     );
   }
-  if (rows.length === 0) {
+  if (rows.length === 0 && !showCreate) {
     return (
       <Text dimColor wrap="truncate">
         no workflows
       </Text>
     );
   }
+
+  const ledgerFocused = focused && !createSelected;
   const singleLine = linesPerEntryForMode(displayMode) === 1;
-  if (singleLine) {
-    return (
+
+  const ledger =
+    rows.length === 0 ? (
+      status === 'loading' ? (
+        <Text dimColor wrap="truncate">
+          loading…
+        </Text>
+      ) : null
+    ) : singleLine ? (
       <Ledger
         rows={rows}
-        cursor={cursor}
-        focused={focused}
+        cursor={ledgerCursor}
+        focused={ledgerFocused}
         linesPerEntry={1}
         minColumns={1}
         maxColumns={1}
         availableWidth={innerW}
-        availableHeight={innerH}
+        availableHeight={ledgerHeight}
         rowKey={(row) => row.id}
         renderEntry={(row, ctx) => renderTinyEntry(row, ctx, innerW, theme)}
         {...rowClickProps}
       />
-    );
-  }
-
-  if (multiCol) {
-    return (
+    ) : multiCol ? (
       <Ledger
         rows={rows}
-        cursor={cursor}
-        focused={focused}
+        cursor={ledgerCursor}
+        focused={ledgerFocused}
         linesPerEntry={LINES_PER_ENTRY}
         minColumns={1}
         maxColumns={maxColumns}
         availableWidth={innerW}
-        availableHeight={innerH}
+        availableHeight={ledgerHeight}
         header={(columns) => renderWorkflowsHeader(columns, displayMode)}
         rowKey={(row) => row.id}
         renderEntry={(row, ctx) => renderWorkflowEntry(row, ctx, theme, innerW)}
         {...rowClickProps}
       />
+    ) : (
+      <Ledger
+        rows={rows}
+        cursor={ledgerCursor}
+        focused={ledgerFocused}
+        linesPerEntry={LINES_PER_ENTRY}
+        minColumns={1}
+        maxColumns={1}
+        availableWidth={innerW}
+        availableHeight={ledgerHeight}
+        header={() => renderPriorityHeader(displayMode, innerW)}
+        rowKey={(row) => row.id}
+        renderEntry={(row, ctx) =>
+          renderPriorityWorkflowEntry(row, ctx, innerW, displayMode, theme)
+        }
+        {...rowClickProps}
+      />
     );
-  }
 
   return (
-    <Ledger
-      rows={rows}
-      cursor={cursor}
-      focused={focused}
-      linesPerEntry={LINES_PER_ENTRY}
-      minColumns={1}
-      maxColumns={1}
-      availableWidth={innerW}
-      availableHeight={innerH}
-      header={() => renderPriorityHeader(displayMode, innerW)}
-      rowKey={(row) => row.id}
-      renderEntry={(row, ctx) => renderPriorityWorkflowEntry(row, ctx, innerW, displayMode, theme)}
-      {...rowClickProps}
-    />
+    <Box flexDirection="column" flexGrow={1} overflow="hidden">
+      {createRowEl}
+      {ledger}
+    </Box>
   );
 }
 
@@ -524,26 +562,31 @@ export const WorkflowsSurface = memo(function WorkflowsSurface({
   theme,
   rows,
   cursor: cursorProp,
+  createLabel,
   status = 'ready',
   error = null,
   onRowClick,
 }: WorkflowsSurfaceProps): React.JSX.Element {
   const baseMode = layout(width, height);
   const padding = paneHorizontalPaddingForWidth(width);
-  const rowCount = rows.length;
+  const showCreate = createLabel !== undefined;
+  const dataCount = rows.length;
+  const totalCount = showCreate ? dataCount + 1 : dataCount;
   const cursor = cursorProp ?? 0;
-  const clampedCursor = Math.min(cursor, Math.max(rowCount - 1, 0));
+  const clampedCursor = Math.min(cursor, Math.max(totalCount - 1, 0));
   const innerH = innerHeight(height);
   const innerW = innerWidth(width);
-  const displayMode = heightAwareMode(baseMode, innerH, rowCount);
+  const ledgerHeight = showCreate ? Math.max(1, innerH - 1) : innerH;
+  const displayMode = heightAwareMode(baseMode, ledgerHeight, dataCount);
   const linesPerEntry = linesPerEntryForMode(displayMode);
+  const ledgerCursor = showCreate ? (dataIndexFromCursor(clampedCursor) ?? 0) : clampedCursor;
   const hasHeader =
-    rowCount > 0 &&
+    dataCount > 0 &&
     showColumnHeader(displayMode) &&
     (shouldUseMultiColumnLedger(displayMode, innerW) || innerW >= 18);
-  const win = computeWindow(rowCount, clampedCursor, linesPerEntry, innerH, hasHeader);
-  const overflowAbove = rowCount === 0 ? 0 : win.start;
-  const overflowBelow = rowCount === 0 ? 0 : rowCount - win.end;
+  const win = computeWindow(dataCount, ledgerCursor, linesPerEntry, ledgerHeight, hasHeader);
+  const overflowAbove = dataCount === 0 ? 0 : win.start;
+  const overflowBelow = dataCount === 0 ? 0 : dataCount - win.end;
 
   return (
     <Box width={width} height={height} overflow="hidden">
@@ -566,6 +609,7 @@ export const WorkflowsSurface = memo(function WorkflowsSurface({
           status={status}
           error={error}
           theme={theme}
+          {...(createLabel !== undefined ? { createLabel } : {})}
           {...(onRowClick !== undefined ? { onRowClick } : {})}
         />
       </Pane>

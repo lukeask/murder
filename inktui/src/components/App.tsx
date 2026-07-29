@@ -111,13 +111,20 @@ import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
 import { captureCurrentFrame } from '../terminal/captureFrame.js';
+import {
+  applyCanvasBackground,
+  ensureCanvasBackgroundCleanup,
+  resolveBackgroundTransparency,
+  useBackgroundTransparencyPreview,
+} from '../terminal/canvasBackground.js';
 import { forceInkFullRepaint } from '../terminal/forceInkRepaint.js';
 import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '../theme/palettes.js';
-import { setTheme } from '../theme/themeStore.js';
+import { setTheme, useTheme } from '../theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { helpMode } from './HelpOverlay.js';
 import { newPlanMode } from './NewPlanModal.js';
+import { newReportMode } from './NewReportModal.js';
 import { newTicketMode } from './NewTicketModal.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { promptTemplateManagerMode } from './PromptTemplateManagerMode.js';
@@ -127,6 +134,7 @@ import { spawnWizardMode } from './SpawnWizardModal.js';
 import { TopBar } from './TopBar.js';
 import { workflowTemplateEditorMode } from './WorkflowTemplateEditorMode.js';
 import { WorkspaceSlideOverlay } from './WorkspaceSlideOverlay.js';
+import { setPanelCreateActions } from '../create/panelCreateActions.js';
 
 /**
  * The smallest terminal the shell will attempt to lay out (first-run UX: a too-small terminal gets
@@ -661,6 +669,13 @@ function Shell({
   // source of truth for inter-pane spacing (mirrors the single orientation read). `0` = flush
   // borders (the default).
   const paneGap = useAppStore((s) => s.settings.paneGap);
+  const backgroundTransparencySetting = useAppStore((s) => s.settings.backgroundTransparency);
+  // Subscribe so live settings-modal preview re-renders the shell; resolve reads the module override.
+  useBackgroundTransparencyPreview();
+  const backgroundTransparency = resolveBackgroundTransparency(backgroundTransparencySetting);
+  const theme = useTheme();
+  const canvasBackgroundColor =
+    backgroundTransparency < 100 ? theme.canvasBg : undefined;
   // Step 4b: while a workspace slide is animating the shell renders ONLY the slide overlay (a
   // Body-slot takeover like a fullscreen mode — same suppression shape as presentationHidesLayout).
   const workspaceSliding = useWorkspaceStore((s) => s.transition !== null);
@@ -891,6 +906,13 @@ function Shell({
     });
   }, [appStore, bindings, workspace, panels, focus, chatInput, paneUi, stdout]);
 
+  // Background transparency → Kitty OSC + (via canvasBackgroundColor) root paint. Re-applies when
+  // the setting, live preview, or theme canvas hex changes. Cleanup restores Kitty colors on exit.
+  useEffect(() => {
+    ensureCanvasBackgroundCleanup();
+    applyCanvasBackground(backgroundTransparency, theme.canvasBg);
+  }, [backgroundTransparency, theme.canvasBg]);
+
   // `ctrl+s` → open the spawn wizard (fires when chat OR a highlighted pane is focused; see
   // dispatcher.ts). Reads the store imperatively at call time (getState()) so no stale closure; stores
   // are stable references.
@@ -937,6 +959,7 @@ function Shell({
           modifier: settings.modifier,
           theme,
           paneGap: settings.paneGap,
+          backgroundTransparency: settings.backgroundTransparency,
           workspaceCount: settings.workspaceCount,
           vimMode: settings.vimMode,
           barWidgets: settings.barWidgets,
@@ -978,6 +1001,7 @@ function Shell({
         onSubmit(planName) {
           toastStore.getState().push(`plan "${planName}" created`, { ttlMs: 6000 });
           void docViewActions.open('plan', planName);
+          void appStore.getState().actions.plans.refresh();
         },
       }),
     );
@@ -1020,6 +1044,21 @@ function Shell({
     );
   };
 
+  // Panel / shared entrypoint: create a blank report (name prompt → `report.create`).
+  const newReportHandler = (): void => {
+    const actions = createDialogActions(bus);
+    const docViewActions = appStore.getState().actions.docView;
+    modes.getState().enter(
+      newReportMode(modes, actions, {
+        onSubmit(reportName) {
+          toastStore.getState().push(`report "${reportName}" created`, { ttlMs: 6000 });
+          void docViewActions.open('report', reportName);
+          void appStore.getState().actions.reports.refresh();
+        },
+      }),
+    );
+  };
+
   // `ctrl+n` → open the quick-note capture (item 10). Draft persists across cancel/reopen (the mode
   // resets the FSM only on a confirmed submit); submit is fire-and-forget via `notetaker.capture.submit`
   // (close instantly + toast). Title is auto/LLM (empty title field).
@@ -1030,16 +1069,30 @@ function Shell({
           void submitCommand(bus, 'notetaker.capture.submit', {
             raw: draft,
             ...(title !== undefined && title.trim() !== '' ? { title: title.trim() } : {}),
-          }).catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
-          });
+          })
+            .then(() => {
+              void appStore.getState().actions.notes.refresh();
+            })
+            .catch((error: unknown) => {
+              const message = error instanceof Error ? error.message : String(error);
+              toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
+            });
           toastStore.getState().push('note captured', { ttlMs: 6000 });
         },
         onCancel() {},
       }),
     );
   };
+
+  // Panels' "+ create" rows call the same handlers as global chords (no duplicated create RPC).
+  useEffect(() => {
+    setPanelCreateActions({
+      newPlan: newPlanHandler,
+      quickNote: quickNoteHandler,
+      newReport: newReportHandler,
+      newWorkflow: () => openWorkflowTemplateEditorHandler(null),
+    });
+  });
 
   // Item 12: `?` → open the keybinding help overlay. Reads the live resolved bindings + keymap
   // registry at call time so the overlay reflects the current modifier/rebinds and the panels that
@@ -1380,7 +1433,13 @@ function Shell({
   // Panels / TopBar / chat stay suppressed — only the hint rail rides along under the Overlay.
   if (active !== null && presentationHidesLayout(active.presentation)) {
     return (
-      <Box flexDirection="column" width="100%" height={rows} overflow="hidden">
+      <Box
+        flexDirection="column"
+        width="100%"
+        height={rows}
+        overflow="hidden"
+        backgroundColor={canvasBackgroundColor}
+      >
         <Box flexGrow={1} flexBasis={0} minHeight={0} overflow="hidden" flexDirection="column">
           <Overlay />
         </Box>
@@ -1404,7 +1463,13 @@ function Shell({
   // Without `flexBasis={0}` the region's basis is its (huge) content height, Yoga never bounds it, the
   // chrome is shoved past `rows`, and nothing clips — which is the "still way too tall" failure.
   return (
-    <Box flexDirection="column" width="100%" height={rows} overflow="hidden">
+    <Box
+      flexDirection="column"
+      width="100%"
+      height={rows}
+      overflow="hidden"
+      backgroundColor={canvasBackgroundColor}
+    >
       <Box ref={topbarRef} flexShrink={0} flexDirection="column">
         <TopBar project={project} />
       </Box>

@@ -378,6 +378,23 @@ class PlanCreateResult(ApplicationModel):
     error: str | None = None
 
 
+class ReportCreateParams(ApplicationModel):
+    name: str = Field(min_length=1)
+    body: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        return _strip_nonempty(value, field="name")
+
+
+class ReportCreateResult(ApplicationModel):
+    handled: bool = True
+    ok: bool = True
+    name: str
+    error: str | None = None
+
+
 # --- ticket.* commands --------------------------------------------------------------
 
 
@@ -548,6 +565,8 @@ __all__ = [
     "PlanRenameResult",
     "PlannerSpawnParams",
     "PlannerSpawnResult",
+    "ReportCreateParams",
+    "ReportCreateResult",
     "TicketExistsParams",
     "TicketExistsResult",
     "TicketNextIdParams",

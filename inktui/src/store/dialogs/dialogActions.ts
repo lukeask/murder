@@ -60,6 +60,13 @@ export interface PlanCreateResult {
   readonly agent_id?: string;
 }
 
+/** Reply from `report.create`. */
+export interface ReportCreateResult {
+  readonly handled: boolean;
+  readonly ok: boolean;
+  readonly name: string;
+}
+
 /**
  * The new-plan submit input. The form fills `body` (the typed plan content) and either asks for an
  * auto name (`autoName: true`) or supplies a `planName`. `message`, when supplied, is sent to the
@@ -105,6 +112,8 @@ export interface DialogActions {
    * (the auto-named result when `autoName` was set). Rejects on bus error — the caller handles it.
    */
   createPlan(input: CreatePlanInput): Promise<PlanCreateResult>;
+  /** Create a blank report via `report.create`. */
+  createReport(name: string, body?: string): Promise<ReportCreateResult>;
 }
 
 /**
@@ -172,6 +181,12 @@ export function createDialogActions(bus: ApplicationClient): DialogActions {
           };
       return asCommandResult<'plan.create', PlanCreateResult>(
         await bus.command('plan.create', params),
+      );
+    },
+
+    async createReport(name: string, body = ''): Promise<ReportCreateResult> {
+      return asCommandResult<'report.create', ReportCreateResult>(
+        await bus.command('report.create', { name, body }),
       );
     },
   };

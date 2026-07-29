@@ -1,5 +1,6 @@
 import { type JSX, memo, useCallback, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
+import { getPanelCreateActions } from '../../create/panelCreateActions.js';
 import { useAppStore } from '../../hooks/useAppStore.js';
 import { useBindings, usePanelKeymap } from '../../hooks/useInputStores.js';
 import type { PanelKeymap } from '../../input/keymap.js';
@@ -9,9 +10,17 @@ import { useTheme } from '../../theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { ReportsSurface } from './ReportsSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
+import {
+  dataIndexFromCursor,
+  isCreateCursor,
+  listRowCountWithCreate,
+  onEnterCreateOrOpen,
+} from './shared/createListRow.js';
 import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 
 type ReportsIntent = 'cursorDown' | 'cursorUp' | 'refresh' | 'star' | 'open';
+
+const CREATE_LABEL = '+ new report';
 
 export interface ReportsControllerProps {
   readonly presentation: PanePresentation;
@@ -28,29 +37,36 @@ export const ReportsController = memo(function ReportsController({
   const toggleDoc = useDocView('report');
   const view = useReportsView(reports, favorites);
   const theme = useTheme();
-  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor(
-    'reports',
-    view.rows.length,
-  );
+  const rowCount = listRowCountWithCreate(view.rows.length);
+  const { cursor, setCursor, moveDown, moveUp } = usePaneUiClampedCursor('reports', rowCount);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const rowNameAtCursor = useCallback(
-    (): string | null => view.rows[cursor]?.name ?? null,
-    [cursor, view.rows],
-  );
+  const rowNameAtCursor = useCallback((): string | null => {
+    const dataIndex = dataIndexFromCursor(cursor);
+    if (dataIndex === null) {
+      return null;
+    }
+    return view.rows[dataIndex]?.name ?? null;
+  }, [cursor, view.rows]);
+
+  const onCreate = useCallback(() => {
+    getPanelCreateActions().newReport();
+  }, []);
 
   const onRowClick = useCallback(
     (index: number) => {
       setCursor(index);
-      const name = view.rows[index]?.name;
-      if (name !== undefined) {
-        toggleDoc(name);
-      }
+      onEnterCreateOrOpen(index, onCreate, (dataIndex) => {
+        const name = view.rows[dataIndex]?.name;
+        if (name !== undefined) {
+          toggleDoc(name);
+        }
+      });
     },
-    [setCursor, toggleDoc, view.rows],
+    [onCreate, setCursor, toggleDoc, view.rows],
   );
 
   const keymap: PanelKeymap<ReportsIntent> = useMemo(
@@ -68,7 +84,7 @@ export const ReportsController = memo(function ReportsController({
         },
         { chord: { input: 'r' }, intent: 'refresh', description: 'refresh' },
         { chord: bindings.chordsFor('panel.star'), intent: 'star', description: 'favorite' },
-        { chord: { key: { return: true } }, intent: 'open', description: 'view doc' },
+        { chord: { key: { return: true } }, intent: 'open', description: 'view doc / create' },
       ],
       onIntent(intent) {
         switch (intent) {
@@ -82,6 +98,9 @@ export const ReportsController = memo(function ReportsController({
             void refresh();
             return;
           case 'star': {
+            if (isCreateCursor(cursor)) {
+              return;
+            }
             const name = rowNameAtCursor();
             if (name !== null) {
               void toggleFavorite(name);
@@ -89,10 +108,12 @@ export const ReportsController = memo(function ReportsController({
             return;
           }
           case 'open': {
-            const name = rowNameAtCursor();
-            if (name !== null) {
-              toggleDoc(name);
-            }
+            onEnterCreateOrOpen(cursor, onCreate, (dataIndex) => {
+              const name = view.rows[dataIndex]?.name;
+              if (name !== undefined) {
+                toggleDoc(name);
+              }
+            });
             return;
           }
           default:
@@ -100,7 +121,18 @@ export const ReportsController = memo(function ReportsController({
         }
       },
     }),
-    [bindings, moveDown, moveUp, refresh, rowNameAtCursor, toggleDoc, toggleFavorite],
+    [
+      bindings,
+      cursor,
+      moveDown,
+      moveUp,
+      onCreate,
+      refresh,
+      rowNameAtCursor,
+      toggleDoc,
+      toggleFavorite,
+      view.rows,
+    ],
   );
   usePanelKeymap('reports', keymap);
 
@@ -113,6 +145,7 @@ export const ReportsController = memo(function ReportsController({
         theme={theme}
         rows={view.rows}
         cursor={cursor}
+        createLabel={CREATE_LABEL}
         status={view.status}
         error={view.error}
         onRowClick={onRowClick}

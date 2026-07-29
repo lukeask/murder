@@ -19,6 +19,8 @@ import {
   renderPlansHeader,
   rowLayoutForDimensions,
 } from './plansPanelDocList.js';
+import { CreateRow } from './shared/CreateRow.js';
+import { dataIndexFromCursor, isCreateCursor } from './shared/createListRow.js';
 
 const PANEL_TITLE = 'Plans';
 
@@ -74,9 +76,11 @@ export interface PlansSurfaceProps {
   readonly rows: readonly ResourceRowFields[];
   readonly cursor?: number;
   readonly emptyText?: string;
+  /** When set, a 1-line “+ create” row is always shown above the ledger (index 0). */
+  readonly createLabel?: string;
   readonly status?: 'ready' | 'loading' | 'error';
   readonly error?: string | null;
-  /** Left-click a list row (absolute index). Opens/toggles the matching document when wired. */
+  /** Left-click a list row (absolute index, including create at 0 when createLabel is set). */
   readonly onRowClick?: (index: number) => void;
 }
 
@@ -88,6 +92,7 @@ export const PlansSurface = memo(function PlansSurface({
   rows,
   cursor: cursorProp,
   emptyText = 'no plans',
+  createLabel,
   status = 'ready',
   error = null,
   onRowClick,
@@ -96,45 +101,77 @@ export const PlansSurface = memo(function PlansSurface({
   const innerW = innerWidth(width);
   const innerH = innerHeight(height);
   const rowLayout = useMemo(() => rowLayoutForDimensions(innerW, innerH), [innerW, innerH]);
-  const rowCount = rows.length;
-  const cursor = cursorProp ?? Math.min(1, Math.max(rowCount - 1, 0));
-  const hasHeader = rowLayout.showHeader && rowCount > 0;
-  const win = computeWindow(rowCount, cursor, rowLayout.linesPerEntry, innerH, hasHeader);
-  const overflowAbove = rowCount === 0 ? 0 : win.start;
-  const overflowBelow = rowCount === 0 ? 0 : rowCount - win.end;
+  const showCreate = createLabel !== undefined;
+  const dataCount = rows.length;
+  const totalCount = showCreate ? dataCount + 1 : dataCount;
+  const cursor = cursorProp ?? Math.min(1, Math.max(totalCount - 1, 0));
+  const createSelected = showCreate && focused && isCreateCursor(cursor);
+  const ledgerCursor = showCreate ? (dataIndexFromCursor(cursor) ?? -1) : cursor;
+  const ledgerHeight = showCreate ? Math.max(1, innerH - 1) : innerH;
+  const hasHeader = rowLayout.showHeader && dataCount > 0;
+  const win = computeWindow(
+    dataCount,
+    Math.max(0, ledgerCursor),
+    rowLayout.linesPerEntry,
+    ledgerHeight,
+    hasHeader,
+  );
+  const overflowAbove = dataCount === 0 ? 0 : win.start;
+  const overflowBelow = dataCount === 0 ? 0 : dataCount - win.end;
 
   const listBody = (() => {
     if (status === 'error') {
       return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
     }
-    if (status === 'loading' && rowCount === 0) {
+    if (status === 'loading' && dataCount === 0 && !showCreate) {
       return <Text dimColor>loading…</Text>;
     }
-    if (rowCount === 0) {
+    if (dataCount === 0 && !showCreate) {
       return <Text dimColor>{emptyText}</Text>;
     }
     return (
-      <Ledger
-        rows={rows}
-        cursor={cursor}
-        focused={focused}
-        linesPerEntry={rowLayout.linesPerEntry}
-        minColumns={1}
-        maxColumns={1}
-        availableWidth={innerW}
-        availableHeight={innerH}
-        renderEntry={(row, ctx) => renderPlansEntry(row, ctx, innerW, rowLayout)}
-        {...(hasHeader ? { header: () => renderPlansHeader(rowLayout) } : {})}
-        rowKey={(row) => row.name}
-        {...(onRowClick !== undefined
-          ? {
-              onRowClick: (_row: ResourceRowFields, index: number, event) => {
-                claimMouseClick(event);
-                onRowClick(index);
-              },
-            }
-          : {})}
-      />
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        {showCreate && createLabel !== undefined ? (
+          <CreateRow
+            label={createLabel}
+            selected={createSelected}
+            width={innerW}
+            {...(onRowClick !== undefined
+              ? {
+                  onClick: (event) => {
+                    claimMouseClick(event);
+                    onRowClick(0);
+                  },
+                }
+              : {})}
+          />
+        ) : null}
+        {status === 'loading' && dataCount === 0 ? (
+          <Text dimColor>loading…</Text>
+        ) : dataCount === 0 ? null : (
+          <Ledger
+            rows={rows}
+            cursor={ledgerCursor}
+            focused={focused && !createSelected}
+            linesPerEntry={rowLayout.linesPerEntry}
+            minColumns={1}
+            maxColumns={1}
+            availableWidth={innerW}
+            availableHeight={ledgerHeight}
+            renderEntry={(row, ctx) => renderPlansEntry(row, ctx, innerW, rowLayout)}
+            {...(hasHeader ? { header: () => renderPlansHeader(rowLayout) } : {})}
+            rowKey={(row) => row.name}
+            {...(onRowClick !== undefined
+              ? {
+                  onRowClick: (_row: ResourceRowFields, index: number, event) => {
+                    claimMouseClick(event);
+                    onRowClick(showCreate ? index + 1 : index);
+                  },
+                }
+              : {})}
+          />
+        )}
+      </Box>
     );
   })();
 
