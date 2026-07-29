@@ -18,10 +18,7 @@ import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
 import '../input/dispatcher.js';
 import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
 import type { EditorCommand } from '../input/textEditor/commands.js';
-import {
-  multilineEditorPolicy,
-  singleLineEditorPolicy,
-} from '../input/textEditor/keyDecoder.js';
+import { multilineEditorPolicy, singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
 import { reduceEditor } from '../input/textEditor/operations.js';
 import { plainTextProjection } from '../input/textEditor/projection.js';
 import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
@@ -30,6 +27,7 @@ import type { AppStore, AppStoreApi } from '../store/store.js';
 import type { TemplateRecord } from '../store/templates/templatesSlice.js';
 import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
 import { useTheme } from '../theme/themeStore.js';
+import { Pane } from './Pane.js';
 import {
   collectBodyPlaceholders,
   collectUnknownInlineRefs,
@@ -46,6 +44,8 @@ export const PROMPT_TEMPLATE_MANAGER_MODE_ID = 'prompt-template-manager';
 
 const LIST_EDITOR_WIDTH = 36;
 const BODY_EDITOR_WIDTH = 64;
+/** Label column in the detail pane, sized to its longest label (`Used by`, `Expands`). */
+const DETAIL_LABEL_WIDTH = 7;
 
 export interface PromptTemplateActions {
   remove(name: string): void;
@@ -62,9 +62,7 @@ export interface PromptTemplateManagerModeOptions {
   readonly workflows?: readonly WorkflowTemplate[];
 }
 
-type ListRow =
-  | { readonly kind: 'create' }
-  | { readonly kind: 'template'; readonly name: string };
+type ListRow = { readonly kind: 'create' } | { readonly kind: 'template'; readonly name: string };
 
 type Interaction =
   | { readonly kind: 'normal' }
@@ -105,22 +103,19 @@ interface ManagerState {
   interaction: Interaction;
   editEditor: TextEditorState;
   notice: string | null;
+  /** Successes and problems share the footer line, so they must not share its colour. */
+  noticeTone: 'info' | 'warning';
 }
 
 function buildRows(templates: readonly TemplateRecord[]): readonly ListRow[] {
-  return [{ kind: 'create' }, ...templates.map((t) => ({ kind: 'template' as const, name: t.name }))];
+  return [
+    { kind: 'create' },
+    ...templates.map((t) => ({ kind: 'template' as const, name: t.name })),
+  ];
 }
 
 function workflowNameSet(workflows: readonly WorkflowTemplate[]): ReadonlySet<string> {
   return new Set(workflows.map((w) => w.name));
-}
-
-function refsWillKeepOldNameNotice(
-  oldName: string,
-  newName: string,
-  refs: readonly WorkflowTemplateRef[],
-): string {
-  return `Rename :${oldName}: → :${newName}:? ${refs.length} workflow ref(s) will keep :${oldName}: (y/n)`;
 }
 
 /**
@@ -138,8 +133,7 @@ export function promptTemplateManagerMode(
   const s: ManagerState = {
     templates: opts.templates ?? initialFromStore?.templates.items ?? [],
     workflows: opts.workflows ?? initialFromStore?.workflows.items ?? [],
-    actions:
-      opts.templateActions ??
+    actions: opts.templateActions ??
       initialFromStore?.actions.templates ?? {
         remove() {},
         rename() {},
@@ -149,6 +143,7 @@ export function promptTemplateManagerMode(
     interaction: { kind: 'normal' },
     editEditor: editorAtEnd(),
     notice: null,
+    noticeTone: 'info',
   };
 
   function refresh(): void {
@@ -197,36 +192,33 @@ export function promptTemplateManagerMode(
     refresh();
   }
 
+  // The bottom bar already spells out the live keys for each interaction, so these transitions set no
+  // notice: the footer line is reserved for outcomes (created / saved / rejected) and problems.
   function beginCreate(): void {
     s.interaction = { kind: 'createName' };
     setEditValue('');
-    s.notice = 'New template name. Enter to continue, Esc to cancel.';
+    s.notice = null;
     refresh();
   }
 
   function beginRename(name: string): void {
     s.interaction = { kind: 'rename', name };
     setEditValue(name);
-    s.notice = 'Rename template. Enter to save, Esc to cancel.';
+    s.notice = null;
     refresh();
   }
 
   function beginEditBody(name: string, isNew: boolean, seed = ''): void {
     s.interaction = { kind: 'editBody', name, isNew };
     setEditValue(seed);
-    s.notice = isNew
-      ? 'Template body. Enter to save, Shift+Enter for newline, Esc to cancel.'
-      : 'Edit body. Enter to save, Shift+Enter for newline, Esc to cancel.';
+    s.notice = null;
     refresh();
   }
 
   function beginDelete(name: string): void {
     const refs = findWorkflowReferences(name, s.workflows);
     s.interaction = { kind: 'confirmDelete', name, refs };
-    s.notice =
-      refs.length === 0
-        ? `delete "${name}"? (y/n)`
-        : `delete "${name}"? referenced by ${refs.length} workflow field(s) — will break those refs (y/n)`;
+    s.notice = null;
     refresh();
   }
 
@@ -236,6 +228,7 @@ export function promptTemplateManagerMode(
     const error = validateTemplateName(name, null, s.templates);
     if (error !== null) {
       s.notice = error;
+      s.noticeTone = 'warning';
       refresh();
       return;
     }
@@ -253,7 +246,8 @@ export function promptTemplateManagerMode(
     }
     s.interaction = { kind: 'normal' };
     setEditValue('');
-    s.notice = isNew ? `Created :${name}:` : `Saved :${name}:`;
+    s.notice = isNew ? `created :${name}:` : `saved :${name}:`;
+    s.noticeTone = 'info';
     const idx = rows().findIndex((r) => r.kind === 'template' && r.name === name);
     if (idx >= 0) s.cursor = idx;
     refresh();
@@ -269,8 +263,9 @@ export function promptTemplateManagerMode(
     const refs = findWorkflowReferences(oldName, s.workflows);
     s.notice =
       refs.length > 0
-        ? `Renamed :${oldName}: → :${newName}: — ${refs.length} workflow ref(s) still use :${oldName}:`
-        : null;
+        ? `renamed to :${newName}: — ${refs.length} workflow field${refs.length === 1 ? '' : 's'} still use :${oldName}:`
+        : `renamed to :${newName}:`;
+    s.noticeTone = refs.length > 0 ? 'warning' : 'info';
     const idx = rows().findIndex((r) => r.kind === 'template' && r.name === newName);
     if (idx >= 0) s.cursor = idx;
     else clampCursor();
@@ -284,6 +279,7 @@ export function promptTemplateManagerMode(
     const error = validateTemplateName(newName, oldName, s.templates);
     if (error !== null) {
       s.notice = error;
+      s.noticeTone = 'warning';
       refresh();
       return;
     }
@@ -297,7 +293,7 @@ export function promptTemplateManagerMode(
     const refs = findWorkflowReferences(oldName, s.workflows);
     if (refs.length > 0) {
       s.interaction = { kind: 'confirmRename', oldName, newName, refs };
-      s.notice = refsWillKeepOldNameNotice(oldName, newName, refs);
+      s.notice = null;
       refresh();
       return;
     }
@@ -653,8 +649,7 @@ function PromptTemplateManagerDialog({
       ? []
       : collectUnknownInlineRefs(bodyForPreview, knownNames, selectedName ?? undefined);
   const registry = new Map(s.templates.map((t) => [t.name, t.body] as const));
-  const expansion =
-    bodyForPreview === null ? null : expandInlinePreview(bodyForPreview, registry);
+  const expansion = bodyForPreview === null ? null : expandInlinePreview(bodyForPreview, registry);
   const workflowRefs =
     selectedName === null ? [] : findWorkflowReferences(selectedName, s.workflows);
   const confirmingRefs =
@@ -662,193 +657,262 @@ function PromptTemplateManagerDialog({
       ? s.interaction.refs
       : null;
 
-  const editingName =
-    s.interaction.kind === 'createName' || s.interaction.kind === 'rename';
+  const editingName = s.interaction.kind === 'createName' || s.interaction.kind === 'rename';
   const editingBody = s.interaction.kind === 'editBody';
+  const listWidth = Math.max(20, Math.min(30, Math.floor(width * 0.36)));
+  const detailWidth = width - 2 - listWidth;
+  const detailInnerWidth = Math.max(16, detailWidth - 4);
+  const bodyEditorWidth = Math.max(20, detailInnerWidth);
+
+  /** One `label   value` row, aligned across the detail pane like the workflow editor's stage panel. */
+  const detailRow = (label: string, node: React.ReactNode): JSX.Element => (
+    <Box key={label} flexDirection="row" flexShrink={0}>
+      <Text dimColor>{`${label.padEnd(DETAIL_LABEL_WIDTH)} `}</Text>
+      <Box flexGrow={1} minWidth={0}>
+        {node}
+      </Box>
+    </Box>
+  );
+
+  const detail = ((): JSX.Element => {
+    if (confirmingRefs !== null) {
+      const rename = s.interaction.kind === 'confirmRename' ? s.interaction : null;
+      const remove = s.interaction.kind === 'confirmDelete' ? s.interaction : null;
+      return (
+        <>
+          <Text bold color={theme.warning} wrap="truncate-end">
+            {rename !== null
+              ? `Rename :${rename.oldName}: to :${rename.newName}:?`
+              : `Delete :${remove?.name ?? ''}:?`}
+          </Text>
+          <Text wrap="truncate-end">
+            {rename !== null
+              ? `${confirmingRefs.length} workflow field${confirmingRefs.length === 1 ? '' : 's'} keep the old name:`
+              : confirmingRefs.length === 0
+                ? 'No workflow references it.'
+                : `${confirmingRefs.length} workflow field${confirmingRefs.length === 1 ? ' references' : 's reference'} it:`}
+          </Text>
+          <Box height={1} flexShrink={0} />
+          {confirmingRefs.map((ref) => (
+            <Text
+              key={`${ref.workflowName}/${ref.stageId}.${ref.field}`}
+              color={theme.warning}
+              wrap="truncate-end"
+            >
+              {`⚠ ${formatWorkflowTemplateRef(ref)}`}
+            </Text>
+          ))}
+          <Box flexGrow={1} />
+          <Text dimColor wrap="truncate-end">
+            {rename !== null ? 'y  rename    n / esc  keep name' : 'y  delete    n / esc  keep it'}
+          </Text>
+        </>
+      );
+    }
+    if (editingBody) {
+      return (
+        <>
+          <TextEditorDisplay
+            state={s.editEditor}
+            width={bodyEditorWidth}
+            placeholder="(body)"
+            focused
+            color={theme.text}
+          />
+          <Box flexGrow={1} />
+          {/* Live, while typing: what this body will ask the caller for, and any ref that can't resolve. */}
+          {detailRow(
+            'Inputs',
+            <Text dimColor wrap="truncate-end">
+              {placeholders.length === 0
+                ? 'none'
+                : placeholders.map((name) => `{${name}}`).join(', ')}
+            </Text>,
+          )}
+          {unknownRefs.length === 0
+            ? null
+            : detailRow(
+                'Refs',
+                <Text color={theme.warning} wrap="truncate-end">
+                  {`⚠ unknown ${unknownRefs.map((name) => `:${name}:`).join(', ')}`}
+                </Text>,
+              )}
+        </>
+      );
+    }
+    if (bodyForPreview !== null && selectedName !== null) {
+      return (
+        <>
+          <Text wrap="truncate-end">{previewBodyFlat(bodyForPreview)}</Text>
+          <Box height={1} flexShrink={0} />
+          {detailRow(
+            'Inputs',
+            <Text dimColor wrap="truncate-end">
+              {placeholders.length === 0
+                ? 'none'
+                : placeholders.map((name) => `{${name}}`).join(', ')}
+            </Text>,
+          )}
+          {detailRow(
+            'Refs',
+            unknownRefs.length === 0 ? (
+              <Text dimColor>all resolve</Text>
+            ) : (
+              <Text color={theme.warning} wrap="truncate-end">
+                {`⚠ unknown ${unknownRefs.map((name) => `:${name}:`).join(', ')}`}
+              </Text>
+            ),
+          )}
+          {detailRow(
+            'Used by',
+            workflowRefs.length === 0 ? (
+              <Text dimColor>no workflow</Text>
+            ) : (
+              <Text wrap="truncate-end">
+                {`${workflowRefs.length} workflow field${workflowRefs.length === 1 ? '' : 's'}`}
+              </Text>
+            ),
+          )}
+          {workflowRefs.map((ref) => (
+            <Text
+              key={`${ref.workflowName}/${ref.stageId}.${ref.field}`}
+              dimColor
+              wrap="truncate-end"
+            >
+              {`${' '.repeat(DETAIL_LABEL_WIDTH + 1)}${formatWorkflowTemplateRef(ref)}`}
+            </Text>
+          ))}
+          {expansion === null || expansion.text === bodyForPreview
+            ? null
+            : detailRow(
+                'Expands',
+                <Text dimColor wrap="truncate-end">
+                  {previewBodyFlat(expansion.text, 120)}
+                </Text>,
+              )}
+        </>
+      );
+    }
+    return (
+      <Text dimColor>
+        {editingName ? 'Naming a new template…' : 'Pick a template to see its body.'}
+      </Text>
+    );
+  })();
+
+  const detailTitle = editingBody
+    ? `Editing :${s.interaction.kind === 'editBody' ? s.interaction.name : ''}:`
+    : confirmingRefs !== null
+      ? 'Confirm'
+      : selectedName === null
+        ? 'Preview'
+        : `:${selectedName}:`;
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={theme.heading}
-      width={width}
-      height={height}
-      paddingX={1}
-      paddingY={0}
-    >
-      <Box flexShrink={0} marginBottom={1}>
-        <Text bold color={theme.accent}>
-          Prompt Templates
-        </Text>
-        <Text color={theme.muted}>{'  '}:name: macros</Text>
-      </Box>
-
-      <Box flexDirection="row" flexGrow={1} gap={1}>
-        <Box flexDirection="column" width={Math.min(32, Math.floor(width * 0.38))} flexShrink={0}>
-          {list.map((row, index) => {
-            const isFocused = index === s.cursor && s.interaction.kind === 'normal';
-            const cursor = isFocused ? '› ' : '  ';
-            const color = isFocused ? theme.warning : theme.text;
-            if (row.kind === 'create') {
-              const creating = s.interaction.kind === 'createName';
-              return (
-                <Box key="create" flexShrink={0}>
-                  <Text color={creating || isFocused ? theme.warning : theme.text} bold={isFocused}>
-                    {cursor}
-                    {creating ? 'name ' : '+ New template'}
-                  </Text>
-                  {creating ? (
-                    <TextEditorDisplay
-                      state={s.editEditor}
-                      width={LIST_EDITOR_WIDTH}
-                      placeholder="(name)"
-                      focused
-                      color={theme.text}
-                    />
-                  ) : null}
-                </Box>
-              );
-            }
-            const renaming = s.interaction.kind === 'rename' && s.interaction.name === row.name;
-            const confirming =
-              (s.interaction.kind === 'confirmDelete' && s.interaction.name === row.name) ||
-              (s.interaction.kind === 'confirmRename' && s.interaction.oldName === row.name);
-            const collides = workflowNames.has(row.name);
-            return (
-              <Box key={row.name} flexShrink={0}>
-                <Text color={color} bold={isFocused}>
-                  {cursor}
-                  {`:${renaming ? '' : row.name}`}
-                </Text>
-                {renaming ? (
-                  <TextEditorDisplay
-                    state={s.editEditor}
-                    width={LIST_EDITOR_WIDTH}
-                    placeholder="(name)"
-                    focused
-                    color={theme.text}
-                  />
-                ) : (
-                  <Text color={confirming ? theme.warning : theme.muted}>
-                    {confirming ? '  ?' : collides ? '  ! workflow name' : ''}
-                  </Text>
-                )}
-              </Box>
-            );
-          })}
-          {list.length === 1 ? (
-            <Box flexShrink={0} marginTop={1}>
-              <Text color={theme.muted}>{'  '}no templates yet</Text>
-            </Box>
-          ) : null}
-        </Box>
-
-        <Box
-          flexDirection="column"
-          flexGrow={1}
-          borderStyle="single"
-          borderColor={theme.borderBlurred}
-          paddingX={1}
-        >
-          {confirmingRefs !== null ? (
-            <>
-              <Text color={theme.warning}>
-                {s.interaction.kind === 'confirmRename'
-                  ? `workflow refs that will keep :${s.interaction.oldName}:`
-                  : s.interaction.kind === 'confirmDelete'
-                    ? `workflow refs that will break if :${s.interaction.name}: is deleted:`
-                    : 'workflow refs:'}
-              </Text>
-              <Box flexDirection="column" flexGrow={1}>
-                {confirmingRefs.length === 0 ? (
-                  <Text color={theme.muted}>{'  '}(none)</Text>
-                ) : (
-                  confirmingRefs.map((ref) => (
-                    <Text
-                      key={`${ref.workflowName}/${ref.stageId}.${ref.field}`}
-                      color={theme.text}
-                    >
-                      {`  ${formatWorkflowTemplateRef(ref)}`}
-                    </Text>
-                  ))
-                )}
-              </Box>
-            </>
-          ) : editingBody ? (
-            <>
-              <Text color={theme.muted}>
-                {`body · :${s.interaction.kind === 'editBody' ? s.interaction.name : ''}:`}
-              </Text>
-              <TextEditorDisplay
-                state={s.editEditor}
-                width={Math.max(20, width - 40)}
-                placeholder="(body)"
-                focused
-                color={theme.text}
-              />
-            </>
-          ) : bodyForPreview !== null && selectedName !== null ? (
-            <>
-              <Text color={theme.muted}>{`preview · :${selectedName}:`}</Text>
-              <Text color={theme.text} wrap="truncate-end">
-                {previewBodyFlat(bodyForPreview)}
-              </Text>
-              <Box marginTop={1} flexDirection="column" flexGrow={1}>
-                <Text color={theme.muted}>
-                  {placeholders.length === 0
-                    ? 'inputs: (none)'
-                    : `inputs: ${placeholders.map((p) => `{${p}}`).join(', ')}`}
-                </Text>
-                <Text color={unknownRefs.length > 0 ? theme.warning : theme.muted}>
-                  {unknownRefs.length === 0
-                    ? 'unknown refs: (none)'
-                    : `unknown refs: ${unknownRefs.map((n) => `:${n}:`).join(', ')}`}
-                </Text>
-                <Text color={workflowRefs.length > 0 ? theme.warning : theme.muted}>
-                  {workflowRefs.length === 0
-                    ? 'used by workflows: (none)'
-                    : `used by (${workflowRefs.length}):`}
-                </Text>
-                {workflowRefs.map((ref) => (
-                  <Text
-                    key={`${ref.workflowName}/${ref.stageId}.${ref.field}`}
-                    color={theme.warning}
-                  >
-                    {`  ${formatWorkflowTemplateRef(ref)}`}
-                  </Text>
-                ))}
-                {expansion !== null ? (
-                  <Text color={theme.muted} wrap="truncate-end">
-                    {`expansion: ${previewBodyFlat(expansion.text, 120)}`}
-                  </Text>
-                ) : null}
-              </Box>
-            </>
+    <Box width={width} height={height} flexDirection="column">
+      <Pane
+        title="Prompt templates"
+        titleExtra={<Text dimColor>{`  ${s.templates.length} saved`}</Text>}
+        focused
+        paddingLeft={0}
+        paddingRight={0}
+        footerLeft={
+          s.notice === null ? (
+            <Text dimColor>:name: expands inside stage prompts</Text>
           ) : (
-            <Text color={theme.muted}>
-              {editingName ? 'Enter a name…' : 'Select a template to preview'}
+            <Text
+              {...(s.noticeTone === 'warning' ? { color: theme.warning } : { dimColor: true })}
+              wrap="truncate-end"
+            >
+              {`${s.noticeTone === 'warning' ? '⚠' : '✓'} ${s.notice}`}
             </Text>
-          )}
+          )
+        }
+      >
+        <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
+          <Box width={listWidth} flexShrink={0} flexDirection="column" overflow="hidden">
+            <Pane title="Templates" focused={s.interaction.kind === 'normal'}>
+              {list.map((row, index) => {
+                const isFocused = index === s.cursor && s.interaction.kind === 'normal';
+                const marker = isFocused ? '▌' : ' ';
+                if (row.kind === 'create') {
+                  const creating = s.interaction.kind === 'createName';
+                  return (
+                    <Box key="create" flexShrink={0}>
+                      <Text
+                        {...(creating || isFocused ? { color: theme.accent } : {})}
+                        bold={isFocused || creating}
+                        dimColor={!isFocused && !creating}
+                      >
+                        {`${creating ? '▌' : marker} ${creating ? ':' : '+ new template'}`}
+                      </Text>
+                      {creating ? (
+                        <>
+                          <TextEditorDisplay
+                            state={s.editEditor}
+                            width={LIST_EDITOR_WIDTH}
+                            placeholder="name"
+                            focused
+                            color={theme.text}
+                          />
+                          <Text color={theme.accent}>:</Text>
+                        </>
+                      ) : null}
+                    </Box>
+                  );
+                }
+                const renaming = s.interaction.kind === 'rename' && s.interaction.name === row.name;
+                const deciding =
+                  (s.interaction.kind === 'confirmDelete' && s.interaction.name === row.name) ||
+                  (s.interaction.kind === 'confirmRename' && s.interaction.oldName === row.name);
+                const collides = workflowNames.has(row.name);
+                if (renaming) {
+                  return (
+                    <Box key={row.name} flexShrink={0}>
+                      <Text color={theme.accent} bold>
+                        {'▌ :'}
+                      </Text>
+                      <TextEditorDisplay
+                        state={s.editEditor}
+                        width={LIST_EDITOR_WIDTH}
+                        placeholder="name"
+                        focused
+                        color={theme.text}
+                      />
+                      <Text color={theme.accent}>:</Text>
+                    </Box>
+                  );
+                }
+                return (
+                  <Box key={row.name} flexShrink={0} flexDirection="row">
+                    <Text
+                      {...(deciding
+                        ? { color: theme.warning }
+                        : isFocused
+                          ? { color: theme.accent }
+                          : {})}
+                      bold={isFocused || deciding}
+                    >
+                      {`${deciding ? '▌' : marker} :${row.name}:`}
+                    </Text>
+                    <Box flexGrow={1} />
+                    {/* A template whose name is also a workflow's is legal but easy to misread. */}
+                    <Text color={theme.warning}>{collides ? ' ⚠' : '  '}</Text>
+                  </Box>
+                );
+              })}
+              {list.length === 1 ? (
+                <Text dimColor>{'  nothing yet — enter creates one'}</Text>
+              ) : null}
+            </Pane>
+          </Box>
+          <Box width={detailWidth} flexShrink={0} flexDirection="column" overflow="hidden">
+            <Pane title={detailTitle} focused={editingBody || confirmingRefs !== null}>
+              {detail}
+            </Pane>
+          </Box>
         </Box>
-      </Box>
-
-      {s.notice !== null ? (
-        <Box marginTop={1} flexShrink={0}>
-          <Text color={theme.warning}>{s.notice}</Text>
-        </Box>
-      ) : null}
-
-      <Box marginTop={1} flexShrink={0}>
-        <Text dimColor>
-          {confirmingRefs !== null
-            ? 'y: confirm · n/esc: cancel'
-            : editingBody
-              ? 'enter: save · shift+enter: newline · esc: cancel'
-              : editingName
-                ? 'enter: confirm · esc: cancel'
-                : 'j/k: navigate · enter: edit · r: rename · n: new · d: delete · esc: close'}
-        </Text>
-      </Box>
+      </Pane>
     </Box>
   );
 }

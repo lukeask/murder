@@ -5,11 +5,11 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { Overlay } from '../../src/components/Overlay.js';
 import {
   PROMPT_TEMPLATE_MANAGER_MODE_ID,
   promptTemplateManagerMode,
 } from '../../src/components/PromptTemplateManagerMode.js';
-import { Overlay } from '../../src/components/Overlay.js';
 import {
   collectBodyPlaceholders,
   collectUnknownInlineRefs,
@@ -120,9 +120,9 @@ describe('promptTemplates/refs helpers', () => {
     expect(findWorkflowReferences('greet', [sampleWorkflow])).toEqual([
       { workflowName: 'review', stageId: 's1', field: 'instructions' },
     ]);
-    expect(formatWorkflowTemplateRef({ workflowName: 'review', stageId: 's1', field: 'title' })).toBe(
-      'review/s1.title',
-    );
+    expect(
+      formatWorkflowTemplateRef({ workflowName: 'review', stageId: 's1', field: 'title' }),
+    ).toBe('review/s1.title');
     expect(validateTemplateName('ok', null, [])).toBeNull();
     expect(validateTemplateName('review-context', null, [])).toBeNull();
     expect(validateTemplateName('bad!', null, [])).toContain('invalid');
@@ -149,12 +149,12 @@ describe('PromptTemplateManagerMode', () => {
     await tick();
     expect(selectActiveMode(stores.modes)?.id).toBe(PROMPT_TEMPLATE_MANAGER_MODE_ID);
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Prompt Templates');
-    expect(frame).toContain(':greet');
-    expect(frame).toContain(':bye');
+    expect(frame).toContain('Prompt templates');
+    expect(frame).toContain(':greet:');
+    expect(frame).toContain(':bye:');
     stdin.write('j');
     await tick();
-    expect(lastFrame()).toContain('inputs: {name}');
+    expect(lastFrame()).toMatch(/Inputs\s+\{name\}/);
 
     stdin.write(ESC);
     await tick();
@@ -288,8 +288,8 @@ describe('PromptTemplateManagerMode', () => {
     await tick();
 
     const confirm = lastFrame() ?? '';
-    expect(confirm).toContain('will keep :greet:');
-    expect(confirm).toContain('workflow refs that will keep :greet:');
+    expect(confirm).toContain('Rename :greet: to :hi:?');
+    expect(confirm).toContain('3 workflow fields keep the old name');
     expect(confirm).toContain('review/s1.instructions');
     expect(confirm).toContain('ship/plan.title');
     expect(confirm).toContain('ship/plan.instructions');
@@ -315,11 +315,12 @@ describe('PromptTemplateManagerMode', () => {
     await tick();
     stdin.write('j');
     await tick();
-    expect(lastFrame()).toContain('used by (1):');
+    expect(lastFrame()).toMatch(/Used by\s+1 workflow field/);
     expect(lastFrame()).toContain('review/s1.instructions');
     stdin.write('d');
     await tick();
-    expect(lastFrame()).toContain('referenced by');
+    expect(lastFrame()).toContain('Delete :greet:?');
+    expect(lastFrame()).toContain('1 workflow field references it');
     expect(lastFrame()).toContain('review/s1.instructions');
     stdin.write('y');
     await tick();
@@ -340,7 +341,8 @@ describe('PromptTemplateManagerMode', () => {
     await tick();
     stdin.write('j');
     await tick();
-    expect(lastFrame()).toContain('workflow name');
+    // A name shared with a workflow is flagged on its list row rather than spelled out inline.
+    expect(lastFrame()).toMatch(/:review:\s+⚠/);
   });
 
   it('onDismiss fires when closed', async () => {
