@@ -667,7 +667,7 @@ function PromptTemplateManagerDialog({
   /** One `label   value` row, aligned across the detail pane like the workflow editor's stage panel. */
   const detailRow = (label: string, node: React.ReactNode): JSX.Element => (
     <Box key={label} flexDirection="row" flexShrink={0}>
-      <Text dimColor>{`${label.padEnd(DETAIL_LABEL_WIDTH)} `}</Text>
+      <Text color={theme.muted}>{`${label.padEnd(DETAIL_LABEL_WIDTH)} `}</Text>
       <Box flexGrow={1} minWidth={0}>
         {node}
       </Box>
@@ -685,7 +685,7 @@ function PromptTemplateManagerDialog({
               ? `Rename :${rename.oldName}: to :${rename.newName}:?`
               : `Delete :${remove?.name ?? ''}:?`}
           </Text>
-          <Text wrap="truncate-end">
+          <Text wrap="truncate-end" color={theme.text}>
             {rename !== null
               ? `${confirmingRefs.length} workflow field${confirmingRefs.length === 1 ? '' : 's'} keep the old name:`
               : confirmingRefs.length === 0
@@ -703,7 +703,7 @@ function PromptTemplateManagerDialog({
             </Text>
           ))}
           <Box flexGrow={1} />
-          <Text dimColor wrap="truncate-end">
+          <Text color={theme.muted} wrap="truncate-end">
             {rename !== null ? 'y  rename    n / esc  keep name' : 'y  delete    n / esc  keep it'}
           </Text>
         </>
@@ -723,7 +723,7 @@ function PromptTemplateManagerDialog({
           {/* Live, while typing: what this body will ask the caller for, and any ref that can't resolve. */}
           {detailRow(
             'Inputs',
-            <Text dimColor wrap="truncate-end">
+            <Text color={theme.muted} wrap="truncate-end">
               {placeholders.length === 0
                 ? 'none'
                 : placeholders.map((name) => `{${name}}`).join(', ')}
@@ -743,11 +743,13 @@ function PromptTemplateManagerDialog({
     if (bodyForPreview !== null && selectedName !== null) {
       return (
         <>
-          <Text wrap="truncate-end">{previewBodyFlat(bodyForPreview)}</Text>
+          <Text wrap="truncate-end" color={theme.text}>
+            {previewBodyFlat(bodyForPreview)}
+          </Text>
           <Box height={1} flexShrink={0} />
           {detailRow(
             'Inputs',
-            <Text dimColor wrap="truncate-end">
+            <Text color={theme.muted} wrap="truncate-end">
               {placeholders.length === 0
                 ? 'none'
                 : placeholders.map((name) => `{${name}}`).join(', ')}
@@ -756,7 +758,7 @@ function PromptTemplateManagerDialog({
           {detailRow(
             'Refs',
             unknownRefs.length === 0 ? (
-              <Text dimColor>all resolve</Text>
+              <Text color={theme.muted}>all resolve</Text>
             ) : (
               <Text color={theme.warning} wrap="truncate-end">
                 {`⚠ unknown ${unknownRefs.map((name) => `:${name}:`).join(', ')}`}
@@ -766,9 +768,9 @@ function PromptTemplateManagerDialog({
           {detailRow(
             'Used by',
             workflowRefs.length === 0 ? (
-              <Text dimColor>no workflow</Text>
+              <Text color={theme.muted}>no workflow</Text>
             ) : (
-              <Text wrap="truncate-end">
+              <Text wrap="truncate-end" color={theme.text}>
                 {`${workflowRefs.length} workflow field${workflowRefs.length === 1 ? '' : 's'}`}
               </Text>
             ),
@@ -776,7 +778,7 @@ function PromptTemplateManagerDialog({
           {workflowRefs.map((ref) => (
             <Text
               key={`${ref.workflowName}/${ref.stageId}.${ref.field}`}
-              dimColor
+              color={theme.muted}
               wrap="truncate-end"
             >
               {`${' '.repeat(DETAIL_LABEL_WIDTH + 1)}${formatWorkflowTemplateRef(ref)}`}
@@ -786,7 +788,7 @@ function PromptTemplateManagerDialog({
             ? null
             : detailRow(
                 'Expands',
-                <Text dimColor wrap="truncate-end">
+                <Text color={theme.muted} wrap="truncate-end">
                   {previewBodyFlat(expansion.text, 120)}
                 </Text>,
               )}
@@ -794,7 +796,7 @@ function PromptTemplateManagerDialog({
       );
     }
     return (
-      <Text dimColor>
+      <Text color={theme.muted}>
         {editingName ? 'Naming a new template…' : 'Pick a template to see its body.'}
       </Text>
     );
@@ -812,16 +814,16 @@ function PromptTemplateManagerDialog({
     <Box width={width} height={height} flexDirection="column">
       <Pane
         title="Prompt templates"
-        titleExtra={<Text dimColor>{`  ${s.templates.length} saved`}</Text>}
+        titleExtra={<Text color={theme.muted}>{`  ${s.templates.length} saved`}</Text>}
         focused
         paddingLeft={0}
         paddingRight={0}
         footerLeft={
           s.notice === null ? (
-            <Text dimColor>:name: expands inside stage prompts</Text>
+            <Text color={theme.muted}>:name: expands inside stage prompts</Text>
           ) : (
             <Text
-              {...(s.noticeTone === 'warning' ? { color: theme.warning } : { dimColor: true })}
+              {...(s.noticeTone === 'warning' ? { color: theme.warning } : { color: theme.muted })}
               wrap="truncate-end"
             >
               {`${s.noticeTone === 'warning' ? '⚠' : '✓'} ${s.notice}`}
@@ -840,9 +842,8 @@ function PromptTemplateManagerDialog({
                   return (
                     <Box key="create" flexShrink={0}>
                       <Text
-                        {...(creating || isFocused ? { color: theme.accent } : {})}
+                        color={creating || isFocused ? theme.accent : theme.muted}
                         bold={isFocused || creating}
-                        dimColor={!isFocused && !creating}
                       >
                         {`${creating ? '▌' : marker} ${creating ? ':' : '+ new template'}`}
                       </Text>
@@ -902,7 +903,7 @@ function PromptTemplateManagerDialog({
                 );
               })}
               {list.length === 1 ? (
-                <Text dimColor>{'  nothing yet — enter creates one'}</Text>
+                <Text color={theme.muted}>{'  nothing yet — enter creates one'}</Text>
               ) : null}
             </Pane>
           </Box>

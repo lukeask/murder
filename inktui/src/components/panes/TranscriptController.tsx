@@ -421,7 +421,7 @@ export const TranscriptController = memo(function TranscriptController({
         title={identity.label}
         titleExtra={
           <>
-            <Text dimColor>{` [${transcriptKindLabel(identity.kind)}]`}</Text>
+            <Text color={theme.muted}>{` [${transcriptKindLabel(identity.kind)}]`}</Text>
             {goto.pending !== null && <Text color={theme.warning}>{` g${goto.pending}`}</Text>}
             {terminalInputError !== null && (
               <Text color={theme.warning}>{` [read-only: ${terminalInputError}]`}</Text>
@@ -432,7 +432,7 @@ export const TranscriptController = memo(function TranscriptController({
               </Text>
             )}
             {terminalViewportLabel !== null && (
-              <Text dimColor>{` [${terminalViewportLabel}]`}</Text>
+              <Text color={theme.muted}>{` [${terminalViewportLabel}]`}</Text>
             )}
             {terminalGeometryWarning !== null && (
               <Text color={theme.warning}>{` [${terminalGeometryWarning}]`}</Text>

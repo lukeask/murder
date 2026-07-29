@@ -210,6 +210,12 @@ export interface BarWidgetContext {
   readonly workspaceColors?: {
     readonly activeBg: string;
     readonly activeFg: string;
+    readonly inactiveFg: string;
+  };
+  /** Muted label + body text for the usage bar widget (from {@link Theme}). */
+  readonly usageColors?: {
+    readonly muted: string;
+    readonly text: string;
   };
 }
 
@@ -471,7 +477,11 @@ export function selectBottomBarLineItems(
     }
     if (widgetId === 'usage') {
       const config = resolveBarWidgetConfig('usage', barWidgets);
-      const segment = selectUsageBarWidget(context.usage.rows, config.harnesses);
+      const segment = selectUsageBarWidget(
+        context.usage.rows,
+        config.harnesses,
+        context.usageColors,
+      );
       if (segment !== null) {
         const gap = items.length > 0 ? BOTTOM_BAR_ITEM_GAP : 0;
         reservedWidth += gap + segment.width;
@@ -517,7 +527,11 @@ export function selectTopBarWidgetSegments(
     }
     if (widgetId === 'usage') {
       const config = resolveBarWidgetConfig('usage', barWidgets);
-      const segment = selectUsageBarWidget(context.usage.rows, config.harnesses);
+      const segment = selectUsageBarWidget(
+        context.usage.rows,
+        config.harnesses,
+        context.usageColors,
+      );
       if (segment !== null) {
         segments.push({
           widgetId: 'usage',

@@ -345,7 +345,7 @@ function NewTicketDialog({
         New Ticket
       </Text>
       <Box marginTop={1} flexDirection="column">
-        <Text>Title:</Text>
+        <Text color={theme.text}>Title:</Text>
         <TextEditorDisplay
           state={title}
           width={TITLE_EDITOR_WIDTH}
@@ -355,7 +355,7 @@ function NewTicketDialog({
       </Box>
       {showPrompt ? (
         <Box marginTop={1} flexDirection="column">
-          <Text>Instructions:</Text>
+          <Text color={theme.text}>Instructions:</Text>
           <TextEditorDisplay
             state={prompt}
             width={PROMPT_EDITOR_WIDTH}
@@ -370,7 +370,7 @@ function NewTicketDialog({
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>
+        <Text color={theme.muted}>
           {showPrompt
             ? 'enter: start  shift+enter: newline  tab: field  esc: cancel  ctrl+u: clear'
             : 'enter: create esc: cancel ctrl+u: clear'}

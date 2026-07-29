@@ -457,28 +457,28 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
         {frontmatter !== null ? (
           <EditorHeader frontmatter={frontmatter} />
         ) : (
-          <Text dimColor>loading…</Text>
+          <Text color={theme.muted}>loading…</Text>
         )}
         {hasUnsavedChanges && <Text color={theme.warning}>{'[modified]'}</Text>}
       </Box>
 
       {/* Status / error bar */}
       {status === 'error' && error !== null && <Text color={theme.error}>{`error: ${error}`}</Text>}
-      {status === 'loading' && <Text dimColor>{'loading…'}</Text>}
-      {status === 'saving' && <Text dimColor>{'saving…'}</Text>}
+      {status === 'loading' && <Text color={theme.muted}>{'loading…'}</Text>}
+      {status === 'saving' && <Text color={theme.muted}>{'saving…'}</Text>}
 
       {/* Vim mode indicator */}
       <Box flexDirection="row" columnGap={2}>
         <Text color={ui.vimMode === 'insert' ? theme.success : theme.warning}>
           {ui.vimMode === 'insert' ? '-- INSERT --' : '-- NORMAL --'}
         </Text>
-        {ui.pendingD && <Text dimColor>{'d_'}</Text>}
+        {ui.pendingD && <Text color={theme.muted}>{'d_'}</Text>}
       </Box>
 
       {/* Body editor: lines with cursor highlight */}
       <Box flexDirection="column" marginTop={0} height={12}>
         {lines.length === 0 ? (
-          <Text dimColor>{'(empty body)'}</Text>
+          <Text color={theme.muted}>{'(empty body)'}</Text>
         ) : (
           lines.map((line, index) => {
             const selected = index === cursor;
@@ -493,7 +493,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
                     <Text
                       inverse={selected && ui.vimMode === 'normal'}
                       color={theme.success}
-                      dimColor={!selected}
+                      color={selected ? theme.text : theme.muted}
                     >
                       {line}
                     </Text>
@@ -501,7 +501,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
                     <Text inverse={selected && ui.vimMode === 'normal'}>{line}</Text>
                   )
                 ) : (
-                  <Text inverse={selected && ui.vimMode === 'normal'} dimColor={!selected}>
+                  <Text inverse={selected && ui.vimMode === 'normal'} color={theme.text}>
                     {line}
                   </Text>
                 )}
@@ -513,18 +513,18 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
 
       {/* Schedule input (separate from body — `ticket.schedule` RPC) */}
       <Box flexDirection="row" columnGap={1} marginTop={1}>
-        <Text dimColor>{'scheduled:'}</Text>
+        <Text color={theme.muted}>{'scheduled:'}</Text>
         <Text color={theme.heading}>{scheduleAt ?? '(none)'}</Text>
       </Box>
       <Box flexDirection="row" columnGap={1}>
-        <Text dimColor>{'reschedule:'}</Text>
+        <Text color={theme.muted}>{'reschedule:'}</Text>
         {ui.scheduleFocused ? (
           <Text color={theme.heading} inverse>
             {scheduleInput !== '' ? scheduleInput : ''}
             <Text color={theme.heading}>{'█'}</Text>
           </Text>
         ) : (
-          <Text dimColor>{scheduleInput !== '' ? scheduleInput : '—'}</Text>
+          <Text color={theme.muted}>{scheduleInput !== '' ? scheduleInput : '—'}</Text>
         )}
         {scheduleInput !== '' && (
           <Text color={scheduleValid ? theme.success : theme.error}>
@@ -535,7 +535,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
 
       {/* Hint bar */}
       <Box flexDirection="row" columnGap={2} marginTop={0}>
-        <Text dimColor>
+        <Text color={theme.muted}>
           {ui.vimMode === 'normal'
             ? 'j/k:nav  i:insert  x:toggle-checklist  dd:del-line  w:save  esc/q:discard  tab:schedule'
             : 'type text  esc:normal'}
@@ -550,12 +550,14 @@ function EditorHeader({ frontmatter }: { readonly frontmatter: TicketFrontmatter
   const theme = useTheme();
   return (
     <>
-      <Text bold>{frontmatter.title}</Text>
+      <Text bold color={theme.text}>
+        {frontmatter.title}
+      </Text>
       <Text color={theme.heading}>{`status:${frontmatter.status}`}</Text>
-      {frontmatter.harness !== null && <Text dimColor>{`harness:${frontmatter.harness}`}</Text>}
-      {frontmatter.model !== null && <Text dimColor>{`model:${frontmatter.model}`}</Text>}
-      {frontmatter.deps !== '' && <Text dimColor>{`deps:${frontmatter.deps}`}</Text>}
-      {frontmatter.worktree !== null && <Text dimColor>{`wt:${frontmatter.worktree}`}</Text>}
+      {frontmatter.harness !== null && <Text color={theme.muted}>{`harness:${frontmatter.harness}`}</Text>}
+      {frontmatter.model !== null && <Text color={theme.muted}>{`model:${frontmatter.model}`}</Text>}
+      {frontmatter.deps !== '' && <Text color={theme.muted}>{`deps:${frontmatter.deps}`}</Text>}
+      {frontmatter.worktree !== null && <Text color={theme.muted}>{`wt:${frontmatter.worktree}`}</Text>}
     </>
   );
 }

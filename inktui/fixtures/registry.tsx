@@ -394,8 +394,8 @@ export const paneFixtures: readonly PaneFixture[] = [
         maxColumns={1}
         availableWidth={width}
         availableHeight={height}
-        renderEntry={renderResourceEntry}
-        header={renderResourceHeader}
+        renderEntry={(row, ctx) => renderResourceEntry(row, ctx, getTheme())}
+        header={() => renderResourceHeader(getTheme())}
         rowKey={(row) => row.name}
       />
     ),

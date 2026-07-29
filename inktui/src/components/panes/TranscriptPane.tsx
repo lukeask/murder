@@ -184,7 +184,7 @@ function ChatHistoryLine({
         {line.kind === 'blank' ? (
           <Text> </Text>
         ) : verbatim ? (
-          <Text dimColor wrap="truncate">
+          <Text color={theme.muted} wrap="truncate">
             {text}
           </Text>
         ) : (
@@ -369,12 +369,12 @@ export const TranscriptPane = memo(function TranscriptPane({
       );
     }
     if (visibleLines.length === 0) {
-      return <Text dimColor>no history</Text>;
+      return <Text color={theme.muted}>no history</Text>;
     }
     if (displayMode === 'tiny') {
       const lastContent = [...visibleLines].reverse().find((line) => line.kind !== 'blank');
       if (lastContent === undefined) {
-        return <Text dimColor>no history</Text>;
+        return <Text color={theme.muted}>no history</Text>;
       }
       const columns = contentWidth(width);
       const color = chatLineColor(lastContent, theme);
@@ -420,8 +420,8 @@ export const TranscriptPane = memo(function TranscriptPane({
         paddingLeft={0}
         paddingRight={0}
         {...(scrollbarVisible ? { scrollbar: { height: innerH, thumb } } : {})}
-        footerLeft={showFooterChrome ? <Text dimColor>{footerLeftText}</Text> : undefined}
-        footerRight={showFooterChrome ? <Text dimColor>{footerRight}</Text> : undefined}
+        footerLeft={showFooterChrome ? <Text color={theme.muted}>{footerLeftText}</Text> : undefined}
+        footerRight={showFooterChrome ? <Text color={theme.muted}>{footerRight}</Text> : undefined}
       >
         <Box flexDirection="column" flexShrink={0} height={innerH} overflow="hidden" minWidth={0}>
           {body}

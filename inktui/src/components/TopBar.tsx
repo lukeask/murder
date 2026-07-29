@@ -101,8 +101,12 @@ export const TopBar = memo(function TopBar({
   const { columns } = useTerminalSize();
   const labels = useMemo(() => selectTopBar(visible), [visible]);
   const workspaceColors = useMemo(
-    () => ({ activeBg: theme.focus, activeFg: theme.gaugeLabelText }),
-    [theme.focus, theme.gaugeLabelText],
+    () => ({ activeBg: theme.focus, activeFg: theme.gaugeLabelText, inactiveFg: theme.muted }),
+    [theme.focus, theme.gaugeLabelText, theme.muted],
+  );
+  const usageColors = useMemo(
+    () => ({ muted: theme.muted, text: theme.text }),
+    [theme.muted, theme.text],
   );
   const rawSegments = useMemo(
     () =>
@@ -113,8 +117,9 @@ export const TopBar = memo(function TopBar({
         activeIndex,
         count,
         workspaceColors,
+        usageColors,
       }),
-    [barWidgets, usage, activeIndex, count, workspaceColors],
+    [barWidgets, usage, activeIndex, count, workspaceColors, usageColors],
   );
   const widgetAvail = useMemo(() => {
     const left = estimateTopBarLeftWidth(project, labels);
@@ -176,7 +181,7 @@ function ConnectionBadge({
 }): React.JSX.Element | null {
   switch (status) {
     case 'connecting':
-      return <Text dimColor>connecting…</Text>;
+      return <Text color={theme.muted}>connecting…</Text>;
     case 'reconnecting':
       return <Text color={theme.warning}>[reconnecting]</Text>;
     case 'version-mismatch':

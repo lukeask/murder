@@ -163,10 +163,10 @@ export const DocumentSurface = memo(function DocumentSurface({
       );
     }
     if (status === 'loading') {
-      return <Text dimColor>loading…</Text>;
+      return <Text color={theme.muted}>loading…</Text>;
     }
     if (status === 'ready' && rows.length === 0) {
-      return <Text dimColor>(empty document)</Text>;
+      return <Text color={theme.muted}>(empty document)</Text>;
     }
     if (status !== 'ready') {
       return null;
@@ -199,7 +199,7 @@ export const DocumentSurface = memo(function DocumentSurface({
         paddingRight={0}
         flexGrow={1}
         {...(showScrollbar ? { scrollbar: { height: windowRows, thumb } } : {})}
-        footerRight={<Text dimColor>{kind}</Text>}
+        footerRight={<Text color={theme.muted}>{kind}</Text>}
       >
         {body === null ? (
           <Box flexGrow={1} minHeight={0} />
@@ -218,11 +218,16 @@ function StyledRow({
 }: {
   readonly row: StyledDocumentRow | undefined;
 }): React.JSX.Element {
+  const theme = useTheme();
   if (displayRow === undefined || displayRow.runs.length === 0) {
-    return <Text wrap="truncate"> </Text>;
+    return (
+      <Text color={theme.text} wrap="truncate">
+        {' '}
+      </Text>
+    );
   }
   return (
-    <Text wrap="truncate">
+    <Text color={theme.text} wrap="truncate">
       {displayRow.runs.map((run, index) => (
         <Text
           // biome-ignore lint/suspicious/noArrayIndexKey: runs are immutable positional layout data.

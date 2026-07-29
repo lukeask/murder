@@ -296,7 +296,7 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const { prev, next } = selectAdjacentRecipientTargets(conversations, roster, favorites);
   const footerRight =
     prev !== null || next !== null ? (
-      <Text dimColor>
+      <Text color={theme.muted}>
         {prev !== null ? `${TRI_LEFT} ${prev.label}` : ''}
         {prev !== null && next !== null ? ' · ' : ''}
         {next !== null ? `${next.label} ${TRI_RIGHT}` : ''}

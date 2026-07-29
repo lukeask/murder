@@ -27,7 +27,7 @@ function errorToasts() {
  * real `_settings_payload`. Override fields per test via `{ ...wire(), ... }`. */
 function wire(over: Record<string, unknown> = {}): SettingsWire {
   return {
-    theme: 'everforest-dark',
+    theme: 'murder-classic',
     modifier: 'alt',
     key_overrides: {},
     pane_gap: 0,
@@ -389,7 +389,7 @@ describe('settings actions', () => {
     expect(s.status).toBe('error');
     expect(s.error).toBe('no settings');
     expect(s.modifier).toBe('alt');
-    expect(s.theme).toBe('everforest-dark');
+    expect(s.theme).toBe('murder-classic');
     expect(s.keyOverrides).toEqual({});
     dispose();
   });

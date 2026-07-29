@@ -188,7 +188,7 @@ function NewReportDialog({
       <Text bold color={theme.success}>
         New report
       </Text>
-      <Text dimColor>name</Text>
+      <Text color={theme.muted}>name</Text>
       <TextEditorDisplay
         state={name}
         width={NAME_EDITOR_WIDTH}

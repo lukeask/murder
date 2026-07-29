@@ -19,10 +19,18 @@
 
 import {
   classifyCrowHealth,
-  HEALTH_EDGE_COLOR,
+  crowHealthColor,
   isStuck,
   STUCK_AFTER_MS,
 } from '../../src/selectors/crowHealthSelectors.js';
+import { buildTheme } from '../../src/theme/buildTheme.js';
+import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '../../src/theme/palettes.js';
+
+const defaultPalette = getPalette(DEFAULT_THEME_ID);
+if (defaultPalette === undefined) {
+  throw new Error('missing default palette');
+}
+const theme = buildTheme(defaultPalette, getThemeMeta(DEFAULT_THEME_ID)?.variant ?? 'dark');
 
 describe('classifyCrowHealth — precedence', () => {
   it('GREEN for running / idle (healthy live crow)', () => {
@@ -104,11 +112,11 @@ describe('isStuck — 60s heartbeat rule', () => {
   });
 });
 
-describe('HEALTH_EDGE_COLOR — Ink colour-name map', () => {
-  it('maps each health state to a literal Ink colour (neutral → gray)', () => {
-    expect(HEALTH_EDGE_COLOR.red).toBe('red');
-    expect(HEALTH_EDGE_COLOR.yellow).toBe('yellow');
-    expect(HEALTH_EDGE_COLOR.green).toBe('green');
-    expect(HEALTH_EDGE_COLOR.neutral).toBe('gray');
+describe('crowHealthColor — theme role map', () => {
+  it('maps each health state to the matching semantic role', () => {
+    expect(crowHealthColor('red', theme)).toBe(theme.error);
+    expect(crowHealthColor('yellow', theme)).toBe(theme.warning);
+    expect(crowHealthColor('green', theme)).toBe(theme.success);
+    expect(crowHealthColor('neutral', theme)).toBe(theme.inactive);
   });
 });

@@ -295,6 +295,7 @@ describe('renderPaneLayoutPlan', () => {
     const root = renderPaneLayoutPlan(plan, {
       state: {} as AppStore,
       chatIdentities: new Map(),
+      theme,
     });
     const [left] = childrenOf(root);
 
@@ -332,6 +333,7 @@ describe('renderPaneAllocation — stage controller routing', () => {
     const root = renderPaneAllocation(allocation, {
       state: { docView: { open } } as AppStore,
       chatIdentities: new Map(),
+      theme,
     });
 
     expect(isValidElement(root)).toBe(true);
@@ -372,6 +374,7 @@ describe('renderPaneAllocation — stage controller routing', () => {
       {
         state: {} as AppStore,
         chatIdentities: new Map([['collab-1', identity]]),
+        theme,
       },
     );
 

@@ -11,16 +11,16 @@ function segmentText(
   return segment?.runs.map((run) => run.text).join('');
 }
 
-const COLORS = { activeBg: '#green', activeFg: '#ink' };
+const COLORS = { activeBg: '#green', activeFg: '#ink', inactiveFg: '#muted' };
 
 describe('selectWorkspaceBarWidget', () => {
   it('three workspaces → padded number tabs with the active index highlighted', () => {
     const segment = selectWorkspaceBarWidget(1, 3, COLORS);
     expect(segmentText(segment)).toBe(' 1  2  3 ');
     expect(segment?.runs).toEqual([
-      { text: ' 1 ', style: { dim: true } },
+      { text: ' 1 ', style: { fg: '#muted' } },
       { text: ' 2 ', style: { bold: true, bg: '#green', fg: '#ink' } },
-      { text: ' 3 ', style: { dim: true } },
+      { text: ' 3 ', style: { fg: '#muted' } },
     ]);
   });
 
@@ -39,7 +39,7 @@ describe('selectWorkspaceBarWidget', () => {
     const segment = selectWorkspaceBarWidget(0, 2, COLORS);
     expect(segmentText(segment)).toBe(' 1  2 ');
     expect(segment?.runs[0]?.style).toEqual({ bold: true, bg: '#green', fg: '#ink' });
-    expect(segment?.runs[1]?.style).toEqual({ dim: true });
+    expect(segment?.runs[1]?.style).toEqual({ fg: '#muted' });
   });
 
   it('emits a tab for every configured workspace up to nine', () => {

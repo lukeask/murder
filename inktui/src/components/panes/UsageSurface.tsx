@@ -479,12 +479,12 @@ function HeaderLine({
   const tag = steeringTag(steering);
   const fetchedSuffix =
     showFetchedAt && fetchedAt !== undefined && fetchedAt !== '' ? (
-      <Text dimColor>{`  ${fetchedAt}`}</Text>
+      <Text color={theme.muted}>{`  ${fetchedAt}`}</Text>
     ) : null;
   if (compact) {
     return (
       <Box flexShrink={0} width="100%">
-        <Text dimColor wrap="truncate">
+        <Text color={theme.muted} wrap="truncate">
           {`· ${harness}`}
           {tag ? <Text color={theme.accent}>{tag}</Text> : null}
           {fetchedSuffix}
@@ -494,7 +494,7 @@ function HeaderLine({
   }
   return (
     <Box flexShrink={0} width="100%" backgroundColor={theme.panelHeaderBg}>
-      <Text bold wrap="truncate">
+      <Text color={theme.heading} bold wrap="truncate">
         {` ${harness}`}
         {tag ? <Text color={theme.accent}>{tag}</Text> : null}
         {fetchedSuffix}
@@ -528,18 +528,18 @@ function GaugeLine({
   );
   return (
     <Box flexShrink={0} width="100%" backgroundColor={selected ? theme.panelSelectedBg : undefined}>
-      <Text wrap="truncate">
+      <Text wrap="truncate" color={theme.text}>
         {gutter}
         {gaugeLineLayout.showLabel ? (
           <>
-            <Text dimColor>
+            <Text color={theme.muted}>
               {gauge.windowLabel.slice(0, groupLayout.labelWidth).padEnd(groupLayout.labelWidth)}
             </Text>
             {padding.windowLabelGap > 0 ? ' ' : null}
           </>
         ) : null}
         {renderBar(gauge, theme, groupLayout.barWidth)}
-        {trail ? <Text dimColor>{trail}</Text> : null}
+        {trail ? <Text color={theme.muted}>{trail}</Text> : null}
       </Text>
     </Box>
   );
@@ -551,31 +551,33 @@ function EmptyUsageState({
   displayMode,
   gaugeLineLayout,
   padding,
+  theme,
 }: {
   readonly innerW: number;
   readonly innerH: number;
   readonly displayMode: UsageDisplayMode;
   readonly gaugeLineLayout: GaugeLayout;
   readonly padding: UsageLayoutOptions;
+  readonly theme: Theme;
 }): React.JSX.Element {
   const message = formatEmptyMessage(EMPTY_MESSAGE, innerW);
   const showKey = emptyShowKeyLine(displayMode, gaugeLineLayout, innerH);
 
   if (innerH < 1 || message.length === 0) {
-    return <Text dimColor> </Text>;
+    return <Text color={theme.muted}> </Text>;
   }
   if (showKey) {
     return (
       <Box flexDirection="column" flexShrink={0} height={innerH} overflow="hidden">
-        <UsageKeyLine layout={gaugeLineLayout} padding={padding} />
-        <Text dimColor wrap="truncate">
+        <UsageKeyLine layout={gaugeLineLayout} padding={padding} theme={theme} />
+        <Text color={theme.muted} wrap="truncate">
           {message}
         </Text>
       </Box>
     );
   }
   return (
-    <Text dimColor wrap="truncate">
+    <Text color={theme.muted} wrap="truncate">
       {message}
     </Text>
   );
@@ -584,9 +586,11 @@ function EmptyUsageState({
 function UsageKeyLine({
   layout: gaugeLineLayout,
   padding,
+  theme,
 }: {
   readonly layout: GaugeLayout;
   readonly padding: UsageLayoutOptions;
+  readonly theme: Theme;
 }): React.JSX.Element | null {
   if (!gaugeLineLayout.showReset) {
     return null;
@@ -594,7 +598,7 @@ function UsageKeyLine({
   const trail = formatKeyTrail(gaugeLineLayout.showWin, gaugeLineLayout.showReset, padding);
   return (
     <Box flexShrink={0} width="100%">
-      <Text dimColor wrap="truncate">
+      <Text color={theme.muted} wrap="truncate">
         {' '.repeat(padding.gutterWidth)}
         {gaugeLineLayout.keyWindowLabel
           ? `${gaugeLineLayout.keyWindowLabel.padEnd(gaugeLineLayout.keyLabelWidth)}${padding.windowLabelGap > 0 ? ' ' : ''}`
@@ -848,7 +852,7 @@ function UsageBody({
     return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
   }
   if (status === 'loading' && groups.length === 0) {
-    return <Text dimColor>loading…</Text>;
+    return <Text color={theme.muted}>loading…</Text>;
   }
   if (groups.length === 0) {
     return (
@@ -858,12 +862,13 @@ function UsageBody({
         displayMode={displayMode}
         gaugeLineLayout={gaugeLineLayout}
         padding={padding}
+        theme={theme}
       />
     );
   }
 
   if (innerH < 1) {
-    return <Text dimColor> </Text>;
+    return <Text color={theme.muted}> </Text>;
   }
 
   if (displayMode === 'tiny') {
@@ -876,6 +881,7 @@ function UsageBody({
           displayMode={displayMode}
           gaugeLineLayout={gaugeLineLayout}
           padding={padding}
+          theme={theme}
         />
       );
     }
@@ -948,7 +954,9 @@ function UsageBody({
 
   return (
     <Box flexDirection="column" flexShrink={0} height={innerH} overflow="hidden">
-      {showKeyLine ? <UsageKeyLine layout={gaugeLineLayout} padding={padding} /> : null}
+      {showKeyLine ? (
+        <UsageKeyLine layout={gaugeLineLayout} padding={padding} theme={theme} />
+      ) : null}
       {visibleGroups.map((group) => (
         <Box key={group.harness} flexDirection="column" flexShrink={0}>
           <HeaderLine

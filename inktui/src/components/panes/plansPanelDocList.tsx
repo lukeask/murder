@@ -4,6 +4,7 @@
  */
 
 import { Box, Text } from 'ink';
+import type { Theme } from '../../theme/buildTheme.js';
 import type { LedgerEntryContext } from '../Ledger.js';
 import type { ResourceRowFields } from '../ResourceRow.js';
 import { formatDocTreeName } from './docTreeIndent.js';
@@ -230,6 +231,7 @@ export function renderPlansEntry(
   ctx: LedgerEntryContext,
   innerWidth: number,
   layout: PlansRowLayout,
+  theme: Theme,
 ): React.ReactNode {
   const star = starPrefix(row.starred);
   if (layout.linesPerEntry === 1) {
@@ -249,9 +251,9 @@ export function renderPlansEntry(
     const nameMax = Math.max(0, innerWidth - STAR_COL_WIDTH - suffix.length);
     const name = formatDocTreeName(displayName(row), innerWidth, { maxLen: nameMax });
     return (
-      <Text wrap="truncate" dimColor={!ctx.selected && suffix.length > 0}>
+      <Text wrap="truncate" color={!ctx.selected && suffix.length > 0 ? theme.muted : theme.text}>
         {star}
-        <Text dimColor={false}>{name}</Text>
+        <Text color={theme.text}>{name}</Text>
         {suffix}
       </Text>
     );
@@ -262,23 +264,23 @@ export function renderPlansEntry(
   const line2 = formatSecondLine(row, layout, innerWidth);
   return (
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${star}${name}`}</Text>
-      <Text dimColor={!ctx.selected} wrap="truncate">
+      <Text color={theme.text} wrap="truncate">{`${star}${name}`}</Text>
+      <Text color={ctx.selected ? theme.text : theme.muted} wrap="truncate">
         {line2}
       </Text>
     </Box>
   );
 }
 
-export function renderPlansHeader(layout: PlansRowLayout): React.ReactNode {
+export function renderPlansHeader(layout: PlansRowLayout, theme: Theme): React.ReactNode {
   if (!layout.showHeader) {
     return null;
   }
   const secondLine = layout.headerCharCount ? '  size · updated' : '  updated';
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{`${starPrefix(false)}name`}</Text>
-      <Text dimColor>{secondLine}</Text>
+      <Text color={theme.muted}>{`${starPrefix(false)}name`}</Text>
+      <Text color={theme.muted}>{secondLine}</Text>
     </Box>
   );
 }

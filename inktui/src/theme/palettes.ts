@@ -7,8 +7,9 @@
  * so adding a scheme is "register a palette + metadata". Every palette MUST expose the same slot
  * keys (enforced by the {@link Palette} type) so {@link buildTheme} works over any of them.
  *
- * Runtime catalog is fed from `tui.load_themes` → {@link applyThemeRecords}; everforest dark/light
- * are seeded at module load so tests and pre-connect boot always have a paintable default.
+ * Runtime catalog is fed from `tui.load_themes` → {@link applyThemeRecords}; murder-classic plus
+ * everforest dark/light are seeded at module load so tests and pre-connect boot always have a
+ * paintable default.
  */
 
 /** Everforest Dark — hard background variant (canonical upstream hex). */
@@ -68,6 +69,14 @@ export const everforestLightHard = {
 /** The shape every palette satisfies. Typed off the dark palette since both share identical keys. */
 export type Palette = { readonly [K in keyof typeof everforestDarkHard]: string };
 
+/**
+ * Murder Classic — exact byte-identical snapshot of the TUI colors at the theme-role migration
+ * (same hex as {@link everforestDarkHard}). Frozen so the classic look stays put if everforest
+ * upstream/hard values ever drift; also the default scheme so migration can map every paint site
+ * onto semantic roles without changing what users already see.
+ */
+export const murderClassic: Palette = { ...everforestDarkHard };
+
 export type ThemeVariant = 'light' | 'dark';
 
 export interface ThemeMeta {
@@ -89,7 +98,7 @@ export interface ThemeRecord {
 export type ThemeId = string;
 
 /** Default scheme when nothing is persisted or the id is unknown. */
-export const DEFAULT_THEME_ID: ThemeId = 'everforest-dark';
+export const DEFAULT_THEME_ID: ThemeId = 'murder-classic';
 
 const registry = new Map<string, { readonly palette: Palette; readonly meta: ThemeMeta }>();
 
@@ -97,6 +106,11 @@ function registerOne(id: string, palette: Palette, meta: ThemeMeta): void {
   registry.set(id, { palette, meta });
 }
 
+registerOne('murder-classic', murderClassic, {
+  name: 'Murder Classic',
+  variant: 'dark',
+  builtin: true,
+});
 registerOne('everforest-dark', everforestDarkHard, {
   name: 'Everforest Dark',
   variant: 'dark',
@@ -122,6 +136,11 @@ export function applyThemeRecords(records: readonly ThemeRecord[]): void {
 /** Drop a theme id from the registry (tests only — production removes via reload). */
 export function clearThemeRegistryForTests(): void {
   registry.clear();
+  registerOne('murder-classic', murderClassic, {
+    name: 'Murder Classic',
+    variant: 'dark',
+    builtin: true,
+  });
   registerOne('everforest-dark', everforestDarkHard, {
     name: 'Everforest Dark',
     variant: 'dark',

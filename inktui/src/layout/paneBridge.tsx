@@ -22,6 +22,7 @@ import {
 } from '../selectors/conversationsSelectors.js';
 import { selectUsageView } from '../selectors/usageSelectors.js';
 import type { AppStore } from '../store/store.js';
+import type { Theme } from '../theme/buildTheme.js';
 import type {
   PaneAllocation,
   PaneId,
@@ -65,6 +66,7 @@ export interface BuildPaneRequestsInput {
 export interface RenderPaneAllocationContext {
   readonly state: AppStore;
   readonly chatIdentities: ReadonlyMap<string, AgentIdentity>;
+  readonly theme: Theme;
 }
 
 function panelRegion(panelId: PanelId): PaneRegion {
@@ -350,7 +352,7 @@ export function renderPaneLayoutPlan(
   if (plan.allocations.length === 0) {
     return (
       <Box flexGrow={1} alignItems="center" justifyContent="center">
-        <Text dimColor>no panes admitted</Text>
+        <Text color={context.theme.muted}>no panes admitted</Text>
       </Box>
     );
   }

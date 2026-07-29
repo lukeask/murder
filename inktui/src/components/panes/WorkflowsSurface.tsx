@@ -259,15 +259,15 @@ function renderPriorityWorkflowEntry(
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
       <Box flexDirection="row" width={innerW} justifyContent="space-between" flexShrink={0}>
         <Box flexDirection="row" flexShrink={1} minWidth={0}>
-          <Text>{marker}</Text>
-          <Text bold={ctx.selected}>{row.idCell}</Text>
+          <Text color={theme.text}>{marker}</Text>
+          <Text color={theme.text} bold={ctx.selected}>{row.idCell}</Text>
           {extras.showDeps ? (
             <Text
               color={row.depsSatisfied ? theme.success : theme.warning}
             >{` ${row.depsCell}`}</Text>
           ) : null}
-          {extras.showHarness ? <Text>{` ${row.harnessCell}`}</Text> : null}
-          {extras.showPlan ? <Text dimColor>{` ${row.planCell}`}</Text> : null}
+          {extras.showHarness ? <Text color={theme.text}>{` ${row.harnessCell}`}</Text> : null}
+          {extras.showPlan ? <Text color={theme.muted}>{` ${row.planCell}`}</Text> : null}
         </Box>
         <Box flexShrink={0}>
           <Text color={statusColor}>{row.statusCell}</Text>
@@ -275,13 +275,13 @@ function renderPriorityWorkflowEntry(
       </Box>
       <Box flexDirection="row" width={innerW} justifyContent="space-between" flexShrink={0}>
         <Box marginLeft={TITLE_INDENT} flexShrink={1} minWidth={0}>
-          <Text dimColor={!ctx.selected} wrap="truncate">
+          <Text color={ctx.selected ? theme.text : theme.muted} wrap="truncate">
             {titleText}
           </Text>
         </Box>
         {rowLayout.showUpdated ? (
           <Box flexShrink={0}>
-            <Text dimColor={!ctx.selected}>{row.lastUpdateCell}</Text>
+            <Text color={ctx.selected ? theme.text : theme.muted}>{row.lastUpdateCell}</Text>
           </Box>
         ) : null}
       </Box>
@@ -299,77 +299,77 @@ function renderWorkflowEntry(
   const cols = ctx.columns;
   return (
     <Box flexDirection="row" flexGrow={1} flexShrink={0}>
-      <Text>{marker} </Text>
+      <Text color={theme.text}>{marker} </Text>
       <Box flexDirection="column" marginRight={2}>
-        <Text bold={ctx.selected}>{row.idCell}</Text>
-        <Text dimColor={!ctx.selected} wrap="truncate">
+        <Text color={theme.text} bold={ctx.selected}>{row.idCell}</Text>
+        <Text color={ctx.selected ? theme.text : theme.muted} wrap="truncate">
           {formatDocTreeName(row.titleCell, innerW)}
         </Text>
       </Box>
       {cols >= 2 ? (
         <Box flexDirection="column" marginRight={2}>
           <Text color={statusToneColor(row.statusTone, theme)}>{row.statusCell}</Text>
-          <Text dimColor={!ctx.selected}>{row.lastUpdateCell}</Text>
+          <Text color={ctx.selected ? theme.text : theme.muted}>{row.lastUpdateCell}</Text>
         </Box>
       ) : null}
       {cols >= 3 ? (
         <Box flexDirection="column" marginRight={2}>
           <Text color={row.depsSatisfied ? theme.success : theme.warning}>{row.depsCell}</Text>
-          <Text dimColor={!ctx.selected}>{row.scheduleCell}</Text>
+          <Text color={ctx.selected ? theme.text : theme.muted}>{row.scheduleCell}</Text>
         </Box>
       ) : null}
       {cols >= 4 ? (
         <Box flexDirection="column" marginRight={2}>
-          <Text bold={ctx.selected}>{row.harnessCell}</Text>
-          <Text dimColor={!ctx.selected}>{row.modelCell}</Text>
+          <Text color={theme.text} bold={ctx.selected}>{row.harnessCell}</Text>
+          <Text color={ctx.selected ? theme.text : theme.muted}>{row.modelCell}</Text>
         </Box>
       ) : null}
       {cols >= 5 ? (
         <Box flexDirection="column">
-          <Text dimColor={!ctx.selected}>{row.planCell}</Text>
-          <Text dimColor={!ctx.selected}>{row.worktreeCell}</Text>
+          <Text color={ctx.selected ? theme.text : theme.muted}>{row.planCell}</Text>
+          <Text color={ctx.selected ? theme.text : theme.muted}>{row.worktreeCell}</Text>
         </Box>
       ) : null}
     </Box>
   );
 }
 
-function renderWorkflowsHeader(columns: number, mode: WorkflowsDisplayMode): React.ReactNode {
+function renderWorkflowsHeader(columns: number, mode: WorkflowsDisplayMode, theme: Theme): React.ReactNode {
   if (!showColumnHeader(mode)) {
     return null;
   }
   const compact = mode === 'compact' || mode === 'minimal';
   return (
     <Box flexDirection="row" flexShrink={0}>
-      <Text dimColor>{'  '}</Text>
+      <Text color={theme.muted}>{'  '}</Text>
       <Box marginRight={2}>
-        <Text dimColor>{compact ? 'id/title' : 'id / title'}</Text>
+        <Text color={theme.muted}>{compact ? 'id/title' : 'id / title'}</Text>
       </Box>
       {columns >= 2 ? (
         <Box marginRight={2}>
-          <Text dimColor>{compact ? 'status' : 'status / updated'}</Text>
+          <Text color={theme.muted}>{compact ? 'status' : 'status / updated'}</Text>
         </Box>
       ) : null}
       {columns >= 3 ? (
         <Box marginRight={2}>
-          <Text dimColor>{compact ? 'deps' : 'deps / schedule'}</Text>
+          <Text color={theme.muted}>{compact ? 'deps' : 'deps / schedule'}</Text>
         </Box>
       ) : null}
       {columns >= 4 ? (
         <Box marginRight={2}>
-          <Text dimColor>{compact ? 'harness' : 'harness / model'}</Text>
+          <Text color={theme.muted}>{compact ? 'harness' : 'harness / model'}</Text>
         </Box>
       ) : null}
       {columns >= 5 ? (
         <Box>
-          <Text dimColor>{compact ? 'plan' : 'plan / worktree'}</Text>
+          <Text color={theme.muted}>{compact ? 'plan' : 'plan / worktree'}</Text>
         </Box>
       ) : null}
     </Box>
   );
 }
 
-function renderPriorityHeader(mode: WorkflowsDisplayMode, innerW: number): React.ReactNode {
+function renderPriorityHeader(mode: WorkflowsDisplayMode, innerW: number, theme: Theme): React.ReactNode {
   if (!showColumnHeader(mode) || innerW < 18) {
     return null;
   }
@@ -377,8 +377,8 @@ function renderPriorityHeader(mode: WorkflowsDisplayMode, innerW: number): React
   const compact = mode === 'compact' || mode === 'minimal';
   return (
     <Box flexDirection="row" width={innerW} justifyContent="space-between" flexShrink={0}>
-      <Text dimColor>{compact ? '  id/title' : '  id / title'}</Text>
-      <Text dimColor>{rowLayout.showUpdated ? 'status / updated' : 'status'}</Text>
+      <Text color={theme.muted}>{compact ? '  id/title' : '  id / title'}</Text>
+      <Text color={theme.muted}>{rowLayout.showUpdated ? 'status / updated' : 'status'}</Text>
     </Box>
   );
 }
@@ -399,7 +399,7 @@ function renderTinyEntry(
 
   return (
     <Box flexDirection="row" width={innerW} justifyContent="space-between" flexShrink={0}>
-      <Text wrap="truncate">
+      <Text color={theme.text} wrap="truncate">
         {marker}
         <Text bold={ctx.selected}>{idText}</Text>
         {titleText.length > 0 ? ` ${titleText}` : ''}
@@ -476,14 +476,14 @@ function WorkflowsList({
   }
   if (status === 'loading' && rows.length === 0 && !showCreate) {
     return (
-      <Text dimColor wrap="truncate">
+      <Text color={theme.muted} wrap="truncate">
         loading…
       </Text>
     );
   }
   if (rows.length === 0 && !showCreate) {
     return (
-      <Text dimColor wrap="truncate">
+      <Text color={theme.muted} wrap="truncate">
         no workflows
       </Text>
     );
@@ -495,7 +495,7 @@ function WorkflowsList({
   const ledger =
     rows.length === 0 ? (
       status === 'loading' ? (
-        <Text dimColor wrap="truncate">
+        <Text color={theme.muted} wrap="truncate">
           loading…
         </Text>
       ) : null
@@ -523,7 +523,7 @@ function WorkflowsList({
         maxColumns={maxColumns}
         availableWidth={innerW}
         availableHeight={ledgerHeight}
-        header={(columns) => renderWorkflowsHeader(columns, displayMode)}
+        header={(columns) => renderWorkflowsHeader(columns, displayMode, theme)}
         rowKey={(row) => row.id}
         renderEntry={(row, ctx) => renderWorkflowEntry(row, ctx, theme, innerW)}
         {...rowClickProps}
@@ -538,7 +538,7 @@ function WorkflowsList({
         maxColumns={1}
         availableWidth={innerW}
         availableHeight={ledgerHeight}
-        header={() => renderPriorityHeader(displayMode, innerW)}
+        header={() => renderPriorityHeader(displayMode, innerW, theme)}
         rowKey={(row) => row.id}
         renderEntry={(row, ctx) =>
           renderPriorityWorkflowEntry(row, ctx, innerW, displayMode, theme)

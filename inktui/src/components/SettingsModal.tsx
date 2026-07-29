@@ -2136,7 +2136,7 @@ function SettingsDialog({
         >
           {view.before > 0 && (
             <Box flexShrink={0}>
-              <Text dimColor>{`  ↑ ${view.before} more`}</Text>
+              <Text color={theme.muted}>{`  ↑ ${view.before} more`}</Text>
             </Box>
           )}
           {view.rows.map(({ row, index }) => (
@@ -2152,7 +2152,7 @@ function SettingsDialog({
           ))}
           {view.after > 0 && (
             <Box flexShrink={0}>
-              <Text dimColor>{`  ↓ ${view.after} more`}</Text>
+              <Text color={theme.muted}>{`  ↓ ${view.after} more`}</Text>
             </Box>
           )}
         </Box>
@@ -2162,7 +2162,7 @@ function SettingsDialog({
               <>
                 {detailView.before > 0 && (
                   <Box flexShrink={0}>
-                    <Text dimColor>{`  ↑ ${detailView.before} more`}</Text>
+                    <Text color={theme.muted}>{`  ↑ ${detailView.before} more`}</Text>
                   </Box>
                 )}
                 {detailView.rows.map(({ row, index }) => (
@@ -2178,7 +2178,7 @@ function SettingsDialog({
                 ))}
                 {detailView.after > 0 && (
                   <Box flexShrink={0}>
-                    <Text dimColor>{`  ↓ ${detailView.after} more`}</Text>
+                    <Text color={theme.muted}>{`  ↓ ${detailView.after} more`}</Text>
                   </Box>
                 )}
               </>
@@ -2413,7 +2413,7 @@ function SettingsDialog({
         )}
 
         <Box marginTop={1} flexShrink={0}>
-          <Text dimColor>
+          <Text color={theme.muted}>
             j/k: navigate · h/l: categories/settings · enter: select · esc: close
           </Text>
         </Box>

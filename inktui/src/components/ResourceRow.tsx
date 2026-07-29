@@ -15,6 +15,7 @@
  */
 
 import { Box, Text } from 'ink';
+import type { Theme } from '../theme/buildTheme.js';
 import type { LedgerEntryContext } from './Ledger.js';
 
 /**
@@ -51,6 +52,7 @@ const CURSOR_GLYPH = ' ';
 export function renderResourceEntry(
   row: ResourceRowFields,
   ctx: LedgerEntryContext,
+  theme: Theme,
 ): React.ReactNode {
   // Cursor marker occupies a column ONLY when the glyph feature is enabled. Disabled (the default —
   // CURSOR_GLYPH is a space), it contributes NOTHING, so a top-level row's name sits flush at the
@@ -67,8 +69,8 @@ export function renderResourceEntry(
     // full row width behind both lines; `flexShrink={0}` so Yoga doesn't sample/drop a line. Line 1 is
     // `[marker][star]name` with marker/star present only when active; line 2 + header sit flush left.
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${marker}${star}${row.name}`}</Text>
-      <Text dimColor={!ctx.selected} wrap="truncate">
+      <Text color={theme.text} wrap="truncate">{`${marker}${star}${row.name}`}</Text>
+      <Text color={ctx.selected ? theme.text : theme.muted} wrap="truncate">
         {`${row.charCount} · ${row.updatedAt}`}
       </Text>
     </Box>
@@ -82,11 +84,11 @@ export function renderResourceEntry(
  * Shared by all three doc panels via the `header` prop. (`columns` is unused — these panels are
  * single-column; a multi-column panel would key each field per `columns`.)
  */
-export function renderResourceHeader(): React.ReactNode {
+export function renderResourceHeader(theme: Theme): React.ReactNode {
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>{'name'}</Text>
-      <Text dimColor>{'size · updated'}</Text>
+      <Text color={theme.muted}>{'name'}</Text>
+      <Text color={theme.muted}>{'size · updated'}</Text>
     </Box>
   );
 }

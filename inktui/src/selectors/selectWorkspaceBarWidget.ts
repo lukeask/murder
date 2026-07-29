@@ -15,6 +15,8 @@ export interface WorkspaceBarColors {
   readonly activeBg: string;
   /** Foreground on the active fill — typically {@link Theme.gaugeLabelText}. */
   readonly activeFg: string;
+  /** Foreground for inactive tabs — typically {@link Theme.muted}. */
+  readonly inactiveFg: string;
 }
 
 /** One renderable workspace bar segment (styled runs + display width). */
@@ -51,7 +53,10 @@ export function selectWorkspaceBarWidget(
             : { bold: true, bg: colors.activeBg, fg: colors.activeFg },
       });
     } else {
-      runs.push({ text, style: { dim: true } });
+      runs.push({
+        text,
+        style: colors === undefined ? { dim: true } : { fg: colors.inactiveFg },
+      });
     }
   }
   return { runs, width: count * TAB_WIDTH };

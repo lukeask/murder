@@ -110,6 +110,7 @@ function renderReportsHeader(
   mode: ReportsDisplayMode,
   innerW: number,
   innerH: number,
+  theme: Theme,
 ): React.ReactNode {
   if (!showColumnHeader(mode, innerH)) {
     return null;
@@ -119,8 +120,8 @@ function renderReportsHeader(
     if (line2.length <= innerW) {
       return (
         <Box flexDirection="column" flexShrink={0}>
-          <Text dimColor>{'name'}</Text>
-          <Text dimColor>{line2}</Text>
+          <Text color={theme.muted}>{'name'}</Text>
+          <Text color={theme.muted}>{line2}</Text>
         </Box>
       );
     }
@@ -128,7 +129,7 @@ function renderReportsHeader(
   if (innerW >= 4) {
     return (
       <Box flexShrink={0}>
-        <Text dimColor>{'name'}</Text>
+        <Text color={theme.muted}>{'name'}</Text>
       </Box>
     );
   }
@@ -256,6 +257,7 @@ function renderReportsEntry(
   ctx: LedgerEntryContext,
   mode: ReportsDisplayMode,
   innerW: number,
+  theme: Theme,
 ): React.ReactNode {
   const star = row.starred ? '★' : ' ';
   const lines = linesPerEntryForMode(mode);
@@ -263,7 +265,7 @@ function renderReportsEntry(
     const title = formatItemTitle(displayName(row), nameBudget(innerW), innerW);
     return (
       <Box flexGrow={1} flexShrink={0}>
-        <Text wrap="truncate">{`${star} ${title}`}</Text>
+        <Text color={theme.text} wrap="truncate">{`${star} ${title}`}</Text>
       </Box>
     );
   }
@@ -271,8 +273,8 @@ function renderReportsEntry(
   const meta = formatMetaLine(row, mode, innerW);
   return (
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${star} ${title}`}</Text>
-      <Text dimColor={!ctx.selected} wrap="truncate">
+      <Text color={theme.text} wrap="truncate">{`${star} ${title}`}</Text>
+      <Text color={ctx.selected ? theme.text : theme.muted} wrap="truncate">
         {meta.length > 0 ? meta : ' '}
       </Text>
     </Box>
@@ -338,11 +340,11 @@ export const ReportsSurface = memo(function ReportsSurface({
       return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
     }
     if (status === 'loading' && dataCount === 0 && !showCreate) {
-      return <Text dimColor>loading…</Text>;
+      return <Text color={theme.muted}>loading…</Text>;
     }
     if (dataCount === 0 && !showCreate) {
       return (
-        <Text dimColor wrap="truncate">
+        <Text color={theme.muted} wrap="truncate">
           {formatEmptyMessage(emptyText, innerW)}
         </Text>
       );
@@ -365,7 +367,7 @@ export const ReportsSurface = memo(function ReportsSurface({
           />
         ) : null}
         {status === 'loading' && dataCount === 0 ? (
-          <Text dimColor>loading…</Text>
+          <Text color={theme.muted}>loading…</Text>
         ) : dataCount === 0 ? null : (
           <Ledger
             rows={rows}
@@ -376,9 +378,9 @@ export const ReportsSurface = memo(function ReportsSurface({
             maxColumns={1}
             availableWidth={innerW}
             availableHeight={ledgerHeight}
-            renderEntry={(row, ctx) => renderReportsEntry(row, ctx, displayMode, innerW)}
+            renderEntry={(row, ctx) => renderReportsEntry(row, ctx, displayMode, innerW, theme)}
             {...(hasHeader
-              ? { header: () => renderReportsHeader(displayMode, innerW, innerH) }
+              ? { header: () => renderReportsHeader(displayMode, innerW, innerH, theme) }
               : {})}
             rowKey={(row) => row.name}
             {...(onRowClick !== undefined

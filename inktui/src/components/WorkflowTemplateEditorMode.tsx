@@ -1285,7 +1285,7 @@ function WorkflowTemplateEditorSurface({
           />
         }
         footerRight={
-          <Text dimColor>
+          <Text color={theme.muted}>
             {[
               `${displayed.stages.length} stage${displayed.stages.length === 1 ? '' : 's'}`,
               session.draft.mode,
@@ -1355,7 +1355,7 @@ function WorkflowStatusChip({
     );
   }
   if (dirty) return <Text color={theme.warning}>{'  ● unsaved'}</Text>;
-  return <Text dimColor>{'  ✓ saved'}</Text>;
+  return <Text color={theme.muted}>{'  ✓ saved'}</Text>;
 }
 
 /** The frame's footer message: a blocking problem if there is one, else the issue tally. */
@@ -1380,7 +1380,7 @@ function WorkflowFooterMessage({
     return (
       <Text>
         {errorCount > 0 ? <Text color={theme.error}>{`✖ ${errorCount} blocking`}</Text> : null}
-        {errorCount > 0 && warningCount > 0 ? <Text dimColor>{' · '}</Text> : null}
+        {errorCount > 0 && warningCount > 0 ? <Text color={theme.muted}>{' · '}</Text> : null}
         {warningCount > 0 ? (
           <Text
             color={theme.warning}
@@ -1389,7 +1389,7 @@ function WorkflowFooterMessage({
       </Text>
     );
   }
-  return <Text dimColor>ready to run</Text>;
+  return <Text color={theme.muted}>ready to run</Text>;
 }
 
 /**
@@ -1429,7 +1429,7 @@ function ContextLine({
       return (
         <Text wrap="truncate-end">
           <Text color={tone} bold>{`${connect.legality.toUpperCase()} dependency`}</Text>
-          <Text dimColor>{`  ${targetId ?? '?'} ${TRI_LEFT} ${candidateId ?? '?'}`}</Text>
+          <Text color={theme.muted}>{`  ${targetId ?? '?'} ${TRI_LEFT} ${candidateId ?? '?'}`}</Text>
         </Text>
       );
     }
@@ -1442,7 +1442,7 @@ function ContextLine({
       return (
         <Text wrap="truncate-end">
           <Text color={theme.heading}>{`${label} `}</Text>
-          <Text dimColor>{`${TRI_RIGHT} `}</Text>
+          <Text color={theme.muted}>{`${TRI_RIGHT} `}</Text>
           {options.length > 0 ? (
             <OptionChooser options={options} value={interaction.value} />
           ) : (
@@ -1455,8 +1455,8 @@ function ContextLine({
       return (
         <Text wrap="truncate-end">
           <Text color={theme.heading}>editing stage </Text>
-          <Text>{selectedId ?? '(blank)'}</Text>
-          <Text dimColor>{`  ${interaction.field}`}</Text>
+          <Text color={theme.text}>{selectedId ?? '(blank)'}</Text>
+          <Text color={theme.muted}>{`  ${interaction.field}`}</Text>
         </Text>
       );
     }
@@ -1467,14 +1467,14 @@ function ContextLine({
       return (
         <Text wrap="truncate-end">
           <Text color={theme.heading}>search </Text>
-          <Text dimColor>{`${TRI_RIGHT} `}</Text>
-          <Text>{`${interaction.query}█`}</Text>
-          <Text dimColor>{`  ${matches} match${matches === 1 ? '' : 'es'}`}</Text>
+          <Text color={theme.muted}>{`${TRI_RIGHT} `}</Text>
+          <Text color={theme.text}>{`${interaction.query}█`}</Text>
+          <Text color={theme.muted}>{`  ${matches} match${matches === 1 ? '' : 'es'}`}</Text>
         </Text>
       );
     }
     return (
-      <Text wrap="truncate-end" dimColor>
+      <Text color={theme.muted} wrap="truncate-end">
         {total === 0
           ? 'empty workflow — a adds the first stage'
           : `stage ${order ?? 0}/${total}  ${selectedId || '(blank id)'}`}
@@ -1500,14 +1500,14 @@ function OptionChooser({
   const index = Math.max(0, options.indexOf(value));
   return (
     <Text>
-      <Text dimColor>{`↑↓ ${index + 1}/${options.length}  `}</Text>
+      <Text color={theme.muted}>{`↑↓ ${index + 1}/${options.length}  `}</Text>
       {options.map((option, position) => (
         <Text key={option}>
-          {position === 0 ? '' : <Text dimColor>{' · '}</Text>}
+          {position === 0 ? '' : <Text color={theme.muted}>{' · '}</Text>}
           {option === value ? (
             <Text color={theme.accent} bold>{`[${option}]`}</Text>
           ) : (
-            <Text dimColor>{option}</Text>
+            <Text color={theme.muted}>{option}</Text>
           )}
         </Text>
       ))}
@@ -1611,7 +1611,7 @@ function EditorSheet({
         {sheet.title}
       </Text>
       {sheet.lines.map((line) => (
-        <Text key={line} wrap="truncate-end">
+        <Text key={line} color={theme.text} wrap="truncate-end">
           {line}
         </Text>
       ))}
@@ -1620,10 +1620,12 @@ function EditorSheet({
         const value = sheet.fields?.values[field.name] ?? '';
         return (
           <Text key={field.name} wrap="truncate-end">
-            <Text {...(active ? { color: theme.accent } : {})} bold={active}>
+            <Text color={active ? theme.accent : theme.muted} bold={active}>
               {`${active ? TRI_RIGHT : ' '} ${field.label.padEnd(labelWidth)}  `}
             </Text>
-            <Text {...(value === '' && field.required ? { color: theme.warning } : {})}>
+            <Text
+              color={value === '' && field.required ? theme.warning : theme.text}
+            >
               {active
                 ? `${value.replaceAll('\n', '↵')}█`
                 : value === ''
@@ -1635,7 +1637,7 @@ function EditorSheet({
           </Text>
         );
       })}
-      <Text dimColor wrap="truncate-end">
+      <Text color={theme.muted} wrap="truncate-end">
         {sheet.choices}
       </Text>
     </Box>
@@ -1838,7 +1840,7 @@ function WorkflowOutline({
     <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden" paddingX={1}>
       {layout.ranks.map((rank, rankIndex) => (
         <Box key={`layer:${rank.join('\0')}`} flexDirection="column" flexShrink={0}>
-          <Text dimColor wrap="truncate-end">
+          <Text color={theme.muted} wrap="truncate-end">
             {`layer ${rankIndex + 1} ${'─'.repeat(Math.max(0, width - 9 - String(rankIndex + 1).length))}`}
           </Text>
           {rank.map((key) => {
@@ -1854,15 +1856,15 @@ function WorkflowOutline({
               stage.dependsOn.length === 0 ? 'root' : `${TRI_LEFT} ${stage.dependsOn.join(', ')}`;
             return (
               <Box key={stage.key} flexDirection="row" flexShrink={0}>
-                <Text {...(active ? { color: theme.accent } : {})} bold={active}>
+                <Text color={active ? theme.accent : theme.muted} bold={active}>
                   {`${active ? '▌' : ' '}${String(index).padStart(2)} ${(stage.id || '(blank)').padEnd(idWidth)} `}
                 </Text>
                 <Box flexGrow={1} minWidth={0}>
-                  <Text dimColor={!active} wrap="truncate-end">
+                  <Text color={active ? theme.text : theme.muted} wrap="truncate-end">
                     {stage.title || '(untitled)'}
                   </Text>
                 </Box>
-                <Text dimColor>{` ${deps} `}</Text>
+                <Text color={theme.muted}>{` ${deps} `}</Text>
                 <Text
                   color={failing ? theme.error : stageStatusColor(status, theme)}
                 >{`${failing ? '✖' : stageStatusGlyph(status) || ' '}`}</Text>
@@ -1872,7 +1874,7 @@ function WorkflowOutline({
         </Box>
       ))}
       <Box flexGrow={1} />
-      <Text dimColor>graph view returns at 72 columns</Text>
+      <Text color={theme.muted}>graph view returns at 72 columns</Text>
     </Box>
   );
 }
@@ -1929,10 +1931,10 @@ function WorkflowInspector({
     return (
       <Box key={field ?? label} flexDirection="column" flexShrink={0}>
         <Box flexDirection="row" flexShrink={0}>
-          <Text {...(active ? { color: theme.accent } : {})} bold={active} dimColor={!active}>
+          <Text color={active ? theme.accent : theme.muted} bold={active}>
             {`${active ? TRI_RIGHT : ' '} ${label.padEnd(INSPECTOR_LABEL_WIDTH)} `}
           </Text>
-          <Text {...valueColor} dimColor={options.muted === true && options.missing !== true}>
+          <Text color={options.missing === true ? theme.warning : options.muted === true ? theme.muted : theme.text}>
             {lines[0] ?? ''}
           </Text>
         </Box>
@@ -1954,11 +1956,11 @@ function WorkflowInspector({
     <Box width={width} flexDirection="column" flexShrink={0} minHeight={0} overflow="hidden">
       <Pane
         title={stageMenu === undefined ? 'Stage' : 'Stage editor'}
-        titleExtra={order === undefined ? null : <Text dimColor>{` ${order}/${total}`}</Text>}
+        titleExtra={order === undefined ? null : <Text color={theme.muted}>{` ${order}/${total}`}</Text>}
         focused={stageMenu !== undefined}
       >
         {stage === null || stage === undefined ? (
-          <Text dimColor>No stage selected — press a to add one.</Text>
+          <Text color={theme.muted}>No stage selected — press a to add one.</Text>
         ) : (
           <>
             {row('title', 'Name', stage.title || '(untitled)')}
@@ -1980,14 +1982,14 @@ function WorkflowInspector({
             })}
             {row(null, 'Feeds', dependents.join(', ') || '—', { muted: dependents.length === 0 })}
             <Box flexDirection="row" flexShrink={0}>
-              <Text dimColor>{`  ${'Runtime'.padEnd(INSPECTOR_LABEL_WIDTH)} `}</Text>
+              <Text color={theme.muted}>{`  ${'Runtime'.padEnd(INSPECTOR_LABEL_WIDTH)} `}</Text>
               <Text color={stageStatusColor(status, theme)}>
                 {`${stageStatusGlyph(status)}${status === undefined ? '' : ' '}${stageStatusLabel(status)}`}
               </Text>
             </Box>
             {run !== null ? (
               <Box flexDirection="row" flexShrink={0}>
-                <Text dimColor>{`  ${'Run'.padEnd(INSPECTOR_LABEL_WIDTH)} `}</Text>
+                <Text color={theme.muted}>{`  ${'Run'.padEnd(INSPECTOR_LABEL_WIDTH)} `}</Text>
                 <Text color={stageStatusColor(run.status, theme)} wrap="truncate-end">
                   {`${run.status} · rev ${run.revision}`}
                 </Text>

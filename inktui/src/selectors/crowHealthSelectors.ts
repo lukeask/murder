@@ -1,3 +1,5 @@
+import type { Theme } from '../theme/buildTheme.js';
+
 /**
  * Crow-health classification — the Ink port of the legacy Textual crow_health classifier.
  *
@@ -105,14 +107,18 @@ export function isStuck({
   return nowMs - lastSeenMs > STUCK_AFTER_MS;
 }
 
-/**
- * Health → Ink colour-name map for a crow's left-edge marker. Textual's `$crow-health-*` theme vars
- * have no Ink equivalent, so this maps to literal Ink colour names. `neutral` reads as `gray` (no
- * positive signal), matching the dimmed Textual neutral edge.
- */
-export const HEALTH_EDGE_COLOR: Readonly<Record<Health, string>> = {
-  red: 'red',
-  yellow: 'yellow',
-  green: 'green',
-  neutral: 'gray',
-};
+/** Health → semantic theme role for a crow's left-edge marker. */
+export function crowHealthColor(health: Health, theme: Theme): string {
+  switch (health) {
+    case 'red':
+      return theme.error;
+    case 'yellow':
+      return theme.warning;
+    case 'green':
+      return theme.success;
+    case 'neutral':
+      return theme.inactive;
+    default:
+      return health satisfies never;
+  }
+}

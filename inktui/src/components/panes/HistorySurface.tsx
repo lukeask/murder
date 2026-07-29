@@ -223,7 +223,7 @@ function showColumnHeader(mode: HistoryDisplayMode): boolean {
   return mode === 'full' || mode === 'compact' || mode === 'minimal';
 }
 
-function renderHistoryHeader(displayMode: HistoryDisplayMode): React.ReactNode {
+function renderHistoryHeader(displayMode: HistoryDisplayMode, theme: Theme): React.ReactNode {
   const linesPerEntry = linesPerEntryForMode(displayMode);
   if (!showColumnHeader(displayMode)) {
     return null;
@@ -231,7 +231,7 @@ function renderHistoryHeader(displayMode: HistoryDisplayMode): React.ReactNode {
   if (displayMode === 'minimal') {
     return (
       <Box flexDirection="column" flexShrink={0}>
-        <Text dimColor>{' age  target'}</Text>
+        <Text color={theme.muted}>{' age  target'}</Text>
         {HEADER_FILLER_KEYS.slice(0, Math.max(0, linesPerEntry - 1)).map((key) => (
           <Text key={key}> </Text>
         ))}
@@ -240,10 +240,10 @@ function renderHistoryHeader(displayMode: HistoryDisplayMode): React.ReactNode {
   }
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Text dimColor>
+      <Text color={theme.muted}>
         {displayMode === 'compact' ? ' age    target' : '  age      target  status'}
       </Text>
-      {intentionLinesForMode(displayMode) > 0 ? <Text dimColor>intention</Text> : null}
+      {intentionLinesForMode(displayMode) > 0 ? <Text color={theme.muted}>intention</Text> : null}
       {HEADER_FILLER_KEYS.slice(0, Math.max(0, linesPerEntry - 2)).map((key) => (
         <Text key={key}> </Text>
       ))}
@@ -280,14 +280,14 @@ function renderHistoryEntry(
   const metaLine =
     displayMode === 'minimal' || displayMode === 'tiny' ? (
       <Box width={innerW} overflow="hidden">
-        <Text wrap="truncate">
+        <Text wrap="truncate" color={theme.text}>
           {`${prefix}${target} `}
           <Text color={statusColor(row.status, theme)}>{tag}</Text>
         </Text>
       </Box>
     ) : (
       <Box flexDirection="row" width={innerW} overflow="hidden">
-        <Text wrap="truncate">{`${prefix}${target} `}</Text>
+        <Text wrap="truncate" color={theme.text}>{`${prefix}${target} `}</Text>
         <Text color={statusColor(row.status, theme)}>{tag}</Text>
       </Box>
     );
@@ -301,7 +301,7 @@ function renderHistoryEntry(
       {metaLine}
       {intentionLines > 0 ? (
         <Box flexDirection="column" flexShrink={0} height={intentionLines} overflow="hidden">
-          <Text dimColor={!ctx.selected} wrap="wrap">
+          <Text color={ctx.selected ? theme.text : theme.muted} wrap="wrap">
             {row.text}
           </Text>
         </Box>
@@ -346,11 +346,11 @@ function HistoryList({
     return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
   }
   if (status === 'loading' && visibleRows.length === 0) {
-    return <Text dimColor>loading…</Text>;
+    return <Text color={theme.muted}>loading…</Text>;
   }
   if (visibleRows.length === 0) {
     return (
-      <Text dimColor wrap="truncate">
+      <Text color={theme.muted} wrap="truncate">
         {emptyStateText(mode, innerW)}
       </Text>
     );
@@ -366,7 +366,7 @@ function HistoryList({
       maxColumns={1}
       availableWidth={innerW}
       availableHeight={innerH}
-      {...(hasHeader ? { header: () => renderHistoryHeader(displayMode) } : {})}
+      {...(hasHeader ? { header: () => renderHistoryHeader(displayMode, theme) } : {})}
       rowKey={(row) => row.id}
       renderEntry={(row, ctx) => renderHistoryEntry(row, ctx, displayMode, innerW, theme)}
     />

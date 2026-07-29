@@ -69,3 +69,38 @@ exports[`buildTheme — per-palette role mapping > snapshots the semantic theme 
   "warning": "#dfa000",
 }
 `;
+
+exports[`buildTheme — per-palette role mapping > snapshots the semantic theme for murder-classic 1`] = `
+{
+  "accent": "#7fbbb3",
+  "active": "#a7c080",
+  "borderBlurred": "#7a8478",
+  "brand": "#e67e80",
+  "canvasBg": "#272e33",
+  "error": "#e67e80",
+  "focus": "#a7c080",
+  "gaugeHigh": "#e67e80",
+  "gaugeLabelText": "#272e33",
+  "gaugeNormal": "#a7c080",
+  "gaugeTrack": "#859289",
+  "heading": "#83c092",
+  "inactive": "#7a8478",
+  "laneColors": [
+    "#83c092",
+    "#d699b6",
+    "#e69875",
+    "#dbbc7f",
+    "#7fbbb3",
+    "#e67e80",
+  ],
+  "muted": "#859289",
+  "panelHeaderBg": "#272e33",
+  "panelSelectedBg": "#374145",
+  "rowAltBg": "#2e383c",
+  "rowSelectedBg": "#3c4841",
+  "success": "#a7c080",
+  "text": "#d3c6aa",
+  "titleBlurred": "#d3c6aa",
+  "warning": "#dbbc7f",
+}
+`;

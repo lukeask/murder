@@ -8,6 +8,12 @@ import type { UsageRow } from '../store/usage/usageSlice.js';
 import { harnessShortLabel } from './harnessDisplay.js';
 import { formatMinutes } from './usageSelectors.js';
 
+/** Colors for the usage label and harness/timer body. */
+export interface UsageBarColors {
+  readonly muted: string;
+  readonly text: string;
+}
+
 /** One renderable usage bar segment (styled runs + display width). */
 export interface UsageBarWidgetSegment {
   readonly runs: readonly TextRun[];
@@ -56,6 +62,7 @@ function minResetByHarness(
 export function selectUsageBarWidget(
   rows: readonly UsageRow[],
   selectedHarnesses: readonly string[] | undefined,
+  colors?: UsageBarColors,
 ): UsageBarWidgetSegment | null {
   const byHarness = minResetByHarness(rows, usageBarHarnessFilter(selectedHarnesses));
   if (byHarness.size === 0) {
@@ -78,8 +85,11 @@ export function selectUsageBarWidget(
   const time = formatMinutes(bestMinutes);
   const body = `${label} ${time}`;
   const runs: TextRun[] = [
-    { text: 'usage ', style: { dim: true } },
-    { text: body, style: {} },
+    {
+      text: 'usage ',
+      style: colors === undefined ? { dim: true } : { fg: colors.muted },
+    },
+    { text: body, style: colors === undefined ? {} : { fg: colors.text } },
   ];
   const width = runs.reduce((sum, run) => sum + run.text.length, 0);
   return { runs, width };

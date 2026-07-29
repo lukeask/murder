@@ -8,8 +8,9 @@
  * current value via {@link getTheme} or — preferred — take the theme as a parameter so the call site
  * stays decoupled from this store.
  *
- * Default scheme is {@link DEFAULT_THEME_ID} (everforest-dark), so the UI looks identical to before
- * runtime switching existed.
+ * Default scheme is {@link DEFAULT_THEME_ID} (murder-classic), so the UI looks identical to the
+ * pre-migration everforest-dark hard palette (murder-classic is a byte-identical freeze of those
+ * colors).
  *
  * ## Source of truth: persisted scheme = `settingsSlice.theme`; this store = what's painted now
  * `settings.theme` (see `../store/settings/settingsSlice.ts`) is the source of truth for the

@@ -107,8 +107,10 @@ function ConfirmDialog({
       paddingX={2}
       paddingY={1}
     >
-      <Text bold>{message}</Text>
-      <Text dimColor>{`y: ${confirmLabel}   n/esc: ${dismissLabel}`}</Text>
+      <Text bold color={theme.text}>
+        {message}
+      </Text>
+      <Text color={theme.muted}>{`y: ${confirmLabel}   n/esc: ${dismissLabel}`}</Text>
     </Box>
   );
 }

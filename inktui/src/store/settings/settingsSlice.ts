@@ -172,7 +172,7 @@ export interface SettingsState {
 /** The initial, pre-load slice value — the defaults that mirror the Python `TuiUserConfig` defaults
  * (so the UI looks identical before `settings.get` resolves and after, when nothing is persisted). */
 export const initialSettingsState: SettingsState = {
-  theme: 'everforest-dark',
+  theme: 'murder-classic',
   modifier: 'alt',
   keyOverrides: {},
   paneGap: 0,

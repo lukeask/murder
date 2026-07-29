@@ -39,4 +39,11 @@ describe('buildTheme — per-palette role mapping', () => {
     expect(light.panelSelectedBg).not.toBe(paper);
     expect(light.rowSelectedBg).not.toBe(paper);
   });
+
+  it('murder-classic is byte-identical to everforest-dark (classic freeze)', () => {
+    const classic = getPalette('murder-classic')!;
+    const everforest = getPalette('everforest-dark')!;
+    expect(classic).toEqual(everforest);
+    expect(buildTheme(classic, 'dark')).toEqual(buildTheme(everforest, 'dark'));
+  });
 });

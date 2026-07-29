@@ -1,5 +1,6 @@
 import { Text } from 'ink';
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useTheme } from '../theme/themeStore.js';
 import { TerminalGridView } from './TerminalGridView.js';
 import { TerminalSurfaceStore } from './TerminalSurfaceStore.js';
 import type {
@@ -45,6 +46,7 @@ export const TerminalSurfaceController = memo(function TerminalSurfaceController
   viewportCommand,
   onViewportChange,
 }: TerminalSurfaceControllerProps): React.JSX.Element {
+  const theme = useTheme();
   const storeRef = useRef<TerminalSurfaceStore | null>(null);
   if (storeRef.current === null) storeRef.current = new TerminalSurfaceStore();
   const store = storeRef.current;
@@ -147,7 +149,7 @@ export const TerminalSurfaceController = memo(function TerminalSurfaceController
   useEffect(() => {
     onViewportChange?.(metrics);
   }, [metrics, onViewportChange]);
-  if (update === null) return <Text dimColor>{waitingText}</Text>;
+  if (update === null) return <Text color={theme.muted}>{waitingText}</Text>;
   return (
     <TerminalGridView
       snapshot={snapshot}

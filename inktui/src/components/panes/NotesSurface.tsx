@@ -221,6 +221,7 @@ function renderNotesHeader(
   mode: NotesDisplayMode,
   innerW: number,
   innerH: number,
+  theme: Theme,
 ): React.ReactNode {
   if (!showColumnHeader(mode, innerH)) {
     return null;
@@ -230,8 +231,8 @@ function renderNotesHeader(
     if (line2.length <= innerW) {
       return (
         <Box flexDirection="column" flexShrink={0}>
-          <Text dimColor>name</Text>
-          <Text dimColor>{line2}</Text>
+          <Text color={theme.muted}>name</Text>
+          <Text color={theme.muted}>{line2}</Text>
         </Box>
       );
     }
@@ -239,7 +240,7 @@ function renderNotesHeader(
   if (innerW >= 4) {
     return (
       <Box flexShrink={0}>
-        <Text dimColor>name</Text>
+        <Text color={theme.muted}>name</Text>
       </Box>
     );
   }
@@ -251,6 +252,7 @@ function renderNotesEntry(
   ctx: LedgerEntryContext,
   mode: NotesDisplayMode,
   innerW: number,
+  theme: Theme,
 ): React.ReactNode {
   const star = starCell(row.starred);
   const nameBudget = Math.max(0, innerW - STAR_COL_WIDTH);
@@ -259,7 +261,7 @@ function renderNotesEntry(
   if (mode === 'minimal' || mode === 'tiny') {
     return (
       <Box flexGrow={1} flexShrink={0}>
-        <Text wrap="truncate">{`${star}${name}`}</Text>
+        <Text color={theme.text} wrap="truncate">{`${star}${name}`}</Text>
       </Box>
     );
   }
@@ -267,8 +269,8 @@ function renderNotesEntry(
   const meta = formatMetaLine(row.charCount, row.updatedAt, innerW);
   return (
     <Box flexDirection="column" flexGrow={1} flexShrink={0}>
-      <Text wrap="truncate">{`${star}${name}`}</Text>
-      <Text dimColor={!ctx.selected} wrap="truncate">
+      <Text color={theme.text} wrap="truncate">{`${star}${name}`}</Text>
+      <Text color={ctx.selected ? theme.text : theme.muted} wrap="truncate">
         {meta.text}
       </Text>
     </Box>
@@ -352,14 +354,14 @@ export const NotesSurface = memo(function NotesSurface({
     }
     if (status === 'loading' && dataCount === 0 && !showCreate) {
       return (
-        <Text dimColor wrap="truncate">
+        <Text color={theme.muted} wrap="truncate">
           {formatEmptyMessage('loading…', innerW)}
         </Text>
       );
     }
     if (dataCount === 0 && !showCreate) {
       return (
-        <Text dimColor wrap="truncate">
+        <Text color={theme.muted} wrap="truncate">
           {formatEmptyMessage(emptyText, innerW)}
         </Text>
       );
@@ -382,7 +384,7 @@ export const NotesSurface = memo(function NotesSurface({
       return (
         <Box flexDirection="column" overflow="hidden">
           {createRowEl}
-          <Text wrap="truncate">{row === undefined ? emptyText : `${star}${name}`}</Text>
+          <Text color={theme.text} wrap="truncate">{row === undefined ? emptyText : `${star}${name}`}</Text>
         </Box>
       );
     }
@@ -390,7 +392,7 @@ export const NotesSurface = memo(function NotesSurface({
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {createRowEl}
         {status === 'loading' && dataCount === 0 ? (
-          <Text dimColor wrap="truncate">
+          <Text color={theme.muted} wrap="truncate">
             {formatEmptyMessage('loading…', innerW)}
           </Text>
         ) : dataCount === 0 ? null : (
@@ -403,8 +405,8 @@ export const NotesSurface = memo(function NotesSurface({
             maxColumns={1}
             availableWidth={innerW}
             availableHeight={ledgerHeight}
-            renderEntry={(row, ctx) => renderNotesEntry(row, ctx, mode, innerW)}
-            {...(hasHeader ? { header: () => renderNotesHeader(mode, innerW, innerH) } : {})}
+            renderEntry={(row, ctx) => renderNotesEntry(row, ctx, mode, innerW, theme)}
+            {...(hasHeader ? { header: () => renderNotesHeader(mode, innerW, innerH, theme) } : {})}
             rowKey={(row) => row.name}
             {...(onRowClick !== undefined
               ? {

@@ -87,8 +87,12 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
   const avail = Math.max(1, columns - BAR_PADDING);
   const now = Date.now();
   const workspaceColors = useMemo(
-    () => ({ activeBg: theme.focus, activeFg: theme.gaugeLabelText }),
-    [theme.focus, theme.gaugeLabelText],
+    () => ({ activeBg: theme.focus, activeFg: theme.gaugeLabelText, inactiveFg: theme.muted }),
+    [theme.focus, theme.gaugeLabelText, theme.muted],
+  );
+  const usageColors = useMemo(
+    () => ({ muted: theme.muted, text: theme.text }),
+    [theme.muted, theme.text],
   );
   const items = useMemo(
     () =>
@@ -97,7 +101,7 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
         focused,
         focusedKeymap,
         bindings,
-        { usage, keyUsage, now, activeIndex, count, workspaceColors },
+        { usage, keyUsage, now, activeIndex, count, workspaceColors, usageColors },
         avail,
         modeHints,
       ),
@@ -114,6 +118,7 @@ export function useBottomBarLines(): BottomBarLineItem[][] {
       activeIndex,
       count,
       workspaceColors,
+      usageColors,
     ],
   );
   const hasToasts = useStore(toastStore, (s) => s.toasts.length > 0);
@@ -211,7 +216,7 @@ function putHint(
     return x + hint.key.length;
   }
   putText(surface, x, 0, hint.key, { fg: theme.warning, dim: true });
-  putText(surface, x + hint.key.length, 0, ` ${hint.description}`, { dim: true });
+  putText(surface, x + hint.key.length, 0, ` ${hint.description}`, { fg: theme.muted });
   return x + bottomBarItemWidth({ kind: 'hint', hint });
 }
 

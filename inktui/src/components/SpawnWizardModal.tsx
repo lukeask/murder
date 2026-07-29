@@ -1036,7 +1036,7 @@ function SpawnWizardDialog({
         <Text bold color={theme.warning}>
           Spawn Rogue
         </Text>
-        <Text dimColor>
+        <Text color={theme.muted}>
           {progress.index}/{progress.total}
         </Text>
       </Box>
@@ -1146,7 +1146,7 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
       <Box flexDirection="row" columnGap={4}>
         {/* Left column — enabled harnesses. */}
         <Box flexDirection="column">
-          <Text>Select harness:</Text>
+          <Text color={theme.text}>Select harness:</Text>
           <Box marginTop={1} flexDirection="column">
             {leftColumnRows.map((row) => {
               if (row.label === null) {
@@ -1164,7 +1164,7 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
                       {row.label}
                     </Text>
                   ) : (
-                    <Text dimColor>
+                    <Text color={theme.muted}>
                       {'  '}
                       {row.label}
                     </Text>
@@ -1176,7 +1176,7 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
         </Box>
         {/* Right column — saved favorites + a create row. */}
         <Box flexDirection="column">
-          <Text>Select favorite:</Text>
+          <Text color={theme.text}>Select favorite:</Text>
           <Box marginTop={1} flexDirection="column">
             {rightColumnRows.map((row) => {
               if (row.label === null) {
@@ -1194,7 +1194,7 @@ function HarnessGrid({ state: s }: { readonly state: SpawnWizardState }): JSX.El
                       {row.label}
                     </Text>
                   ) : (
-                    <Text dimColor>
+                    <Text color={theme.muted}>
                       {'  '}
                       {row.label}
                     </Text>
@@ -1244,7 +1244,7 @@ function SelectList({
   const theme = useTheme();
   return (
     <Box marginTop={1} flexDirection="column">
-      <Text>{header}</Text>
+      <Text color={theme.text}>{header}</Text>
       <Box marginTop={1} flexDirection="column">
         {items.map((item, i) => (
           <Box key={item}>
@@ -1254,7 +1254,7 @@ function SelectList({
                 {item}
               </Text>
             ) : (
-              <Text dimColor>
+              <Text color={theme.muted}>
                 {'  '}
                 {item}
               </Text>
@@ -1279,7 +1279,7 @@ function TextStep({
   const theme = useTheme();
   return (
     <Box marginTop={1} flexDirection="column">
-      <Text>{label}</Text>
+      <Text color={theme.text}>{label}</Text>
       <Box marginTop={1}>
         <TextEditorDisplay
           state={editor}
@@ -1304,7 +1304,7 @@ function ContextStep({
   const theme = useTheme();
   return (
     <Box marginTop={1} flexDirection="column">
-      <Text>
+      <Text color={theme.text}>
         Include{' '}
         <Text color={theme.heading} bold>
           {spawnContext.title}

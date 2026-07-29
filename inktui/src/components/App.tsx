@@ -808,8 +808,8 @@ function Shell({
   }, [focus, paneLayoutPlan.allocations]);
   const chatIdentities = useMemo(() => createChatIdentityMap(appState), [appState]);
   const paneRenderContext = useMemo(
-    () => ({ state: appState, chatIdentities }),
-    [appState, chatIdentities],
+    () => ({ state: appState, chatIdentities, theme }),
+    [appState, chatIdentities, theme],
   );
 
   // F9: the image-draft store owns the `image.upload` bus call + the FIFO upload queue (it writes a
@@ -1415,9 +1415,9 @@ function Shell({
         justifyContent="center"
         alignItems="center"
       >
-        <Text>terminal too small</Text>
+        <Text color={theme.text}>terminal too small</Text>
         <Text
-          dimColor
+          color={theme.muted}
         >{`need ≥ ${MIN_TERMINAL_COLUMNS}×${MIN_TERMINAL_ROWS}, have ${columns}×${rows}`}</Text>
       </Box>
     );

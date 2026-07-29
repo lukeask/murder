@@ -9,7 +9,12 @@
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
 import { claimMouseClick } from '../../input/mouseClick.js';
-import { HEALTH_EDGE_COLOR, type Health } from '../../selectors/crowHealthSelectors.js';
+import {
+  classifyCrowHealth,
+  crowHealthColor,
+  type Health,
+  isStuck,
+} from '../../selectors/crowHealthSelectors.js';
 import type { Theme } from '../../theme/buildTheme.js';
 import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
@@ -200,8 +205,8 @@ function buildFlatRows(
   return { ledgerRows, crowToFlat };
 }
 
-function indicatorColor(health: Health): string {
-  return HEALTH_EDGE_COLOR[health];
+function indicatorColor(health: Health, theme: Theme): string {
+  return crowHealthColor(health, theme);
 }
 
 function CrowRowShell({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
@@ -215,10 +220,10 @@ function CrowRowShell({ children }: { readonly children: React.ReactNode }): Rea
   );
 }
 
-function renderCrowsLegend(): React.ReactNode {
+function renderCrowsLegend(theme: Theme): React.ReactNode {
   return (
     <CrowRowShell>
-      <Text dimColor>{'  ○ ready  ● working'}</Text>
+      <Text color={theme.muted}>{'  ○ ready  ● working'}</Text>
     </CrowRowShell>
   );
 }
@@ -229,25 +234,26 @@ function renderCrowEntry(
   displayMode: CrowsDisplayMode,
   showMeta: boolean,
   innerW: number,
+  theme: Theme,
 ): React.ReactNode {
   if (ledgerRow.kind === 'header') {
     return (
       <CrowRowShell>
-        <Text dimColor bold wrap="truncate">
+        <Text color={theme.muted} bold wrap="truncate">
           {ledgerRow.label}
         </Text>
       </CrowRowShell>
     );
   }
   const { row } = ledgerRow;
-  const color = indicatorColor(row.health);
+  const color = indicatorColor(row.health, theme);
   const title = formatItemTitle(row.name, nameBudget(innerW, !showMeta));
   const star = row.starred ? '★' : ' ';
   const circle = row.working ? '●' : '○';
   if (!showMeta) {
     return (
       <CrowRowShell>
-        <Text wrap="truncate">
+        <Text color={theme.text} wrap="truncate">
           {star} <Text color={color}>{circle}</Text>
           {` ${title}`}
         </Text>
@@ -258,12 +264,12 @@ function renderCrowEntry(
     <CrowRowShell>
       <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0}>
         <Box flexDirection="column" width={1} flexShrink={0}>
-          <Text>{star}</Text>
+          <Text color={theme.text}>{star}</Text>
           <Text color={color}>{circle}</Text>
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text wrap="truncate">{` ${title}`}</Text>
-          <Text dimColor={!ctx.selected} wrap="truncate">
+          <Text color={theme.text} wrap="truncate">{` ${title}`}</Text>
+          <Text color={ctx.selected ? theme.text : theme.muted} wrap="truncate">
             {` ${formatMetaLine(row.meta, displayMode)}`}
           </Text>
         </Box>
@@ -331,10 +337,10 @@ function CrowsList({
     return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
   }
   if (status === 'loading' && rows.length === 0) {
-    return <Text dimColor>loading...</Text>;
+    return <Text color={theme.muted}>loading...</Text>;
   }
   if (rows.length === 0) {
-    return <Text dimColor>no crows</Text>;
+    return <Text color={theme.muted}>no crows</Text>;
   }
 
   return (
@@ -347,12 +353,12 @@ function CrowsList({
       maxColumns={1}
       availableWidth={innerW}
       availableHeight={innerH}
-      {...(hasLegend ? { header: renderCrowsLegend } : {})}
+      {...(hasLegend ? { header: () => renderCrowsLegend(theme) } : {})}
       rowKey={(ledgerRow) =>
         ledgerRow.kind === 'header' ? `h:${ledgerRow.group}` : `c:${ledgerRow.row.id}`
       }
       renderEntry={(ledgerRow, ctx) =>
-        renderCrowEntry(ledgerRow, ctx, displayMode, showMeta, innerW)
+        renderCrowEntry(ledgerRow, ctx, displayMode, showMeta, innerW, theme)
       }
       {...(onRowClick !== undefined
         ? {

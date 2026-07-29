@@ -124,10 +124,10 @@ export const PlansSurface = memo(function PlansSurface({
       return <Text color={theme.error}>{`error: ${error ?? 'unknown'} (r to retry)`}</Text>;
     }
     if (status === 'loading' && dataCount === 0 && !showCreate) {
-      return <Text dimColor>loading…</Text>;
+      return <Text color={theme.muted}>loading…</Text>;
     }
     if (dataCount === 0 && !showCreate) {
-      return <Text dimColor>{emptyText}</Text>;
+      return <Text color={theme.muted}>{emptyText}</Text>;
     }
     return (
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
@@ -147,7 +147,7 @@ export const PlansSurface = memo(function PlansSurface({
           />
         ) : null}
         {status === 'loading' && dataCount === 0 ? (
-          <Text dimColor>loading…</Text>
+          <Text color={theme.muted}>loading…</Text>
         ) : dataCount === 0 ? null : (
           <Ledger
             rows={rows}
@@ -158,8 +158,8 @@ export const PlansSurface = memo(function PlansSurface({
             maxColumns={1}
             availableWidth={innerW}
             availableHeight={ledgerHeight}
-            renderEntry={(row, ctx) => renderPlansEntry(row, ctx, innerW, rowLayout)}
-            {...(hasHeader ? { header: () => renderPlansHeader(rowLayout) } : {})}
+            renderEntry={(row, ctx) => renderPlansEntry(row, ctx, innerW, rowLayout, theme)}
+            {...(hasHeader ? { header: () => renderPlansHeader(rowLayout, theme) } : {})}
             rowKey={(row) => row.name}
             {...(onRowClick !== undefined
               ? {

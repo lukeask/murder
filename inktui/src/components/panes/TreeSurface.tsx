@@ -633,7 +633,7 @@ function LaneRow({
 
   return (
     <Box flexShrink={0}>
-      <Text wrap="truncate">
+      <Text wrap="truncate" color={theme.text}>
         <Text color={lane.color}>{rail}</Text>
         {' '.repeat(TAG_GAP)}
         <Text
@@ -676,12 +676,12 @@ function InfoSection({
           <Text color={theme.heading}>{meta.branch}</Text>
         </Box>
         <Box flexShrink={0}>
-          <Text dimColor>{meta.age}</Text>
+          <Text color={theme.muted}>{meta.age}</Text>
         </Box>
         {messageLines.map((line, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: fixture info lines are position-keyed slices.
           <Box key={`info-msg-${index}`} flexShrink={0}>
-            <Text dimColor wrap="wrap">
+            <Text color={theme.muted} wrap="wrap">
               {line.length > 0 ? line : ' '}
             </Text>
           </Box>
@@ -696,15 +696,15 @@ function InfoSection({
         <Box flexShrink={0}>
           <Text wrap="wrap">
             <Text color={theme.text}>{meta.hash}</Text>
-            <Text dimColor>{' · '}</Text>
+            <Text color={theme.muted}>{' · '}</Text>
             <Text color={theme.heading}>{meta.branch}</Text>
-            <Text dimColor>{` · ${meta.age}`}</Text>
+            <Text color={theme.muted}>{` · ${meta.age}`}</Text>
           </Text>
         </Box>
         {messageLines.map((line, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: fixture info lines are position-keyed slices.
           <Box key={`info-msg-${index}`} flexShrink={0}>
-            <Text dimColor wrap="wrap">
+            <Text color={theme.muted} wrap="wrap">
               {line.length > 0 ? line : ' '}
             </Text>
           </Box>
@@ -719,8 +719,7 @@ function InfoSection({
         // biome-ignore lint/suspicious/noArrayIndexKey: fixture info lines are position-keyed slices.
         <Box key={`info-${index}`} flexShrink={0}>
           <Text
-            dimColor={index > 0}
-            {...(pending && index === 0 ? { color: theme.heading } : {})}
+            color={pending && index === 0 ? theme.heading : index > 0 ? theme.muted : theme.text}
             wrap={pending ? 'truncate' : 'wrap'}
           >
             {line.length > 0 ? line : ' '}
@@ -747,10 +746,10 @@ function TransitBody({
     return <Text color={theme.error}>{`error: ${data.error ?? 'unknown'} (r to retry)`}</Text>;
   }
   if (data.status === 'loading' && data.lanes.length === 0) {
-    return <Text dimColor>loading...</Text>;
+    return <Text color={theme.muted}>loading...</Text>;
   }
   if (data.lanes.length === 0) {
-    return <Text dimColor>no branches</Text>;
+    return <Text color={theme.muted}>no branches</Text>;
   }
 
   const plan = resolveBodyPlan(width, height, data.lanes, data.info, data.pending === true);
@@ -759,7 +758,7 @@ function TransitBody({
   if (mode === 'micro' && lanes.length === 0) {
     return (
       <Box flexShrink={0}>
-        <Text dimColor>Git Tree</Text>
+        <Text color={theme.muted}>Git Tree</Text>
       </Box>
     );
   }
@@ -768,7 +767,7 @@ function TransitBody({
     <Box flexDirection="column" flexShrink={0} overflow="hidden">
       {showRuler ? (
         <Box flexShrink={0}>
-          <Text dimColor wrap="truncate">
+          <Text color={theme.muted} wrap="truncate">
             {fitRuler(data.ruler, innerW)}
           </Text>
         </Box>

@@ -32,6 +32,7 @@ def test_bundled_theme_jsons_validate_and_cover_shortlist() -> None:
     builtins = load_builtin_theme_jsons()
     ids = {t["id"] for t in builtins}
     assert {
+        "murder-classic",
         "everforest-dark",
         "everforest-light",
         "tokyo-night",
@@ -50,6 +51,15 @@ def test_bundled_theme_jsons_validate_and_cover_shortlist() -> None:
         assert raw["variant"] in ("light", "dark")
         assert isinstance(raw["palette"], dict)
         assert len(raw["palette"]) == len(_PALETTE_SLOTS)
+
+
+def test_murder_classic_palette_matches_everforest_dark() -> None:
+    """Murder Classic is a byte-identical freeze of the everforest-dark hard palette."""
+    by_id = {t["id"]: t for t in load_builtin_theme_jsons()}
+    classic = by_id["murder-classic"]
+    everforest = by_id["everforest-dark"]
+    assert classic["variant"] == "dark"
+    assert classic["palette"] == everforest["palette"]
 
 
 def test_ensure_user_themes_seeds_missing_builtins(tmp_path: Path) -> None:

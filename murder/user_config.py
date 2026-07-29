@@ -99,7 +99,7 @@ class TuiUserConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    theme: str = "everforest-dark"
+    theme: str = "murder-classic"
     modifier: Literal["alt", "ctrl", "both"] = "alt"
     # ActionId -> key char. Stored as-is; the TS registry validates ids.
     key_overrides: dict[str, str] = Field(default_factory=dict)

@@ -26,7 +26,9 @@ export const CreateRow = memo(function CreateRow({
   if (onClick === undefined) {
     return (
       <Box flexShrink={0} {...(width !== undefined ? { width } : { width: '100%' })} backgroundColor={bg}>
-        <Text wrap="truncate">{label}</Text>
+        <Text wrap="truncate" color={theme.text}>
+          {label}
+        </Text>
       </Box>
     );
   }
@@ -67,7 +69,9 @@ function ClickableCreateRow({
       {...(width !== undefined ? { width } : { width: '100%' })}
       backgroundColor={bg}
     >
-      <Text wrap="truncate">{label}</Text>
+      <Text wrap="truncate" color={theme.text}>
+        {label}
+      </Text>
     </Box>
   );
 }

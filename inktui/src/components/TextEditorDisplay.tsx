@@ -34,14 +34,14 @@ export function TextEditorDisplay({
     if (!focused || placeholder.length === 0)
       return (
         <Box flexShrink={0}>
-          <Text dimColor wrap="truncate-end">
+          <Text color={theme.muted} wrap="truncate-end">
             {placeholder}
           </Text>
         </Box>
       );
     return (
       <Box flexShrink={0}>
-        <Text dimColor wrap="truncate-end">
+        <Text color={theme.muted} wrap="truncate-end">
           <Text inverse>{placeholder.slice(0, 1)}</Text>
           {placeholder.slice(1)}
         </Text>
