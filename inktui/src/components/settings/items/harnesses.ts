@@ -57,46 +57,53 @@ export function defaultEffortFor(
 const startupRogueItem: SettingsItem = {
   id: 'harnesses.startupRogue',
   label: 'Startup Rogue',
-  rows: ({ startupRogue, startupRogueModels, startupRogueEfforts }) => {
-    const rows: SettingsRow[] = [
-      headerRow(startupRogueItem),
-      { id: 'harnesses.startupRogue:off', kind: 'startupRogue', field: 'off' },
-      ...HARNESSES.map(
-        (value): SettingsRow => ({
-          id: `harnesses.startupRogue:harness:${value}`,
-          kind: 'startupRogue',
-          field: 'harness',
-          value,
-        }),
-      ),
-    ];
-    if (startupRogue !== null) {
-      appendStartupRogueDetails(rows, startupRogue, startupRogueModels, startupRogueEfforts);
-    }
-    return rows;
-  },
+  rows: () => [
+    headerRow(startupRogueItem),
+    { id: 'harnesses.startupRogue:off', kind: 'startupRogue', field: 'off' },
+    ...HARNESSES.map(
+      (value): SettingsRow => ({
+        id: `harnesses.startupRogue:harness:${value}`,
+        kind: 'startupRogue',
+        field: 'harness',
+        value,
+      }),
+    ),
+  ],
 };
+
+/** Model + effort rows for a startup-rogue harness (T3 detail column). */
+export function startupRogueDetailRows(
+  harness: string,
+  startupRogue: StartupRogueWire | null,
+  modelsByHarness: Readonly<Record<string, readonly StartupRogueModelWire[]>>,
+  effortsByHarness: Readonly<Record<string, readonly string[]>>,
+): readonly SettingsRow[] {
+  const model =
+    startupRogue?.harness === harness
+      ? startupRogue.model
+      : defaultModelFor(harness, modelsByHarness);
+  const rows: SettingsRow[] = [];
+  appendStartupRogueDetails(rows, harness, model, modelsByHarness, effortsByHarness);
+  return rows;
+}
 
 function appendStartupRogueDetails(
   rows: SettingsRow[],
-  startupRogue: StartupRogueWire,
+  harness: string,
+  model: string,
   modelsByHarness: Readonly<Record<string, readonly StartupRogueModelWire[]>>,
   effortsByHarness: Readonly<Record<string, readonly string[]>>,
 ): void {
-  for (const model of startupRogueModelsFor(startupRogue.harness, modelsByHarness)) {
+  for (const entry of startupRogueModelsFor(harness, modelsByHarness)) {
     rows.push({
-      id: `harnesses.startupRogue:model:${model.id || 'default'}`,
+      id: `harnesses.startupRogue:model:${entry.id || 'default'}`,
       kind: 'startupRogue',
       field: 'model',
-      value: model.id,
-      label: model.label,
+      value: entry.id,
+      label: entry.label,
     });
   }
-  for (const value of startupRogueEffortsFor(
-    startupRogue.harness,
-    effortsByHarness,
-    startupRogue.model,
-  )) {
+  for (const value of startupRogueEffortsFor(harness, effortsByHarness, model)) {
     rows.push({
       id: `harnesses.startupRogue:effort:${value}`,
       kind: 'startupRogue',
@@ -131,61 +138,66 @@ const crowItem: SettingsItem = {
 };
 
 const CODEX_CONTROL_BACKENDS = ['harness_parse', 'app_server'] as const;
+const CURSOR_CONTROL_BACKENDS = ['harness_parse', 'acp'] as const;
+const CLAUDE_CONTROL_BACKENDS = ['harness_parse', 'agent_sdk'] as const;
 
 const codexControlBackendItem: SettingsItem = {
   id: 'harnesses.codexControlBackend',
   label: 'Codex Control Backend',
-  rows: () => [
-    headerRow(codexControlBackendItem),
-    ...CODEX_CONTROL_BACKENDS.map(
-      (value): SettingsRow => ({
-        id: `harnesses.codexControlBackend:${value}`,
-        kind: 'codexControlBackend',
-        value,
-      }),
-    ),
-  ],
+  rows: () => [],
 };
-
-const CURSOR_CONTROL_BACKENDS = ['harness_parse', 'acp'] as const;
 
 const cursorControlBackendItem: SettingsItem = {
   id: 'harnesses.cursorControlBackend',
   label: 'Cursor Control Backend',
-  rows: () => [
-    headerRow(cursorControlBackendItem),
-    ...CURSOR_CONTROL_BACKENDS.map(
-      (value): SettingsRow => ({
-        id: `harnesses.cursorControlBackend:${value}`,
-        kind: 'cursorControlBackend',
-        value,
-      }),
-    ),
-  ],
+  rows: () => [],
 };
-
-const CLAUDE_CONTROL_BACKENDS = ['harness_parse', 'agent_sdk'] as const;
 
 const claudeControlBackendItem: SettingsItem = {
   id: 'harnesses.claudeControlBackend',
   label: 'Claude Control Backend',
-  rows: () => [
-    headerRow(claudeControlBackendItem),
-    ...CLAUDE_CONTROL_BACKENDS.map(
-      (value): SettingsRow => ({
-        id: `harnesses.claudeControlBackend:${value}`,
-        kind: 'claudeControlBackend',
-        value,
-      }),
-    ),
-  ],
+  rows: () => [],
 };
 
-export const HARNESS_ITEMS: readonly SettingsItem[] = [
-  startupRogueItem,
-  plannerItem,
-  crowItem,
-  codexControlBackendItem,
-  cursorControlBackendItem,
-  claudeControlBackendItem,
-];
+/** Control-backend radios for a crow harness that has one; empty if none. */
+export function crowControlBackendDetailRows(crowHarness: string | null): readonly SettingsRow[] {
+  switch (crowHarness) {
+    case 'codex':
+      return [
+        headerRow(codexControlBackendItem),
+        ...CODEX_CONTROL_BACKENDS.map(
+          (value): SettingsRow => ({
+            id: `harnesses.codexControlBackend:${value}`,
+            kind: 'codexControlBackend',
+            value,
+          }),
+        ),
+      ];
+    case 'cursor':
+      return [
+        headerRow(cursorControlBackendItem),
+        ...CURSOR_CONTROL_BACKENDS.map(
+          (value): SettingsRow => ({
+            id: `harnesses.cursorControlBackend:${value}`,
+            kind: 'cursorControlBackend',
+            value,
+          }),
+        ),
+      ];
+    case 'claude_code':
+      return [
+        headerRow(claudeControlBackendItem),
+        ...CLAUDE_CONTROL_BACKENDS.map(
+          (value): SettingsRow => ({
+            id: `harnesses.claudeControlBackend:${value}`,
+            kind: 'claudeControlBackend',
+            value,
+          }),
+        ),
+      ];
+    default:
+      return [];
+  }
+}
+
+export const HARNESS_ITEMS: readonly SettingsItem[] = [startupRogueItem, plannerItem, crowItem];

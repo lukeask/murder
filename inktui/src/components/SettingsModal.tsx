@@ -86,8 +86,8 @@ import type {
 } from '../store/settings/settingsSlice.js';
 import type { AppStore } from '../store/store.js';
 import type { ThemeRecord } from '../store/themes/themesSlice.js';
-import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
 import { setBackgroundTransparencyPreview } from '../terminal/canvasBackground.js';
+import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
 import { DEFAULT_THEME_ID, listThemeRecords, type ThemeId } from '../theme/palettes.js';
 import { setTheme, useTheme } from '../theme/themeStore.js';
 import {
@@ -96,9 +96,11 @@ import {
   SETTINGS_CATEGORIES,
 } from './settings/categories.js';
 import {
+  crowControlBackendDetailRows,
   defaultEffortFor,
   defaultModelFor,
   HARNESSES,
+  startupRogueDetailRows,
   startupRogueEffortsFor,
 } from './settings/items/harnesses.js';
 import { REBINDABLE, RESERVED_KEYS } from './settings/items/keybindings.js';
@@ -110,6 +112,10 @@ import { TextEditorDisplay } from './TextEditorDisplay.js';
 const SETTINGS_LLM_FORM_EDITOR_WIDTH = 50;
 const SETTINGS_THEME_IMPORT_EDITOR_WIDTH = 48;
 const SETTINGS_PROVIDER_EDITOR_WIDTH = 36;
+/** Category rail wide enough for `› • LLM Functionality` / `Prompt Templates`. */
+const SETTINGS_CATEGORY_RAIL_WIDTH = 24;
+/** Preferred modal width floor; actual width is `max(this, columns - 4)` then clamped. */
+const SETTINGS_MODAL_MIN_PREFERRED_WIDTH = 100;
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (the printable/capture router needs it).
 import '../input/dispatcher.js';
@@ -195,13 +201,23 @@ interface SettingsState {
   /** The live row list — rebuilt whenever the draft `llm` changes (tier/role rows are dynamic). */
   rows: readonly SettingsRow[];
   /** Which pane owns j/k/up/down right now. */
-  activePane: 'categories' | 'settings' | 'editor';
+  activePane: 'categories' | 'settings' | 'detail' | 'editor';
   /** The category selected in the sidebar. */
   categoryId: SettingsCategoryId;
   /** The sidebar cursor index. */
   categoryCursor: number;
   /** One row cursor per category id, so returning to a category restores its focused setting. */
   rowCursors: Partial<Record<SettingsCategoryId, number>>;
+  /** Categories whose T2 pane has been entered at least once this modal session. */
+  visitedSettings: Partial<Record<SettingsCategoryId, true>>;
+  /** Detail-context keys whose T3 pane has been entered at least once this modal session. */
+  visitedDetails: Record<string, true>;
+  /** Last T3 row/field cursor per detail-context key. */
+  detailCursors: Record<string, number>;
+  /** Contextual T3 rows (harness backends / startup-rogue model+effort). Empty when unused. */
+  detailRows: readonly SettingsRow[];
+  /** Cursor within {@link detailRows} when `activePane === 'detail'`. */
+  detailCursor: number;
   /** The cursor's row index (always on a selectable row). */
   cursor: number;
   /** The draft modifier (committed via `update` on selection). */
@@ -382,6 +398,11 @@ export function settingsMode(
     categoryId: initialCategoryId,
     categoryCursor: categoryIndexById(initialCategoryId),
     rowCursors: { [initialCategoryId]: initialCursor },
+    visitedSettings: {},
+    visitedDetails: {},
+    detailCursors: {},
+    detailRows: [],
+    detailCursor: 0,
     cursor: initialCursor,
     modifier: current.modifier,
     persistedTheme: current.theme,
@@ -475,6 +496,149 @@ export function settingsMode(
     });
   }
 
+  function detailContextKey(row: SettingsRow | undefined): string | null {
+    if (row === undefined) return null;
+    if (row.kind === 'startupRogue' && row.field === 'harness') {
+      return `startupRogue:${row.value}`;
+    }
+    if (row.kind === 'crow' && row.value !== null) {
+      return `crow:${row.value}`;
+    }
+    if (row.kind === 'llmProvider') return `llm:provider:${row.providerId}`;
+    if (row.kind === 'llmPolicy') return `llm:policy:${row.policyId}`;
+    if (row.kind === 'llmAddProvider') return `llm:add:${row.providerType}`;
+    if (row.kind === 'llmCreatePolicy') return 'llm:create-policy';
+    return null;
+  }
+
+  function buildDetailRowsFor(row: SettingsRow | undefined): readonly SettingsRow[] {
+    if (row === undefined) return [];
+    if (row.kind === 'startupRogue' && row.field === 'harness') {
+      return startupRogueDetailRows(
+        row.value,
+        s.startupRogue,
+        s.startupRogueModels,
+        s.startupRogueEfforts,
+      );
+    }
+    if (row.kind === 'crow') {
+      return crowControlBackendDetailRows(row.value);
+    }
+    return [];
+  }
+
+  /** Sync T3 content from the focused T2 row. Does not change activePane. */
+  function syncDetailPane(): void {
+    const row = s.rows[s.cursor];
+    s.detailRows = buildDetailRowsFor(row);
+    const key = detailContextKey(row);
+    if (s.detailRows.length === 0) {
+      s.detailCursor = 0;
+    } else if (key !== null && s.visitedDetails[key] === true) {
+      const saved = s.detailCursors[key] ?? 0;
+      s.detailCursor = firstSelectableFrom(s.detailRows, Math.min(saved, s.detailRows.length - 1));
+    } else {
+      s.detailCursor = firstSelectableFrom(s.detailRows, 0);
+    }
+    syncLlmFormForRow(row);
+  }
+
+  /** Keep the LLM form pane aligned with the highlighted T2 provider/policy row. */
+  function syncLlmFormForRow(row: SettingsRow | undefined): void {
+    if (row?.kind === 'llmProvider') {
+      const provider = s.llm.providers?.[row.providerId];
+      const key = detailContextKey(row) ?? '';
+      const savedField = s.visitedDetails[key] === true ? (s.detailCursors[key] ?? 0) : 0;
+      s.llmForm = {
+        kind: 'provider',
+        providerType: provider?.type ?? row.providerId,
+        providerId: row.providerId,
+        builtin: row.builtin,
+        name: provider?.name ?? row.providerId.replaceAll('-', ' '),
+        endpoint: provider?.endpoint ?? '',
+        apiKey: provider?.auth?.api_key ?? provider?.api_key ?? '',
+        source: provider?.models?.source ?? 'recommended',
+        include: (provider?.models?.include ?? []).join(', '),
+        exclude: (provider?.models?.exclude ?? []).join(', '),
+        overrides: JSON.stringify(provider?.models?.overrides ?? {}),
+        field: Math.min(savedField, 8),
+      };
+      s.llmFormEditing = false;
+      return;
+    }
+    if (row?.kind === 'llmPolicy' && !row.builtin) {
+      const policy = s.llm.policies?.[row.policyId];
+      const key = detailContextKey(row) ?? '';
+      const savedField = s.visitedDetails[key] === true ? (s.detailCursors[key] ?? 0) : 0;
+      s.llmForm = {
+        kind: 'policy',
+        policyId: row.policyId,
+        name: policy?.name ?? '',
+        groups: JSON.stringify(policy?.groups ?? [], null, 0),
+        field: Math.min(savedField, 3),
+      };
+      s.llmFormEditing = false;
+      return;
+    }
+    if (row?.kind === 'llmAddProvider') {
+      const key = detailContextKey(row) ?? '';
+      const same =
+        s.llmForm?.kind === 'provider' &&
+        s.llmForm.providerId === null &&
+        s.llmForm.providerType === row.providerType;
+      if (!same) {
+        const savedField = s.visitedDetails[key] === true ? (s.detailCursors[key] ?? 0) : 0;
+        s.llmForm = {
+          kind: 'provider',
+          providerType: row.providerType,
+          providerId: null,
+          builtin: false,
+          name: '',
+          endpoint: '',
+          apiKey: '',
+          source: 'recommended',
+          include: '',
+          exclude: '',
+          overrides: '{}',
+          field: Math.min(savedField, 8),
+        };
+      }
+      s.llmFormEditing = false;
+      return;
+    }
+    if (row?.kind === 'llmCreatePolicy') {
+      const key = detailContextKey(row) ?? '';
+      const same = s.llmForm?.kind === 'policy' && s.llmForm.policyId === null;
+      if (!same) {
+        const savedField = s.visitedDetails[key] === true ? (s.detailCursors[key] ?? 0) : 0;
+        s.llmForm = {
+          kind: 'policy',
+          policyId: null,
+          name: '',
+          groups: '[]',
+          field: Math.min(savedField, 3),
+        };
+      }
+      s.llmFormEditing = false;
+      return;
+    }
+    // Non-form T2 rows: clear the LLM form so T3 can show harness details (or nothing).
+    if (s.activePane !== 'editor') {
+      s.llmForm = null;
+      s.llmFormEditing = false;
+    }
+  }
+
+  function rememberDetailCursor(): void {
+    const key = detailContextKey(s.rows[s.cursor]);
+    if (key === null) return;
+    if (s.activePane === 'editor' && s.llmForm !== null) {
+      s.detailCursors = { ...s.detailCursors, [key]: s.llmForm.field };
+    } else if (s.activePane === 'detail') {
+      s.detailCursors = { ...s.detailCursors, [key]: s.detailCursor };
+    }
+  }
+
   function switchCategory(delta: number): void {
     if (s.activePane !== 'categories' || modalIsBusy()) {
       return;
@@ -492,8 +656,16 @@ export function settingsMode(
     s.categoryCursor = nextCursor;
     s.categoryId = category.id;
     s.rows = buildRowsFor(category.id);
-    const savedCursor = s.rowCursors[category.id] ?? 0;
-    s.cursor = firstSelectableFrom(s.rows, Math.min(savedCursor, s.rows.length - 1));
+    if (s.visitedSettings[category.id] === true) {
+      const savedCursor = s.rowCursors[category.id] ?? 0;
+      s.cursor = firstSelectableFrom(s.rows, Math.min(savedCursor, s.rows.length - 1));
+    } else {
+      s.cursor = firstSelectableFrom(s.rows, 0);
+    }
+    s.activePane = 'categories';
+    s.llmForm = null;
+    s.llmFormEditing = false;
+    syncDetailPane();
     s.notice = null;
     refresh();
   }
@@ -502,19 +674,55 @@ export function settingsMode(
     if (modalIsBusy()) {
       return;
     }
-    if (s.activePane === 'settings' && s.categoryId === 'llm') {
-      const row = s.rows[s.cursor];
-      if (
-        row?.kind === 'llmProvider' ||
-        row?.kind === 'llmPolicy' ||
-        row?.kind === 'llmAddProvider' ||
-        row?.kind === 'llmCreatePolicy'
-      ) {
-        confirm();
-        return;
+    if (s.activePane === 'categories') {
+      if (s.visitedSettings[s.categoryId] !== true) {
+        s.cursor = firstSelectableFrom(s.rows, 0);
+        s.visitedSettings = { ...s.visitedSettings, [s.categoryId]: true };
+      } else {
+        const saved = s.rowCursors[s.categoryId] ?? s.cursor;
+        s.cursor = firstSelectableFrom(s.rows, Math.min(saved, s.rows.length - 1));
       }
+      s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
+      s.activePane = 'settings';
+      syncDetailPane();
+      s.notice = null;
+      refresh();
+      return;
     }
-    s.activePane = 'settings';
+    if (s.activePane === 'settings') {
+      enterDetailPane();
+    }
+  }
+
+  function enterDetailPane(): void {
+    const row = s.rows[s.cursor];
+    const key = detailContextKey(row);
+    syncDetailPane();
+    if (s.llmForm !== null) {
+      if (key !== null && s.visitedDetails[key] !== true) {
+        s.llmForm.field = 0;
+        s.visitedDetails = { ...s.visitedDetails, [key]: true };
+        s.detailCursors = { ...s.detailCursors, [key]: 0 };
+      } else if (key !== null) {
+        s.llmForm.field = Math.min(s.detailCursors[key] ?? 0, formFieldCount() - 1);
+      }
+      s.activePane = 'editor';
+      s.notice = null;
+      refresh();
+      return;
+    }
+    if (s.detailRows.length === 0) {
+      return;
+    }
+    if (key !== null && s.visitedDetails[key] !== true) {
+      s.detailCursor = firstSelectableFrom(s.detailRows, 0);
+      s.visitedDetails = { ...s.visitedDetails, [key]: true };
+      s.detailCursors = { ...s.detailCursors, [key]: s.detailCursor };
+    } else if (key !== null) {
+      const saved = s.detailCursors[key] ?? 0;
+      s.detailCursor = firstSelectableFrom(s.detailRows, Math.min(saved, s.detailRows.length - 1));
+    }
+    s.activePane = 'detail';
     s.notice = null;
     refresh();
   }
@@ -523,7 +731,8 @@ export function settingsMode(
     if (modalIsBusy()) {
       return;
     }
-    if (s.activePane === 'editor') {
+    if (s.activePane === 'editor' || s.activePane === 'detail') {
+      rememberDetailCursor();
       s.activePane = 'settings';
       s.notice = null;
       refresh();
@@ -533,6 +742,7 @@ export function settingsMode(
     if (prev?.kind === 'theme') {
       restoreThemePreview();
     }
+    s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
     s.activePane = 'categories';
     s.notice = null;
     refresh();
@@ -542,6 +752,14 @@ export function settingsMode(
   function moveCursor(delta: number): void {
     if (s.activePane === 'editor') {
       moveFormField(delta);
+      const key = detailContextKey(s.rows[s.cursor]);
+      if (key !== null && s.llmForm !== null) {
+        s.detailCursors = { ...s.detailCursors, [key]: s.llmForm.field };
+      }
+      return;
+    }
+    if (s.activePane === 'detail') {
+      moveDetailCursor(delta);
       return;
     }
     if (s.activePane !== 'settings') {
@@ -573,6 +791,27 @@ export function settingsMode(
         }
         s.notice = null;
         s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
+        syncDetailPane();
+        refresh();
+        return;
+      }
+    }
+  }
+
+  function moveDetailCursor(delta: number): void {
+    const len = s.detailRows.length;
+    if (len === 0) return;
+    let idx = s.detailCursor;
+    for (let step = 0; step < len; step++) {
+      idx = (idx + delta + len) % len;
+      const row = s.detailRows[idx];
+      if (row !== undefined && isSelectable(row)) {
+        s.detailCursor = idx;
+        const key = detailContextKey(s.rows[s.cursor]);
+        if (key !== null) {
+          s.detailCursors = { ...s.detailCursors, [key]: s.detailCursor };
+        }
+        s.notice = null;
         refresh();
         return;
       }
@@ -749,9 +988,16 @@ export function settingsMode(
 
   /** Pick the Startup Rogue's model (`''` = adapter default) and recompute its parameters. */
   function selectStartupRogueModel(model: string): void {
+    const focused = s.rows[s.cursor];
+    const harnessFromT2 =
+      focused?.kind === 'startupRogue' && focused.field === 'harness' ? focused.value : null;
     if (s.startupRogue === null) {
-      return;
+      if (harnessFromT2 === null) return;
+      selectStartupRogueHarness(harnessFromT2);
+    } else if (harnessFromT2 !== null && s.startupRogue.harness !== harnessFromT2) {
+      selectStartupRogueHarness(harnessFromT2);
     }
+    if (s.startupRogue === null) return;
     const efforts = startupRogueEffortsFor(s.startupRogue.harness, s.startupRogueEfforts, model);
     const effort =
       s.startupRogue.effort !== null && efforts.includes(s.startupRogue.effort)
@@ -765,13 +1011,21 @@ export function settingsMode(
     refresh();
   }
 
-  /** Pick the Startup Rogue's reasoning effort. No row-structure change. */
+  /** Pick the Startup Rogue's effort. */
   function selectStartupRogueEffort(effort: string): void {
+    const focused = s.rows[s.cursor];
+    const harnessFromT2 =
+      focused?.kind === 'startupRogue' && focused.field === 'harness' ? focused.value : null;
     if (s.startupRogue === null) {
-      return;
+      if (harnessFromT2 === null) return;
+      selectStartupRogueHarness(harnessFromT2);
+    } else if (harnessFromT2 !== null && s.startupRogue.harness !== harnessFromT2) {
+      selectStartupRogueHarness(harnessFromT2);
     }
+    if (s.startupRogue === null) return;
     const next: StartupRogueWire = { ...s.startupRogue, effort };
     s.startupRogue = next;
+    rebuildRows();
     void actions.update({ startup_rogue: next });
     s.notice = null;
     refresh();
@@ -1021,11 +1275,12 @@ export function settingsMode(
   }
 
   function cancelLlmForm(): void {
-    s.llmForm = null;
     s.llmFormEditing = false;
     setEditValue('');
     s.activePane = 'settings';
     s.notice = null;
+    // Reload T3 from the persisted draft so Cancel discards in-progress edits without trapping focus.
+    syncDetailPane();
     refresh();
   }
 
@@ -1290,6 +1545,7 @@ export function settingsMode(
       s.cursor = firstSelectableFrom(s.rows, Math.min(s.cursor, s.rows.length - 1));
     }
     s.rowCursors = { ...s.rowCursors, [s.categoryId]: s.cursor };
+    syncDetailPane();
   }
 
   /** Begin capturing the next key for a binding row's rebind. */
@@ -1336,8 +1592,19 @@ export function settingsMode(
       enterSettingsPane();
       return;
     }
-    const row = s.rows[s.cursor];
+    const row = s.activePane === 'detail' ? s.detailRows[s.detailCursor] : s.rows[s.cursor];
     if (row === undefined) {
+      return;
+    }
+    // From T2, Enter on an LLM form target focuses T3 (form already synced by highlight).
+    if (
+      s.activePane === 'settings' &&
+      (row.kind === 'llmProvider' ||
+        row.kind === 'llmAddProvider' ||
+        row.kind === 'llmCreatePolicy' ||
+        (row.kind === 'llmPolicy' && !row.builtin))
+    ) {
+      enterDetailPane();
       return;
     }
     switch (row.kind) {
@@ -1468,8 +1735,11 @@ export function settingsMode(
       refresh();
       return;
     }
-    if (s.llmForm !== null) {
-      cancelLlmForm();
+    if (s.activePane === 'editor' || s.activePane === 'detail') {
+      rememberDetailCursor();
+      s.activePane = 'settings';
+      s.notice = null;
+      refresh();
       return;
     }
     if (s.editing !== null) {
@@ -1552,7 +1822,7 @@ export function settingsMode(
           // delete confirm is pending (it only accepts y/n via onUncaptured, or Esc to cancel).
           if (s.llmFormEditing) {
             commitFormTextEdit();
-          } else if (s.llmForm !== null) {
+          } else if (s.activePane === 'editor' && s.llmForm !== null) {
             const form = s.llmForm;
             const textField =
               (form.kind === 'provider' &&
@@ -1702,9 +1972,7 @@ export function settingsMode(
       }
       return false; // other chars are not actions here — swallow under the modal
     },
-    render: () => (
-      <SettingsDialog state={s} syncThemes={syncThemes} />
-    ),
+    render: () => <SettingsDialog state={s} syncThemes={syncThemes} />,
   };
 
   return mode;
@@ -1795,10 +2063,9 @@ function SettingsDialog({
   ) => void;
 }): JSX.Element {
   const theme = useTheme();
-  // Design width 84, clamped to the live terminal so a narrow screen doesn't overflow the box.
-  const width = useModalWidth(84);
+  const { rows: termRows, columns } = useTerminalSize();
+  const width = useModalWidth(Math.max(SETTINGS_MODAL_MIN_PREFERRED_WIDTH, columns - 4));
   const height = useModalHeight(0.8);
-  const { rows: termRows } = useTerminalSize();
   const kitty = useKittySupport();
   const ctrlAvailable = kitty === true;
   const liveThemes = useLiveThemes();
@@ -1808,6 +2075,8 @@ function SettingsDialog({
     }
   }, [liveThemes, syncThemes]);
   const view = rowWindow(s.rows, s.cursor, visibleRowBudget(termRows));
+  const detailView = rowWindow(s.detailRows, s.detailCursor, visibleRowBudget(termRows));
+  const showDetailColumn = s.categoryId === 'llm' || s.detailRows.length > 0;
   const llmSelection = s.categoryId === 'llm' ? s.rows[s.cursor] : undefined;
   const llmProvider =
     llmSelection?.kind === 'llmProvider' ? s.llm.providers?.[llmSelection.providerId] : undefined;
@@ -1831,7 +2100,12 @@ function SettingsDialog({
       </Box>
 
       <Box marginTop={1} flexDirection="row" flexGrow={1} flexBasis={0} minHeight={0}>
-        <Box flexDirection="column" flexShrink={0} width={18} marginRight={2}>
+        <Box
+          flexDirection="column"
+          flexShrink={0}
+          width={SETTINGS_CATEGORY_RAIL_WIDTH}
+          marginRight={2}
+        >
           {SETTINGS_CATEGORIES.map((category, index) => {
             const selected = category.id === s.categoryId;
             const focused = s.activePane === 'categories' && index === s.categoryCursor;
@@ -1854,19 +2128,12 @@ function SettingsDialog({
 
         <Box
           flexDirection="column"
-          flexGrow={s.categoryId !== 'llm' ? 1 : 0}
+          flexGrow={showDetailColumn ? 0 : 1}
           minHeight={0}
-          width={s.categoryId === 'llm' ? 28 : undefined}
-          flexShrink={s.categoryId === 'llm' ? 0 : undefined}
-          marginRight={s.categoryId === 'llm' ? 2 : 0}
+          width={showDetailColumn ? 32 : undefined}
+          flexShrink={showDetailColumn ? 0 : undefined}
+          marginRight={showDetailColumn ? 2 : 0}
         >
-          {view.before === 0 &&
-            Array.from({ length: s.categoryCursor }, (_, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: these are positional spacer rows.
-              <Box key={`category-offset-${i}`} flexShrink={0}>
-                <Text> </Text>
-              </Box>
-            ))}
           {view.before > 0 && (
             <Box flexShrink={0}>
               <Text dimColor>{`  ↑ ${view.before} more`}</Text>
@@ -1889,204 +2156,237 @@ function SettingsDialog({
             </Box>
           )}
         </Box>
-        {s.categoryId === 'llm' && (
+        {showDetailColumn && (
           <Box flexDirection="column" flexGrow={1} flexBasis={0} minHeight={0}>
-            <Text color={theme.muted} wrap="truncate-end">
-              {s.llmForm?.kind === 'provider'
-                ? `Settings / LLM Functionality / Providers / ${s.llmForm.providerId ?? 'New provider'}`
-                : s.llmForm?.kind === 'policy'
-                  ? `Settings / LLM Functionality / Policies / ${s.llmForm.policyId ?? 'New policy'}`
-                  : 'Settings / LLM Functionality'}
-            </Text>
-            <Box marginTop={1} flexDirection="column">
-              {s.llmForm?.kind === 'provider' && (
-                <>
-                  <Text bold color={theme.heading}>
-                    {s.llmForm.providerId === null
-                      ? `Add ${s.llmForm.providerType === 'lemonade' ? 'Lemonade' : 'OpenAI-compatible'}`
-                      : 'Provider settings'}
-                  </Text>
-                  <LlmFormField
-                    label="Name"
-                    value={s.llmForm.name}
-                    editing={s.llmFormEditing && s.llmForm.field === 0}
-                    editEditor={s.editEditor}
-                    focused={s.activePane === 'editor' && s.llmForm.field === 0}
+            {s.detailRows.length > 0 && (
+              <>
+                {detailView.before > 0 && (
+                  <Box flexShrink={0}>
+                    <Text dimColor>{`  ↑ ${detailView.before} more`}</Text>
+                  </Box>
+                )}
+                {detailView.rows.map(({ row, index }) => (
+                  <RowView
+                    key={`detail:${rowKey(row)}`}
+                    row={row}
+                    rowIndex={index}
+                    focused={s.activePane === 'detail' && index === s.detailCursor}
+                    state={s}
                     theme={theme}
+                    ctrlAvailable={ctrlAvailable}
                   />
-                  <Text
-                    color={
-                      s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2)
-                        ? theme.warning
-                        : theme.text
-                    }
-                    bold={
-                      s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2)
-                    }
-                    wrap="truncate-end"
-                  >{`${s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2) ? '› ' : '  '}API key: ${s.llmForm.apiKey ? 'set' : 'not set'}; Endpoint`}</Text>
-                  <Text
-                    color={
-                      s.activePane === 'editor' && s.llmForm.field === 3
-                        ? theme.warning
-                        : theme.text
-                    }
-                    bold={s.activePane === 'editor' && s.llmForm.field === 3}
-                  >{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Models source     ${s.llmForm.source}`}</Text>
-                  <LlmFormField
-                    label="Include models"
-                    value={s.llmForm.include}
-                    editing={s.llmFormEditing && s.llmForm.field === 4}
-                    editEditor={s.editEditor}
-                    focused={s.activePane === 'editor' && s.llmForm.field === 4}
-                    theme={theme}
-                  />
-                  <LlmFormField
-                    label="Exclude models"
-                    value={s.llmForm.exclude}
-                    editing={s.llmFormEditing && s.llmForm.field === 5}
-                    editEditor={s.editEditor}
-                    focused={s.activePane === 'editor' && s.llmForm.field === 5}
-                    theme={theme}
-                  />
-                  <LlmFormField
-                    label="Model overrides JSON"
-                    value={s.llmForm.overrides}
-                    editing={s.llmFormEditing && s.llmForm.field === 6}
-                    editEditor={s.editEditor}
-                    focused={s.activePane === 'editor' && s.llmForm.field === 6}
-                    theme={theme}
-                  />
-                  <Text color={theme.muted} wrap="truncate-end">
-                    {effectiveCatalogPreview(
-                      s.llmForm.include,
-                      s.llmForm.exclude,
-                      s.llmForm.overrides,
-                    )}
-                  </Text>
-                  <Text
-                    color={
-                      s.activePane === 'editor' && s.llmForm.field === 7
-                        ? theme.warning
-                        : theme.text
-                    }
-                    bold={s.activePane === 'editor' && s.llmForm.field === 7}
-                  >{`${s.activePane === 'editor' && s.llmForm.field === 7 ? '› ' : '  '}Save`}</Text>
-                  <Text
-                    color={
-                      s.activePane === 'editor' && s.llmForm.field === 8
-                        ? theme.warning
-                        : theme.text
-                    }
-                    bold={s.activePane === 'editor' && s.llmForm.field === 8}
-                  >{`${s.activePane === 'editor' && s.llmForm.field === 8 ? '› ' : '  '}Cancel${s.llmForm.providerId !== null && !s.llmForm.builtin ? '  (d deletes)' : ''}`}</Text>
-                </>
-              )}
-              {s.llmForm?.kind === 'policy' && (
-                <>
-                  <Text bold color={theme.heading}>
-                    {s.llmForm.policyId === null ? 'Create Policy' : 'Custom policy'}
-                  </Text>
-                  <LlmFormField
-                    label="Name"
-                    value={s.llmForm.name}
-                    editing={s.llmFormEditing && s.llmForm.field === 0}
-                    editEditor={s.editEditor}
-                    focused={s.activePane === 'editor' && s.llmForm.field === 0}
-                    theme={theme}
-                  />
-                  <LlmFormField
-                    label="Groups JSON"
-                    value={s.llmForm.groups}
-                    editing={s.llmFormEditing && s.llmForm.field === 1}
-                    editEditor={s.editEditor}
-                    focused={s.activePane === 'editor' && s.llmForm.field === 1}
-                    theme={theme}
-                  />
-                  <Text
-                    color={
-                      s.activePane === 'editor' && s.llmForm.field === 2
-                        ? theme.warning
-                        : theme.text
-                    }
-                    bold={s.activePane === 'editor' && s.llmForm.field === 2}
-                  >{`${s.activePane === 'editor' && s.llmForm.field === 2 ? '› ' : '  '}Save`}</Text>
-                  <Text
-                    color={
-                      s.activePane === 'editor' && s.llmForm.field === 3
-                        ? theme.warning
-                        : theme.text
-                    }
-                    bold={s.activePane === 'editor' && s.llmForm.field === 3}
-                  >{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Cancel${s.llmForm.policyId !== null ? '  (d deletes)' : ''}`}</Text>
-                </>
-              )}
-              {s.llmForm === null && (
-                <>
-                  {llmSelection?.kind === 'llmGlobal' && (
+                ))}
+                {detailView.after > 0 && (
+                  <Box flexShrink={0}>
+                    <Text dimColor>{`  ↓ ${detailView.after} more`}</Text>
+                  </Box>
+                )}
+              </>
+            )}
+            {s.categoryId === 'llm' && (
+              <>
+                <Text color={theme.muted} wrap="truncate-end">
+                  {s.llmForm?.kind === 'provider'
+                    ? `Settings / LLM Functionality / Providers / ${s.llmForm.providerId ?? 'New provider'}`
+                    : s.llmForm?.kind === 'policy'
+                      ? `Settings / LLM Functionality / Policies / ${s.llmForm.policyId ?? 'New policy'}`
+                      : 'Settings / LLM Functionality'}
+                </Text>
+                <Box marginTop={1} flexDirection="column">
+                  {s.llmForm?.kind === 'provider' && (
                     <>
                       <Text bold color={theme.heading}>
-                        LLM Functionality
+                        {s.llmForm.providerId === null
+                          ? `Add ${s.llmForm.providerType === 'lemonade' ? 'Lemonade' : 'OpenAI-compatible'}`
+                          : 'Provider settings'}
+                      </Text>
+                      <LlmFormField
+                        label="Name"
+                        value={s.llmForm.name}
+                        editing={s.llmFormEditing && s.llmForm.field === 0}
+                        editEditor={s.editEditor}
+                        focused={s.activePane === 'editor' && s.llmForm.field === 0}
+                        theme={theme}
+                      />
+                      <Text
+                        color={
+                          s.activePane === 'editor' &&
+                          (s.llmForm.field === 1 || s.llmForm.field === 2)
+                            ? theme.warning
+                            : theme.text
+                        }
+                        bold={
+                          s.activePane === 'editor' &&
+                          (s.llmForm.field === 1 || s.llmForm.field === 2)
+                        }
+                        wrap="truncate-end"
+                      >{`${s.activePane === 'editor' && (s.llmForm.field === 1 || s.llmForm.field === 2) ? '› ' : '  '}API key: ${s.llmForm.apiKey ? 'set' : 'not set'}; Endpoint`}</Text>
+                      <Text
+                        color={
+                          s.activePane === 'editor' && s.llmForm.field === 3
+                            ? theme.warning
+                            : theme.text
+                        }
+                        bold={s.activePane === 'editor' && s.llmForm.field === 3}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Models source     ${s.llmForm.source}`}</Text>
+                      <LlmFormField
+                        label="Include models"
+                        value={s.llmForm.include}
+                        editing={s.llmFormEditing && s.llmForm.field === 4}
+                        editEditor={s.editEditor}
+                        focused={s.activePane === 'editor' && s.llmForm.field === 4}
+                        theme={theme}
+                      />
+                      <LlmFormField
+                        label="Exclude models"
+                        value={s.llmForm.exclude}
+                        editing={s.llmFormEditing && s.llmForm.field === 5}
+                        editEditor={s.editEditor}
+                        focused={s.activePane === 'editor' && s.llmForm.field === 5}
+                        theme={theme}
+                      />
+                      <LlmFormField
+                        label="Model overrides JSON"
+                        value={s.llmForm.overrides}
+                        editing={s.llmFormEditing && s.llmForm.field === 6}
+                        editEditor={s.editEditor}
+                        focused={s.activePane === 'editor' && s.llmForm.field === 6}
+                        theme={theme}
+                      />
+                      <Text color={theme.muted} wrap="truncate-end">
+                        {effectiveCatalogPreview(
+                          s.llmForm.include,
+                          s.llmForm.exclude,
+                          s.llmForm.overrides,
+                        )}
                       </Text>
                       <Text
-                        color={theme.text}
-                      >{`Enabled           ${s.llm.disabled ? '[ ]' : '[x]'}`}</Text>
-                      <Text color={theme.muted}>Disabling preserves providers and policies.</Text>
+                        color={
+                          s.activePane === 'editor' && s.llmForm.field === 7
+                            ? theme.warning
+                            : theme.text
+                        }
+                        bold={s.activePane === 'editor' && s.llmForm.field === 7}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 7 ? '› ' : '  '}Save`}</Text>
+                      <Text
+                        color={
+                          s.activePane === 'editor' && s.llmForm.field === 8
+                            ? theme.warning
+                            : theme.text
+                        }
+                        bold={s.activePane === 'editor' && s.llmForm.field === 8}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 8 ? '› ' : '  '}Cancel${s.llmForm.providerId !== null && !s.llmForm.builtin ? '  (d deletes)' : ''}`}</Text>
                     </>
                   )}
-                  {llmSelection?.kind === 'llmProvider' && (
+                  {s.llmForm?.kind === 'policy' && (
                     <>
                       <Text bold color={theme.heading}>
-                        {llmProvider?.name ?? llmSelection.providerId}
+                        {s.llmForm.policyId === null ? 'Create Policy' : 'Custom policy'}
                       </Text>
+                      <LlmFormField
+                        label="Name"
+                        value={s.llmForm.name}
+                        editing={s.llmFormEditing && s.llmForm.field === 0}
+                        editEditor={s.editEditor}
+                        focused={s.activePane === 'editor' && s.llmForm.field === 0}
+                        theme={theme}
+                      />
+                      <LlmFormField
+                        label="Groups JSON"
+                        value={s.llmForm.groups}
+                        editing={s.llmFormEditing && s.llmForm.field === 1}
+                        editEditor={s.editEditor}
+                        focused={s.activePane === 'editor' && s.llmForm.field === 1}
+                        theme={theme}
+                      />
                       <Text
-                        color={theme.text}
-                      >{`Enabled           ${(llmProvider?.enabled ?? false) ? '[x]' : '[ ]'}`}</Text>
+                        color={
+                          s.activePane === 'editor' && s.llmForm.field === 2
+                            ? theme.warning
+                            : theme.text
+                        }
+                        bold={s.activePane === 'editor' && s.llmForm.field === 2}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 2 ? '› ' : '  '}Save`}</Text>
                       <Text
-                        color={theme.text}
-                      >{`Endpoint          ${llmProvider?.endpoint ?? 'default'}`}</Text>
-                      <Text
-                        color={theme.text}
-                      >{`API Key           ${(llmProvider?.auth?.api_key ?? llmProvider?.api_key) ? 'set' : 'not set'}`}</Text>
-                      <Text
-                        color={theme.text}
-                      >{`Models            ${llmProvider?.models?.source ?? 'recommended'}`}</Text>
+                        color={
+                          s.activePane === 'editor' && s.llmForm.field === 3
+                            ? theme.warning
+                            : theme.text
+                        }
+                        bold={s.activePane === 'editor' && s.llmForm.field === 3}
+                      >{`${s.activePane === 'editor' && s.llmForm.field === 3 ? '› ' : '  '}Cancel${s.llmForm.policyId !== null ? '  (d deletes)' : ''}`}</Text>
                     </>
                   )}
-                  {llmSelection?.kind === 'llmPolicy' && (
+                  {s.llmForm === null && (
                     <>
-                      <Text bold color={theme.heading}>
-                        {llmPolicy?.name ?? llmSelection.policyId}
-                      </Text>
-                      <Text
-                        color={theme.text}
-                      >{`Active            ${s.llm.active_policy === llmSelection.policyId ? '[x]' : '[ ]'}`}</Text>
-                      <Text color={theme.muted}>
-                        {llmSelection.builtin ? 'Built-in policy (read-only)' : 'Custom policy'}
-                      </Text>
+                      {llmSelection?.kind === 'llmGlobal' && (
+                        <>
+                          <Text bold color={theme.heading}>
+                            LLM Functionality
+                          </Text>
+                          <Text
+                            color={theme.text}
+                          >{`Enabled           ${s.llm.disabled ? '[ ]' : '[x]'}`}</Text>
+                          <Text color={theme.muted}>
+                            Disabling preserves providers and policies.
+                          </Text>
+                        </>
+                      )}
+                      {llmSelection?.kind === 'llmProvider' && (
+                        <>
+                          <Text bold color={theme.heading}>
+                            {llmProvider?.name ?? llmSelection.providerId}
+                          </Text>
+                          <Text
+                            color={theme.text}
+                          >{`Enabled           ${(llmProvider?.enabled ?? false) ? '[x]' : '[ ]'}`}</Text>
+                          <Text
+                            color={theme.text}
+                          >{`Endpoint          ${llmProvider?.endpoint ?? 'default'}`}</Text>
+                          <Text
+                            color={theme.text}
+                          >{`API Key           ${(llmProvider?.auth?.api_key ?? llmProvider?.api_key) ? 'set' : 'not set'}`}</Text>
+                          <Text
+                            color={theme.text}
+                          >{`Models            ${llmProvider?.models?.source ?? 'recommended'}`}</Text>
+                        </>
+                      )}
+                      {llmSelection?.kind === 'llmPolicy' && (
+                        <>
+                          <Text bold color={theme.heading}>
+                            {llmPolicy?.name ?? llmSelection.policyId}
+                          </Text>
+                          <Text
+                            color={theme.text}
+                          >{`Active            ${s.llm.active_policy === llmSelection.policyId ? '[x]' : '[ ]'}`}</Text>
+                          <Text color={theme.muted}>
+                            {llmSelection.builtin ? 'Built-in policy (read-only)' : 'Custom policy'}
+                          </Text>
+                        </>
+                      )}
+                      {llmSelection?.kind === 'llmAddProvider' && (
+                        <>
+                          <Text bold color={theme.heading}>
+                            {llmSelection.providerType === 'lemonade'
+                              ? 'Add Lemonade'
+                              : 'Add OpenAI-compatible'}
+                          </Text>
+                          <Text color={theme.muted}>Enter opens the configuration form.</Text>
+                        </>
+                      )}
+                      {llmSelection?.kind === 'llmCreatePolicy' && (
+                        <>
+                          <Text bold color={theme.heading}>
+                            Create Policy
+                          </Text>
+                          <Text color={theme.muted}>Enter opens the policy creation form.</Text>
+                        </>
+                      )}
                     </>
                   )}
-                  {llmSelection?.kind === 'llmAddProvider' && (
-                    <>
-                      <Text bold color={theme.heading}>
-                        {llmSelection.providerType === 'lemonade'
-                          ? 'Add Lemonade'
-                          : 'Add OpenAI-compatible'}
-                      </Text>
-                      <Text color={theme.muted}>Enter opens the configuration form.</Text>
-                    </>
-                  )}
-                  {llmSelection?.kind === 'llmCreatePolicy' && (
-                    <>
-                      <Text bold color={theme.heading}>
-                        Create Policy
-                      </Text>
-                      <Text color={theme.muted}>Enter opens the policy creation form.</Text>
-                    </>
-                  )}
-                </>
-              )}
-            </Box>
+                </Box>
+              </>
+            )}
           </Box>
         )}
       </Box>
@@ -2097,7 +2397,6 @@ function SettingsDialog({
             <Text color={theme.muted}>{CTRL_UNSUPPORTED_NOTICE}</Text>
           </Box>
         )}
-
 
         {s.categoryId === 'workspaces' &&
           s.showKittyWorkspaceMappingWarning &&
@@ -2355,9 +2654,7 @@ function RowView({
           {mark}
           {label}
         </Text>
-        {focused ? (
-          <Text color={theme.muted}>{'  '}wallpaper needs transparent kitty</Text>
-        ) : null}
+        {focused ? <Text color={theme.muted}>{'  '}wallpaper needs transparent kitty</Text> : null}
       </Box>
     );
   }

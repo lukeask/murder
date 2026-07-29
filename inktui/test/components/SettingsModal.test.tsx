@@ -48,7 +48,9 @@ async function walkToFirstBinding(
 }
 
 /** Walk the cursor down (j) until the focused row (the line carrying the `›` cursor prefix) contains
- * `marker`. Robust to the scroll-by-cursor window and the radio/checkbox mark glyphs. */
+ * `marker`. Robust to the scroll-by-cursor window and the radio/checkbox mark glyphs. Only the text
+ * at/after `›` is matched so a same-row category label (e.g. `LLM Functionality` beside T2) cannot
+ * false-positive. */
 async function walkUntilFocused(
   stdin: { write: (s: string) => void },
   lastFrame: () => string | undefined,
@@ -56,13 +58,26 @@ async function walkUntilFocused(
 ): Promise<void> {
   for (let i = 0; i < 80; i++) {
     const focusedLine = (lastFrame() ?? '').split('\n').find((l) => l.includes('›'));
-    if (focusedLine?.includes(marker)) {
+    const afterCursor =
+      focusedLine === undefined ? undefined : focusedLine.slice(focusedLine.indexOf('›'));
+    if (afterCursor?.includes(marker)) {
       return;
     }
     stdin.write('j');
     await tick();
   }
   throw new Error(`never focused a row matching "${marker}"`);
+}
+
+function focusedLine(lastFrame: () => string | undefined): string {
+  return (lastFrame() ?? '').split('\n').find((line) => line.includes('›')) ?? '';
+}
+
+/** Assert `text` appears within the first `maxLine` lines (top-aligned T2, not category-index padding). */
+function assertNearTop(frame: string, text: string, maxLine = 14): void {
+  const idx = frame.split('\n').findIndex((line) => line.includes(text));
+  expect(idx).toBeGreaterThanOrEqual(0);
+  expect(idx).toBeLessThan(maxLine);
 }
 
 async function openCategory(
@@ -186,8 +201,8 @@ describe('SettingsModal', () => {
     expect(frame).toContain('Settings');
     expect(frame).toContain('Appearance');
     expect(frame).toContain('Harnesses');
-    expect(frame).toContain('LLM');
-    expect(frame).toContain('Templates');
+    expect(frame).toContain('LLM Functionality');
+    expect(frame).toContain('Prompt Templates');
     expect(frame).toContain('Keybindings');
     expect(frame).toContain('Workspaces');
     expect(frame).toContain('Theme');
@@ -682,16 +697,147 @@ describe('SettingsModal', () => {
     expect(lastFrame()).toContain('Groups JSON');
   });
 
+  it('shows full LLM Functionality and Prompt Templates category labels', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('LLM Functionality');
+    expect(frame).toContain('Prompt Templates');
+  });
+
   // --- Prompt Templates category (launches PromptTemplateManagerMode) ---
+
+  it('top-aligns T2 when entering Bars and Harnesses (no category-index spacer)', async () => {
+    const { stores, enter } = setup();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    enter();
+    await tick();
+    await openCategory(stdin, lastFrame, 'Bars');
+    stdin.write('l');
+    await tick();
+    assertNearTop(lastFrame() ?? '', 'Contextual hints');
+
+    stdin.write('h');
+    await tick();
+    await openCategory(stdin, lastFrame, 'Harnesses');
+    stdin.write('l');
+    await tick();
+    const frame = lastFrame() ?? '';
+    assertNearTop(frame, 'Startup Rogue');
+    expect(focusedLine(lastFrame)).toMatch(/off|no startup rogue/i);
+  });
+
+  it('remembers T2 focus when leaving and re-entering a category (h/l session memory)', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+
+    await openCategory(stdin, lastFrame, 'Harnesses');
+    stdin.write('l');
+    await tick();
+    expect(focusedLine(lastFrame)).toMatch(/off|no startup rogue/i);
+
+    for (let i = 0; i < 3; i++) {
+      stdin.write('j');
+      await tick();
+    }
+    expect(focusedLine(lastFrame)).toContain('Cursor');
+
+    stdin.write('h');
+    await tick();
+    expect(focusedLine(lastFrame)).toContain('Harnesses');
+
+    stdin.write('l');
+    await tick();
+    expect(focusedLine(lastFrame)).toContain('Cursor');
+    expect(focusedLine(lastFrame)).not.toMatch(/off|no startup rogue/i);
+
+    stdin.write('h');
+    await tick();
+    stdin.write('j');
+    await tick();
+    expect(focusedLine(lastFrame)).toContain('LLM Functionality');
+
+    stdin.write('l');
+    await tick();
+    expect(focusedLine(lastFrame)).toContain('Enabled');
+  });
+
+  it('LLM T3 follows T2 highlight after h without a Cancel trap', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await openCategory(stdin, lastFrame, 'LLM');
+    await walkUntilFocused(stdin, lastFrame, 'groq');
+    stdin.write('\r');
+    await tick();
+    expect(lastFrame()).toContain('Provider settings');
+    expect(lastFrame()).toContain('API key');
+
+    stdin.write('h');
+    await tick();
+    expect(focusedLine(lastFrame)).toContain('groq');
+    expect(lastFrame()).toContain('Provider settings');
+
+    stdin.write('j');
+    await tick();
+    expect(focusedLine(lastFrame)).toContain('cerebras');
+    expect(lastFrame()).toMatch(/cerebras/i);
+  });
+
+  it('Harnesses T3 shows harness detail and keeps control-backend headers out of T2', async () => {
+    const stores = createInputStores(['notes'], 'notes');
+    const { actions } = fakeActions();
+    const { lastFrame, stdin } = render(<Harness stores={stores} />);
+    stores.modes.getState().enter(settingsMode(stores.modes, actions, RICH_CURRENT));
+    await tick();
+    await openCategory(stdin, lastFrame, 'Harnesses');
+    stdin.write('l');
+    await tick();
+    let frame = lastFrame() ?? '';
+    expect(frame).not.toContain('Codex Control Backend');
+    expect(frame).not.toContain('Cursor Control Backend');
+    expect(frame).not.toContain('Claude Control Backend');
+
+    for (let i = 0; i < 3; i++) {
+      stdin.write('j');
+      await tick();
+    }
+    expect(focusedLine(lastFrame)).toContain('Cursor');
+    frame = lastFrame() ?? '';
+    expect(frame).toMatch(/Composer 2\.5|slow|fast/);
+
+    await walkUntilFocused(stdin, lastFrame, 'reset to default');
+    await walkUntilFocused(stdin, lastFrame, 'Codex');
+    frame = lastFrame() ?? '';
+    expect(frame).toMatch(/Harness parse|App server/);
+    expect(focusedLine(lastFrame)).toContain('Codex');
+    expect(frame).toContain('Codex Control Backend');
+
+    // Leave crow Codex for a crow harness without a backend — T3 backends clear.
+    await walkUntilFocused(stdin, lastFrame, 'Pi');
+    frame = lastFrame() ?? '';
+    expect(focusedLine(lastFrame)).toContain('Pi');
+    expect(frame).not.toContain('Codex Control Backend');
+    expect(frame).not.toContain('Cursor Control Backend');
+    expect(frame).not.toContain('Claude Control Backend');
+  });
 
   it('Enter on Open Prompt Templates invokes openPromptTemplates', async () => {
     const stores = createInputStores(['notes'], 'notes');
     const { actions } = fakeActions();
     const openPromptTemplates = vi.fn();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
-    stores.modes.getState().enter(
-      settingsMode(stores.modes, actions, RICH_CURRENT, { openPromptTemplates }),
-    );
+    stores.modes
+      .getState()
+      .enter(settingsMode(stores.modes, actions, RICH_CURRENT, { openPromptTemplates }));
     await tick();
     await openCategory(stdin, lastFrame, 'Prompt Templates');
     await walkUntilFocused(stdin, lastFrame, 'Open Prompt Templates');
