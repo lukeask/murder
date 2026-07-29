@@ -44,11 +44,14 @@ describe('paintWorkflow', () => {
     });
     const output = lines(surface).join('\n');
 
-    expect(output).toContain('┌Build release');
+    // The name rides the top border rail after the definition-order index; the interior belongs to
+    // the stage's own prompt, and the runtime row lists harness · model · worktree.
+    expect(output).toContain('┌ 1 Build release');
     expect(output).toContain('Compile packages');
     expect(output).toContain('codex · gpt-5');
-    expect(output).toContain('wt:');
-    expect(output).toContain('running');
+    expect(output).toContain('└ root ');
+    // A runtime status is a badge on the rail (`●` = running), not a word inside the node.
+    expect(output).toContain('●');
     expect(output).toContain('▶');
     const buildRect = layout.nodes.get('a')?.rect;
     expect(buildRect).toBeDefined();

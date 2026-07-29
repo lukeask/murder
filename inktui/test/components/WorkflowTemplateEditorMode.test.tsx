@@ -19,7 +19,10 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { matchKeymap } from '../../src/input/keymap.js';
 import { createAppStore } from '../../src/store/store.js';
-import type { WorkflowTemplate, WorkflowNodeTemplate } from '../../src/store/workflows/workflowsSlice.js';
+import type {
+  WorkflowNodeTemplate,
+  WorkflowTemplate,
+} from '../../src/store/workflows/workflowsSlice.js';
 import { compileWorkflowTemplate } from '../../src/workflowEditor/compile.js';
 import { fromWire, toWire } from '../../src/workflowEditor/wire.js';
 import { makeKey } from '../input/key.js';
@@ -231,35 +234,35 @@ describe('WorkflowTemplateEditorMode', () => {
     const app = setup({ columns: 140 });
     await tick();
     const frame = app.stdout.lastFrame();
-    expect(frame).toContain('WORKFLOWS  release');
+    expect(frame).toContain('Workflow · release');
     expect(frame).toContain('navigate graph');
     expect(frame).toContain('add stage');
     expect(frame).toContain('dependencies');
     app.close();
   });
 
-  it('uses the wide inspector, medium overlay inspector, and narrow outline at the documented 140/90/60 widths', async () => {
+  it('docks the stage panel beside the graph at 140/90 and falls back to the outline at 60', async () => {
     const wide = setup({ columns: 140 });
     await tick();
-    expect(wide.stdout.lastFrame()).toContain('WORKFLOWS  release');
-    expect(wide.stdout.lastFrame()).toContain('Inspector');
-    expect(wide.stdout.lastFrame()).toContain('ID: build');
+    expect(wide.stdout.lastFrame()).toContain('Workflow · release');
+    expect(wide.stdout.lastFrame()).toContain('Stage 1/3');
+    expect(wide.stdout.lastFrame()).toMatch(/ID\s+build/);
     wide.close();
 
-    const overlay = setup({ columns: 90 });
+    // The panel is docked (never floated) at medium width too, so the graph can never show through
+    // its gaps; it narrows instead, and its required fields stay on screen.
+    const medium = setup({ columns: 90 });
     await tick();
-    // At medium width the inspector is an in-canvas overlay rather than a side
-    // column; its title and required fields must not be clipped below the viewport.
-    expect(overlay.stdout.lastFrame()).toContain('Inspector');
-    expect(overlay.stdout.lastFrame()).toContain('ID: build');
-    expect(overlay.stdout.lastFrame()).toContain('Harness: codex');
-    expect(overlay.stdout.lastFrame()).toContain('Definition order: 1 of 3');
-    overlay.close();
+    expect(medium.stdout.lastFrame()).toContain('Stage 1/3');
+    expect(medium.stdout.lastFrame()).toMatch(/ID\s+build/);
+    expect(medium.stdout.lastFrame()).toMatch(/Harness\s+codex/);
+    medium.close();
 
     const narrow = setup({ columns: 60 });
     await tick();
-    expect(narrow.stdout.lastFrame()).toContain('› 1. build — Build');
-    expect(narrow.stdout.lastFrame()).not.toContain('Inspector');
+    expect(narrow.stdout.lastFrame()).toMatch(/▌\s*1 build\s+Build/);
+    expect(narrow.stdout.lastFrame()).toContain('layer 1');
+    expect(narrow.stdout.lastFrame()).not.toMatch(/Worktree/);
     narrow.close();
   });
 
@@ -306,8 +309,7 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     app.mode.onIntent('save');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('error');
-    expect(app.stdout.lastFrame()).toContain('Stage harness is required.');
+    expect(app.stdout.lastFrame()).toContain('✖ Stage harness is required.');
     expect(app.fake.commandCalls.filter((call) => call.name === 'workflow.put')).toHaveLength(0);
 
     app.mode.onIntent('run');
@@ -335,7 +337,7 @@ describe('WorkflowTemplateEditorMode', () => {
 
     const frame = app.stdout.lastFrame();
     expect(frame).toContain('Stage harness is required.');
-    expect(frame).toContain('ID: far-invalid');
+    expect(frame).toMatch(/ID\s+far-invalid/);
     // The human name is in the canvas border; the machine ID remains available in the inspector.
     expect(frame).toContain('Far Invalid');
     app.close();
@@ -392,11 +394,11 @@ describe('WorkflowTemplateEditorMode', () => {
       },
     }));
     await tick();
-    expect(app.stdout.lastFrame()).toContain('Monitoring immutable run snapshot v7');
-    expect(app.stdout.lastFrame()).toContain('ID: frozen');
-    expect(app.stdout.lastFrame()).toContain('Runtime: running');
-    expect(app.stdout.lastFrame()).toContain('Run running · revision 3');
-    expect(app.stdout.lastFrame()).not.toContain('ID: local');
+    expect(app.stdout.lastFrame()).toContain('snapshot v7');
+    expect(app.stdout.lastFrame()).toMatch(/ID\s+frozen/);
+    expect(app.stdout.lastFrame()).toMatch(/Runtime\s+● running/);
+    expect(app.stdout.lastFrame()).toMatch(/Run\s+running · rev 3/);
+    expect(app.stdout.lastFrame()).not.toMatch(/ID\s+local/);
     app.close();
   });
 
@@ -440,7 +442,9 @@ describe('WorkflowTemplateEditorMode', () => {
     }));
     await tick();
     for (const status of statuses) {
-      expect(app.stdout.lastFrame()).toContain(`Runtime: ${status}`);
+      expect(app.stdout.lastFrame()).toMatch(
+        new RegExp(`Runtime\\s+\\S ${status.replaceAll('_', ' ')}`),
+      );
       app.mode.onIntent('down');
       await tick();
     }
@@ -460,7 +464,7 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('enter');
     app.mode.onIntent('escape');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('• unsaved');
+    expect(app.stdout.lastFrame()).toContain('● unsaved');
     app.mode.onIntent('run');
     await tick();
     expect(app.stdout.lastFrame()).toContain('saving');
@@ -492,10 +496,10 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('inspector');
     await tick();
     expect(app.stdout.lastFrame()).toContain('Stage editor');
-    expect(app.stdout.lastFrame()).toContain('› Name: Build');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Name\s+Build/);
     app.mode.onIntent('down');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('› Description: —');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Prompt\s+—/);
     app.mode.onIntent('enter');
 
     const capturedInputs = new Set(
@@ -511,13 +515,14 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('enter');
     await tick();
 
-    expect(app.stdout.lastFrame()).toContain('│A useful description');
+    expect(app.stdout.lastFrame()).toContain('A useful');
     app.mode.onIntent('up');
     app.mode.onIntent('enter');
     for (const char of ' stage') app.mode.onUncaptured?.(char, {} as never);
     app.mode.onIntent('enter');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('┌Build stage');
+    // The stage's name rides its node's top border rail, after the definition-order index.
+    expect(app.stdout.lastFrame()).toContain('1 Build stage');
     app.mode.onIntent('escape');
     app.mode.onIntent('enter');
     await tick();
@@ -532,44 +537,44 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('down');
     app.mode.onIntent('down');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('› Harness: codex');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Harness\s+codex/);
 
     app.mode.onIntent('enter');
     await tick();
     let frame = app.stdout.lastFrame();
-    expect(frame).toContain('Options (↑/↓):');
+    expect(frame).toContain('↑↓ 2/5');
     expect(frame).toContain('[codex]');
     expect(frame).toContain('claude_code');
     expect(app.mode.hints.some((hint) => hint.description === 'select option')).toBe(true);
 
     app.mode.onUncaptured?.('x', {} as never);
     await tick();
-    expect(app.stdout.lastFrame()).toContain('› Harness: codex█');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Harness\s+codex█/);
 
     app.mode.onIntent('up'); // previous option → claude_code
     await tick();
-    expect(app.stdout.lastFrame()).toContain('› Harness: claude_code█');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Harness\s+claude_code█/);
     app.mode.onIntent('down'); // codex
     app.mode.onIntent('down'); // cursor
     await tick();
-    expect(app.stdout.lastFrame()).toContain('› Harness: cursor█');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Harness\s+cursor█/);
     app.mode.onIntent('enter');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('› Harness: cursor');
-    expect(app.stdout.lastFrame()).toMatch(/Model: (composer-2\.5|auto)/);
+    expect(app.stdout.lastFrame()).toMatch(/▸ Harness\s+cursor/);
+    expect(app.stdout.lastFrame()).toMatch(/Model\s+(composer-2\.5|auto)/);
 
     app.mode.onIntent('down');
     app.mode.onIntent('enter');
     await tick();
     frame = app.stdout.lastFrame();
-    expect(frame).toContain('Options (↑/↓):');
+    expect(frame).toContain('↑↓');
     expect(frame).toContain('composer-2.5');
     expect(frame).toContain('claude-sonnet-4.5');
     app.mode.onIntent('down');
     app.mode.onIntent('down');
     app.mode.onIntent('enter');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('› Model: gpt-5.5');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Model\s+gpt-5\.5/);
     app.close();
   });
 
@@ -595,13 +600,13 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('save');
     await tick();
     expect(app.stdout.lastFrame()).toMatch(
-      /Registry changed remotely.*Latest release v1 has 1 stage.*Review latest summary.*r: reload.*o: overwrite latest.*A: save as/s,
+      /Registry changed remotely.*Latest release v1 has 1 stage.*r {2}reload remote.*o {2}overwrite latest.*A {2}save as/s,
     );
     expect(app.store.getState().workflows.items[0]).toEqual(workflow());
 
     app.mode.onIntent('saveAs');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('name: release█');
+    expect(app.stdout.lastFrame()).toContain('workflow name ▸ release█');
     app.close();
 
     // Reload is deliberately only accepted while the conflict capture is active.
@@ -626,7 +631,7 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     reloaded.mode.onIntent('reload');
     await tick();
-    expect(reloaded.stdout.lastFrame()).toContain('ID: remote');
+    expect(reloaded.stdout.lastFrame()).toMatch(/ID\s+remote/);
     reloaded.close();
 
     let puts = 0;
@@ -677,7 +682,10 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     app.mode.onIntent('run');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('Run  [target=]  region=');
+    const runSheet = app.stdout.lastFrame();
+    expect(runSheet).toContain('Run release');
+    expect(runSheet).toMatch(/▸ target\s+█/);
+    expect(runSheet).toMatch(/region\s+(required|—)/);
     expect(app.fake.queryCalls.some((call) => call.name === 'workflow.compile')).toBe(true);
     expect(
       app.fake.queryCalls.find((call) => call.name === 'workflow.compile')?.params,
@@ -727,7 +735,8 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     app.mode.onIntent('run');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('Run  [subject=]  risk_area=');
+    expect(app.stdout.lastFrame()).toMatch(/▸ subject\s+█/);
+    expect(app.stdout.lastFrame()).toContain('risk_area');
     expect(
       app.fake.queryCalls.find((call) => call.name === 'workflow.compile')?.params,
     ).toMatchObject({
@@ -741,9 +750,7 @@ describe('WorkflowTemplateEditorMode', () => {
 
   it('blocks start when a stage references an unknown prompt template', async () => {
     const definition = workflow({
-      stages: [
-        stage('review', 'Review', [], { instructions: 'Use :missing-template: please' }),
-      ],
+      stages: [stage('review', 'Review', [], { instructions: 'Use :missing-template: please' })],
     });
     const app = setup({ definition });
     await tick();
@@ -759,15 +766,13 @@ describe('WorkflowTemplateEditorMode', () => {
       inputs: {
         target: { label: 'Deploy target', kind: 'text', required: true },
       },
-      stages: [
-        stage('build', 'Build {target}', [], { instructions: 'Deploy {target}' }),
-      ],
+      stages: [stage('build', 'Build {target}', [], { instructions: 'Deploy {target}' })],
     });
     const app = setup({ definition });
     await tick();
     app.mode.onIntent('run');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('Run  [Deploy target=]');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Deploy target\s+█/);
     app.mode.onIntent('enter');
     await tick();
     expect(app.stdout.lastFrame()).toContain("required input 'target' is not filled");
@@ -786,7 +791,7 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     app.mode.onIntent('run');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('Run  [Brief=]');
+    expect(app.stdout.lastFrame()).toMatch(/▸ Brief\s+█/);
     // Regression: bare `{ return }` before `{ shift, return }` would steal Shift+Enter as submit.
     expect(matchKeymap(app.mode.keymap, '', makeKey({ return: true, shift: true }))).toBe(
       'newline',
@@ -801,20 +806,18 @@ describe('WorkflowTemplateEditorMode', () => {
     app.mode.onIntent('enter');
     await tick();
 
-    expect(app.fake.commandCalls.find((call) => call.name === 'workflow.start')?.params).toMatchObject(
-      {
-        name: 'release',
-        args: { brief: 'line1\nline2' },
-      },
-    );
+    expect(
+      app.fake.commandCalls.find((call) => call.name === 'workflow.start')?.params,
+    ).toMatchObject({
+      name: 'release',
+      args: { brief: 'line1\nline2' },
+    });
     app.close();
   });
 
   it('falls back to client compile when workflow.compile RPC fails', async () => {
     const definition = workflow({
-      stages: [
-        stage('build', 'Build {target}', [], { instructions: 'Deploy {target}' }),
-      ],
+      stages: [stage('build', 'Build {target}', [], { instructions: 'Deploy {target}' })],
     });
     const app = setup({
       definition,
@@ -825,7 +828,7 @@ describe('WorkflowTemplateEditorMode', () => {
     await tick();
     app.mode.onIntent('run');
     await tick();
-    expect(app.stdout.lastFrame()).toContain('Run  [target=]');
+    expect(app.stdout.lastFrame()).toMatch(/▸ target\s+█/);
     app.close();
   });
 });

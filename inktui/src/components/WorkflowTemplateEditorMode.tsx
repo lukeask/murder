@@ -28,9 +28,9 @@ import { useTheme } from '../theme/themeStore.js';
 import {
   compileWorkflowTemplate,
   requiredInputIssues,
-  wizardFieldsFromCompileResult,
   type WizardField,
   type WorkflowCompileIssue,
+  wizardFieldsFromCompileResult,
 } from '../workflowEditor/compile.js';
 import { type GraphLayout, layoutWorkflow } from '../workflowEditor/layout.js';
 import type {
@@ -42,7 +42,7 @@ import type {
 } from '../workflowEditor/model.js';
 import { workflowEqual } from '../workflowEditor/model.js';
 import { autoPan, nearestNode } from '../workflowEditor/navigation.js';
-import { paintWorkflow } from '../workflowEditor/paint.js';
+import { paintWorkflow, wrapText } from '../workflowEditor/paint.js';
 import {
   applyWorkflowEdit,
   dependencyLegality,
@@ -50,13 +50,31 @@ import {
   type WorkflowEdit,
 } from '../workflowEditor/reducer.js';
 import { decodeStaticDagStatuses } from '../workflowEditor/runState.js';
+import {
+  stageStatusColor,
+  stageStatusGlyph,
+  stageStatusLabel,
+} from '../workflowEditor/statusDisplay.js';
 import { validateEditorWorkflow } from '../workflowEditor/validate.js';
 import { fromWire, toWire } from '../workflowEditor/wire.js';
 import { useBottomBarLines } from './BottomBar.js';
-import { TextRuns } from './TextRuns.js';
+import { TRI_LEFT, TRI_RIGHT } from './glyphs.js';
+import { Pane } from './Pane.js';
 import { HARNESS_ORDER } from './spawnWizardMachine.js';
+import { TextRuns } from './TextRuns.js';
 
 export const WORKFLOW_TEMPLATE_EDITOR_MODE_ID = 'workflow-editor';
+
+/** Frame rows the body cannot use: the titled top border, the context line, the bottom border. */
+const FRAME_ROWS = 3;
+/** Frame columns the body cannot use: the two side borders. */
+const FRAME_COLUMNS = 2;
+/** Width of the docked stage panel — enough for `Worktree` plus a readable value column. */
+const INSPECTOR_WIDTH = 40;
+/** Floor for the stage panel on a mid-width terminal, below which the graph keeps the space. */
+const INSPECTOR_MIN_WIDTH = 28;
+/** Label column in the stage panel, sized to its longest label (`Worktree`). */
+const INSPECTOR_LABEL_WIDTH = 8;
 
 type Interaction =
   | { readonly kind: 'normal' }
@@ -1026,10 +1044,7 @@ function workflowTemplateEditorKeymap(
   ];
 }
 
-function hints(
-  interaction: Interaction,
-  options: readonly string[] = [],
-): readonly ModeHint[] {
+function hints(interaction: Interaction, options: readonly string[] = []): readonly ModeHint[] {
   if (interaction.kind === 'stage-menu')
     return interaction.editing
       ? options.length > 0
@@ -1163,10 +1178,16 @@ function WorkflowTemplateEditorSurface({
     issuesByNode.set(issue.stageKey, nodeIssues);
   }
   const narrow = columns < 72;
-  const overlay = columns >= 72 && columns < 110;
-  const inspectorWidth = !narrow && !overlay && session.inspectorOpen ? 36 : 0;
-  const canvasWidth = Math.max(20, columns - inspectorWidth);
-  const canvasHeight = Math.max(5, availRows - 4);
+  const bodyWidth = Math.max(20, columns - FRAME_COLUMNS);
+  // The stage panel is always docked beside the graph rather than floated over it: Ink overlays only
+  // paint the cells their text covers, so a floating panel would show graph lines through its gaps.
+  const inspectorWidth =
+    narrow || !session.inspectorOpen
+      ? 0
+      : Math.max(INSPECTOR_MIN_WIDTH, Math.min(INSPECTOR_WIDTH, Math.floor(bodyWidth * 0.42)));
+  const canvasWidth = Math.max(20, bodyWidth - inspectorWidth);
+  const sheet = editorSheet(session, run);
+  const canvasHeight = Math.max(5, availRows - FRAME_ROWS - (sheet === null ? 0 : sheet.rows));
   session.canvasWidth = canvasWidth;
   session.canvasHeight = canvasHeight;
   const connect =
@@ -1217,157 +1238,406 @@ function WorkflowTemplateEditorSurface({
     },
   );
   const selected = displayed.stages.find((stage) => stage.key === displayedSelected) ?? null;
-  const wizard = session.interaction.kind === 'wizard' ? session.interaction : null;
-  const editOptions =
-    session.interaction.kind === 'edit' ? optionsForEditorField(session, session.interaction) : [];
-  const editValue = session.interaction.kind === 'edit' ? session.interaction.value : '';
-  const stageMenuOptions =
-    session.interaction.kind === 'stage-menu'
-      ? optionsForEditorField(session, session.interaction)
-      : [];
+  const order =
+    displayedSelected === null
+      ? undefined
+      : displayed.stages.findIndex((stage) => stage.key === displayedSelected) + 1;
+  const inspector = (width: number): JSX.Element => (
+    <WorkflowInspector
+      stage={selected}
+      issues={issues}
+      run={run}
+      statuses={stageStatuses}
+      order={order}
+      total={displayed.stages.length}
+      dependents={
+        displayedSelected === null
+          ? []
+          : (layout.graph.outgoing.get(displayedSelected) ?? []).flatMap((edge) => {
+              const target = displayed.stages.find((stage) => stage.key === edge.target);
+              return target === undefined ? [] : [target.id];
+            })
+      }
+      width={width}
+      {...(session.interaction.kind === 'stage-menu' ? { interaction: session.interaction } : {})}
+      editorOptions={
+        session.interaction.kind === 'stage-menu'
+          ? optionsForEditorField(session, session.interaction)
+          : []
+      }
+    />
+  );
+  const errorCount = issues.filter((issue) => issue.severity === 'error').length;
+  const warningCount = issues.length - errorCount;
   return (
     <Box width={columns} height={availRows} flexDirection="column" overflow="hidden">
-      <Text
-        bold
-        color={theme.accent}
-      >{`WORKFLOWS  ${session.draft.name || '(unnamed)'}${workflowEqual(session.base, session.draft) ? '' : ' • unsaved'}  ${session.status}${run === null ? '' : `  run: ${run.status}`}`}</Text>
-      {session.interaction.kind === 'discard' ? (
-        <Text color={theme.warning}>Discard unsaved edits? y: discard n/esc: continue</Text>
-      ) : null}
-      {session.feedback !== null ? <Text color={theme.error}>{session.feedback}</Text> : null}
-      {session.interaction.kind === 'delete' ? (
-        <Text
-          color={theme.warning}
-        >{`Delete “${session.interaction.stageId || '(blank)'}” and remove ${session.interaction.affected} dependency reference${session.interaction.affected === 1 ? '' : 's'}? y: delete  n/esc: cancel`}</Text>
-      ) : null}
-      {session.interaction.kind === 'edit' ? (
-        <>
-          <Text
-            color={theme.accent}
-          >{`${session.interaction.field}: ${session.interaction.value}█`}</Text>
-          {editOptions.length > 0 ? (
-            <Text
-              dimColor
-            >{`Options (↑/↓): ${formatOptionList(editOptions, editValue)}`}</Text>
-          ) : null}
-        </>
-      ) : null}
-      {session.interaction.kind === 'search' ? (
-        <Text color={theme.accent}>{`Search stages: ${session.interaction.query}█`}</Text>
-      ) : null}
-      {session.interaction.kind === 'conflict' ? (
-        <>
+      <Pane
+        title={`Workflow · ${session.draft.name || '(unnamed)'}`}
+        titleExtra={<WorkflowStatusChip session={session} run={run} />}
+        focused
+        paddingLeft={0}
+        paddingRight={0}
+        footerLeft={
+          <WorkflowFooterMessage
+            session={session}
+            errorCount={errorCount}
+            warningCount={warningCount}
+          />
+        }
+        footerRight={
+          <Text dimColor>
+            {[
+              `${displayed.stages.length} stage${displayed.stages.length === 1 ? '' : 's'}`,
+              session.draft.mode,
+              runSnapshot === null ? '' : `snapshot v${run?.definition_version ?? '?'}`,
+            ]
+              .filter((part) => part !== '')
+              .join(' · ')}
+          </Text>
+        }
+      >
+        <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden">
+          <ContextLine
+            session={session}
+            connect={connect}
+            order={order}
+            total={displayed.stages.length}
+            selectedId={selected?.id ?? null}
+            width={bodyWidth}
+          />
+          {narrow ? (
+            session.interaction.kind === 'stage-menu' ? (
+              inspector(bodyWidth)
+            ) : (
+              <WorkflowOutline
+                draft={displayed}
+                selected={displayedSelected}
+                issues={issues}
+                statuses={stageStatuses}
+                width={bodyWidth}
+              />
+            )
+          ) : (
+            <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
+              <WorkflowCanvas
+                surface={surface}
+                layout={layout}
+                viewport={session.viewport}
+                width={canvasWidth}
+                height={canvasHeight}
+                onSelect={onSelect}
+                onScroll={onScroll}
+              />
+              {inspectorWidth > 0 ? inspector(inspectorWidth) : null}
+            </Box>
+          )}
+          {sheet === null ? null : <EditorSheet sheet={sheet} width={bodyWidth} />}
+        </Box>
+      </Pane>
+    </Box>
+  );
+}
+
+/** The dirty/saving/run chip worn on the frame's title rail. */
+function WorkflowStatusChip({
+  session,
+  run,
+}: {
+  readonly session: Session;
+  readonly run: WorkflowRun | null;
+}): JSX.Element | null {
+  const theme = useTheme();
+  const dirty = !workflowEqual(session.base, session.draft);
+  if (session.status === 'saving') return <Text color={theme.heading}>{'  saving…'}</Text>;
+  if (run !== null) {
+    return (
+      <Text color={stageStatusColor(run.status, theme)}>{`  ${TRI_RIGHT} ${run.status}`}</Text>
+    );
+  }
+  if (dirty) return <Text color={theme.warning}>{'  ● unsaved'}</Text>;
+  return <Text dimColor>{'  ✓ saved'}</Text>;
+}
+
+/** The frame's footer message: a blocking problem if there is one, else the issue tally. */
+function WorkflowFooterMessage({
+  session,
+  errorCount,
+  warningCount,
+}: {
+  readonly session: Session;
+  readonly errorCount: number;
+  readonly warningCount: number;
+}): JSX.Element {
+  const theme = useTheme();
+  if (session.feedback !== null) {
+    return (
+      <Text color={session.status === 'error' ? theme.error : theme.warning}>
+        {`${session.status === 'error' ? '✖' : '⚠'} ${session.feedback}`}
+      </Text>
+    );
+  }
+  if (errorCount > 0 || warningCount > 0) {
+    return (
+      <Text>
+        {errorCount > 0 ? <Text color={theme.error}>{`✖ ${errorCount} blocking`}</Text> : null}
+        {errorCount > 0 && warningCount > 0 ? <Text dimColor>{' · '}</Text> : null}
+        {warningCount > 0 ? (
           <Text
             color={theme.warning}
-          >{`Registry changed remotely. ${session.interaction.remoteSummary}`}</Text>
-          <Text color={theme.warning}>
-            Review latest summary, then r: reload o: overwrite latest A: save as
+          >{`⚠ ${warningCount} warning${warningCount === 1 ? '' : 's'}`}</Text>
+        ) : null}
+      </Text>
+    );
+  }
+  return <Text dimColor>ready to run</Text>;
+}
+
+/**
+ * The always-present line under the frame's title: a breadcrumb while navigating, and the live
+ * field/query editor while a transient interaction owns the keyboard. It is reserved even when idle
+ * so opening a prompt never shifts the graph under the cursor.
+ */
+function ContextLine({
+  session,
+  connect,
+  order,
+  total,
+  selectedId,
+  width,
+}: {
+  readonly session: Session;
+  readonly connect:
+    | { readonly target: StageKey; readonly candidate: StageKey; readonly legality: string }
+    | undefined;
+  readonly order: number | undefined;
+  readonly total: number;
+  readonly selectedId: string | null;
+  readonly width: number;
+}): JSX.Element {
+  const theme = useTheme();
+  const interaction = session.interaction;
+  const body = ((): JSX.Element => {
+    if (connect !== undefined) {
+      const tone =
+        connect.legality === 'add'
+          ? theme.success
+          : connect.legality === 'remove'
+            ? theme.warning
+            : theme.error;
+      const candidateId = session.draft.stages.find((stage) => stage.key === connect.candidate)?.id;
+      const targetId = session.draft.stages.find((stage) => stage.key === connect.target)?.id;
+      return (
+        <Text wrap="truncate-end">
+          <Text color={tone} bold>{`${connect.legality.toUpperCase()} dependency`}</Text>
+          <Text dimColor>{`  ${targetId ?? '?'} ${TRI_LEFT} ${candidateId ?? '?'}`}</Text>
+        </Text>
+      );
+    }
+    if (interaction.kind === 'edit' || (interaction.kind === 'stage-menu' && interaction.editing)) {
+      const options = optionsForEditorField(session, interaction);
+      const label =
+        interaction.kind === 'edit' && interaction.target === 'workflow'
+          ? `workflow ${interaction.field}`
+          : `stage ${interaction.field}`;
+      return (
+        <Text wrap="truncate-end">
+          <Text color={theme.heading}>{`${label} `}</Text>
+          <Text dimColor>{`${TRI_RIGHT} `}</Text>
+          {options.length > 0 ? (
+            <OptionChooser options={options} value={interaction.value} />
+          ) : (
+            <Text color={theme.text}>{`${interaction.value}█`}</Text>
+          )}
+        </Text>
+      );
+    }
+    if (interaction.kind === 'stage-menu') {
+      return (
+        <Text wrap="truncate-end">
+          <Text color={theme.heading}>editing stage </Text>
+          <Text>{selectedId ?? '(blank)'}</Text>
+          <Text dimColor>{`  ${interaction.field}`}</Text>
+        </Text>
+      );
+    }
+    if (interaction.kind === 'search') {
+      const matches = session.draft.stages.filter((stage) =>
+        `${stage.id} ${stage.title}`.toLowerCase().includes(interaction.query.toLowerCase()),
+      ).length;
+      return (
+        <Text wrap="truncate-end">
+          <Text color={theme.heading}>search </Text>
+          <Text dimColor>{`${TRI_RIGHT} `}</Text>
+          <Text>{`${interaction.query}█`}</Text>
+          <Text dimColor>{`  ${matches} match${matches === 1 ? '' : 'es'}`}</Text>
+        </Text>
+      );
+    }
+    return (
+      <Text wrap="truncate-end" dimColor>
+        {total === 0
+          ? 'empty workflow — a adds the first stage'
+          : `stage ${order ?? 0}/${total}  ${selectedId || '(blank id)'}`}
+      </Text>
+    );
+  })();
+  return (
+    <Box width={width} flexShrink={0} paddingX={1}>
+      {body}
+    </Box>
+  );
+}
+
+/** A one-line pick list: the committed value in brackets, its neighbours dimmed around it. */
+function OptionChooser({
+  options,
+  value,
+}: {
+  readonly options: readonly string[];
+  readonly value: string;
+}): JSX.Element {
+  const theme = useTheme();
+  const index = Math.max(0, options.indexOf(value));
+  return (
+    <Text>
+      <Text dimColor>{`↑↓ ${index + 1}/${options.length}  `}</Text>
+      {options.map((option, position) => (
+        <Text key={option}>
+          {position === 0 ? '' : <Text dimColor>{' · '}</Text>}
+          {option === value ? (
+            <Text color={theme.accent} bold>{`[${option}]`}</Text>
+          ) : (
+            <Text dimColor>{option}</Text>
+          )}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+interface SheetSpec {
+  readonly title: string;
+  readonly tone: 'warning' | 'error' | 'accent';
+  readonly lines: readonly string[];
+  readonly choices: string;
+  /** Wizard fields render as rows so the cursor and per-field values stay readable. */
+  readonly fields?: {
+    readonly items: readonly WizardField[];
+    readonly values: Record<string, string>;
+    readonly cursor: number;
+  };
+  /** Total rows the sheet occupies, so the canvas can give up exactly that much height. */
+  readonly rows: number;
+}
+
+/** Describe the sheet a blocking interaction needs (confirmations, conflicts, the run form). */
+function editorSheet(session: Session, run: WorkflowRun | null): SheetSpec | null {
+  const interaction = session.interaction;
+  const chrome = 3; // border rows + the choices row
+  if (interaction.kind === 'delete') {
+    const lines = [
+      `${interaction.affected} dependency reference${interaction.affected === 1 ? '' : 's'} to “${interaction.stageId || '(blank)'}” will be removed.`,
+    ];
+    return {
+      title: `Delete stage “${interaction.stageId || '(blank)'}”?`,
+      tone: 'warning',
+      lines,
+      choices: 'y  delete      n / esc  keep stage',
+      rows: chrome + lines.length + 1,
+    };
+  }
+  if (interaction.kind === 'discard') {
+    const lines = ['Unsaved edits to this workflow will be lost.'];
+    return {
+      title: 'Discard unsaved edits?',
+      tone: 'warning',
+      lines,
+      choices: 'y  discard     n / esc  keep editing',
+      rows: chrome + lines.length + 1,
+    };
+  }
+  if (interaction.kind === 'conflict') {
+    const lines = [interaction.remoteSummary];
+    return {
+      title: 'Registry changed remotely',
+      tone: 'error',
+      lines,
+      choices: 'r  reload remote     o  overwrite latest     A  save as     esc  cancel',
+      rows: chrome + lines.length + 1,
+    };
+  }
+  if (interaction.kind === 'wizard') {
+    return {
+      title: `Run ${session.draft.name || '(unnamed)'}${run === null ? '' : ' again'}`,
+      tone: 'accent',
+      lines: [],
+      choices: 'enter  run      tab  next field      esc  cancel',
+      fields: {
+        items: interaction.fields,
+        values: interaction.values,
+        cursor: interaction.cursor,
+      },
+      rows: chrome + interaction.fields.length + 1,
+    };
+  }
+  return null;
+}
+
+/** The bottom sheet: a bordered, tone-coloured panel for anything that needs a decision. */
+function EditorSheet({
+  sheet,
+  width,
+}: {
+  readonly sheet: SheetSpec;
+  readonly width: number;
+}): JSX.Element {
+  const theme = useTheme();
+  const tone =
+    sheet.tone === 'error' ? theme.error : sheet.tone === 'warning' ? theme.warning : theme.accent;
+  const labelWidth = Math.min(
+    24,
+    Math.max(6, ...(sheet.fields?.items ?? []).map((field) => Array.from(field.label).length)),
+  );
+  return (
+    <Box
+      width={width}
+      flexShrink={0}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={tone}
+      paddingX={1}
+    >
+      <Text bold color={tone} wrap="truncate-end">
+        {sheet.title}
+      </Text>
+      {sheet.lines.map((line) => (
+        <Text key={line} wrap="truncate-end">
+          {line}
+        </Text>
+      ))}
+      {sheet.fields?.items.map((field, index) => {
+        const active = index === sheet.fields?.cursor;
+        const value = sheet.fields?.values[field.name] ?? '';
+        return (
+          <Text key={field.name} wrap="truncate-end">
+            <Text {...(active ? { color: theme.accent } : {})} bold={active}>
+              {`${active ? TRI_RIGHT : ' '} ${field.label.padEnd(labelWidth)}  `}
+            </Text>
+            <Text {...(value === '' && field.required ? { color: theme.warning } : {})}>
+              {active
+                ? `${value.replaceAll('\n', '↵')}█`
+                : value === ''
+                  ? field.required
+                    ? 'required'
+                    : '—'
+                  : value.replaceAll('\n', '↵')}
+            </Text>
           </Text>
-        </>
-      ) : null}
-      {connect !== undefined ? (
-        <Text
-          color={
-            connect.legality === 'add'
-              ? theme.success
-              : connect.legality === 'remove'
-                ? theme.warning
-                : theme.error
-          }
-        >{`${connect.legality.toUpperCase()} dependency`}</Text>
-      ) : null}
-      {wizard !== null ? (
-        <Text
-          color={theme.accent}
-        >{`Run  ${wizard.fields
-          .map((field, index) => {
-            const value = wizard.values[field.name] ?? '';
-            const cell = `${field.label}=${value}`;
-            return index === wizard.cursor ? `[${cell}]` : cell;
-          })
-          .join('  ')}`}</Text>
-      ) : null}
-      {runSnapshot !== null ? (
-        <Text
-          dimColor
-        >{`Monitoring immutable run snapshot v${run?.definition_version ?? '?'}`}</Text>
-      ) : null}
-      {narrow && session.interaction.kind === 'stage-menu' ? (
-        <WorkflowInspector
-          stage={selected}
-          issues={issues}
-          run={run}
-          statuses={stageStatuses}
-          order={
-            displayedSelected === null
-              ? undefined
-              : displayed.stages.findIndex((stage) => stage.key === displayedSelected) + 1
-          }
-          total={displayed.stages.length}
-          width={columns}
-          interaction={session.interaction}
-          editorOptions={stageMenuOptions}
-        />
-      ) : narrow ? (
-        <WorkflowOutline
-          draft={displayed}
-          selected={displayedSelected}
-          issues={issues}
-          statuses={stageStatuses}
-        />
-      ) : (
-        <Box flexDirection="row" flexGrow={1}>
-          <WorkflowCanvas
-            surface={surface}
-            layout={layout}
-            viewport={session.viewport}
-            width={canvasWidth}
-            height={canvasHeight}
-            onSelect={onSelect}
-            onScroll={onScroll}
-          />
-          {!overlay && session.inspectorOpen ? (
-            <WorkflowInspector
-              stage={selected}
-              issues={issues}
-              run={run}
-              statuses={stageStatuses}
-              order={
-                displayedSelected === null
-                  ? undefined
-                  : displayed.stages.findIndex((stage) => stage.key === displayedSelected) + 1
-              }
-              total={displayed.stages.length}
-              width={inspectorWidth}
-              {...(session.interaction.kind === 'stage-menu'
-                ? { interaction: session.interaction }
-                : {})}
-              editorOptions={stageMenuOptions}
-            />
-          ) : null}
-          {overlay && session.inspectorOpen ? (
-            <Box position="absolute" alignSelf="flex-end">
-              <WorkflowInspector
-                stage={selected}
-                issues={issues}
-                run={run}
-                statuses={stageStatuses}
-                order={
-                  displayedSelected === null
-                    ? undefined
-                    : displayed.stages.findIndex((stage) => stage.key === displayedSelected) + 1
-                }
-                total={displayed.stages.length}
-                width={Math.min(44, columns - 4)}
-                {...(session.interaction.kind === 'stage-menu'
-                  ? { interaction: session.interaction }
-                  : {})}
-                editorOptions={stageMenuOptions}
-              />
-            </Box>
-          ) : null}
-        </Box>
-      )}
+        );
+      })}
+      <Text dimColor wrap="truncate-end">
+        {sheet.choices}
+      </Text>
     </Box>
   );
 }
@@ -1426,10 +1696,6 @@ function fieldOptions(session: Session, interaction: Interaction): readonly stri
   if (interaction.kind !== 'edit' && interaction.kind !== 'stage-menu') return [];
   if (interaction.kind === 'stage-menu' && !interaction.editing) return [];
   return optionsForEditorField(session, interaction);
-}
-
-function formatOptionList(options: readonly string[], selected: string): string {
-  return options.map((option) => (option === selected ? `[${option}]` : option)).join(' · ');
 }
 
 function optionsForEditorField(
@@ -1545,42 +1811,78 @@ function editorIssueFromServer(
   };
 }
 
+/**
+ * The sub-72-column fallback: the same graph as a dependency-ordered list. Stages are grouped by the
+ * layer they would occupy on the canvas, so the shape of the workflow still reads top-to-bottom.
+ */
 function WorkflowOutline({
   draft,
   selected,
   issues,
   statuses,
+  width,
 }: {
   readonly draft: EditorWorkflow;
   readonly selected: StageKey | null;
   readonly issues: readonly EditorIssue[];
   readonly statuses: ReadonlyMap<string, string>;
+  readonly width: number;
 }): JSX.Element {
+  const theme = useTheme();
   const layout = layoutWorkflow(draft);
+  const idWidth = Math.min(
+    14,
+    Math.max(4, ...draft.stages.map((stage) => Array.from(stage.id || '(blank)').length)),
+  );
   return (
-    <Box flexDirection="column" flexGrow={1}>
+    <Box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden" paddingX={1}>
       {layout.ranks.map((rank, rankIndex) => (
-        <Box key={`rank:${rank.join('\0')}`} flexDirection="column">
-          <Text dimColor>{`Rank ${rankIndex}`}</Text>
+        <Box key={`layer:${rank.join('\0')}`} flexDirection="column" flexShrink={0}>
+          <Text dimColor wrap="truncate-end">
+            {`layer ${rankIndex + 1} ${'─'.repeat(Math.max(0, width - 9 - String(rankIndex + 1).length))}`}
+          </Text>
           {rank.map((key) => {
             const stage = draft.stages.find((candidate) => candidate.key === key);
             if (stage === undefined) return null;
-            const definitionIndex = draft.stages.findIndex((candidate) => candidate.key === key);
-            const label = `${stage.key === selected ? '›' : ' '} ${definitionIndex + 1}. ${stage.id || '(blank)'} — ${stage.title || '(untitled)'}${stage.dependsOn.length === 0 ? ' · root' : ` · ← ${stage.dependsOn.join(', ')}`}${statuses.has(stage.id) ? ` · ${statuses.get(stage.id)}` : ''}${issues.some((issue) => issue.stageKey === stage.key) ? ' !' : ''}`;
-            return stage.key === selected ? (
-              <Text key={stage.key} color="cyan">
-                {label}
-              </Text>
-            ) : (
-              <Text key={stage.key}>{label}</Text>
+            const index = draft.stages.findIndex((candidate) => candidate.key === key) + 1;
+            const status = statuses.get(stage.id);
+            const failing = issues.some(
+              (issue) => issue.stageKey === stage.key && issue.severity === 'error',
+            );
+            const active = stage.key === selected;
+            const deps =
+              stage.dependsOn.length === 0 ? 'root' : `${TRI_LEFT} ${stage.dependsOn.join(', ')}`;
+            return (
+              <Box key={stage.key} flexDirection="row" flexShrink={0}>
+                <Text {...(active ? { color: theme.accent } : {})} bold={active}>
+                  {`${active ? '▌' : ' '}${String(index).padStart(2)} ${(stage.id || '(blank)').padEnd(idWidth)} `}
+                </Text>
+                <Box flexGrow={1} minWidth={0}>
+                  <Text dimColor={!active} wrap="truncate-end">
+                    {stage.title || '(untitled)'}
+                  </Text>
+                </Box>
+                <Text dimColor>{` ${deps} `}</Text>
+                <Text
+                  color={failing ? theme.error : stageStatusColor(status, theme)}
+                >{`${failing ? '✖' : stageStatusGlyph(status) || ' '}`}</Text>
+              </Box>
             );
           })}
         </Box>
       ))}
+      <Box flexGrow={1} />
+      <Text dimColor>graph view returns at 72 columns</Text>
     </Box>
   );
 }
 
+/**
+ * The stage panel: the selected stage's fields in one aligned column, its graph position, and any
+ * problems attached to it. It doubles as the stage *editor* — the same rows gain a cursor and an
+ * inline value editor while the `stage-menu` interaction is live, so editing happens where the value
+ * is read rather than in a separate form.
+ */
 function WorkflowInspector({
   stage,
   issues,
@@ -1588,6 +1890,7 @@ function WorkflowInspector({
   statuses,
   order,
   total,
+  dependents,
   width,
   interaction,
   editorOptions = [],
@@ -1598,6 +1901,7 @@ function WorkflowInspector({
   readonly statuses: ReadonlyMap<string, string>;
   readonly order: number | undefined;
   readonly total: number;
+  readonly dependents: readonly string[];
   readonly width: number;
   readonly interaction?: Extract<Interaction, { readonly kind: 'stage-menu' }>;
   readonly editorOptions?: readonly string[];
@@ -1609,49 +1913,96 @@ function WorkflowInspector({
       ? workflowIssues
       : [...workflowIssues, ...issues.filter((issue) => issue.stageKey === stage.key)];
   const stageMenu = stage?.key === interaction?.target ? interaction : undefined;
-  const row = (field: EditableField, label: string, value: string): JSX.Element => {
-    const active = stageMenu?.field === field;
-    const shown = active && stageMenu.editing ? `${stageMenu.value}█` : value;
-    const text = `${active ? '› ' : '  '}${label}: ${shown}`;
-    return active ? (
-      <Text key={field} color={theme.accent} bold>
-        {text}
-      </Text>
-    ) : (
-      <Text key={field}>{text}</Text>
+  const valueWidth = Math.max(8, width - 4 - INSPECTOR_LABEL_WIDTH - 2);
+  const status = stage === null || stage === undefined ? undefined : statuses.get(stage.id);
+  const row = (
+    field: EditableField | null,
+    label: string,
+    value: string,
+    options: { readonly missing?: boolean; readonly muted?: boolean } = {},
+  ): JSX.Element => {
+    const active = field !== null && stageMenu?.field === field;
+    const editing = active && stageMenu?.editing === true;
+    const shown = editing ? `${stageMenu?.value ?? ''}█` : value;
+    const lines = wrapText(shown, valueWidth, editing ? 1 : 3);
+    const valueColor = options.missing === true ? { color: theme.warning } : {};
+    return (
+      <Box key={field ?? label} flexDirection="column" flexShrink={0}>
+        <Box flexDirection="row" flexShrink={0}>
+          <Text {...(active ? { color: theme.accent } : {})} bold={active} dimColor={!active}>
+            {`${active ? TRI_RIGHT : ' '} ${label.padEnd(INSPECTOR_LABEL_WIDTH)} `}
+          </Text>
+          <Text {...valueColor} dimColor={options.muted === true && options.missing !== true}>
+            {lines[0] ?? ''}
+          </Text>
+        </Box>
+        {lines.slice(1).map((line, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: continuation rows are identified by position.
+          <Text key={`${label}:${index}`} {...valueColor}>
+            {`${' '.repeat(INSPECTOR_LABEL_WIDTH + 3)}${line}`}
+          </Text>
+        ))}
+        {editing && editorOptions.length > 0 ? (
+          <Box paddingLeft={INSPECTOR_LABEL_WIDTH + 3} flexShrink={0}>
+            <OptionChooser options={editorOptions} value={stageMenu?.value ?? ''} />
+          </Box>
+        ) : null}
+      </Box>
     );
   };
   return (
-    <Box width={width} flexDirection="column" borderStyle="single" paddingX={1}>
-      <Text bold>{stageMenu === undefined ? 'Inspector' : 'Stage editor'}</Text>
-      {stage === null || stage === undefined ? (
-        <Text dimColor>Select a stage</Text>
-      ) : (
-        <>
-          {row('title', 'Name', stage.title || '(untitled)')}
-          {row('instructions', 'Description', stage.instructions || '—')}
-          {row('harness', 'Harness', stage.harness ?? '(required)')}
-          {row('model', 'Model', stage.model ?? '(required)')}
-          {row('worktree', 'Worktree', stage.worktree ?? '—')}
-          {row('gate', 'Gate', stage.gate)}
-          {row('id', 'ID', stage.id || '(blank)')}
-          <Text>{`Depends on: ${stage.dependsOn.join(', ') || '—'}`}</Text>
-          <Text>{`Definition order: ${order ?? 0} of ${total}`}</Text>
-          <Text>{`Runtime: ${statuses.get(stage.id) ?? 'not running'}`}</Text>
-          {stageMenu?.editing === true && editorOptions.length > 0 ? (
-            <Text dimColor>{`Options (↑/↓): ${formatOptionList(editorOptions, stageMenu.value)}`}</Text>
-          ) : null}
-        </>
-      )}
-      {run !== null ? (
-        <Text color="green">{`Run ${run.status} · revision ${run.revision}`}</Text>
-      ) : null}
-      {stageIssues.map((issue) => (
-        <Text
-          key={`${issue.code}:${issue.stageKey ?? 'workflow'}:${issue.dependencyIndex ?? ''}:${issue.field ?? ''}:${issue.message}`}
-          color={issue.severity === 'error' ? 'red' : 'yellow'}
-        >{`! ${issue.message}`}</Text>
-      ))}
+    <Box width={width} flexDirection="column" flexShrink={0} minHeight={0} overflow="hidden">
+      <Pane
+        title={stageMenu === undefined ? 'Stage' : 'Stage editor'}
+        titleExtra={order === undefined ? null : <Text dimColor>{` ${order}/${total}`}</Text>}
+        focused={stageMenu !== undefined}
+      >
+        {stage === null || stage === undefined ? (
+          <Text dimColor>No stage selected — press a to add one.</Text>
+        ) : (
+          <>
+            {row('title', 'Name', stage.title || '(untitled)')}
+            {row('instructions', 'Prompt', stage.instructions || '—', {
+              muted: stage.instructions === '',
+            })}
+            {row('harness', 'Harness', stage.harness ?? 'required', {
+              missing: stage.harness === null || stage.harness === '',
+            })}
+            {row('model', 'Model', stage.model ?? 'required', {
+              missing: stage.model === null || stage.model === '',
+            })}
+            {row('worktree', 'Worktree', stage.worktree ?? '—', { muted: stage.worktree === null })}
+            {row('gate', 'Gate', stage.gate, { muted: stage.gate === 'auto' })}
+            {row('id', 'ID', stage.id || '(blank)')}
+            <Box height={1} flexShrink={0} />
+            {row(null, 'Needs', stage.dependsOn.join(', ') || '—', {
+              muted: stage.dependsOn.length === 0,
+            })}
+            {row(null, 'Feeds', dependents.join(', ') || '—', { muted: dependents.length === 0 })}
+            <Box flexDirection="row" flexShrink={0}>
+              <Text dimColor>{`  ${'Runtime'.padEnd(INSPECTOR_LABEL_WIDTH)} `}</Text>
+              <Text color={stageStatusColor(status, theme)}>
+                {`${stageStatusGlyph(status)}${status === undefined ? '' : ' '}${stageStatusLabel(status)}`}
+              </Text>
+            </Box>
+            {run !== null ? (
+              <Box flexDirection="row" flexShrink={0}>
+                <Text dimColor>{`  ${'Run'.padEnd(INSPECTOR_LABEL_WIDTH)} `}</Text>
+                <Text color={stageStatusColor(run.status, theme)} wrap="truncate-end">
+                  {`${run.status} · rev ${run.revision}`}
+                </Text>
+              </Box>
+            ) : null}
+          </>
+        )}
+        {stageIssues.length > 0 ? <Box height={1} flexShrink={0} /> : null}
+        {stageIssues.map((issue) => (
+          <Text
+            key={`${issue.code}:${issue.stageKey ?? 'workflow'}:${issue.dependencyIndex ?? ''}:${issue.field ?? ''}:${issue.message}`}
+            color={issue.severity === 'error' ? theme.error : theme.warning}
+          >{`${issue.severity === 'error' ? '✖' : '⚠'} ${issue.message}`}</Text>
+        ))}
+      </Pane>
     </Box>
   );
 }
