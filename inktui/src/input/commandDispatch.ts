@@ -68,6 +68,8 @@ export interface CommandCtx {
   readonly terminalViewport?: (agentId: string, action: TerminalViewportAction) => void;
   /** Open the full-screen workflow template editor. The optional workflow name selects an existing definition. */
   readonly openWorkflows?: (name: string | null) => void;
+  /** Open the New Ticket modal. */
+  readonly openTicket?: () => void;
 }
 
 /** The rename subject resolved from chat/doc context for the single-arg `:rename <new>` form. */
@@ -119,6 +121,14 @@ type CommandHandler = (args: string, agentId: string | null, ctx: CommandCtx) =>
  * command surface. Adding a command = adding one entry here (and one Help "Commands" row).
  */
 const COMMANDS: Readonly<Record<string, CommandHandler>> = {
+  /** `:ticket` — open the New Ticket modal. */
+  ticket(_args, _agentId, ctx) {
+    if (ctx.openTicket === undefined) {
+      ctx.pushToast('new ticket creation is unavailable', { severity: 'error' });
+      return;
+    }
+    ctx.openTicket();
+  },
   /** `:workflows [name]` — open the workflow template editor, optionally on a named workflow. */
   workflows(args, _agentId, ctx) {
     if (ctx.openWorkflows === undefined) {

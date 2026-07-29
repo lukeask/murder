@@ -206,7 +206,9 @@ function setup(
           },
         }),
   }));
-  const mode = workflowTemplateEditorMode(stores.modes, store, { workflow: definition });
+  const mode = workflowTemplateEditorMode(stores.modes, store, {
+    source: { kind: 'existing', workflow: definition },
+  });
   stores.modes.getState().enter(mode);
   const rows = 30;
   const stdout = stdoutFor(options.columns ?? 140, rows);

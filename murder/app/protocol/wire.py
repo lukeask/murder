@@ -62,6 +62,15 @@ class ReplyMessage(ApplicationModel):
     result: dict[str, object] = Field(default_factory=dict)
 
 
+class PlanSeedFailedNotification(ApplicationModel):
+    """Best-effort, client-targeted completion notice for asynchronous plan seeding."""
+
+    op: Literal["notification"] = "notification"
+    type: Literal["plan.seed_failed"] = "plan.seed_failed"
+    plan_name: str
+    message: str
+
+
 class SubscribeMessage(ApplicationModel):
     op: Literal["subscribe"] = "subscribe"
     subscription_id: str
@@ -129,6 +138,13 @@ class TerminalInputMessage(ApplicationModel):
     data: str = Field(min_length=1, max_length=349_528)
 
 
+class TerminalInputDetachMessage(ApplicationModel):
+    """Release the server-side queue and writer task for an input stream."""
+
+    op: Literal["terminal.input_detach"] = "terminal.input_detach"
+    stream_id: str = Field(min_length=1, max_length=200)
+
+
 class TerminalInputAckMessage(ApplicationModel):
     """Non-critical acknowledgement of the contiguous accepted input prefix."""
 
@@ -192,6 +208,7 @@ ApplicationWireMessage = Annotated[
     | ServerHello
     | RequestMessage
     | ReplyMessage
+    | PlanSeedFailedNotification
     | SubscribeMessage
     | UnsubscribeMessage
     | SubscriptionReadyMessage
@@ -200,6 +217,7 @@ ApplicationWireMessage = Annotated[
     | TerminalDetachMessage
     | TerminalResyncMessage
     | TerminalInputMessage
+    | TerminalInputDetachMessage
     | TerminalInputAckMessage
     | TerminalAttachedMessage
     | TerminalFrameMessage
@@ -219,6 +237,7 @@ __all__ = [
     "ApplicationWireMessage",
     "ClientHello",
     "ErrorMessage",
+    "PlanSeedFailedNotification",
     "ReplyMessage",
     "RequestMessage",
     "ServerHello",
@@ -232,6 +251,7 @@ __all__ = [
     "TerminalFrameMessage",
     "TerminalKeyframeMessage",
     "TerminalInputAckMessage",
+    "TerminalInputDetachMessage",
     "TerminalInputMessage",
     "TerminalResyncMessage",
     "TerminalResyncedMessage",

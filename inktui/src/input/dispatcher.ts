@@ -24,7 +24,7 @@
  *     not "fix" this back below the chord layer — that would break exclusive capture.
  *  1. **Global chords** — `alt+<n>` (toggle/focus a panel), `alt+h/j/k/l` (vim directional nav),
  *     `alt+y` (tmux toggle), `alt+s` (spawn wizard — see below), `alt+space` (focus chat), `alt+p`
- *     (new-plan popup, C12), `alt+t` (new-ticket popup, C12). These are app-wide and
+ *     (new-plan popup, C12), `alt+t` (chat-view cycle). These are app-wide and
  *     always win, *including while chat is focused*, so the user can summon a panel mid-message.
  *     They are safe to check first because every one carries `meta`, which printable typing never
  *     does — so checking them ahead of the chat short-circuit cannot swallow a typed character.

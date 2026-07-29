@@ -10,6 +10,7 @@ import type { PanelId } from './input/panels.js';
 import { connectionStore } from './store/connection/connectionStore.js';
 import { startKeyUsagePersistence } from './store/keyUsage/keyUsagePersistence.js';
 import { createAppStore } from './store/store.js';
+import { toastStore } from './store/toast/toastStore.js';
 import { capsStore } from './terminal/capsStore.js';
 import { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
@@ -111,6 +112,14 @@ export async function runLive(busFactory: () => ApplicationClient = makeLiveBus)
   const unhookPermanentError = onPermanentErrorIfSupported(bus, () =>
     connectionStore.getState().setStatus('version-mismatch'),
   );
+  const unhookPlanSeedFailure = onPlanSeedFailedIfSupported(bus, (notification) =>
+    toastStore
+      .getState()
+      .push(
+        `plan "${notification.plan_name}" was created, but its planner could not start: ${notification.message}`,
+        { severity: 'error', ttlMs: 12000 },
+      ),
+  );
 
   // Phase 2 — the kitty stdin shim. Constructed in BYPASS (pure passthrough) and handed to Ink as its
   // stdin, so until the protocol is actually enabled Ink sees the identical byte stream it always did
@@ -168,6 +177,7 @@ export async function runLive(busFactory: () => ApplicationClient = makeLiveBus)
     unhookConnectedStatus?.();
     unhookDisconnect?.();
     unhookPermanentError?.();
+    unhookPlanSeedFailure?.();
     dispose();
     closeIfSupported(bus);
     teardownKeyUsage();
@@ -365,6 +375,19 @@ function onPermanentErrorIfSupported(
     onPermanentError?: (listener: (error: Error) => void) => () => void;
   };
   return maybe.onPermanentError?.(listener);
+}
+
+/** Register plan-seeding failure delivery when the concrete transport supports notifications. */
+function onPlanSeedFailedIfSupported(
+  bus: ApplicationClient,
+  listener: (notification: { readonly plan_name: string; readonly message: string }) => void,
+): (() => void) | undefined {
+  const maybe = bus as ApplicationClient & {
+    onPlanSeedFailed?: (
+      listener: (notification: { readonly plan_name: string; readonly message: string }) => void,
+    ) => () => void;
+  };
+  return maybe.onPlanSeedFailed?.(listener);
 }
 
 /** Close the application connection if the client exposes a `close()` (the live client does;

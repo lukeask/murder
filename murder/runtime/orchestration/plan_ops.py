@@ -42,6 +42,7 @@ from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import content_hash as _plan_content_hash
 
 LOGGER = logging.getLogger(__name__)
+_PLAN_AUTO_NAME_TIMEOUT_S = 5.0
 
 SendAgentMessage = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -255,15 +256,23 @@ class PlanOps:
         )
         if client is not None and text:
             try:
-                meta = await notes_mod.llm_capture_metadata(
-                    raw=text,
-                    system=notes_mod._load_prompt("plan_namer"),
-                    client=client,
-                    config=notetaker_cfg,
+                meta = await asyncio.wait_for(
+                    notes_mod.llm_capture_metadata(
+                        raw=text,
+                        system=notes_mod._load_prompt("plan_namer"),
+                        client=client,
+                        config=notetaker_cfg,
+                    ),
+                    timeout=_PLAN_AUTO_NAME_TIMEOUT_S,
                 )
                 slug = notes_mod._slugify_title(meta.get("one_or_two_word_title", ""))
                 if slug:
                     return slug
+            except asyncio.TimeoutError:
+                LOGGER.warning(
+                    "plan auto-name timed out after %.1fs; falling back to timestamp slug",
+                    _PLAN_AUTO_NAME_TIMEOUT_S,
+                )
             except Exception:
                 LOGGER.exception("plan auto-name failed; falling back to timestamp slug")
         return f"plan-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
@@ -276,15 +285,13 @@ class PlanOps:
         body: str | None = None,
         auto_name: bool = False,
     ) -> dict[str, Any]:
-        """Create a new plan and (optionally) seed its planning agent.
+        """Create a durable plan scaffold.
 
         Thin composition of existing machinery: ``scaffold_plan`` writes the
-        plan row + materialized markdown (and emits the plan snapshot), then —
-        when an initial ``message`` is supplied — ``send_agent_message`` to the
-        ``planner-{name}`` agent, which lazily spawns the planner via
-        ``ensure_planning_agent``. This is the new-plan flow originally exposed
-        via the retired Textual ctrl+p binding (scaffold + focus
-        ``planner-{name}`` as chat target).
+        plan row + materialized markdown (and emits the plan snapshot). An
+        initial planner message is scheduled by the application boundary only
+        after this coroutine returns, so external planner startup can never
+        hold the create RPC open.
 
         ``body`` seeds the plan's markdown body (defaulting to the legacy
         ``"# Plan Name\\n"`` stub). ``auto_name`` derives the plan name from
@@ -317,14 +324,10 @@ class PlanOps:
             # so the scaffold can take the name. Atomic with no markdown change
             # to the archived plan: rename_plan carries its materialized_path
             # through, so its deprecated-dir file is not orphaned.
-            archived = _free_superseded_plan_name(self.rt.db, plan_name)
+            _free_superseded_plan_name(self.rt.db, plan_name)
         scaffolded = await self.scaffold_plan(plan_name, seed_body)
         name = str(scaffolded.get("name") or plan_name)
-        agent_id: str | None = None
-        text = (message or "").strip()
-        if text:
-            agent_id = f"planner-{name}"
-            await self._send_agent_message(agent_id, text, None)
+        agent_id = f"planner-{name}" if (message or "").strip() else None
         return {"handled": True, "ok": True, "plan_name": name, "agent_id": agent_id}
 
 

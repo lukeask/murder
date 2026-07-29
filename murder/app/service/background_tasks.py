@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -43,6 +43,7 @@ class ServiceBackgroundTasks:
     runtime: Runtime
     orchestrator: Orchestrator
     _tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict, init=False)
+    _plan_seed_sequence: int = field(default=0, init=False)
 
     def start(self) -> None:
         """Launch non-blocking work after socket and workers are available."""
@@ -59,6 +60,47 @@ class ServiceBackgroundTasks:
 
     def _spawn(self, name: str, coroutine: Coroutine[object, object, None]) -> None:
         self._tasks[name] = asyncio.create_task(coroutine, name=name)
+
+    def schedule_plan_seed(
+        self,
+        plan_name: str,
+        message: str,
+        *,
+        on_failure: Callable[[str], Awaitable[None]],
+    ) -> None:
+        """Seed a newly-created planner without extending its create request.
+
+        Tasks are owned by the service lifecycle rather than by a websocket
+        connection, so an initiating client disconnect cannot abandon planner
+        startup. Failures remain observable through the initiating connection
+        while it is still present.
+        """
+        self._plan_seed_sequence += 1
+        task_key = f"plan-seed:{plan_name}:{self._plan_seed_sequence}"
+        self._tasks[task_key] = asyncio.create_task(
+            self._seed_plan(plan_name, message, on_failure), name=task_key
+        )
+
+    async def _seed_plan(
+        self,
+        plan_name: str,
+        message: str,
+        on_failure: Callable[[str], Awaitable[None]],
+    ) -> None:
+        try:
+            result = await self.orchestrator.send_agent_message(
+                f"planner-{plan_name}", message, None
+            )
+            if result.get("handled") is False or result.get("ok") is False:
+                raise RuntimeError(str(result.get("error") or "planner startup failed"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.exception("planner seed failed for %s", plan_name)
+            try:
+                await on_failure(str(exc))
+            except Exception:
+                LOGGER.warning("failed to notify client of planner seed failure", exc_info=True)
 
     async def stop(self) -> None:
         """Cancel and drain all owned work, including one-shot recovery tasks."""

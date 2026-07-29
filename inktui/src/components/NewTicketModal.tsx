@@ -1,6 +1,6 @@
 /**
- * `NewTicketModal` — the `ctrl+t` new-ticket popup: a **modal C7M mode** that presents a title
- * field for a new ticket, analogous to the old `:ticket` flow.
+ * `NewTicketModal` — the `:ticket` new-ticket popup: a **modal C7M mode** that presents a title
+ * field for a new ticket.
  *
  * ## Launch path
  *
@@ -9,10 +9,7 @@
  * {@link DialogActions.startBuiltinTicket}. Otherwise it keeps the temporary
  * ``ticket.quick_create`` fallback for unconfigured planned tickets.
  *
- * ## What this delivers vs. `:ticket`
- *
- * The old `:ticket` flow required opening a file editor, blanking the screen. This dialog stays
- * in-TUI (rule 1 — no `$EDITOR`-blank).
+ * This dialog stays in-TUI (rule 1 — no `$EDITOR`-blank).
  *
  * ## C13 copy recipe
  *
@@ -372,8 +369,8 @@ function NewTicketDialog({
       <Box marginTop={1}>
         <Text color={theme.muted}>
           {showPrompt
-            ? 'enter: start  shift+enter: newline  tab: field  esc: cancel  ctrl+u: clear'
-            : 'enter: create esc: cancel ctrl+u: clear'}
+            ? 'enter: start  shift+enter: newline  tab: field  esc: cancel  alt+u: clear'
+            : 'enter: create esc: cancel alt+u: clear'}
         </Text>
       </Box>
     </Box>

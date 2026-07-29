@@ -194,8 +194,25 @@ class ServiceHost:
             queries=self._application_queries,
             commands=self._application_commands,
         )
+        self.background_tasks = ServiceBackgroundTasks(
+            repo_root=self.repo_root,
+            runtime=self.runtime,
+            orchestrator=self.orchestrator,
+        )
+
+        def schedule_plan_seed(plan_name: str, message: str, client_id: str | None) -> None:
+            assert self.background_tasks is not None
+
+            async def notify_failure(error: str) -> None:
+                if self.socket_server is not None:
+                    await self.socket_server.notify_plan_seed_failed(client_id, plan_name, error)
+
+            self.background_tasks.schedule_plan_seed(
+                plan_name, message, on_failure=notify_failure
+            )
+
         self.socket_server = ApplicationSocketServer(
-            gateway=ApplicationGateway(application),
+            gateway=ApplicationGateway(application, schedule_plan_seed=schedule_plan_seed),
             facts=self.fact_log,
             projection_inputs=self.projection_input_log,
             providers=self.projection_providers,
@@ -220,11 +237,6 @@ class ServiceHost:
             runtime=self.runtime,
             orchestrator=self.orchestrator,
             events=self.runtime.orchestration_events,
-        )
-        self.background_tasks = ServiceBackgroundTasks(
-            repo_root=self.repo_root,
-            runtime=self.runtime,
-            orchestrator=self.orchestrator,
         )
         self.background_tasks.start()
 

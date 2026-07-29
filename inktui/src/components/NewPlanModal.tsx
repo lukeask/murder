@@ -9,8 +9,8 @@
  *  3. **Name input** — shown only when `custom` is chosen; the typed plan name. Enter submits.
  *
  * On submit it calls `actions.createPlan(...)` → `plan.create` RPC (the service derives the name when
- * `auto` and seeds the body). A brief `naming…`
- * pending state covers the auto path's mini-LLM round-trip. On success the caller's `onSubmit` runs
+ * `auto` and seeds the body). A brief `creating plan…`
+ * pending state covers the create request, including auto naming when selected. On success the caller's `onSubmit` runs
  * (toast + open the plan's doc pane).
  *
  * ## Field + state model (the C12 modal recipe)
@@ -93,7 +93,7 @@ interface NewPlanState {
   naming: Naming;
   planName: TextEditorState;
   focus: FocusGroup;
-  /** True while the `plan.create` RPC is in flight (the `naming…` pending state). */
+  /** True while the `plan.create` RPC is in flight. */
   pending: boolean;
   error: string | null;
 }
@@ -132,8 +132,7 @@ export function newPlanMode(
     }
   }
 
-  /** Fire the `plan.create` RPC and dismiss. Exit-then-act so focus restores before the async call;
-   * a `naming…` pending state is shown briefly for the auto path's mini-LLM round-trip. */
+  /** Fire the `plan.create` RPC and dismiss after the durable create completes. */
   function submit(): void {
     if (s.pending) {
       return;
@@ -467,7 +466,7 @@ function NewPlanForm({
 
       {pending && (
         <Box marginTop={1}>
-          <Text color={theme.muted}>naming…</Text>
+          <Text color={theme.muted}>creating plan…</Text>
         </Box>
       )}
       {error !== null && (

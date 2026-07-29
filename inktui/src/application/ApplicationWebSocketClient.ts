@@ -6,6 +6,7 @@ import {
   type ApplicationRequest,
   type ClientMessage,
   type CommandName,
+  type PlanSeedFailedNotification,
   type ProjectionTopic,
   type QueryName,
   type ServerMessage,
@@ -96,6 +97,7 @@ interface ProjectionSubscription {
   invalidation: ProjectionInvalidationListener | undefined;
   snapshotListener: ((reply: HydrateReply) => void) | undefined;
   ready: boolean;
+  subscribedGeneration: number;
   resolve(value: HydrateReply): void;
   reject(reason: Error): void;
 }
@@ -108,6 +110,7 @@ interface TerminalSubscription {
   suspended: boolean;
   resyncPending: boolean;
   mode: TerminalAttachMode;
+  attachedGeneration: number;
 }
 
 export class ApplicationWebSocketClient implements ApplicationClient {
@@ -120,8 +123,11 @@ export class ApplicationWebSocketClient implements ApplicationClient {
   private readonly terminalInputWatchers = new Map<string, Set<(error: Error) => void>>();
   private readonly connected = new Set<() => void>();
   private readonly disconnected = new Set<() => void>();
+  private readonly planSeedFailed = new Set<(notification: PlanSeedFailedNotification) => void>();
   private projectionCursor: number | undefined;
   private factCursor: number | undefined;
+  private serverId: string | undefined;
+  private connectionGeneration = 0;
   private reconnectCancel: (() => void) | undefined;
   private readonly url: string;
   private readonly clientId: string;
@@ -165,6 +171,10 @@ export class ApplicationWebSocketClient implements ApplicationClient {
   onPermanentError(_listener: (error: Error) => void): Unsubscribe {
     return () => {};
   }
+  onPlanSeedFailed(listener: (notification: PlanSeedFailedNotification) => void): Unsubscribe {
+    this.planSeedFailed.add(listener);
+    return () => this.planSeedFailed.delete(listener);
+  }
 
   async query<M extends QueryMethod>(name: M, params: QueryParams<M>): Promise<QueryResult<M>> {
     return unwrapReadReply(name, await this.request('query', name, params)) as QueryResult<M>;
@@ -193,12 +203,25 @@ export class ApplicationWebSocketClient implements ApplicationClient {
         invalidation,
         snapshotListener,
         ready: false,
+        subscribedGeneration: 0,
         resolve,
         reject,
       });
     });
-    await this.connect();
-    this.subscribe(this.projections.get(id)!);
+    try {
+      await this.connect();
+    } catch (error) {
+      const subscription = this.projections.get(id);
+      if (subscription !== undefined) {
+        this.projections.delete(id);
+        subscription.reject(
+          error instanceof Error ? error : new ConnectionLostError('application connection failed'),
+        );
+      }
+      return { ...(await reply), unsubscribe: () => this.unsubscribe(id) };
+    }
+    const subscription = this.projections.get(id);
+    if (subscription !== undefined) this.reconcileSubscription(subscription);
     return { ...(await reply), unsubscribe: () => this.unsubscribe(id) };
   }
 
@@ -216,12 +239,17 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       suspended: false,
       resyncPending: false,
       mode,
+      attachedGeneration: 0,
     };
     this.terminals.set(id, terminal);
     if (this.socket?.readyState === 1) {
-      this.attach(terminal);
+      this.reconcileTerminal(terminal);
     } else {
-      void this.connect().then(() => this.attach(terminal));
+      void this.connect()
+        .then(() => {
+          if (this.terminals.get(id) === terminal) this.reconcileTerminal(terminal);
+        })
+        .catch(() => {});
     }
     return () => {
       this.terminals.delete(id);
@@ -264,13 +292,17 @@ export class ApplicationWebSocketClient implements ApplicationClient {
   }
 
   async closeTerminalInput(lease: TerminalInputLease): Promise<void> {
-    await this.command('session.writer.release', {
-      session_id: lease.sessionId,
-      lease_id: lease.leaseId,
-      fence: lease.fence,
-      holder: { kind: 'client', id: this.clientId },
-      reason: 'interactive terminal detached',
-    });
+    try {
+      await this.command('session.writer.release', {
+        session_id: lease.sessionId,
+        lease_id: lease.leaseId,
+        fence: lease.fence,
+        holder: { kind: 'client', id: this.clientId },
+        reason: 'interactive terminal detached',
+      });
+    } finally {
+      this.send({ op: 'terminal.input_detach', stream_id: lease.streamId });
+    }
   }
 
   sendTerminalInput(batch: TerminalInputBatch): boolean {
@@ -311,6 +343,12 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       item.reject(new ConnectionLostError('application client closed'));
     }
     this.pending.clear();
+    const error = new ConnectionLostError('application client closed');
+    for (const subscription of this.projections.values()) {
+      if (!subscription.ready) subscription.reject(error);
+    }
+    this.projections.clear();
+    this.terminals.clear();
   }
 
   private async request(
@@ -365,12 +403,23 @@ export class ApplicationWebSocketClient implements ApplicationClient {
         const message = parseServerMessage(event.data);
         if (message === undefined) return;
         if (message.op === 'server.hello') {
+          const serverChanged = this.serverId !== undefined && this.serverId !== message.server_id;
+          this.serverId = message.server_id;
+          this.connectionGeneration += 1;
           this.projectionCursor = message.projection_cursor;
           this.factCursor = message.fact_cursor;
+          if (serverChanged) {
+            for (const terminal of this.terminals.values()) {
+              terminal.sequence = 0;
+              terminal.suspended = false;
+              terminal.resyncPending = false;
+            }
+          }
           this.connecting = undefined;
           resolve();
-          for (const subscription of this.projections.values()) this.subscribe(subscription);
-          for (const terminal of this.terminals.values()) this.attach(terminal);
+          for (const subscription of this.projections.values())
+            this.reconcileSubscription(subscription);
+          for (const terminal of this.terminals.values()) this.reconcileTerminal(terminal);
           this.connected.forEach((listener) => listener());
           return;
         }
@@ -409,6 +458,10 @@ export class ApplicationWebSocketClient implements ApplicationClient {
         this.pending.delete(message.request_id);
         clearTimeout(pending.timer);
         pending.resolve(message.result);
+      }
+    } else if (message.op === 'notification') {
+      if (message.type === 'plan.seed_failed') {
+        for (const listener of this.planSeedFailed) listener(message);
       }
     } else if (message.op === 'error') {
       if (message.request_id !== null && message.request_id !== undefined) {
@@ -481,6 +534,11 @@ export class ApplicationWebSocketClient implements ApplicationClient {
       },
     });
   }
+  private reconcileSubscription(subscription: ProjectionSubscription): void {
+    if (subscription.subscribedGeneration === this.connectionGeneration) return;
+    subscription.subscribedGeneration = this.connectionGeneration;
+    this.subscribe(subscription);
+  }
   private unsubscribe(id: string): void {
     this.projections.delete(id);
     this.send({ op: 'unsubscribe', subscription_id: id });
@@ -497,6 +555,11 @@ export class ApplicationWebSocketClient implements ApplicationClient {
     // An already-observed stream must not resume deltas until a full parser
     // state arrives; the attach watermark still lets a server retain/replay.
     if (terminal.sequence > 0) this.requestTerminalResync(terminal, 'reconnect');
+  }
+  private reconcileTerminal(terminal: TerminalSubscription): void {
+    if (terminal.attachedGeneration === this.connectionGeneration) return;
+    terminal.attachedGeneration = this.connectionGeneration;
+    this.attach(terminal);
   }
   private acceptTerminalFrame(terminal: TerminalSubscription, frame: TerminalFrame): void {
     if (frame.sequence <= terminal.sequence) return;
@@ -577,6 +640,7 @@ function parseServerMessage(data: unknown): ServerMessage | undefined {
 const SERVER_OPS = new Set([
   'server.hello',
   'reply',
+  'notification',
   'subscription.ready',
   'subscription.event',
   'terminal.attached',

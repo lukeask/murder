@@ -1007,7 +1007,7 @@ function Shell({
     );
   };
 
-  // `ctrl+t` → open the new-ticket modal. When Startup Rogue defaults make the built-in
+  // `:ticket` → open the new-ticket modal. When Startup Rogue defaults make the built-in
   // launch-oriented `ticket` workflow runnable, submit goes through `workflow.start`; otherwise
   // keep `ticket.quick_create` for unconfigured planned tickets.
   const newTicketHandler = (): void => {
@@ -1037,7 +1037,7 @@ function Shell({
     }
     modes.getState().enter(
       workflowTemplateEditorMode(modes, appStore, {
-        ...(workflow === undefined ? {} : { workflow }),
+        source: workflow === undefined ? { kind: 'blank' } : { kind: 'existing', workflow },
         harnessModels: createHarnessModelsActions(bus),
         worktreeOptions: createWorktreeOptionsActions(bus),
       }),
@@ -1300,6 +1300,7 @@ function Shell({
       paneScroll.emitTerminalViewport(stageTranscriptFocusId(agentId), action);
     },
     openWorkflows: openWorkflowTemplateEditorHandler,
+    openTicket: newTicketHandler,
     resolveRenameTarget: () => {
       const state = appStore.getState();
       const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);

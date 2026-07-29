@@ -197,6 +197,13 @@ export type ReplyMessage = {{
   readonly request_id: string;
 }} & ({{ readonly result: QueryResult<QueryMethod> }} | {{ readonly result: CommandResult<CommandMethod> }});
 
+export interface PlanSeedFailedNotification {{
+  readonly op: 'notification';
+  readonly type: 'plan.seed_failed';
+  readonly plan_name: string;
+  readonly message: string;
+}}
+
 export type SubscriptionSpec =
   | {{
       readonly kind: 'projections';
@@ -275,6 +282,11 @@ export interface TerminalInputMessage {{
   readonly input_sequence: number;
   readonly encoding: 'base64';
   readonly data: string;
+}}
+
+export interface TerminalInputDetachMessage {{
+  readonly op: 'terminal.input_detach';
+  readonly stream_id: string;
 }}
 
 export interface TerminalInputAckMessage {{
@@ -434,11 +446,13 @@ export type ClientMessage =
   | TerminalAttachMessage
   | TerminalDetachMessage
   | TerminalResyncMessage
-  | TerminalInputMessage;
+  | TerminalInputMessage
+  | TerminalInputDetachMessage;
 
 export type ServerMessage =
   | ServerHello
   | ReplyMessage
+  | PlanSeedFailedNotification
   | SubscriptionReadyMessage
   | SubscriptionEventMessage
   | TerminalAttachedMessage

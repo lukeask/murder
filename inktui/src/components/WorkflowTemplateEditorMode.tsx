@@ -128,8 +128,17 @@ interface Session {
   worktrees: readonly WorktreeOption[];
 }
 
+/**
+ * The editor must always be opened with an explicit source. In particular, a blank editor is not
+ * allowed to infer a definition from the workflow store: that could turn a create flow into an
+ * edit-and-overwrite flow.
+ */
+export type WorkflowTemplateEditorSource =
+  | { readonly kind: 'blank' }
+  | { readonly kind: 'existing'; readonly workflow: WorkflowTemplate };
+
 export interface WorkflowTemplateEditorModeOptions {
-  readonly workflow?: WorkflowTemplate;
+  readonly source: WorkflowTemplateEditorSource;
   /** Called after a successfully saved definition, useful to focus a caller-owned list. */
   readonly onSaved?: (workflow: WorkflowTemplate) => void;
   readonly harnessModels?: HarnessModelsActions;
@@ -178,9 +187,9 @@ function blankWorkflow(): EditorWorkflow {
 export function workflowTemplateEditorMode(
   modes: ModeStoreApi,
   app: AppStoreApi,
-  options: WorkflowTemplateEditorModeOptions = {},
+  options: WorkflowTemplateEditorModeOptions,
 ): Mode<WorkflowTemplateEditorIntent> {
-  const existing = options.workflow ?? app.getState().workflows.items[0];
+  const existing = options.source.kind === 'existing' ? options.source.workflow : undefined;
   const initial = existing === undefined ? blankWorkflow() : fromWire(existing);
   const s: Session = {
     base: initial,

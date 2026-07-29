@@ -62,7 +62,7 @@ export interface DeferredGlobalHandlers {
   newPlan?: () => void;
   /** `alt+g` / `ctrl+g`: open the workflow template editor. */
   openWorkflowTemplateEditor?: () => void;
-  /** `alt+t`. Default: no-op until C12 wires the new-ticket dialog. */
+  /** New-ticket handler, reachable through `:ticket`. */
   newTicket?: () => void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action). Default: no-op until a later phase wires the settings
    * modal. Present now so the action's handler slot exists end-to-end (the registry already declares

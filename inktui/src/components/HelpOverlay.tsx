@@ -121,6 +121,7 @@ export function buildHelpGroups(
     entries: [
       { key: '/…', description: 'passthrough to harness' },
       { key: ':help', description: 'this overlay' },
+      { key: ':ticket', description: 'new ticket' },
       { key: ':note <text>', description: 'quick note' },
       { key: ':rename <new>', description: 'rename rogue crow or plan' },
       { key: ':rename <old> <new>', description: 'rename a named plan' },

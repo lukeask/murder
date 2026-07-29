@@ -12,6 +12,8 @@ adapts them at this boundary.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -43,12 +45,20 @@ _CORRELATED_COMMANDS = frozenset(
     }
 )
 
+PlanSeedScheduler = Callable[[str, str, str | None], None]
+
 
 class ApplicationGateway:
     """Validate the closed public request union and invoke application use cases."""
 
-    def __init__(self, application: ApplicationPort) -> None:
+    def __init__(
+        self,
+        application: ApplicationPort,
+        *,
+        schedule_plan_seed: PlanSeedScheduler | None = None,
+    ) -> None:
         self._application = application
+        self._schedule_plan_seed = schedule_plan_seed
 
     @property
     def available_queries(self) -> tuple[QueryName, ...]:
@@ -74,7 +84,9 @@ class ApplicationGateway:
             params = self._validate_params(
                 operation.params_model, params, capability=request.name.value
             )
-            result = await self._application.query(request.name, params)
+            result = await self._await_with_timeout(
+                self._application.query(request.name, params), timeout_s
+            )
             return self._validate_result(
                 operation.result_model, result, capability=request.name.value
             )
@@ -110,8 +122,38 @@ class ApplicationGateway:
         params = self._validate_params(
             operation.params_model, params, capability=request.name.value
         )
-        result = await self._application.command(request.name, params)
-        return self._validate_result(operation.result_model, result, capability=request.name.value)
+        result = await self._await_with_timeout(
+            self._application.command(request.name, params), timeout_s
+        )
+        validated = self._validate_result(
+            operation.result_model, result, capability=request.name.value
+        )
+        self._schedule_plan_seed_if_needed(
+            request.name, params, validated, authenticated_client_id
+        )
+        return validated
+
+    async def _await_with_timeout(
+        self, awaitable: Awaitable[dict[str, Any]], timeout_s: float
+    ) -> dict[str, Any]:
+        try:
+            return await asyncio.wait_for(awaitable, timeout=timeout_s)
+        except TimeoutError as exc:
+            raise TimeoutError(f"request timed out after {timeout_s:g}s") from exc
+
+    def _schedule_plan_seed_if_needed(
+        self,
+        name: CommandName,
+        params: dict[str, object],
+        result: dict[str, Any],
+        client_id: str | None,
+    ) -> None:
+        if name is not CommandName.PLAN_CREATE or self._schedule_plan_seed is None:
+            return
+        message = str(params.get("message") or "").strip()
+        plan_name = str(result.get("plan_name") or "").strip()
+        if message and plan_name:
+            self._schedule_plan_seed(plan_name, message, client_id)
 
     @staticmethod
     def _validate_params(

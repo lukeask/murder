@@ -43,6 +43,7 @@ from murder.app.protocol.wire import (
     APPLICATION_WIRE_ADAPTER,
     ClientHello,
     ErrorMessage,
+    PlanSeedFailedNotification,
     ReplyMessage,
     RequestMessage,
     ServerHello,
@@ -51,11 +52,12 @@ from murder.app.protocol.wire import (
     SubscriptionReadyMessage,
     TerminalAttachMessage,
     TerminalAttachedMessage,
-    TerminalDetachMessage,
     TerminalChunkMessage,
+    TerminalDetachMessage,
     TerminalFrameMessage,
     TerminalKeyframeMessage,
     TerminalInputAckMessage,
+    TerminalInputDetachMessage,
     TerminalInputMessage,
     TerminalResyncMessage,
     TerminalResyncedMessage,
@@ -97,13 +99,54 @@ class ApplicationConnection:
         task = self.tasks.pop(key, None)
         if task is not None:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                LOGGER.warning("application task failed during cleanup key=%s", key, exc_info=True)
 
     async def close(self) -> None:
         for key in list(self.tasks):
-            await self.cancel(key)
-        await self.websocket.close()
+            try:
+                await self.cancel(key)
+            except Exception:
+                LOGGER.warning("application task cleanup failed key=%s", key, exc_info=True)
+        with contextlib.suppress(Exception):
+            await self.websocket.close()
+
+    def start_stream(
+        self,
+        key: str,
+        body: Callable[[], Awaitable[None]],
+        *,
+        error_stream_id: str | None = None,
+        error_subscription_id: str | None = None,
+        error_code: ErrorCode = ErrorCode.STREAM_FAILED,
+        name: str | None = None,
+    ) -> asyncio.Task[None]:
+        async def run_stream() -> None:
+            try:
+                await body()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning("application stream failed key=%s", key, exc_info=True)
+                with contextlib.suppress(Exception):
+                    await self.send(
+                        ErrorMessage(
+                            stream_id=error_stream_id,
+                            subscription_id=error_subscription_id,
+                            error=ErrorBody(code=error_code, message=str(exc)),
+                        )
+                    )
+            finally:
+                if self.tasks.get(key) is asyncio.current_task():
+                    self.tasks.pop(key, None)
+
+        task = asyncio.create_task(run_stream(), name=name)
+        self.tasks[key] = task
+        return task
 
 
 @dataclass
@@ -166,8 +209,10 @@ class TerminalInputCoordinator:
         if state is None:
             state = _TerminalInputState(session_id=message.session_id)
             connection.input_streams[message.stream_id] = state
-            connection.tasks[_input_task_key(message.stream_id)] = asyncio.create_task(
-                self._run(connection, message.stream_id, state),
+            connection.start_stream(
+                _input_task_key(message.stream_id),
+                lambda: self._run(connection, message.stream_id, state),
+                error_stream_id=message.stream_id,
                 name=f"murder-terminal-input-{message.stream_id}",
             )
         if state.session_id != message.session_id:
@@ -507,6 +552,7 @@ class ApplicationSocketServer:
         )
         self._terminal_input = TerminalInputCoordinator(terminal_input, terminal_input_validator)
         self._assets_dir = assets_dir
+        self._connections: dict[str, ApplicationConnection] = {}
         self._runner: Any = None
         self._site: Any = None
         self.bound: tuple[str, int] | None = None
@@ -531,6 +577,22 @@ class ApplicationSocketServer:
             self._runner = None
             self._site = None
 
+    async def notify_plan_seed_failed(
+        self, client_id: str | None, plan_name: str, message: str
+    ) -> None:
+        """Deliver an ephemeral planner-seed failure only to its initiating client."""
+        if client_id is None:
+            return
+        connection = self._connections.get(client_id)
+        if connection is None:
+            return
+        try:
+            await connection.send(
+                PlanSeedFailedNotification(plan_name=plan_name, message=message)
+            )
+        except Exception:
+            LOGGER.debug("failed to deliver plan seed failure to %s", client_id, exc_info=True)
+
     async def _handle_websocket(self, request: Any) -> Any:
         web, WSMsgType = _aiohttp()
         ws = web.WebSocketResponse(heartbeat=30.0)
@@ -546,6 +608,7 @@ class ApplicationSocketServer:
             if hello.protocol_version != APPLICATION_PROTOCOL_VERSION:
                 raise ValueError("application protocol version mismatch")
             connection = ApplicationConnection(ws, hello.client.client_id)
+            self._connections[connection.client_id] = connection
             await connection.send(ServerHello(server_id=self._run_id, queries=list(self._gateway.available_queries), commands=list(self._gateway.available_commands), fact_cursor=self._facts.watermark(), projection_cursor=self._inputs.watermark()))
             async for raw in ws:
                 if raw.type is not WSMsgType.TEXT:
@@ -556,6 +619,8 @@ class ApplicationSocketServer:
                 await connection.send(ErrorMessage(error={"code": ErrorCode.INVALID_MESSAGE, "message": str(exc)}))
         finally:
             if connection is not None:
+                if self._connections.get(connection.client_id) is connection:
+                    self._connections.pop(connection.client_id, None)
                 await connection.close()
         return ws
 
@@ -575,25 +640,34 @@ class ApplicationSocketServer:
 
     async def _dispatch(self, connection: ApplicationConnection, message: object) -> None:
         if isinstance(message, RequestMessage):
-            try:
-                result = await self._gateway.request(
-                    message.request,
-                    timeout_s=message.timeout_s,
-                    authenticated_client_id=connection.client_id,
-                    wire_request_id=message.request_id,
-                )
-                await connection.send(ReplyMessage(request_id=message.request_id, result=result))
-            except Exception as exc:
-                await connection.send(ErrorMessage(error={"code": ErrorCode.REQUEST_FAILED, "message": str(exc)}, request_id=message.request_id))
+            key = f"request:{message.request_id}"
+            await connection.cancel(key)
+            connection.start_stream(
+                key,
+                lambda: self._run_request(connection, message),
+                name=f"murder-request-{message.request_id}",
+            )
+            await asyncio.sleep(0)
         elif isinstance(message, SubscribeMessage):
             await connection.cancel(message.subscription_id)
-            connection.tasks[message.subscription_id] = asyncio.create_task(self._subscriptions.run(connection, message))
+            connection.start_stream(
+                message.subscription_id,
+                lambda: self._subscriptions.run(connection, message),
+                error_subscription_id=message.subscription_id,
+                error_code=ErrorCode.UNSUPPORTED_SUBSCRIPTION,
+                name=f"murder-subscription-{message.subscription_id}",
+            )
         elif isinstance(message, UnsubscribeMessage):
             await connection.cancel(message.subscription_id)
         elif isinstance(message, TerminalAttachMessage):
             await connection.cancel(message.stream_id)
             connection.terminals[message.stream_id] = message
-            connection.tasks[message.stream_id] = asyncio.create_task(self._terminals.run(connection, message))
+            connection.start_stream(
+                message.stream_id,
+                lambda: self._terminals.run(connection, message),
+                error_stream_id=message.stream_id,
+                name=f"murder-terminal-{message.stream_id}",
+            )
         elif isinstance(message, TerminalDetachMessage):
             connection.terminals.pop(message.stream_id, None)
             await connection.cancel(message.stream_id)
@@ -602,8 +676,9 @@ class ApplicationSocketServer:
             if attachment is None:
                 raise ValueError("terminal stream is not attached")
             await connection.cancel(message.stream_id)
-            connection.tasks[message.stream_id] = asyncio.create_task(
-                self._terminals.run(
+            connection.start_stream(
+                message.stream_id,
+                lambda: self._terminals.run(
                     connection,
                     TerminalAttachMessage(
                         stream_id=message.stream_id,
@@ -612,7 +687,9 @@ class ApplicationSocketServer:
                         mode=attachment.mode,
                     ),
                     resync=True,
-                )
+                ),
+                error_stream_id=message.stream_id,
+                name=f"murder-terminal-{message.stream_id}",
             )
         elif isinstance(message, TerminalInputMessage):
             try:
@@ -626,8 +703,31 @@ class ApplicationSocketServer:
                         error=ErrorBody(code=ErrorCode.STREAM_FAILED, message=str(exc)),
                     )
                 )
+        elif isinstance(message, TerminalInputDetachMessage):
+            await self._terminal_input.detach(connection, message.stream_id)
         else:
             raise ValueError(f"client cannot send {getattr(message, 'op', 'unknown')}")
+
+    async def _run_request(
+        self, connection: ApplicationConnection, message: RequestMessage
+    ) -> None:
+        try:
+            result = await self._gateway.request(
+                message.request,
+                timeout_s=message.timeout_s,
+                authenticated_client_id=connection.client_id,
+                wire_request_id=message.request_id,
+            )
+            await connection.send(ReplyMessage(request_id=message.request_id, result=result))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await connection.send(
+                ErrorMessage(
+                    error=ErrorBody(code=ErrorCode.REQUEST_FAILED, message=str(exc)),
+                    request_id=message.request_id,
+                )
+            )
 
 
 def _input_payload(item: object) -> dict[str, object]:

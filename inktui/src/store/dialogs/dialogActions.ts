@@ -2,7 +2,7 @@
  * Dialog actions — the *only* code that calls the bus for dialog operations (rule 3).
  *
  * Covers operations triggered from the C12 modal dialogs:
- *  - `ticket.quick_create` — create a new ticket (`ctrl+t`). NOT a standalone RPC: it is an
+ *  - `ticket.quick_create` — create a new ticket (`:ticket`). NOT a standalone RPC: it is an
  *    orchestrator command kind, routed through the LIVE `command.submit` choke point (F2). See
  *    {@link ../commandSubmit.js}.
  *  - `ticket.next_id` — fetch the next free ticket id. LIVE RPC.

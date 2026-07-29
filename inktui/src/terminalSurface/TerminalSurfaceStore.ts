@@ -813,10 +813,10 @@ export class TerminalSurfaceStore {
       } else if (value === 66) this.modes.applicationKeypad = enabled;
       else if (value === 2004) this.modes.bracketedPaste = enabled;
       else if (value === 2026) {
+        if (this.modes.synchronizedUpdates === enabled) continue;
         this.modes.synchronizedUpdates = enabled;
-        this.synchronousDepth += enabled ? 1 : -1;
+        this.synchronousDepth = enabled ? 1 : 0;
         if (this.synchronousDepth <= 0) {
-          this.synchronousDepth = 0;
           if (this.deferredNotify) {
             this.deferredNotify = false;
             this.publish();

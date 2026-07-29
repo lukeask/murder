@@ -74,6 +74,7 @@ function buffer(input: TerminalBuffer, columns: number, rows: number): TerminalB
     saved_rendition: rendition(input.saved_rendition),
     scroll_top: input.scroll_top,
     scroll_bottom: input.scroll_bottom,
+    wrap_pending: input.wrap_pending,
   };
 }
 

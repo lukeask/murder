@@ -39,6 +39,7 @@ class _WorkerState:
     heartbeat_task: asyncio.Task[None]
     commands: asyncio.Queue[WorkerCommand | CommandEvent | ClaimedCommand]
     runner: SubprocessWorkerRunner | None = None
+    supervision_task: asyncio.Task[None] | None = None
 
 
 class Supervisor:
@@ -93,6 +94,9 @@ class Supervisor:
             runner=runner,
         )
         self._states[name] = state
+        state.supervision_task = asyncio.create_task(
+            self._supervise_worker(name, state), name=f"{name}:supervisor"
+        )
         if self._reaper_task is None:
             self._reaper_task = asyncio.create_task(
                 self._command_reaper_loop(), name="supervisor:command-reaper"
@@ -103,6 +107,12 @@ class Supervisor:
         if state is None:
             return
         state.stop_event.set()
+        if (
+            state.supervision_task is not None
+            and state.supervision_task is not asyncio.current_task()
+        ):
+            state.supervision_task.cancel()
+            await _await_cancelled_task(state.supervision_task, label=f"{name}:supervisor")
         for task in (state.command_task, state.command_claim_task, state.heartbeat_task):
             task.cancel()
             await _await_cancelled_task(task, label=f"{name}:{task.get_name()}")
@@ -114,7 +124,49 @@ class Supervisor:
             except asyncio.TimeoutError:
                 state.run_task.cancel()
                 await _await_cancelled_task(state.run_task, label=f"{name}:run")
+            except Exception:
+                LOGGER.warning("worker %r run task had already failed", name, exc_info=True)
         await state.worker.on_stop(self._ctx)
+
+    async def _supervise_worker(self, name: WorkerName, state: _WorkerState) -> None:
+        """Stop a worker's sibling loops when any primary loop exits unexpectedly."""
+        watched = [state.command_task, state.command_claim_task, state.heartbeat_task]
+        if state.run_task is not None:
+            watched.append(state.run_task)
+        done, _ = await asyncio.wait(watched, return_when=asyncio.FIRST_COMPLETED)
+        if state.stop_event.is_set() or self._states.get(name) is not state:
+            return
+        failed = next(iter(done))
+        try:
+            failure = failed.exception()
+        except asyncio.CancelledError:
+            failure = asyncio.CancelledError()
+        if failure is None:
+            LOGGER.error("worker %r task %s exited unexpectedly", name, failed.get_name())
+        else:
+            LOGGER.error(
+                "worker %r task %s failed: %s", name, failed.get_name(), failure, exc_info=failure
+            )
+
+        # Claim the state before cleanup so dispatch immediately reports the
+        # worker unavailable and a concurrent stop cannot clean it twice.
+        if self._states.get(name) is not state:
+            return
+        self._states.pop(name, None)
+        state.stop_event.set()
+        for task in watched:
+            if task is failed:
+                await _await_cancelled_task(task, label=f"{name}:{task.get_name()}")
+                continue
+            task.cancel()
+            await _await_cancelled_task(task, label=f"{name}:{task.get_name()}")
+        if state.runner is not None:
+            with contextlib.suppress(Exception):
+                await state.runner.stop(state.worker.spec.shutdown_grace_s)
+        try:
+            await state.worker.on_stop(self._ctx)
+        except Exception:
+            LOGGER.exception("worker %r on_stop failed after task failure", name)
 
     async def stop_all(self) -> None:
         if self._ctx.shutdown is not None:
