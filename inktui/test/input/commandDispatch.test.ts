@@ -91,13 +91,19 @@ describe('dispatchCommand — : commands', () => {
     expect(ctx.openHelp).toHaveBeenCalledOnce();
   });
 
-  it(':workflows opens the workflow template editor, optionally at a named workflow', () => {
+  it(':workflows opens the workflow template library, optionally at an exact named workflow', () => {
     const ctx = makeCtx();
     expect(dispatchCommand(':workflows', AGENT, ctx)).toBe(true);
     expect(ctx.openWorkflows).toHaveBeenLastCalledWith(null);
 
     expect(dispatchCommand(':workflows release', AGENT, ctx)).toBe(true);
     expect(ctx.openWorkflows).toHaveBeenLastCalledWith('release');
+
+    expect(dispatchCommand(':workflows "Deploy Production"', AGENT, ctx)).toBe(true);
+    expect(ctx.openWorkflows).toHaveBeenLastCalledWith('Deploy Production');
+
+    expect(dispatchCommand(':workflows Deploy Production', AGENT, ctx)).toBe(true);
+    expect(ctx.pushToast).toHaveBeenCalled();
   });
 
   it(':note <text> captures a note with the body', () => {

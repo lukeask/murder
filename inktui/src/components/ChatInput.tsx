@@ -59,10 +59,9 @@ import {
   useInputStores,
   useMeasureFocus,
 } from '../hooks/useInputStores.js';
-import { type BufferState } from '../input/chatBuffer.js';
-import { SPAN_CLOSE, SPAN_OPEN } from '../input/chat/chatSpans.js';
 import { chatProjection } from '../input/chat/chatProjection.js';
-import { TextEditorDisplay } from './TextEditorDisplay.js';
+import { SPAN_CLOSE, SPAN_OPEN } from '../input/chat/chatSpans.js';
+import type { BufferState } from '../input/chatBuffer.js';
 import { CHAT_FOCUS } from '../input/focusStore.js';
 import { isDefaultFavorited } from '../selectors/agentIdentity.js';
 import {
@@ -76,8 +75,10 @@ import {
 } from '../selectors/conversationsSelectors.js';
 import { isFavorited } from '../selectors/favoritesSelectors.js';
 import { useTheme } from '../theme/themeStore.js';
+import { useCanvasBackgroundColor } from './canvasBackground.js';
 import { PANE_BORDER_GLYPHS, paneBorderStyle, TRI_LEFT, TRI_RIGHT } from './glyphs.js';
 import { PaneBorderBottom, PaneBorderTop } from './paneBorder.js';
+import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 /** Matches one marked image span (`U+E000 <id> U+E001`) for render-time substitution. */
 const SPAN_RE = new RegExp(`${SPAN_OPEN}[^${SPAN_OPEN}${SPAN_CLOSE}]*${SPAN_CLOSE}`, 'g');
@@ -238,6 +239,7 @@ function ChoiceMenu({
 
 export const ChatInput = memo(function ChatInput(): React.JSX.Element {
   const theme = useTheme();
+  const canvasBackgroundColor = useCanvasBackgroundColor();
   const ref = useFocusRef();
   const { focus } = useInputStores();
   const focused = useEffectiveFocus() === CHAT_FOCUS;
@@ -319,12 +321,21 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
       ) : null}
       <PaneBorderTop
         title={`${TRI_RIGHT} ${targetLabel}`}
+        backgroundColor={canvasBackgroundColor}
         borderColor={borderColor}
         titleColor={focused ? theme.active : theme.inactive}
         glyphs={borderGlyphs}
         bold={focused}
       />
-      <Box borderStyle={inkBorderStyle} borderTop={false} borderColor={borderColor} paddingX={1}>
+      <Box
+        borderStyle={inkBorderStyle}
+        borderTop={false}
+        borderColor={borderColor}
+        {...(canvasBackgroundColor === undefined
+          ? {}
+          : { borderBackgroundColor: canvasBackgroundColor })}
+        paddingX={1}
+      >
         {livePrompt !== null ? (
           <ChoiceMenu prompt={livePrompt} compose={text} />
         ) : (
@@ -339,7 +350,12 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
       </Box>
       {/* Bottom border overlay: `╰──…── ◂ prev · next ▸ ─╯` riding Ink's own bottom border
           above (net-zero height). Labels appear only when ≥1 adjacent crow exists. */}
-      <PaneBorderBottom borderColor={borderColor} glyphs={borderGlyphs} rightExtra={footerRight} />
+      <PaneBorderBottom
+        borderColor={borderColor}
+        backgroundColor={canvasBackgroundColor}
+        glyphs={borderGlyphs}
+        rightExtra={footerRight}
+      />
     </Box>
   );
 });

@@ -50,7 +50,7 @@ def test_valid_workflow_passes() -> None:
 
 def test_structured_issues_preserve_the_legacy_validation_messages() -> None:
     defn = WorkflowDef(
-        name="bad name",
+        name="bad: name",
         stages=[_stage(id="a", title="A", depends_on=["ghost", "ghost"])],
     )
 
@@ -97,9 +97,19 @@ def test_missing_name() -> None:
     assert any("name" in e for e in errors)
 
 
-def test_bad_name_charset() -> None:
-    errors = validate_workflow(_wf(name="bad name"))
-    assert any("name" in e for e in errors)
+def test_workflow_names_allow_single_spaces_but_reject_ambiguous_whitespace_and_syntax() -> None:
+    assert validate_workflow(_wf(name="Release Checklist 2")) == []
+    for name in (
+        "",
+        " leading",
+        "trailing ",
+        "two  spaces",
+        'has "quote"',
+        "has:colon",
+        "tab\tname",
+    ):
+        errors = validate_workflow(_wf(name=name))
+        assert any("name" in error for error in errors), name
 
 
 def test_empty_stages() -> None:
@@ -216,7 +226,7 @@ def test_shared_validation_fixture_issue_code_parity() -> None:
 
 def test_every_validation_issue_code_has_stable_path_metadata() -> None:
     definitions = [
-        WorkflowDef(name="bad name", stages=[]),
+        WorkflowDef(name="bad: name", stages=[]),
         WorkflowDef(
             name="wf",
             mode="generative",

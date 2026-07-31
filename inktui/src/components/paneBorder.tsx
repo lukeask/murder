@@ -60,24 +60,29 @@ function OverflowIndicator({
   count,
   borderColor,
   horizontal,
+  backgroundColor,
 }: {
   readonly tri: string;
   readonly count: number;
   readonly borderColor: string;
   readonly horizontal: string;
+  readonly backgroundColor?: string | undefined;
 }): React.JSX.Element {
+  const background = backgroundColor === undefined ? {} : { backgroundColor };
   return (
     <Box flexShrink={0}>
-      <Text color={borderColor}>{`${horizontal} ${tri} `}</Text>
-      <Text color={borderColor} dimColor>
+      <Text color={borderColor} {...background}>{`${horizontal} ${tri} `}</Text>
+      <Text color={borderColor} {...background} dimColor>
         {String(count)}
       </Text>
-      <Text color={borderColor}>{` ${horizontal}${horizontal}`}</Text>
+      <Text color={borderColor} {...background}>{` ${horizontal}${horizontal}`}</Text>
     </Box>
   );
 }
 
 export interface PaneBorderTopProps {
+  /** Explicit canvas fill for hand-rendered border cells; undefined preserves terminal default. */
+  readonly backgroundColor?: string | undefined;
   /** Display-ready title text shown inline on the border (e.g. `Plans`, or `›` for the chat input). */
   readonly title: string;
   /** Border + corner + `─`-fill color — a {@link ../theme/buildTheme.js Theme} role resolved by `paneColors`. */
@@ -119,8 +124,10 @@ export function PaneBorderTop({
   titleExtra,
   overflowAbove,
   overflowBelow,
+  backgroundColor,
 }: PaneBorderTopProps): React.JSX.Element {
   const { topLeftPrefix, topRight, horizontal } = glyphs;
+  const background = backgroundColor === undefined ? {} : { backgroundColor };
   return (
     // No rigid `width="100%"`: the row STRETCHES to the (shrinkable, `minWidth={0}`) outer Pane box on
     // the cross axis, so on a narrow tiled column it resolves to the SAME width as the content box below
@@ -128,19 +135,23 @@ export function PaneBorderTop({
     // fixed corner/title segments shrink-flow correctly; `overflow="hidden"` clips the `─` fill overrun.
     <Box flexDirection="row" flexShrink={1} minWidth={0} overflow="hidden" height={1}>
       <Box flexShrink={0}>
-        <Text color={borderColor}>{topLeftPrefix}</Text>
+        <Text color={borderColor} {...background}>
+          {topLeftPrefix}
+        </Text>
       </Box>
       {/* Title segment: SHRINKABLE + clipped so a title/suffix wider than the rail truncates rather
           than pushing the `╮` corner off the edge (L3b). The fixed corner segments above/below never
           shrink, so the border always closes. */}
       <Box flexShrink={1} minWidth={0} overflow="hidden">
-        <Text color={titleColor} bold={bold} wrap="truncate-end">
+        <Text color={titleColor} {...background} bold={bold} wrap="truncate-end">
           {title}
         </Text>
         {titleExtra}
       </Box>
       <Box flexShrink={0}>
-        <Text color={borderColor}> </Text>
+        <Text color={borderColor} {...background}>
+          {' '}
+        </Text>
       </Box>
       {/* The `─` fill: `flexBasis={0}` is load-bearing (L3b). With the default `auto` basis the
           256-char run is the box's natural width, so the title row ALWAYS overflows 100% — and once
@@ -152,7 +163,7 @@ export function PaneBorderTop({
           basis = 0`) absorbs none of it, so the title segment alone shrinks and clips (the corners
           stay `flexShrink={0}`, so `╮` always draws). The canonical grow:1/basis:0 fill idiom. */}
       <Box flexGrow={1} flexShrink={1} flexBasis={0} minWidth={0} overflow="hidden">
-        <Text color={borderColor} wrap="hard">
+        <Text color={borderColor} {...background} wrap="hard">
           {horizontal.repeat(256)}
         </Text>
       </Box>
@@ -167,6 +178,7 @@ export function PaneBorderTop({
           count={overflowAbove}
           borderColor={borderColor}
           horizontal={horizontal}
+          backgroundColor={backgroundColor}
         />
       )}
       {overflowBelow !== undefined && overflowBelow > 0 && (
@@ -175,16 +187,21 @@ export function PaneBorderTop({
           count={overflowBelow}
           borderColor={borderColor}
           horizontal={horizontal}
+          backgroundColor={backgroundColor}
         />
       )}
       <Box flexShrink={0}>
-        <Text color={borderColor}>{topRight}</Text>
+        <Text color={borderColor} {...background}>
+          {topRight}
+        </Text>
       </Box>
     </Box>
   );
 }
 
 export interface PaneBorderBottomProps {
+  /** Explicit canvas fill for glyph/label cells; overlay spacer Boxes stay transparent. */
+  readonly backgroundColor?: string | undefined;
   /** Border color — the spacer cells inherit it (they're blanks, so it's only meaningful if a future
    *  glyph rides them); the left/right nodes own their own color. */
   readonly borderColor: string;
@@ -223,8 +240,10 @@ export function PaneBorderBottom({
   glyphs = PANE_BORDER_GLYPHS.round,
   leftExtra,
   rightExtra,
+  backgroundColor,
 }: PaneBorderBottomProps): React.JSX.Element {
   const { horizontal } = glyphs;
+  const background = backgroundColor === undefined ? {} : { backgroundColor };
   const hasLeft = leftExtra !== undefined && leftExtra !== null && leftExtra !== false;
   const hasRight = rightExtra !== undefined && rightExtra !== null && rightExtra !== false;
   return (
@@ -246,9 +265,13 @@ export function PaneBorderBottom({
         // ` <label> ` — the surrounding blanks sit over the border `─`, giving the label breathing
         // room exactly like the title's ` ` gaps. SHRINKABLE so a wide label clips before the corners.
         <Box flexShrink={1} minWidth={0} overflow="hidden" flexDirection="row">
-          <Text color={borderColor}> </Text>
+          <Text color={borderColor} {...background}>
+            {' '}
+          </Text>
           {leftExtra}
-          <Text color={borderColor}> </Text>
+          <Text color={borderColor} {...background}>
+            {' '}
+          </Text>
         </Box>
       )}
       {/* Transparent fill — Ink's `─` border shows through (no painted glyphs to clip/flicker). */}
@@ -257,9 +280,11 @@ export function PaneBorderBottom({
         // ` <label> ─` ending one cell before the right edge; the reserve below shows the `╯` corner,
         // so this reads `… <label> ─╯`, mirroring the title's `╭─ ` 3-cell inset. FIXED — fill clips first.
         <Box flexShrink={0} flexDirection="row">
-          <Text color={borderColor}> </Text>
+          <Text color={borderColor} {...background}>
+            {' '}
+          </Text>
           {rightExtra}
-          <Text color={borderColor}>{` ${horizontal}`}</Text>
+          <Text color={borderColor} {...background}>{` ${horizontal}`}</Text>
         </Box>
       )}
       {/* Transparent over the closing `╯` (Ink's own corner, or the scrollbar column's). */}
@@ -292,13 +317,16 @@ export function PaneBorderRight({
   thumb,
   color,
   glyphs = PANE_BORDER_GLYPHS.round,
+  backgroundColor,
 }: {
   readonly height: number;
   readonly thumb: { readonly size: number; readonly offset: number } | null;
   readonly color: string;
   readonly glyphs?: PaneBorderGlyphs;
+  readonly backgroundColor?: string | undefined;
 }): React.JSX.Element {
   const track = trackGlyph(glyphs);
+  const background = backgroundColor === undefined ? {} : { backgroundColor };
   const cells = Array.from({ length: Math.max(height, 0) }, (_, i) =>
     thumb !== null && i >= thumb.offset && i < thumb.offset + thumb.size ? THUMB : track,
   );
@@ -306,11 +334,13 @@ export function PaneBorderRight({
     <Box flexDirection="column" width={1} flexShrink={0} minHeight={0} overflow="hidden">
       {cells.map((glyph, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length border cells are position-keyed.
-        <Text key={i} color={color}>
+        <Text key={i} color={color} {...background}>
           {glyph}
         </Text>
       ))}
-      <Text color={color}>{glyphs.bottomRight}</Text>
+      <Text color={color} {...background}>
+        {glyphs.bottomRight}
+      </Text>
     </Box>
   );
 }

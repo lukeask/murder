@@ -1,14 +1,16 @@
 import { buildEditorGraph } from './graph.js';
 import type { EditorIssue, EditorWorkflow } from './model.js';
 
-const ID = /^[A-Za-z0-9_-]+$/;
+/** Human-readable registry names use single spaces between non-empty word segments. */
+const WORKFLOW_NAME = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/;
+const STAGE_NAME = /^\S(?:.*\S)?$/;
 export function validateEditorWorkflow(workflow: EditorWorkflow): readonly EditorIssue[] {
   const issues: EditorIssue[] = [];
-  if (!ID.test(workflow.name))
+  if (!WORKFLOW_NAME.test(workflow.name))
     issues.push({
       code: 'invalid_name',
       severity: 'error',
-      message: 'Workflow name must contain only letters, numbers, _ and -.',
+      message: 'Workflow name may contain letters, numbers, _, -, and single spaces between words.',
       field: 'name',
     });
   if (workflow.stages.length === 0)
@@ -19,11 +21,11 @@ export function validateEditorWorkflow(workflow: EditorWorkflow): readonly Edito
     });
   const graph = buildEditorGraph(workflow);
   for (const stage of workflow.stages) {
-    if (!ID.test(stage.id))
+    if (!STAGE_NAME.test(stage.id))
       issues.push({
         code: 'invalid_stage_id',
         severity: 'error',
-        message: 'Stage ID must contain only letters, numbers, _ and -.',
+        message: 'Stage name must not be blank or begin/end with whitespace.',
         stageKey: stage.key,
         field: 'id',
       });

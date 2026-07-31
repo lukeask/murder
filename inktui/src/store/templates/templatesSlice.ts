@@ -1,5 +1,5 @@
 /**
- * Templates slice — the registry of named text-expansion templates (`:name:` macros).
+ * Prompt-templates slice — the registry of named text-expansion prompt templates.
  *
  * ## Why hand-written, not a `listSlice.ts` factory shell
  *
@@ -26,7 +26,7 @@ import type { StateCreator } from 'zustand';
 import type { AppStore } from '../store.js';
 
 /** One named template: `name` is the `:name:` macro key, `body` the expansion text. */
-export interface TemplateRecord {
+export interface PromptTemplateRecord {
   readonly name: string;
   readonly body: string;
 }
@@ -37,9 +37,9 @@ export interface TemplateRecord {
  * loaded yet" from "loaded, none defined". `error` carries a failed load/save message. All readonly
  * — ref-swapped wholesale on change.
  */
-export interface TemplatesState {
+export interface PromptTemplatesState {
   /** The named templates. Normalized (sorted, de-duped) by the backend after each save. */
-  readonly items: readonly TemplateRecord[];
+  readonly items: readonly PromptTemplateRecord[];
   /** Load/save lifecycle: `idle` before the first `load`, `ready` after, `error` on a failed RPC. */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   /** Set when the last load/save rejected; cleared on the next success. */
@@ -47,7 +47,7 @@ export interface TemplatesState {
 }
 
 /** The initial, pre-load slice value. A fresh store has not called `tui.load_templates` yet. */
-export const initialTemplatesState: TemplatesState = {
+export const initialPromptTemplatesState: PromptTemplatesState = {
   items: [],
   status: 'idle',
   error: null,
@@ -59,13 +59,13 @@ export const initialTemplatesState: TemplatesState = {
  * (rule 3 — see {@link ./templatesActions.js}). Contributes only the `templates` key; `../store.ts`
  * composes it.
  */
-export const createTemplatesSlice: StateCreator<
+export const createPromptTemplatesSlice: StateCreator<
   AppStore,
   [],
   [],
-  { templates: TemplatesState }
+  { templates: PromptTemplatesState }
 > = () => ({
-  templates: initialTemplatesState,
+  templates: initialPromptTemplatesState,
 });
 
 /**
@@ -73,12 +73,19 @@ export const createTemplatesSlice: StateCreator<
  * code and the settings UI consume. Last-wins on a duplicate name (the backend normalizes away
  * duplicates, but a pre-save optimistic list could momentarily hold one).
  */
-export function selectTemplatesByName(
-  items: readonly TemplateRecord[],
-): Map<string, TemplateRecord> {
-  const byName = new Map<string, TemplateRecord>();
+export function selectPromptTemplatesByName(
+  items: readonly PromptTemplateRecord[],
+): Map<string, PromptTemplateRecord> {
+  const byName = new Map<string, PromptTemplateRecord>();
   for (const item of items) {
     byName.set(item.name, item);
   }
   return byName;
 }
+
+/** Compatibility aliases for existing store wiring and downstream extensions. */
+export type TemplateRecord = PromptTemplateRecord;
+export type TemplatesState = PromptTemplatesState;
+export const initialTemplatesState = initialPromptTemplatesState;
+export const createTemplatesSlice = createPromptTemplatesSlice;
+export const selectTemplatesByName = selectPromptTemplatesByName;

@@ -28,6 +28,11 @@ describe('createAppStore — projection hydration', () => {
             },
           ],
         },
+        settings: {
+          settings: {
+            background_transparency: 40,
+          },
+        },
       },
       cursor: 42,
       mode: 'cold',
@@ -57,6 +62,7 @@ describe('createAppStore — projection hydration', () => {
       projections: { cursor: 42, mode: 'cold' },
     });
     expect(store.getState().roster.rows[0]?.agentId).toBe('agent-1');
+    expect(store.getState().settings.backgroundTransparency).toBe(40);
     dispose();
   });
 

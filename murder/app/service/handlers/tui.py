@@ -66,18 +66,18 @@ def register(
         tmp.replace(path)
         return {"ok": True, "favorites": ids}
 
-    def _tui_load_templates(_body: dict[str, Any]) -> dict[str, Any]:
-        from murder.user_config import load_templates
+    def _tui_load_prompt_templates(_body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import load_prompt_templates
 
-        return {"ok": True, "templates": load_templates()}
+        return {"ok": True, "templates": load_prompt_templates()}
 
-    def _tui_save_templates(body: dict[str, Any]) -> dict[str, Any]:
-        from murder.user_config import save_templates
+    def _tui_save_prompt_templates(body: dict[str, Any]) -> dict[str, Any]:
+        from murder.user_config import save_prompt_templates
 
         templates = body.get("templates")
         if not isinstance(templates, list):
-            raise ValueError("tui.save_templates requires templates list")
-        return {"ok": True, "templates": save_templates(templates)}
+            raise ValueError("templates.set requires templates list")
+        return {"ok": True, "templates": save_prompt_templates(templates)}
 
     def _tui_load_workflows(body: dict[str, Any]) -> dict[str, Any]:
         from murder.user_config import read_workflow_registry
@@ -202,12 +202,12 @@ def register(
 
     host.register_application_query(QueryName.FAVORITES_GET, _tui_load_favorites)
     host.register_application_query(QueryName.SPAWN_FAVORITES_GET, _tui_load_spawn_favorites)
-    host.register_application_query(QueryName.TEMPLATES_GET, _tui_load_templates)
+    host.register_application_query(QueryName.TEMPLATES_GET, _tui_load_prompt_templates)
     host.register_application_query(QueryName.THEMES_GET, _tui_load_themes)
     host.register_application_query(QueryName.WORKFLOWS_GET, _tui_load_workflows)
     host.register_application_command(CommandName.FAVORITES_SET, _tui_save_favorites)
     host.register_application_command(CommandName.SPAWN_FAVORITES_SET, _tui_save_spawn_favorites)
-    host.register_application_command(CommandName.TEMPLATES_SET, _tui_save_templates)
+    host.register_application_command(CommandName.TEMPLATES_SET, _tui_save_prompt_templates)
     host.register_application_command(CommandName.THEMES_SET, _tui_save_themes)
     host.register_application_command(CommandName.THEME_IMPORT, _tui_import_theme)
     host.register_application_command(CommandName.WORKFLOWS_SET, _tui_save_workflows)
@@ -216,6 +216,6 @@ def register(
     host.register_application_command(CommandName.WORKFLOW_START, _tui_run_workflow)
     if projections is not None:
         projections.register(ProjectionTopic.FAVORITES, lambda: _tui_load_favorites({}))
-        projections.register(ProjectionTopic.TEMPLATES, lambda: _tui_load_templates({}))
+        projections.register(ProjectionTopic.TEMPLATES, lambda: _tui_load_prompt_templates({}))
         projections.register(ProjectionTopic.THEMES, lambda: _tui_load_themes({}))
         projections.register(ProjectionTopic.WORKFLOWS, lambda: _tui_load_workflows({}))

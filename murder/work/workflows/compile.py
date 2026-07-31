@@ -2,7 +2,8 @@
 
 Compilation order for each templatable stage field (``title``, ``instructions``):
 
-1. Expand inline ``:foo:`` prompt templates (single-pass; bodies are not re-scanned).
+1. Expand inline ``:foo:`` or ``:\"Prompt Name\":`` prompt templates
+   (single-pass; bodies are not re-scanned).
 2. Collect ``{workflow-input}`` placeholders from the expanded text.
 3. Merge with optional declared ``WorkflowDef.inputs`` into wizard fields + diagnostics.
 
@@ -27,10 +28,12 @@ from murder.work.workflows.definition import (
     WorkflowInputKind,
 )
 
-# Identifier-like names only (must start with a letter or underscore). Pure-digit
-# spans like ``12:30:``, ``1:2:3``, and ``:100:`` are left literal — they are times /
-# versions, not prompt-template refs.
-_INLINE_TEMPLATE_RE = re.compile(r":([A-Za-z_][A-Za-z0-9_-]*):")
+# Unquoted macros retain the old identifier grammar so times/versions such as
+# ``12:30:`` and ``:100:`` stay literal.  Quoted macros use the full prompt-template
+# name grammar, including spaces, and make numeric names unambiguous.
+_INLINE_PROMPT_TEMPLATE_RE = re.compile(
+    r':(?:"([A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*)"|([A-Za-z_][A-Za-z0-9_-]*)):'
+)
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_-]+)\}")
 
 WorkflowCompileIssueCode = Literal[
@@ -79,11 +82,6 @@ class CompileWorkflowTemplateParams(ApplicationModel):
     def require_template_or_name(self) -> CompileWorkflowTemplateParams:
         if self.template is None and not (self.name and self.name.strip()):
             raise ValueError("template or name is required")
-        if self.name is not None:
-            text = self.name.strip()
-            if not text:
-                raise ValueError("name must be non-empty")
-            self.name = text
         return self
 
 
@@ -100,7 +98,7 @@ def expand_inline_prompt_templates(
     text: str,
     templates: Mapping[str, str],
 ) -> tuple[str, list[str]]:
-    """Single-pass expand of inline ``:name:`` macros.
+    """Single-pass expand of inline ``:name:`` and ``:\"Name With Spaces\":`` macros.
 
     Returns ``(expanded_text, unknown_names)``. Unknown names are left verbatim
     in the expanded text and listed in first-occurrence order (deduplicated).
@@ -110,7 +108,7 @@ def expand_inline_prompt_templates(
     seen_unknown: set[str] = set()
 
     def _replace(match: re.Match[str]) -> str:
-        name = match.group(1)
+        name = match.group(1) or match.group(2)
         body = templates.get(name)
         if body is not None:
             return body
@@ -119,7 +117,7 @@ def expand_inline_prompt_templates(
             unknown.append(name)
         return match.group(0)
 
-    return _INLINE_TEMPLATE_RE.sub(_replace, text), unknown
+    return _INLINE_PROMPT_TEMPLATE_RE.sub(_replace, text), unknown
 
 
 def collect_placeholders(*texts: str) -> list[str]:
@@ -149,9 +147,7 @@ def compile_workflow_template(
 
     for stage_index, stage in enumerate(template.stages):
         title, title_unknown = expand_inline_prompt_templates(stage.title, registry)
-        instructions, instr_unknown = expand_inline_prompt_templates(
-            stage.instructions, registry
-        )
+        instructions, instr_unknown = expand_inline_prompt_templates(stage.instructions, registry)
         unknown_fields: dict[str, str] = {}
         for unknown_name in title_unknown:
             unknown_fields.setdefault(unknown_name, "title")
@@ -163,7 +159,7 @@ def compile_workflow_template(
                     code="unknown_prompt_template",
                     message=(
                         f"stage {stage.id!r} references unknown prompt template "
-                        f":{unknown_name}:"
+                        f"{_format_prompt_template_reference(unknown_name)}"
                     ),
                     severity="error",
                     path=["stages", stage_index, field],
@@ -251,17 +247,24 @@ def required_input_issues(
 def prompt_template_map(
     records: list[Mapping[str, str]] | None = None,
 ) -> dict[str, str]:
-    """Build a name→body map from ``load_templates()``-shaped records."""
+    """Build a name→body map from prompt-template records."""
     if records is None:
-        from murder.user_config import load_templates  # noqa: PLC0415
+        from murder.user_config import load_prompt_templates  # noqa: PLC0415
 
-        records = load_templates()
+        records = load_prompt_templates()
     out: dict[str, str] = {}
     for record in records:
         name = str(record.get("name", ""))
         if name:
             out[name] = str(record.get("body", ""))
     return out
+
+
+def _format_prompt_template_reference(name: str) -> str:
+    """Render a name in the unambiguous inline-macro spelling used in diagnostics."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name):
+        return f":{name}:"
+    return f':"{name}":'
 
 
 def _merge_inputs(

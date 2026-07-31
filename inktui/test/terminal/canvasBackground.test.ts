@@ -30,9 +30,23 @@ describe('canvasBackground', () => {
     }
   });
 
-  it('does nothing outside kitty when applying a translucent canvas', () => {
+  it('sets the non-Kitty dynamic default background for an opaque canvas', () => {
     delete process.env['KITTY_WINDOW_ID'];
-    applyCanvasBackground(50, '#272e33');
+    applyCanvasBackground(0, '#272e33');
+    expect(writeSpy).toHaveBeenCalledWith('\x1b]11;#272e33\x1b\\');
+  });
+
+  it('restores the non-Kitty dynamic default background at 100%', () => {
+    delete process.env['KITTY_WINDOW_ID'];
+    applyCanvasBackground(0, '#272e33');
+    writeSpy.mockClear();
+    applyCanvasBackground(100, '#272e33');
+    expect(writeSpy).toHaveBeenCalledWith('\x1b]111\x1b\\');
+  });
+
+  it('leaves a non-Kitty terminal untouched when already at 100%', () => {
+    delete process.env['KITTY_WINDOW_ID'];
+    applyCanvasBackground(100, '#272e33');
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
@@ -73,6 +87,23 @@ describe('canvasBackground', () => {
     writeSpy.mockClear();
     applyCanvasBackground(25, '#272e33');
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not redundantly alter a non-Kitty terminal for identical values', () => {
+    delete process.env['KITTY_WINDOW_ID'];
+    applyCanvasBackground(0, '#272e33');
+    writeSpy.mockClear();
+    applyCanvasBackground(0, '#272e33');
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not double-restore Kitty through the non-Kitty path', () => {
+    process.env['KITTY_WINDOW_ID'] = '1';
+    applyCanvasBackground(0, '#272e33');
+    writeSpy.mockClear();
+    applyCanvasBackground(100, '#272e33');
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).toHaveBeenCalledWith('\x1b]30101\x1b\\');
   });
 
   it('resolveBackgroundTransparency prefers the live preview override', () => {

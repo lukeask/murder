@@ -8,7 +8,7 @@ import { fromWire, type WorkflowWire } from '../../src/workflowEditor/wire.js';
 describe('validateEditorWorkflow', () => {
   it('reports independently repairable malformed graph facts without throwing', () => {
     const workflow: EditorWorkflow = {
-      name: 'bad name',
+      name: 'bad  name',
       description: '',
       mode: 'generative',
       stages: [
@@ -47,6 +47,32 @@ describe('validateEditorWorkflow', () => {
     expect(codes).toContain('unknown_dependency');
     expect(codes).toContain('unsupported_mode');
     expect(codes).toContain('unsupported_gate');
+  });
+
+  it('accepts human-readable workflow names and rejects ambiguous spacing', () => {
+    const base = {
+      description: '',
+      mode: 'static' as const,
+      stages: [
+        {
+          key: 'a',
+          id: 'stage',
+          title: 'stage',
+          instructions: '',
+          harness: 'codex',
+          model: 'x',
+          worktree: null,
+          dependsOn: [],
+          gate: 'auto' as const,
+        },
+      ],
+    };
+    expect(validateEditorWorkflow({ ...base, name: 'Deploy Production' })).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid_name' })]),
+    );
+    expect(validateEditorWorkflow({ ...base, name: ' Deploy  Production ' })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'invalid_name' })]),
+    );
   });
 
   it('matches the shared backend validation issue-code corpus', () => {

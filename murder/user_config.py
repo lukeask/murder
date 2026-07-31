@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -643,21 +643,28 @@ def config_path() -> Path:
     return config_dir() / "config.yaml"
 
 
-def templates_path() -> Path:
-    """Userspace/global text-template registry (follows the user across repos)."""
+class PromptTemplateRecord(TypedDict):
+    """One persisted prompt-template definition (wire shape stays ``templates``)."""
+
+    name: str
+    body: str
+
+
+def prompt_templates_path() -> Path:
+    """Userspace/global prompt-template registry (stored as ``templates.yaml``)."""
     return config_dir() / "templates.yaml"
 
 
-_TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_PROMPT_TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$")
 
 
-def load_templates(path: Path | None = None) -> list[dict[str, str]]:
-    """Read the userspace templates registry.
+def load_prompt_templates(path: Path | None = None) -> list[PromptTemplateRecord]:
+    """Read the userspace prompt-template registry.
 
     Tolerates a missing/empty file or a missing ``templates:`` key by returning
     an empty list. Each record is coerced to ``{"name": str, "body": str}``.
     """
-    tpath = path or templates_path()
+    tpath = path or prompt_templates_path()
     if not tpath.exists():
         return []
     try:
@@ -669,7 +676,7 @@ def load_templates(path: Path | None = None) -> list[dict[str, str]]:
     records = raw.get("templates")
     if not isinstance(records, list):
         return []
-    out: list[dict[str, str]] = []
+    out: list[PromptTemplateRecord] = []
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -677,27 +684,27 @@ def load_templates(path: Path | None = None) -> list[dict[str, str]]:
     return out
 
 
-def _normalize_templates(records: Any) -> list[dict[str, str]]:
-    """Validate/coerce records: drop invalid names, de-dupe (last wins), sort."""
+def _normalize_prompt_templates(records: Any) -> list[PromptTemplateRecord]:
+    """Validate/coerce prompt templates: drop invalid names, de-dupe, then sort."""
     by_name: dict[str, str] = {}
     if isinstance(records, list):
         for rec in records:
             if not isinstance(rec, dict):
                 continue
             name = str(rec.get("name", ""))
-            if not _TEMPLATE_NAME_RE.match(name):
+            if not _PROMPT_TEMPLATE_NAME_RE.match(name):
                 continue
             by_name[name] = str(rec.get("body", ""))
     return [{"name": n, "body": by_name[n]} for n in sorted(by_name)]
 
 
-def save_templates(records: Any, path: Path | None = None) -> list[dict[str, str]]:
-    """Normalize and atomically persist the templates registry.
+def save_prompt_templates(records: Any, path: Path | None = None) -> list[PromptTemplateRecord]:
+    """Normalize and atomically persist the prompt-template registry.
 
     Returns the normalized list (canonical state) so callers can sync to it.
     """
-    normalized = _normalize_templates(records)
-    tpath = path or templates_path()
+    normalized = _normalize_prompt_templates(records)
+    tpath = path or prompt_templates_path()
     tpath.parent.mkdir(parents=True, exist_ok=True)
     payload = yaml.safe_dump({"templates": normalized}, default_flow_style=False, sort_keys=False)
     tmp = tpath.with_suffix(".tmp")
@@ -705,6 +712,14 @@ def save_templates(records: Any, path: Path | None = None) -> list[dict[str, str
     os.chmod(tmp, 0o600)
     tmp.replace(tpath)
     return normalized
+
+
+# Compatibility boundaries: RPC payloads and the on-disk file deliberately
+# remain ``templates`` / ``templates.yaml``.  Keep these aliases for callers
+# which have not yet adopted the explicit prompt-template terminology.
+templates_path = prompt_templates_path
+load_templates = load_prompt_templates
+save_templates = save_prompt_templates
 
 
 def workflows_path() -> Path:

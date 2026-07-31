@@ -492,8 +492,7 @@ function TicketEditorSurface({ ui }: { readonly ui: EditorUiState }): JSX.Elemen
                   checklistDone ? (
                     <Text
                       inverse={selected && ui.vimMode === 'normal'}
-                      color={theme.success}
-                      color={selected ? theme.text : theme.muted}
+                      color={selected ? theme.success : theme.muted}
                     >
                       {line}
                     </Text>
@@ -554,10 +553,16 @@ function EditorHeader({ frontmatter }: { readonly frontmatter: TicketFrontmatter
         {frontmatter.title}
       </Text>
       <Text color={theme.heading}>{`status:${frontmatter.status}`}</Text>
-      {frontmatter.harness !== null && <Text color={theme.muted}>{`harness:${frontmatter.harness}`}</Text>}
-      {frontmatter.model !== null && <Text color={theme.muted}>{`model:${frontmatter.model}`}</Text>}
+      {frontmatter.harness !== null && (
+        <Text color={theme.muted}>{`harness:${frontmatter.harness}`}</Text>
+      )}
+      {frontmatter.model !== null && (
+        <Text color={theme.muted}>{`model:${frontmatter.model}`}</Text>
+      )}
       {frontmatter.deps !== '' && <Text color={theme.muted}>{`deps:${frontmatter.deps}`}</Text>}
-      {frontmatter.worktree !== null && <Text color={theme.muted}>{`wt:${frontmatter.worktree}`}</Text>}
+      {frontmatter.worktree !== null && (
+        <Text color={theme.muted}>{`wt:${frontmatter.worktree}`}</Text>
+      )}
     </>
   );
 }

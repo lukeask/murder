@@ -18,6 +18,7 @@ const registry = new Map<string, string>([
   ['pair', '{a} and {b}'],
   ['plain', 'just text'],
   ['sig', '— sent from murder'],
+  ['Greeting Card', 'dear {who}'],
 ]);
 const builtins = new Set<string>(['help', 'save', 'note']);
 
@@ -34,6 +35,14 @@ describe('expandTemplates — inline form', () => {
 
   it('replaces multiple inline hits', () => {
     expect(run(':plain: then :sig:')).toBe('just text then — sent from murder');
+  });
+
+  it('replaces a quoted macro for a human-readable prompt-template name', () => {
+    expect(run('hi :"Greeting Card": bye')).toBe('hi dear {who} bye');
+  });
+
+  it('leaves an unclosed quoted macro literal', () => {
+    expect(run('hi :"Greeting Card: bye')).toBe('hi :"Greeting Card: bye');
   });
 });
 
@@ -53,6 +62,10 @@ describe('expandTemplates — leading parameterized form', () => {
 
   it('ignores extra args beyond the placeholder count', () => {
     expect(run(':greet world extra ignored')).toBe('hello world');
+  });
+
+  it('fills a quoted leading prompt-template name', () => {
+    expect(run(':"Greeting Card" Ada')).toBe('dear Ada');
   });
 
   it('leaves a leading builtin name untouched (builtin wins)', () => {
@@ -178,6 +191,17 @@ describe('expandInlinePromptTemplates', () => {
     });
   });
 
+  it('expands quoted human-readable names and reports quoted misses', () => {
+    const templates = new Map<string, string>([['Meeting Notes', 'NOTES']]);
+    expect(
+      expandInlinePromptTemplates('x :"Meeting Notes": y :"Missing Notes":', templates),
+    ).toEqual({
+      text: 'x NOTES y :"Missing Notes":',
+      missing: ['Missing Notes'],
+      expanded: ['Meeting Notes'],
+    });
+  });
+
   it('does not treat times, versions, or pure-digit :N: as template refs', () => {
     for (const text of [
       'meet at 12:30: then go',
@@ -198,9 +222,7 @@ describe('expandInlinePromptTemplates', () => {
       ['my-template', 'BODY'],
       ['review-context', 'CTX'],
     ]);
-    expect(
-      expandInlinePromptTemplates('x :my-template: y :review-context:', templates),
-    ).toEqual({
+    expect(expandInlinePromptTemplates('x :my-template: y :review-context:', templates)).toEqual({
       text: 'x BODY y CTX',
       missing: [],
       expanded: ['my-template', 'review-context'],
@@ -218,6 +240,13 @@ describe('parseLeadingColonName', () => {
 
   it('parses :name at EOS with empty remainder', () => {
     expect(parseLeadingColonName(':greet')).toEqual({ name: 'greet', remainder: '' });
+  });
+
+  it('parses a quoted leading name with its remainder', () => {
+    expect(parseLeadingColonName(':"Greeting Card" Ada')).toEqual({
+      name: 'Greeting Card',
+      remainder: ' Ada',
+    });
   });
 
   it('returns null for inline :name: (trailing colon blocks leading match)', () => {

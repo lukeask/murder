@@ -94,12 +94,15 @@ import {
   initialSettingsState,
   type SettingsState,
 } from './settings/settingsSlice.js';
-import { createTemplatesActions, type TemplatesActions } from './templates/templatesActions.js';
 import {
-  createTemplatesSlice,
-  initialTemplatesState,
-  type TemplateRecord,
-  type TemplatesState,
+  createPromptTemplateActions,
+  type PromptTemplateActions,
+} from './templates/templatesActions.js';
+import {
+  createPromptTemplatesSlice,
+  initialPromptTemplatesState,
+  type PromptTemplateRecord,
+  type PromptTemplatesState,
 } from './templates/templatesSlice.js';
 import { createThemesActions, type ThemesActions } from './themes/themesActions.js';
 import { createThemesSlice, initialThemesState, type ThemesState } from './themes/themesSlice.js';
@@ -133,13 +136,6 @@ import {
 import { createUsageActions, type UsageActions } from './usage/usageActions.js';
 import type { UsageRow } from './usage/usageSlice.js';
 import { createUsageSlice, initialUsageState, type UsageState } from './usage/usageSlice.js';
-import { createWorkflowsActions, type WorkflowsActions } from './workflows/workflowsActions.js';
-import {
-  createWorkflowsSlice,
-  initialWorkflowsState,
-  type WorkflowTemplate,
-  type WorkflowsState,
-} from './workflows/workflowsSlice.js';
 import {
   createWorkflowRunsActions,
   type WorkflowRunsActions,
@@ -149,6 +145,13 @@ import {
   initialWorkflowRunsState,
   type WorkflowRunsState,
 } from './workflowRuns/workflowRunsSlice.js';
+import { createWorkflowsActions, type WorkflowsActions } from './workflows/workflowsActions.js';
+import {
+  createWorkflowsSlice,
+  initialWorkflowsState,
+  type WorkflowsState,
+  type WorkflowTemplate,
+} from './workflows/workflowsSlice.js';
 
 /** Every slice's actions, grouped by domain. Components dispatch through here; the bus is reached
  * only via these (rule 3). One key per slice — copy the `roster` line to add a domain. */
@@ -164,7 +167,8 @@ export interface AppActions {
   ticketDetail: TicketDetailActions;
   conversations: ConversationsActions;
   favorites: FavoritesActions;
-  templates: TemplatesActions;
+  /** Compatibility boundary: the wire/store key remains `templates`. */
+  templates: PromptTemplateActions;
   themes: ThemesActions;
   workflows: WorkflowsActions;
   workflowRuns: WorkflowRunsActions;
@@ -200,7 +204,8 @@ export interface AppStore {
   ticketDetail: TicketDetailState;
   conversations: ConversationsState;
   favorites: FavoritesState;
-  templates: TemplatesState;
+  /** Compatibility boundary: `templates` remains the projection/store key. */
+  templates: PromptTemplatesState;
   themes: ThemesState;
   workflows: WorkflowsState;
   workflowRuns: WorkflowRunsState;
@@ -245,7 +250,7 @@ export function createAppStore(bus: ApplicationClient): {
     ...createTicketDetailSlice(...a),
     ...createConversationsSlice(...a),
     ...createFavoritesSlice(...a),
-    ...createTemplatesSlice(...a),
+    ...createPromptTemplatesSlice(...a),
     ...createThemesSlice(...a),
     ...createWorkflowsSlice(...a),
     ...createWorkflowRunsSlice(...a),
@@ -269,7 +274,7 @@ export function createAppStore(bus: ApplicationClient): {
     ticketDetail: createTicketDetailActions(bus, store),
     conversations: createConversationsActions(bus, store),
     favorites: createFavoritesActions(bus, store),
-    templates: createTemplatesActions(bus, store),
+    templates: createPromptTemplateActions(bus, store),
     themes: createThemesActions(bus, store),
     workflows: createWorkflowsActions(bus, store),
     workflowRuns: createWorkflowRunsActions(bus, store),
@@ -452,7 +457,10 @@ function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots):
     });
   }
 
-  const templates = snapshotAs<{ templates?: readonly TemplateRecord[] }>(snapshots, 'templates');
+  const templates = snapshotAs<{ templates?: readonly PromptTemplateRecord[] }>(
+    snapshots,
+    'templates',
+  );
   if (templates !== undefined) {
     store.setState({
       templates: { items: templates.templates ?? [], status: 'ready', error: null },
@@ -466,10 +474,18 @@ function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots):
     store.setState({ themes: { items, status: 'ready', error: null } });
   }
 
-  const workflows = snapshotAs<{ workflows?: readonly WorkflowTemplate[]; revision?: string }>(snapshots, 'workflows');
+  const workflows = snapshotAs<{ workflows?: readonly WorkflowTemplate[]; revision?: string }>(
+    snapshots,
+    'workflows',
+  );
   if (workflows !== undefined) {
     store.setState({
-      workflows: { items: workflows.workflows ?? [], revision: workflows.revision ?? '', status: 'ready', error: null },
+      workflows: {
+        items: workflows.workflows ?? [],
+        revision: workflows.revision ?? '',
+        status: 'ready',
+        error: null,
+      },
     });
   }
 
@@ -568,6 +584,7 @@ function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined):
     modifier: wire.modifier ?? prev.modifier,
     keyOverrides: wire.key_overrides ?? prev.keyOverrides,
     paneGap: wire.pane_gap ?? prev.paneGap,
+    backgroundTransparency: wire.background_transparency ?? prev.backgroundTransparency,
     workspaceCount: wire.workspace_count ?? prev.workspaceCount,
     vimMode: wire.vim_mode ?? prev.vimMode,
     barWidgets: wire.bar_widgets ?? prev.barWidgets,
@@ -628,7 +645,7 @@ export const initialAppState: Pick<
   ticketDetail: initialTicketDetailState,
   conversations: initialConversationsState,
   favorites: initialFavoritesState,
-  templates: initialTemplatesState,
+  templates: initialPromptTemplatesState,
   themes: initialThemesState,
   workflows: initialWorkflowsState,
   workflowRuns: initialWorkflowRunsState,

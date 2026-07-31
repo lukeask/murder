@@ -1,7 +1,7 @@
 /**
  * `PromptTemplateManagerMode` — dedicated modal for prompt-template CRUD (list / create / edit /
  * rename / delete) plus preview of `{inputs}`, inline `:refs:`, workflow usages, and a single-pass
- * expansion preview. Extracted from the Templates section of {@link ./SettingsModal.js}.
+ * expansion preview. Extracted from the Prompt Templates section of {@link ./SettingsModal.js}.
  *
  * Persistence stays on the templates store actions (`save` / `rename` / `remove`); this mode never
  * talks to the bus directly.
@@ -24,18 +24,19 @@ import { plainTextProjection } from '../input/textEditor/projection.js';
 import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
 import { plainTextTopology } from '../input/textEditor/topology.js';
 import type { AppStore, AppStoreApi } from '../store/store.js';
-import type { TemplateRecord } from '../store/templates/templatesSlice.js';
+import type { PromptTemplateRecord } from '../store/templates/templatesSlice.js';
 import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
 import { useTheme } from '../theme/themeStore.js';
 import { Pane } from './Pane.js';
 import {
   collectBodyPlaceholders,
-  collectUnknownInlineRefs,
-  expandInlinePreview,
-  findWorkflowReferences,
+  collectUnknownInlinePromptTemplateRefs,
+  expandInlinePromptTemplatePreview,
+  findWorkflowPromptTemplateReferences,
+  formatPromptTemplateMacro,
   formatWorkflowTemplateRef,
   previewBodyFlat,
-  validateTemplateName,
+  validatePromptTemplateName,
   type WorkflowTemplateRef,
 } from './promptTemplates/refs.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
@@ -47,7 +48,7 @@ const BODY_EDITOR_WIDTH = 64;
 /** Label column in the detail pane, sized to its longest label (`Used by`, `Expands`). */
 const DETAIL_LABEL_WIDTH = 7;
 
-export interface PromptTemplateActions {
+export interface PromptTemplateManagerActions {
   remove(name: string): void;
   rename(oldName: string, newName: string): void;
   save(name: string, body: string): void;
@@ -56,8 +57,12 @@ export interface PromptTemplateActions {
 export interface PromptTemplateManagerModeOptions {
   readonly onDismiss?: () => void;
   /** Seed / override list (tests). When omitted, the store snapshot is used. */
-  readonly templates?: readonly TemplateRecord[];
-  readonly templateActions?: PromptTemplateActions;
+  readonly promptTemplates?: readonly PromptTemplateRecord[];
+  readonly promptTemplateActions?: PromptTemplateManagerActions;
+  /** @deprecated Use `promptTemplates`. */
+  readonly templates?: readonly PromptTemplateRecord[];
+  /** @deprecated Use `promptTemplateActions`. */
+  readonly templateActions?: PromptTemplateManagerActions;
   /** Workflow templates used for referential warnings (tests / callers without store). */
   readonly workflows?: readonly WorkflowTemplate[];
 }
@@ -96,9 +101,9 @@ type Intent =
   | 'right';
 
 interface ManagerState {
-  templates: readonly TemplateRecord[];
+  templates: readonly PromptTemplateRecord[];
   workflows: readonly WorkflowTemplate[];
-  actions: PromptTemplateActions;
+  actions: PromptTemplateManagerActions;
   cursor: number;
   interaction: Interaction;
   editEditor: TextEditorState;
@@ -107,7 +112,7 @@ interface ManagerState {
   noticeTone: 'info' | 'warning';
 }
 
-function buildRows(templates: readonly TemplateRecord[]): readonly ListRow[] {
+function buildRows(templates: readonly PromptTemplateRecord[]): readonly ListRow[] {
   return [
     { kind: 'create' },
     ...templates.map((t) => ({ kind: 'template' as const, name: t.name })),
@@ -131,9 +136,10 @@ export function promptTemplateManagerMode(
 
   const initialFromStore = store?.getState();
   const s: ManagerState = {
-    templates: opts.templates ?? initialFromStore?.templates.items ?? [],
+    templates: opts.promptTemplates ?? opts.templates ?? initialFromStore?.templates.items ?? [],
     workflows: opts.workflows ?? initialFromStore?.workflows.items ?? [],
-    actions: opts.templateActions ??
+    actions: opts.promptTemplateActions ??
+      opts.templateActions ??
       initialFromStore?.actions.templates ?? {
         remove() {},
         rename() {},
@@ -216,7 +222,7 @@ export function promptTemplateManagerMode(
   }
 
   function beginDelete(name: string): void {
-    const refs = findWorkflowReferences(name, s.workflows);
+    const refs = findWorkflowPromptTemplateReferences(name, s.workflows);
     s.interaction = { kind: 'confirmDelete', name, refs };
     s.notice = null;
     refresh();
@@ -225,7 +231,7 @@ export function promptTemplateManagerMode(
   function commitCreateName(): void {
     if (s.interaction.kind !== 'createName') return;
     const name = s.editEditor.text.trim();
-    const error = validateTemplateName(name, null, s.templates);
+    const error = validatePromptTemplateName(name, null, s.templates);
     if (error !== null) {
       s.notice = error;
       s.noticeTone = 'warning';
@@ -246,7 +252,9 @@ export function promptTemplateManagerMode(
     }
     s.interaction = { kind: 'normal' };
     setEditValue('');
-    s.notice = isNew ? `created :${name}:` : `saved :${name}:`;
+    s.notice = isNew
+      ? `created ${formatPromptTemplateMacro(name)}`
+      : `saved ${formatPromptTemplateMacro(name)}`;
     s.noticeTone = 'info';
     const idx = rows().findIndex((r) => r.kind === 'template' && r.name === name);
     if (idx >= 0) s.cursor = idx;
@@ -260,11 +268,11 @@ export function promptTemplateManagerMode(
     }
     s.interaction = { kind: 'normal' };
     setEditValue('');
-    const refs = findWorkflowReferences(oldName, s.workflows);
+    const refs = findWorkflowPromptTemplateReferences(oldName, s.workflows);
     s.notice =
       refs.length > 0
-        ? `renamed to :${newName}: — ${refs.length} workflow field${refs.length === 1 ? '' : 's'} still use :${oldName}:`
-        : `renamed to :${newName}:`;
+        ? `renamed to ${formatPromptTemplateMacro(newName)} — ${refs.length} workflow field${refs.length === 1 ? '' : 's'} still use ${formatPromptTemplateMacro(oldName)}`
+        : `renamed to ${formatPromptTemplateMacro(newName)}`;
     s.noticeTone = refs.length > 0 ? 'warning' : 'info';
     const idx = rows().findIndex((r) => r.kind === 'template' && r.name === newName);
     if (idx >= 0) s.cursor = idx;
@@ -276,7 +284,7 @@ export function promptTemplateManagerMode(
     if (s.interaction.kind !== 'rename') return;
     const oldName = s.interaction.name;
     const newName = s.editEditor.text.trim();
-    const error = validateTemplateName(newName, oldName, s.templates);
+    const error = validatePromptTemplateName(newName, oldName, s.templates);
     if (error !== null) {
       s.notice = error;
       s.noticeTone = 'warning';
@@ -290,7 +298,7 @@ export function promptTemplateManagerMode(
       refresh();
       return;
     }
-    const refs = findWorkflowReferences(oldName, s.workflows);
+    const refs = findWorkflowPromptTemplateReferences(oldName, s.workflows);
     if (refs.length > 0) {
       s.interaction = { kind: 'confirmRename', oldName, newName, refs };
       s.notice = null;
@@ -371,9 +379,9 @@ export function promptTemplateManagerMode(
   }
 
   function syncFromStore(
-    items: readonly TemplateRecord[],
+    items: readonly PromptTemplateRecord[],
     workflows: readonly WorkflowTemplate[],
-    actions: PromptTemplateActions,
+    actions: PromptTemplateManagerActions,
   ): void {
     s.actions = actions;
     const templatesChanged =
@@ -599,9 +607,9 @@ function PromptTemplateManagerDialog({
   readonly state: ManagerState;
   readonly store: AppStoreApi | null;
   readonly syncFromStore: (
-    items: readonly TemplateRecord[],
+    items: readonly PromptTemplateRecord[],
     workflows: readonly WorkflowTemplate[],
-    actions: PromptTemplateActions,
+    actions: PromptTemplateManagerActions,
   ) => void;
 }): JSX.Element {
   const theme = useTheme();
@@ -647,11 +655,16 @@ function PromptTemplateManagerDialog({
   const unknownRefs =
     bodyForPreview === null
       ? []
-      : collectUnknownInlineRefs(bodyForPreview, knownNames, selectedName ?? undefined);
+      : collectUnknownInlinePromptTemplateRefs(
+          bodyForPreview,
+          knownNames,
+          selectedName ?? undefined,
+        );
   const registry = new Map(s.templates.map((t) => [t.name, t.body] as const));
-  const expansion = bodyForPreview === null ? null : expandInlinePreview(bodyForPreview, registry);
+  const expansion =
+    bodyForPreview === null ? null : expandInlinePromptTemplatePreview(bodyForPreview, registry);
   const workflowRefs =
-    selectedName === null ? [] : findWorkflowReferences(selectedName, s.workflows);
+    selectedName === null ? [] : findWorkflowPromptTemplateReferences(selectedName, s.workflows);
   const confirmingRefs =
     s.interaction.kind === 'confirmRename' || s.interaction.kind === 'confirmDelete'
       ? s.interaction.refs
@@ -682,8 +695,8 @@ function PromptTemplateManagerDialog({
         <>
           <Text bold color={theme.warning} wrap="truncate-end">
             {rename !== null
-              ? `Rename :${rename.oldName}: to :${rename.newName}:?`
-              : `Delete :${remove?.name ?? ''}:?`}
+              ? `Rename ${formatPromptTemplateMacro(rename.oldName)} to ${formatPromptTemplateMacro(rename.newName)}?`
+              : `Delete ${formatPromptTemplateMacro(remove?.name ?? '')}?`}
           </Text>
           <Text wrap="truncate-end" color={theme.text}>
             {rename !== null
@@ -734,7 +747,7 @@ function PromptTemplateManagerDialog({
             : detailRow(
                 'Refs',
                 <Text color={theme.warning} wrap="truncate-end">
-                  {`⚠ unknown ${unknownRefs.map((name) => `:${name}:`).join(', ')}`}
+                  {`⚠ unknown ${unknownRefs.map(formatPromptTemplateMacro).join(', ')}`}
                 </Text>,
               )}
         </>
@@ -761,7 +774,7 @@ function PromptTemplateManagerDialog({
               <Text color={theme.muted}>all resolve</Text>
             ) : (
               <Text color={theme.warning} wrap="truncate-end">
-                {`⚠ unknown ${unknownRefs.map((name) => `:${name}:`).join(', ')}`}
+                {`⚠ unknown ${unknownRefs.map(formatPromptTemplateMacro).join(', ')}`}
               </Text>
             ),
           )}
@@ -797,7 +810,7 @@ function PromptTemplateManagerDialog({
     }
     return (
       <Text color={theme.muted}>
-        {editingName ? 'Naming a new template…' : 'Pick a template to see its body.'}
+        {editingName ? 'Naming a new prompt template…' : 'Pick a prompt template to see its body.'}
       </Text>
     );
   })();
@@ -808,19 +821,21 @@ function PromptTemplateManagerDialog({
       ? 'Confirm'
       : selectedName === null
         ? 'Preview'
-        : `:${selectedName}:`;
+        : formatPromptTemplateMacro(selectedName);
 
   return (
     <Box width={width} height={height} flexDirection="column">
       <Pane
-        title="Prompt templates"
+        title="Prompt Templates"
         titleExtra={<Text color={theme.muted}>{`  ${s.templates.length} saved`}</Text>}
         focused
         paddingLeft={0}
         paddingRight={0}
         footerLeft={
           s.notice === null ? (
-            <Text color={theme.muted}>:name: expands inside stage prompts</Text>
+            <Text color={theme.muted}>
+              :name: or :&quot;Name With Spaces&quot;: expands inside stage prompts
+            </Text>
           ) : (
             <Text
               {...(s.noticeTone === 'warning' ? { color: theme.warning } : { color: theme.muted })}
@@ -833,7 +848,7 @@ function PromptTemplateManagerDialog({
       >
         <Box flexDirection="row" flexGrow={1} minHeight={0} overflow="hidden">
           <Box width={listWidth} flexShrink={0} flexDirection="column" overflow="hidden">
-            <Pane title="Templates" focused={s.interaction.kind === 'normal'}>
+            <Pane title="Prompt Templates" focused={s.interaction.kind === 'normal'}>
               {list.map((row, index) => {
                 const isFocused = index === s.cursor && s.interaction.kind === 'normal';
                 const marker = isFocused ? '▌' : ' ';
@@ -845,7 +860,7 @@ function PromptTemplateManagerDialog({
                         color={creating || isFocused ? theme.accent : theme.muted}
                         bold={isFocused || creating}
                       >
-                        {`${creating ? '▌' : marker} ${creating ? ':' : '+ new template'}`}
+                        {`${creating ? '▌' : marker} ${creating ? ':' : '+ new prompt template'}`}
                       </Text>
                       {creating ? (
                         <>
@@ -894,7 +909,7 @@ function PromptTemplateManagerDialog({
                           : {})}
                       bold={isFocused || deciding}
                     >
-                      {`${deciding ? '▌' : marker} :${row.name}:`}
+                      {`${deciding ? '▌' : marker} ${formatPromptTemplateMacro(row.name)}`}
                     </Text>
                     <Box flexGrow={1} />
                     {/* A template whose name is also a workflow's is legal but easy to misread. */}
@@ -919,7 +934,7 @@ function PromptTemplateManagerDialog({
 }
 
 const EMPTY_STORE_STATE = {
-  templates: { items: [] as readonly TemplateRecord[] },
+  templates: { items: [] as readonly PromptTemplateRecord[] },
   workflows: { items: [] as readonly WorkflowTemplate[] },
   actions: {
     templates: { remove() {}, rename() {}, save() {} },

@@ -1,11 +1,5 @@
 import type { QueryResult } from '../generated/applicationProtocol.js';
-import type {
-  EditorInputDecl,
-  EditorStage,
-  EditorWorkflow,
-  StageGate,
-  StageKey,
-} from './model.js';
+import type { EditorInputDecl, EditorStage, EditorWorkflow, StageGate, StageKey } from './model.js';
 
 export type WorkflowWire = QueryResult<'workflows.get'>['workflows'][number];
 export type StageWire = NonNullable<WorkflowWire['stages']>[number];
@@ -37,9 +31,7 @@ function inputsFromWire(
   return out;
 }
 
-function inputsToWire(
-  inputs: EditorWorkflow['inputs'],
-): WorkflowWire['inputs'] | undefined {
+function inputsToWire(inputs: EditorWorkflow['inputs']): WorkflowWire['inputs'] | undefined {
   if (inputs === undefined) return undefined;
   const out: Record<string, InputDeclWire> = {};
   for (const [name, decl] of Object.entries(inputs)) {
@@ -67,7 +59,9 @@ export function fromWire(workflow: WorkflowWire): EditorWorkflow {
       (stage): EditorStage => ({
         key: createLocalStageKey(),
         id: stage.id,
-        title: stage.title,
+        // A stage has one user-facing name.  Keep the wire title synchronized
+        // for older registries and the ticket title materialization path.
+        title: stage.id,
         instructions: stage.instructions ?? '',
         harness: stage.harness ?? null,
         model: stage.model ?? null,
@@ -91,7 +85,7 @@ export function toWire(workflow: EditorWorkflow): WorkflowWire {
     ...(inputs === undefined ? {} : { inputs }),
     stages: workflow.stages.map((stage) => ({
       id: stage.id,
-      title: stage.title,
+      title: stage.id,
       instructions: stage.instructions,
       harness: stage.harness,
       model: stage.model,

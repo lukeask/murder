@@ -29,10 +29,11 @@ export function applyWorkflowEdit(workflow: EditorWorkflow, edit: WorkflowEdit):
     case 'replace':
       return edit.workflow;
     case 'add-stage': {
+      const id = nextStageId(workflow.stages);
       const stage: EditorStage = {
         key: createLocalStageKey(),
-        id: nextStageId(workflow.stages),
-        title: '',
+        id,
+        title: id,
         instructions: '',
         harness: null,
         model: null,
@@ -125,7 +126,7 @@ export function renameStage(workflow: EditorWorkflow, key: StageKey, id: string)
     ...workflow,
     stages: workflow.stages.map((item) =>
       item.key === key
-        ? { ...item, id }
+        ? { ...item, id, title: id }
         : {
             ...item,
             dependsOn: item.dependsOn.map((dependency) =>

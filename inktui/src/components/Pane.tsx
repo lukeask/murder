@@ -64,6 +64,7 @@ import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
 import type { Theme } from '../theme/buildTheme.js';
 import { useTheme } from '../theme/themeStore.js';
+import { useCanvasBackgroundColor } from './canvasBackground.js';
 import {
   PANE_BORDER_GLYPHS,
   type PaneBorderGlyphs,
@@ -204,6 +205,7 @@ export const Pane = memo(
     ref,
   ): React.JSX.Element {
     const theme = useTheme();
+    const canvasBackgroundColor = useCanvasBackgroundColor();
     const {
       border: borderColor,
       title: titleColor,
@@ -239,6 +241,9 @@ export const Pane = memo(
         borderTop={false}
         borderRight={scrollbar === undefined}
         borderColor={borderColor}
+        {...(canvasBackgroundColor === undefined
+          ? {}
+          : { borderBackgroundColor: canvasBackgroundColor })}
         paddingLeft={paddingLeft}
         paddingRight={paddingRight}
       >
@@ -260,6 +265,7 @@ export const Pane = memo(
             thumb={scrollbar.thumb}
             color={borderColor}
             glyphs={glyphs}
+            backgroundColor={canvasBackgroundColor}
           />
         </Box>
       );
@@ -286,6 +292,7 @@ export const Pane = memo(
             used by ChatInput). Fixed segments never shrink; the `─` fill absorbs the slack + clips. */}
         <PaneBorderTop
           title={title}
+          backgroundColor={canvasBackgroundColor}
           borderColor={borderColor}
           titleColor={titleColor}
           glyphs={glyphs}
@@ -302,6 +309,7 @@ export const Pane = memo(
         {hasFooter && (
           <PaneBorderBottom
             borderColor={borderColor}
+            backgroundColor={canvasBackgroundColor}
             glyphs={glyphs}
             leftExtra={footerLeft}
             rightExtra={footerRight}

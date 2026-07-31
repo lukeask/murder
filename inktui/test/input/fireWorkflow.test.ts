@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { parseWorkflowFire } from '../../src/input/fireWorkflow.js';
 
 const builtins = new Set<string>(['help', 'save', 'note']);
-const workflows = new Set<string>(['wf', 'ship', 'help']); // `help` also collides with a builtin.
+const workflows = new Set<string>(['wf', 'ship', 'Deploy Production', 'help']); // `help` also collides with a builtin.
 
 const run = (msg: string) => parseWorkflowFire(msg, builtins, workflows);
 
@@ -42,5 +42,17 @@ describe('parseWorkflowFire', () => {
   it('returns null for the inline `:name:` form (double colon is templates domain)', () => {
     expect(run(':wf:')).toBeNull();
     expect(run(':wf: inline')).toBeNull();
+  });
+
+  it('fires a quoted human-readable workflow name with the same single input remainder', () => {
+    expect(run(':"Deploy Production" ship it')).toEqual({
+      name: 'Deploy Production',
+      args: { input: 'ship it' },
+    });
+  });
+
+  it('does not accept malformed or unclosed quoted workflow names', () => {
+    expect(run(':"Deploy Production ship it')).toBeNull();
+    expect(run(':"Deploy Production":')).toBeNull();
   });
 });

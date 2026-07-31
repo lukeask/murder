@@ -1,5 +1,5 @@
 /**
- * Templates actions — the *only* code that calls the bus for the template registry (rule 3).
+ * Prompt-template actions — the *only* code that calls the bus for the prompt-template registry.
  *
  * Two RPCs, mirroring the bus contract's prefs pair:
  *  - `tui.load_templates {}` → `{ ok, templates: [{name,body},…] }` — load the persisted registry.
@@ -20,12 +20,11 @@
  */
 
 import type { StoreApi } from 'zustand';
-import type { ApplicationClient } from '../../application/ApplicationClient.js';
-import type { CommandParams } from '../../application/ApplicationClient.js';
+import type { ApplicationClient, CommandParams } from '../../application/ApplicationClient.js';
 import { asCommandResult, asQueryResult } from '../../application/resultCast.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
-import type { TemplateRecord } from './templatesSlice.js';
+import type { PromptTemplateRecord } from './templatesSlice.js';
 
 /**
  * The template-registry RPC declarations, augmenting the shared {@link RpcMethods} registry without
@@ -34,9 +33,8 @@ import type { TemplateRecord } from './templatesSlice.js';
  * save reply carrying the backend-normalized list.
  */
 
-
 /** The templates actions, bound to one {@link ApplicationClient} + store handle. */
-export interface TemplatesActions {
+export interface PromptTemplateActions {
   /**
    * Load the persisted templates via `tui.load_templates` (once, at startup). Ref-swaps the slice to
    * `loading`, then `ready` with the loaded list (or `error` on rejection — never thrown past the
@@ -58,30 +56,34 @@ export interface TemplatesActions {
 }
 
 /** Project a `tui.load_templates` reply's list defensively (the wire may omit it). */
-function toItems(templates: readonly TemplateRecord[] | undefined): readonly TemplateRecord[] {
+function toItems(
+  templates: readonly PromptTemplateRecord[] | undefined,
+): readonly PromptTemplateRecord[] {
   return templates ?? [];
 }
 
-export function createTemplatesActions(
+export function createPromptTemplateActions(
   bus: ApplicationClient,
   store: StoreApi<AppStore>,
-): TemplatesActions {
+): PromptTemplateActions {
   /**
    * Ref-swap the local list (optimistic), then persist via `tui.save_templates`. On success replace
    * the slice with the server's normalized echo; on failure set `error` + toast (NO rollback).
    */
-  async function commit(next: readonly TemplateRecord[]): Promise<void> {
+  async function commit(next: readonly PromptTemplateRecord[]): Promise<void> {
     store.setState((state) => ({
       templates: { ...state.templates, items: next, status: 'ready', error: null },
     }));
     try {
-      const reply = await bus.command(
-        'templates.set',
-        { templates: next } as unknown as CommandParams<'templates.set'>,
-      );
+      const reply = await bus.command('templates.set', {
+        templates: next,
+      } as unknown as CommandParams<'templates.set'>);
       store.setState({
         templates: {
-          items: toItems(asCommandResult<'templates.set', { templates?: readonly TemplateRecord[] }>(reply).templates),
+          items: toItems(
+            asCommandResult<'templates.set', { templates?: readonly PromptTemplateRecord[] }>(reply)
+              .templates,
+          ),
           status: 'ready',
           error: null,
         },
@@ -103,7 +105,10 @@ export function createTemplatesActions(
         const reply = await bus.query('templates.get', {});
         store.setState({
           templates: {
-            items: toItems(asQueryResult<'templates.get', { templates?: readonly TemplateRecord[] }>(reply).templates),
+            items: toItems(
+              asQueryResult<'templates.get', { templates?: readonly PromptTemplateRecord[] }>(reply)
+                .templates,
+            ),
             status: 'ready',
             error: null,
           },
@@ -140,3 +145,7 @@ export function createTemplatesActions(
     },
   };
 }
+
+/** Compatibility aliases for existing store wiring and downstream extensions. */
+export type TemplatesActions = PromptTemplateActions;
+export const createTemplatesActions = createPromptTemplateActions;

@@ -21,11 +21,12 @@
  * version; v0 takes the whole tail as one blob so `:wf fix the login bug` just works.
  */
 
-/** A leading bare name: `:name` followed by whitespace or end-of-string. Captures `name`. Mirrors
- * `expandTemplates`'s `LEADING_RE` so the three consumers agree on what "a leading `:name`" is — in
- * particular `:wf:` (double colon) is NOT a leading match (the `:` is not whitespace/EOS), so inline
- * `:name:` stays templates' domain. */
-const LEADING_RE = /^:([A-Za-z0-9_-]+)(?=\s|$)/;
+/**
+ * A leading invocation accepts the legacy bare form (`:name`) and the unambiguous quoted form
+ * (`:"Name With Spaces"`).  Both require whitespace or end-of-string afterwards, keeping inline
+ * `:name:` macros in prompt-template territory.
+ */
+const LEADING_RE = /^:(?:([A-Za-z0-9_-]+)|"([A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*)")(?=\s|$)/;
 
 /**
  * Parse a leading `:name <remainder>`. Returns the workflow firing intent IFF `name` is NOT a builtin
@@ -45,7 +46,7 @@ export function parseWorkflowFire(
   if (leading === null) {
     return null; // not a leading `:name` (or it's `:name:` inline — templates' domain).
   }
-  const name = leading[1] as string;
+  const name = (leading[1] ?? leading[2]) as string;
   if (builtins.has(name)) {
     return null; // builtin wins — dispatchCommand handles it.
   }

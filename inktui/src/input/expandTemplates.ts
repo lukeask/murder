@@ -1,5 +1,5 @@
 /**
- * Prompt-template expansion helpers — pure text passes for `:name:` macros.
+ * Prompt-template expansion helpers — pure text passes for `:name:` and `:"Name With Spaces":` macros.
  *
  * ## Chat entrypoint: {@link expandTemplates}
  *
@@ -21,17 +21,18 @@
  * This is deliberate: single-pass expansion can't loop, so a template referencing itself (directly or
  * via a cycle) is impossible to hang the input loop on.
  *
- * 1. **Leading parameterized form** — when the message STARTS with `:name` (name matches
- *    `^[A-Za-z0-9_-]+$`) immediately followed by whitespace or end-of-string:
+ * 1. **Leading parameterized form** — when the message STARTS with either `:name` (an existing
+ *    identifier-style name) or `:"Name With Spaces"`, immediately followed by whitespace or
+ *    end-of-string:
  *      - `name` ∈ builtins → message untouched (the builtin `:command` wins; `dispatchCommand` runs it).
  *      - `name` ∈ registry → the body is filled positionally: the Nth DISTINCT `{placeholder}` (in order
  *        of first appearance in the body) takes the Nth whitespace-separated arg after the name. Unfilled
  *        placeholders stay verbatim; extra args are ignored. The whole `:name args…` prefix is REPLACED
  *        by the filled body, and the result is returned WITHOUT an inline re-scan (precedence rule).
  *      - else (unknown) → untouched (falls through `dispatchCommand` literally, sent verbatim).
- * 2. **Inline form** — only when leading expansion did NOT fire: every `:name:` (double-colon delimited,
- *    `name` matches `[A-Za-z_][A-Za-z0-9_-]*` — identifier-like, not pure digits) is replaced by its
- *    registry body, or left verbatim on a miss (literal fallthrough). Inline form is templates-only —
+ * 2. **Inline form** — only when leading expansion did NOT fire: every legacy `:name:` (double-colon
+ *    delimited, identifier-like) and quoted `:"Name With Spaces":` macro is replaced by its registry
+ *    body, or left verbatim on a miss (literal fallthrough). Inline form is templates-only —
  *    it never consults builtins. Times/versions like `12:30:`, `1:2:3`, `:100:` are not refs.
  *
  * Unknown inline `:name:` tokens are left verbatim for chat. Workflow compile will treat unknowns as
@@ -39,12 +40,14 @@
  */
 
 /** A leading bare name: `:name` followed by whitespace or end-of-string. Captures `name`. */
-const LEADING_RE = /^:([A-Za-z0-9_-]+)(?=\s|$)/;
+const LEADING_BARE_RE = /^:([A-Za-z0-9_-]+)(?=\s|$)/;
+/** A leading quoted name: `:"Name With Spaces"` followed by whitespace or end-of-string. */
+const LEADING_QUOTED_RE = /^:"([^"\r\n:]+)"(?=\s|$)/;
 /**
  * An inline macro: `:name:`. Name must start with a letter or underscore so times /
  * versions (`12:30:`, `1:2:3`, `:100:`) are not treated as template refs.
  */
-const INLINE_RE = /:([A-Za-z_][A-Za-z0-9_-]*):/g;
+const INLINE_RE = /:"([^"\r\n:]+)":|:([A-Za-z_][A-Za-z0-9_-]*):/g;
 /** A `{placeholder}` token inside a template body. */
 const PLACEHOLDER_RE = /\{([A-Za-z0-9_-]+)\}/g;
 
@@ -80,7 +83,7 @@ export type LeadingColonName = {
  * start with that form — including inline `:name:` (the trailing `:` is neither whitespace nor EOS).
  */
 export function parseLeadingColonName(text: string): LeadingColonName | null {
-  const leading = LEADING_RE.exec(text);
+  const leading = LEADING_QUOTED_RE.exec(text) ?? LEADING_BARE_RE.exec(text);
   if (leading === null) return null;
   const name = leading[1] as string;
   return { name, remainder: text.slice(leading[0].length) };
@@ -128,21 +131,26 @@ export function expandInlinePromptTemplates(
   const seenMissing = new Set<string>();
   const seenExpanded = new Set<string>();
 
-  const result = text.replace(INLINE_RE, (whole, name: string) => {
-    const body = templates.get(name);
-    if (body === undefined) {
-      if (!seenMissing.has(name)) {
-        seenMissing.add(name);
-        missing.push(name);
+  const result = text.replace(
+    INLINE_RE,
+    (whole, quotedName: string | undefined, bareName: string | undefined) => {
+      const name = quotedName ?? bareName;
+      if (name === undefined) return whole;
+      const body = templates.get(name);
+      if (body === undefined) {
+        if (!seenMissing.has(name)) {
+          seenMissing.add(name);
+          missing.push(name);
+        }
+        return whole;
       }
-      return whole;
-    }
-    if (!seenExpanded.has(name)) {
-      seenExpanded.add(name);
-      expanded.push(name);
-    }
-    return body;
-  });
+      if (!seenExpanded.has(name)) {
+        seenExpanded.add(name);
+        expanded.push(name);
+      }
+      return body;
+    },
+  );
 
   return { text: result, missing, expanded };
 }
@@ -179,7 +187,7 @@ export function parseLeadingTemplateInvocation(
  * nodes should use {@link expandInlinePromptTemplates} instead.
  *
  * @param message  the chat buffer (already image-span-expanded).
- * @param registry template name → body. Built caller-side from `selectTemplatesByName`.
+ * @param registry prompt-template name → body. Built caller-side from `selectPromptTemplatesByName`.
  * @param builtins the dispatcher's builtin command names — a leading `:builtin` is left untouched.
  */
 export function expandTemplates(

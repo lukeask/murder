@@ -21,17 +21,10 @@ import {
   type WorktreeOptionsActions,
 } from '../store/dialogs/worktreeOptionsActions.js';
 import type { AppStoreApi } from '../store/store.js';
-import { selectTemplatesByName } from '../store/templates/templatesSlice.js';
 import type { WorkflowRun } from '../store/workflowRuns/workflowRunsSlice.js';
 import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
 import { useTheme } from '../theme/themeStore.js';
-import {
-  compileWorkflowTemplate,
-  requiredInputIssues,
-  type WizardField,
-  type WorkflowCompileIssue,
-  wizardFieldsFromCompileResult,
-} from '../workflowEditor/compile.js';
+import { requiredInputIssues, type WizardField } from '../workflowEditor/compile.js';
 import { type GraphLayout, layoutWorkflow } from '../workflowEditor/layout.js';
 import type {
   EditableField,
@@ -62,6 +55,7 @@ import { TRI_LEFT, TRI_RIGHT } from './glyphs.js';
 import { Pane } from './Pane.js';
 import { HARNESS_ORDER } from './spawnWizardMachine.js';
 import { TextRuns } from './TextRuns.js';
+import { workflowLaunchReviewMode } from './WorkflowLaunchReviewMode.js';
 
 export const WORKFLOW_TEMPLATE_EDITOR_MODE_ID = 'workflow-editor';
 
@@ -135,7 +129,9 @@ interface Session {
  */
 export type WorkflowTemplateEditorSource =
   | { readonly kind: 'blank' }
-  | { readonly kind: 'existing'; readonly workflow: WorkflowTemplate };
+  | { readonly kind: 'existing'; readonly workflow: WorkflowTemplate }
+  /** A new/copy draft has no overwrite identity even when it originated from a saved template. */
+  | { readonly kind: 'draft'; readonly workflow: WorkflowTemplate };
 
 export interface WorkflowTemplateEditorModeOptions {
   readonly source: WorkflowTemplateEditorSource;
@@ -190,7 +186,10 @@ export function workflowTemplateEditorMode(
   options: WorkflowTemplateEditorModeOptions,
 ): Mode<WorkflowTemplateEditorIntent> {
   const existing = options.source.kind === 'existing' ? options.source.workflow : undefined;
-  const initial = existing === undefined ? blankWorkflow() : fromWire(existing);
+  // `fromWire` creates fresh local stage keys.  A draft is deliberately not an existing identity:
+  // saving it creates a new record rather than replacing the source it was copied from.
+  const initial =
+    options.source.kind === 'blank' ? blankWorkflow() : fromWire(options.source.workflow);
   const s: Session = {
     base: initial,
     draft: initial,
@@ -200,7 +199,11 @@ export function workflowTemplateEditorMode(
     canvasWidth: 80,
     canvasHeight: 20,
     inspectorOpen: true,
-    interaction: { kind: 'normal' },
+    // Copied templates immediately expose their collision-free proposed name for confirmation/edit.
+    interaction:
+      options.source.kind === 'draft'
+        ? { kind: 'edit', target: 'workflow', field: 'name', value: initial.name }
+        : { kind: 'normal' },
     undo: [],
     redo: [],
     status: 'idle',
@@ -298,9 +301,9 @@ export function workflowTemplateEditorMode(
     s.interaction = {
       kind: 'stage-menu',
       target: s.selected,
-      field: 'title',
+      field: 'id',
       editing: false,
-      value: stageFieldValue(s.selected, 'title'),
+      value: stageFieldValue(s.selected, 'id'),
     };
     refresh();
   }
@@ -309,13 +312,12 @@ export function workflowTemplateEditorMode(
     delta: number,
   ): void {
     const fields: readonly EditableField[] = [
-      'title',
+      'id',
       'instructions',
       'harness',
       'model',
       'worktree',
       'gate',
-      'id',
     ];
     const current = fields.indexOf(interaction.field);
     const field = fields[(current + delta + fields.length) % fields.length];
@@ -335,7 +337,7 @@ export function workflowTemplateEditorMode(
     const fields: readonly EditableField[] =
       interaction.target === 'workflow'
         ? ['name', 'description', 'mode']
-        : ['title', 'id', 'instructions', 'harness', 'model', 'worktree', 'gate'];
+        : ['id', 'instructions', 'harness', 'model', 'worktree', 'gate'];
     const current = fields.indexOf(interaction.field);
     const field = fields[(current + delta + fields.length) % fields.length];
     if (field === undefined) return;
@@ -355,7 +357,7 @@ export function workflowTemplateEditorMode(
     s.interaction = { ...next, value: pickValue(next, value) };
     refresh();
   }
-  function save(afterSave?: () => void): void {
+  function save(afterSave?: (workflow: WorkflowTemplate) => void): void {
     const local = validateEditorWorkflow(s.draft);
     const error = local.find((issue) => issue.severity === 'error');
     if (error !== undefined) {
@@ -404,7 +406,7 @@ export function workflowTemplateEditorMode(
         s.feedback = null;
         options.onSaved?.(result.workflow);
         refresh();
-        afterSave?.();
+        afterSave?.(result.workflow);
       })
       .catch((error: unknown) => {
         s.status = 'error';
@@ -435,84 +437,28 @@ export function workflowTemplateEditorMode(
       refresh();
       return;
     }
-    const runWith = (fields: readonly WizardField[], args: Record<string, string>): void => {
-      const missing = requiredInputIssues(fields, args);
-      if (missing.length > 0) {
-        const first = missing[0];
-        s.serverIssues = [];
-        s.feedback = first?.message ?? 'Required workflow input is not filled.';
-        s.status = 'error';
-        refresh();
-        return;
-      }
-      // Start still goes through workflow.start; the server compiles authoritatively and snapshots
-      // the saved definition so later template edits cannot rewrite an already-started run.
-      void app.getState().actions.workflows.run(s.draft.name, args);
-      s.interaction = { kind: 'normal' };
-      refresh();
-    };
-    const openWizard = (fields: readonly WizardField[]): void => {
-      if (fields.length === 0) {
-        runWith(fields, {});
-        return;
-      }
-      s.feedback = null;
-      s.status = 'idle';
-      s.interaction = {
-        kind: 'wizard',
-        fields,
-        values: Object.fromEntries(fields.map((field) => [field.name, field.defaultValue])),
-        cursor: 0,
-      };
-      refresh();
-    };
-    const failCompile = (issue: WorkflowCompileIssue | undefined): void => {
-      s.serverIssues = [];
-      s.feedback = issue?.message ?? 'Workflow template compile failed.';
-      s.status = 'error';
-      if (issue?.stageKey !== undefined) focusStage(issue.stageKey);
-      else if (issue?.stageId !== undefined) {
-        const match = s.draft.stages.find((stage) => stage.id === issue.stageId);
-        if (match !== undefined) focusStage(match.key);
-      }
-      refresh();
-    };
-    const ask = (): void => {
-      const templateBodies = Object.fromEntries(
-        [...selectTemplatesByName(app.getState().templates.items)].map(([name, record]) => [
-          name,
-          record.body,
-        ]),
+    const review = (workflow: WorkflowTemplate): void => {
+      const promptTemplates = Object.fromEntries(
+        app.getState().templates.items.map((template) => [template.name, template.body]),
       );
-      const templateMap = new Map(Object.entries(templateBodies));
-      void app
-        .getState()
-        .actions.workflows.compile({
-          template: toWire(s.draft),
-          promptTemplates: templateBodies,
-        })
-        .then((result) => {
-          const mapped = wizardFieldsFromCompileResult(result);
-          const blocking = mapped.issues.find((issue) => issue.severity === 'error');
-          if (!mapped.ok || blocking !== undefined) {
-            failCompile(blocking ?? mapped.issues[0]);
-            return;
-          }
-          openWizard(mapped.fields);
-        })
-        .catch(() => {
-          // Offline / RPC error: fall back to client-side compile for wizard preview.
-          const compiled = compileWorkflowTemplate(s.draft, templateMap);
-          const blocking = compiled.issues.find((issue) => issue.severity === 'error');
-          if (blocking !== undefined) {
-            failCompile(blocking);
-            return;
-          }
-          openWizard(compiled.fields);
-        });
+      modes.getState().enter(
+        workflowLaunchReviewMode(modes, app, { workflow, compileTemplate: workflow, promptTemplates }),
+      );
     };
-    if (!workflowEqual(s.base, s.draft)) save(ask);
-    else ask();
+    if (!workflowEqual(s.base, s.draft)) {
+      save(review);
+      return;
+    }
+    // The reviewed source is a saved definition; compile by exact registry name rather than a
+    // client draft, so the launch review remains authoritative in both entry paths.
+    const saved = app.getState().workflows.items.find((workflow) => workflow.name === s.draft.name);
+    if (saved === undefined) {
+      s.feedback = 'Save this workflow before launching it.';
+      s.status = 'error';
+      refresh();
+      return;
+    }
+    review(saved);
   }
   function close(): void {
     modes.getState().exit(id);
@@ -739,6 +685,8 @@ export function workflowTemplateEditorMode(
             refresh();
             return;
           }
+          // Explicit confirmation is required even when there are no fields; this is the shared
+          // launch-review contract used by saved templates and editor drafts alike.
           void app.getState().actions.workflows.run(s.draft.name, values);
           s.interaction = { kind: 'normal' };
           refresh();
@@ -951,8 +899,16 @@ function workflowTemplateEditorKeymap(
     description: 'previous field',
   } as const;
   const optionArrows = [
-    { chord: { key: { upArrow: true } }, intent: 'up', description: 'previous option' },
-    { chord: { key: { downArrow: true } }, intent: 'down', description: 'next option' },
+    {
+      chord: [{ input: 'h' }, { input: 'k' }, { key: { upArrow: true } }],
+      intent: 'up',
+      description: 'previous option',
+    },
+    {
+      chord: [{ input: 'j' }, { input: 'l' }, { key: { downArrow: true } }],
+      intent: 'down',
+      description: 'next option',
+    },
   ] as const;
   if (interaction.kind === 'wizard') {
     const field = interaction.fields[interaction.cursor];
@@ -972,13 +928,7 @@ function workflowTemplateEditorKeymap(
     if (interaction.editing) {
       return hasOptions
         ? [escapeBinding, enter, ...optionArrows]
-        : [
-            escapeBinding,
-            enter,
-            backspace,
-            { chord: { key: { upArrow: true } }, intent: 'up', description: 'previous option' },
-            { chord: { key: { downArrow: true } }, intent: 'down', description: 'next option' },
-          ];
+        : [escapeBinding, enter, backspace, ...optionArrows];
     }
     return [
       escapeBinding,
@@ -1058,7 +1008,7 @@ function hints(interaction: Interaction, options: readonly string[] = []): reado
     return interaction.editing
       ? options.length > 0
         ? [
-            { key: '↑/↓', description: 'select option' },
+            { key: 'hjkl/↑↓', description: 'select option' },
             { key: 'enter', description: 'apply' },
             { key: 'esc', description: 'cancel field' },
           ]
@@ -1438,7 +1388,9 @@ function ContextLine({
       return (
         <Text wrap="truncate-end">
           <Text color={tone} bold>{`${connect.legality.toUpperCase()} dependency`}</Text>
-          <Text color={theme.muted}>{`  ${targetId ?? '?'} ${TRI_LEFT} ${candidateId ?? '?'}`}</Text>
+          <Text
+            color={theme.muted}
+          >{`  ${targetId ?? '?'} ${TRI_LEFT} ${candidateId ?? '?'}`}</Text>
         </Text>
       );
     }
@@ -1577,10 +1529,13 @@ function editorSheet(session: Session, run: WorkflowRun | null): SheetSpec | nul
   }
   if (interaction.kind === 'wizard') {
     return {
-      title: `Run ${session.draft.name || '(unnamed)'}${run === null ? '' : ' again'}`,
+      title: `Review ${session.draft.name || '(unnamed)'}${run === null ? '' : ' again'}`,
       tone: 'accent',
       lines: [],
-      choices: 'enter  run      tab  next field      esc  cancel',
+      choices:
+        interaction.fields.length === 0
+          ? 'enter  launch      esc  cancel'
+          : 'enter  launch      tab  next field      esc  cancel',
       fields: {
         items: interaction.fields,
         values: interaction.values,
@@ -1632,9 +1587,7 @@ function EditorSheet({
             <Text color={active ? theme.accent : theme.muted} bold={active}>
               {`${active ? TRI_RIGHT : ' '} ${field.label.padEnd(labelWidth)}  `}
             </Text>
-            <Text
-              color={value === '' && field.required ? theme.warning : theme.text}
-            >
+            <Text color={value === '' && field.required ? theme.warning : theme.text}>
               {active
                 ? `${value.replaceAll('\n', '↵')}█`
                 : value === ''
@@ -1935,7 +1888,7 @@ function WorkflowInspector({
     const active = field !== null && stageMenu?.field === field;
     const editing = active && stageMenu?.editing === true;
     const shown = editing ? `${stageMenu?.value ?? ''}█` : value;
-    const lines = wrapText(shown, valueWidth, editing ? 1 : 3);
+    const lines = wrapText(shown, valueWidth, 3);
     const valueColor = options.missing === true ? { color: theme.warning } : {};
     return (
       <Box key={field ?? label} flexDirection="column" flexShrink={0}>
@@ -1943,7 +1896,15 @@ function WorkflowInspector({
           <Text color={active ? theme.accent : theme.muted} bold={active}>
             {`${active ? TRI_RIGHT : ' '} ${label.padEnd(INSPECTOR_LABEL_WIDTH)} `}
           </Text>
-          <Text color={options.missing === true ? theme.warning : options.muted === true ? theme.muted : theme.text}>
+          <Text
+            color={
+              options.missing === true
+                ? theme.warning
+                : options.muted === true
+                  ? theme.muted
+                  : theme.text
+            }
+          >
             {lines[0] ?? ''}
           </Text>
         </Box>
@@ -1965,14 +1926,16 @@ function WorkflowInspector({
     <Box width={width} flexDirection="column" flexShrink={0} minHeight={0} overflow="hidden">
       <Pane
         title={stageMenu === undefined ? 'Stage' : 'Stage editor'}
-        titleExtra={order === undefined ? null : <Text color={theme.muted}>{` ${order}/${total}`}</Text>}
+        titleExtra={
+          order === undefined ? null : <Text color={theme.muted}>{` ${order}/${total}`}</Text>
+        }
         focused={stageMenu !== undefined}
       >
         {stage === null || stage === undefined ? (
           <Text color={theme.muted}>No stage selected — press a to add one.</Text>
         ) : (
           <>
-            {row('title', 'Name', stage.title || '(untitled)')}
+            {row('id', 'Name', stage.id || '(blank)')}
             {row('instructions', 'Prompt', stage.instructions || '—', {
               muted: stage.instructions === '',
             })}
@@ -1984,7 +1947,6 @@ function WorkflowInspector({
             })}
             {row('worktree', 'Worktree', stage.worktree ?? '—', { muted: stage.worktree === null })}
             {row('gate', 'Gate', stage.gate, { muted: stage.gate === 'auto' })}
-            {row('id', 'ID', stage.id || '(blank)')}
             <Box height={1} flexShrink={0} />
             {row(null, 'Needs', stage.dependsOn.join(', ') || '—', {
               muted: stage.dependsOn.length === 0,

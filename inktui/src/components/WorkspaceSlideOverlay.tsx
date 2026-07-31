@@ -89,7 +89,11 @@ function buildSlideSurface(transition: WorkspaceTransition): TextFrame | null {
  * but the guard keeps the component total). Owns the tick loop, the per-tick full repaint, the
  * end-of-slide commit repaint, and the cancel-on-resize rule.
  */
-export function WorkspaceSlideOverlay(): ReactNode {
+export function WorkspaceSlideOverlay({
+  backgroundColor,
+}: {
+  readonly backgroundColor?: string | undefined;
+}): ReactNode {
   const transition = useWorkspaceStore((s) => s.transition);
   const { workspace } = useInputStores();
   const { stdout } = useStdout();
@@ -143,7 +147,13 @@ export function WorkspaceSlideOverlay(): ReactNode {
   const window = sliceFrameWindow(surface, offset, frameRows);
   const lines = window.text.split('\n');
   return (
-    <Box flexDirection="column" width={columns} height={rows} overflow="hidden">
+    <Box
+      flexDirection="column"
+      width={columns}
+      height={rows}
+      overflow="hidden"
+      {...(backgroundColor === undefined ? {} : { backgroundColor })}
+    >
       {lines.map((line, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional by nature (a fixed grid).
         <Text key={index} wrap="truncate">

@@ -12,10 +12,12 @@ import {
 } from '../../src/components/PromptTemplateManagerMode.js';
 import {
   collectBodyPlaceholders,
-  collectUnknownInlineRefs,
-  findWorkflowReferences,
+  collectInlinePromptTemplateRefs,
+  collectUnknownInlinePromptTemplateRefs,
+  findWorkflowPromptTemplateReferences,
+  formatPromptTemplateMacro,
   formatWorkflowTemplateRef,
-  validateTemplateName,
+  validatePromptTemplateName,
 } from '../../src/components/promptTemplates/refs.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
@@ -111,23 +113,47 @@ const multiRefWorkflows = [
 describe('promptTemplates/refs helpers', () => {
   it('collects placeholders and unknown inline refs', () => {
     expect(collectBodyPlaceholders('hi {a} and {b} and {a}')).toEqual(['a', 'b']);
-    expect(collectUnknownInlineRefs('see :greet: and :missing:', new Set(['greet']))).toEqual([
-      'missing',
+    expect(
+      collectUnknownInlinePromptTemplateRefs(
+        'see :greet: and :"Meeting Notes": and :"missing note":',
+        new Set(['greet', 'Meeting Notes']),
+      ),
+    ).toEqual(['missing note']);
+    expect(collectInlinePromptTemplateRefs(':greet: :"Meeting Notes":')).toEqual([
+      'greet',
+      'Meeting Notes',
     ]);
+    expect(formatPromptTemplateMacro('Meeting Notes')).toBe(':"Meeting Notes":');
   });
 
   it('finds workflow references and validates names', () => {
-    expect(findWorkflowReferences('greet', [sampleWorkflow])).toEqual([
+    expect(findWorkflowPromptTemplateReferences('greet', [sampleWorkflow])).toEqual([
       { workflowName: 'review', stageId: 's1', field: 'instructions' },
     ]);
     expect(
       formatWorkflowTemplateRef({ workflowName: 'review', stageId: 's1', field: 'title' }),
     ).toBe('review/s1.title');
-    expect(validateTemplateName('ok', null, [])).toBeNull();
-    expect(validateTemplateName('review-context', null, [])).toBeNull();
-    expect(validateTemplateName('bad!', null, [])).toContain('invalid');
-    expect(validateTemplateName('100', null, [])).toContain('invalid');
-    expect(validateTemplateName('x', null, [{ name: 'x' }])).toContain('already exists');
+    expect(validatePromptTemplateName('ok', null, [])).toBeNull();
+    expect(validatePromptTemplateName('review-context', null, [])).toBeNull();
+    expect(validatePromptTemplateName('Meeting Notes 2', null, [])).toBeNull();
+    expect(validatePromptTemplateName(' bad', null, [])).toContain('invalid');
+    expect(validatePromptTemplateName('bad!', null, [])).toContain('invalid');
+    expect(validatePromptTemplateName('x', null, [{ name: 'x' }])).toContain('already exists');
+  });
+
+  it('finds quoted prompt-template references in workflow fields', () => {
+    const workflow = {
+      ...sampleWorkflow,
+      stages: [
+        {
+          ...(sampleWorkflow.stages?.[0] ?? {}),
+          instructions: 'Use :"Meeting Notes": then continue',
+        },
+      ],
+    } as unknown as WorkflowTemplate;
+    expect(findWorkflowPromptTemplateReferences('Meeting Notes', [workflow])).toEqual([
+      { workflowName: 'review', stageId: 's1', field: 'instructions' },
+    ]);
   });
 });
 
@@ -149,7 +175,7 @@ describe('PromptTemplateManagerMode', () => {
     await tick();
     expect(selectActiveMode(stores.modes)?.id).toBe(PROMPT_TEMPLATE_MANAGER_MODE_ID);
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Prompt templates');
+    expect(frame).toContain('Prompt Templates');
     expect(frame).toContain(':greet:');
     expect(frame).toContain(':bye:');
     stdin.write('j');

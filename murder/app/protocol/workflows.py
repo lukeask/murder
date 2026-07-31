@@ -57,14 +57,6 @@ class DeleteWorkflowParams(ApplicationModel):
     name: str = Field(min_length=1)
     expected_revision: str = Field(min_length=1)
 
-    @field_validator("name")
-    @classmethod
-    def strip_name(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("name must be non-empty")
-        return text
-
 
 class DeleteWorkflowResult(ApplicationModel):
     ok: bool
@@ -78,14 +70,6 @@ class StartWorkflowParams(ApplicationModel):
     name: str = Field(min_length=1)
     args: dict[str, str] = Field(default_factory=dict)
     request_id: UUID | None = None
-
-    @field_validator("name")
-    @classmethod
-    def strip_name(cls, value: str) -> str:
-        text = value.strip()
-        if not text:
-            raise ValueError("name must be non-empty")
-        return text
 
     @field_validator("args", mode="before")
     @classmethod
@@ -120,11 +104,6 @@ class CompileWorkflowParams(ApplicationModel):
     def require_template_or_name(self) -> CompileWorkflowParams:
         if self.template is None and not (self.name and self.name.strip()):
             raise ValueError("template or name is required")
-        if self.name is not None:
-            text = self.name.strip()
-            if not text:
-                raise ValueError("name must be non-empty")
-            self.name = text
         return self
 
 

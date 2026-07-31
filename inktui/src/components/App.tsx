@@ -29,6 +29,7 @@ import {
   useState,
 } from 'react';
 import type { ApplicationClient } from '../application/ApplicationClient.js';
+import { setPanelCreateActions } from '../create/panelCreateActions.js';
 import { ApplicationClientProvider, useApplicationClient } from '../hooks/useApplicationClient.js';
 import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
 import {
@@ -93,8 +94,8 @@ import {
   selectUserHistory,
 } from '../selectors/conversationsSelectors.js';
 import { submitCommand } from '../store/commandSubmit.js';
-import { createDialogActions } from '../store/dialogs/dialogActions.js';
 import { canLaunchBuiltinTicket } from '../store/dialogs/canLaunchBuiltinTicket.js';
+import { createDialogActions } from '../store/dialogs/dialogActions.js';
 import { createHarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '../store/dialogs/spawnActions.js';
 import { createSpawnFavoritesActions } from '../store/dialogs/spawnFavoritesActions.js';
@@ -110,13 +111,13 @@ import { noteCaptureStore } from '../store/notes/noteCaptureStore.js';
 import type { SettingsModifier } from '../store/settings/settingsSlice.js';
 import type { AppStoreApi } from '../store/store.js';
 import { toastStore } from '../store/toast/toastStore.js';
-import { captureCurrentFrame } from '../terminal/captureFrame.js';
 import {
   applyCanvasBackground,
   ensureCanvasBackgroundCleanup,
   resolveBackgroundTransparency,
   useBackgroundTransparencyPreview,
 } from '../terminal/canvasBackground.js';
+import { captureCurrentFrame } from '../terminal/captureFrame.js';
 import { forceInkFullRepaint } from '../terminal/forceInkRepaint.js';
 import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '../theme/palettes.js';
 import { setTheme, useTheme } from '../theme/themeStore.js';
@@ -132,9 +133,16 @@ import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { TopBar } from './TopBar.js';
-import { workflowTemplateEditorMode } from './WorkflowTemplateEditorMode.js';
+import { workflowLaunchReviewMode } from './WorkflowLaunchReviewMode.js';
+import {
+  WORKFLOW_TEMPLATE_EDITOR_MODE_ID,
+  workflowTemplateEditorMode,
+} from './WorkflowTemplateEditorMode.js';
+import {
+  WORKFLOW_TEMPLATE_LIBRARY_MODE_ID,
+  workflowTemplateLibraryMode,
+} from './WorkflowTemplateLibraryMode.js';
 import { WorkspaceSlideOverlay } from './WorkspaceSlideOverlay.js';
-import { setPanelCreateActions } from '../create/panelCreateActions.js';
 
 /**
  * The smallest terminal the shell will attempt to lay out (first-run UX: a too-small terminal gets
@@ -674,8 +682,7 @@ function Shell({
   useBackgroundTransparencyPreview();
   const backgroundTransparency = resolveBackgroundTransparency(backgroundTransparencySetting);
   const theme = useTheme();
-  const canvasBackgroundColor =
-    backgroundTransparency < 100 ? theme.canvasBg : undefined;
+  const canvasBackgroundColor = backgroundTransparency < 100 ? theme.canvasBg : undefined;
   // Step 4b: while a workspace slide is animating the shell renders ONLY the slide overlay (a
   // Body-slot takeover like a fullscreen mode — same suppression shape as presentationHidesLayout).
   const workspaceSliding = useWorkspaceStore((s) => s.transition !== null);
@@ -1017,29 +1024,62 @@ function Shell({
       newTicketMode(modes, actions, {
         preferBuiltinTicket,
         onSubmit(_ticketId, title) {
-          toastStore.getState().push(
-            preferBuiltinTicket ? `ticket "${title}" started` : `ticket "${title}" created`,
-            { ttlMs: 6000 },
-          );
+          toastStore
+            .getState()
+            .push(preferBuiltinTicket ? `ticket "${title}" started` : `ticket "${title}" created`, {
+              ttlMs: 6000,
+            });
         },
       }),
     );
   };
 
-  const openWorkflowTemplateEditorHandler = (name: string | null): void => {
-    const workflow =
-      name === null
-        ? undefined
-        : appStore.getState().workflows.items.find((item) => item.name === name);
-    if (name !== null && workflow === undefined) {
-      toastStore.getState().push(`workflow “${name}” was not found`, { severity: 'error' });
-      return;
-    }
+  const openWorkflowTemplateLibraryHandler = (name: string | null): void => {
+    const openEditor = (
+      source: Parameters<typeof workflowTemplateEditorMode>[2]['source'],
+    ): void => {
+      modes.getState().enter(
+        workflowTemplateEditorMode(modes, appStore, {
+          source,
+          onSaved(canonical) {
+            // A template create/copy/edit returns to the library with the canonical server record
+            // selected.  Exiting first avoids leaving a stale editor below a re-entered library.
+            modes.getState().exit(WORKFLOW_TEMPLATE_EDITOR_MODE_ID);
+            openWorkflowTemplateLibraryHandler(canonical.name);
+          },
+          harnessModels: createHarnessModelsActions(bus),
+          worktreeOptions: createWorktreeOptionsActions(bus),
+        }),
+      );
+    };
     modes.getState().enter(
-      workflowTemplateEditorMode(modes, appStore, {
-        source: workflow === undefined ? { kind: 'blank' } : { kind: 'existing', workflow },
-        harnessModels: createHarnessModelsActions(bus),
-        worktreeOptions: createWorktreeOptionsActions(bus),
+      workflowTemplateLibraryMode(modes, {
+        workflows: appStore.getState().workflows.items,
+        focusedName: name,
+        actions: {
+          run(workflow) {
+            modes.getState().enter(workflowLaunchReviewMode(modes, appStore, { workflow }));
+          },
+          newWorkflowTemplate() {
+            openEditor({ kind: 'blank' });
+          },
+          copy(workflow) {
+            openEditor({ kind: 'draft', workflow });
+          },
+          edit(workflow) {
+            openEditor({ kind: 'existing', workflow });
+          },
+          delete(workflow) {
+            void appStore
+              .getState()
+              .actions.workflows.delete(workflow.name)
+              .then((result) => {
+                if (!result.ok) return;
+                modes.getState().exit(WORKFLOW_TEMPLATE_LIBRARY_MODE_ID);
+                openWorkflowTemplateLibraryHandler(null);
+              });
+          },
+        },
       }),
     );
   };
@@ -1090,7 +1130,7 @@ function Shell({
       newPlan: newPlanHandler,
       quickNote: quickNoteHandler,
       newReport: newReportHandler,
-      newWorkflow: () => openWorkflowTemplateEditorHandler(null),
+      newWorkflow: () => openWorkflowTemplateLibraryHandler(null),
     });
   });
 
@@ -1299,7 +1339,7 @@ function Shell({
     terminalViewport: (agentId, action) => {
       paneScroll.emitTerminalViewport(stageTranscriptFocusId(agentId), action);
     },
-    openWorkflows: openWorkflowTemplateEditorHandler,
+    openWorkflows: openWorkflowTemplateLibraryHandler,
     openTicket: newTicketHandler,
     resolveRenameTarget: () => {
       const state = appStore.getState();
@@ -1359,7 +1399,7 @@ function Shell({
       spawn: spawnHandler,
       openSettings: openSettingsHandler,
       newPlan: newPlanHandler,
-      openWorkflowTemplateEditor: () => openWorkflowTemplateEditorHandler(null),
+      openWorkflowTemplateEditor: () => openWorkflowTemplateLibraryHandler(null),
       newTicket: newTicketHandler,
       cycleChatView: cycleChatViewHandler,
       quickNote: quickNoteHandler,
@@ -1413,6 +1453,7 @@ function Shell({
         width="100%"
         height={rows}
         overflow="hidden"
+        {...(canvasBackgroundColor === undefined ? {} : { backgroundColor: canvasBackgroundColor })}
         justifyContent="center"
         alignItems="center"
       >
@@ -1427,7 +1468,7 @@ function Shell({
   // captured frames sliding until the transition clears (or a resize cancels it). Checked ahead of
   // the fullscreen-mode return so the slide wins even if a fullscreen mode is up underneath.
   if (workspaceSliding) {
-    return <WorkspaceSlideOverlay />;
+    return <WorkspaceSlideOverlay backgroundColor={canvasBackgroundColor} />;
   }
   // Fullscreen modes still keep the BottomBar so mode-specific hints stay discoverable (the workflow
   // workflow template editor declares interaction-aware hints; without this chrome those keys are invisible).

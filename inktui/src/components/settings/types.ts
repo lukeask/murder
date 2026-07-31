@@ -17,7 +17,7 @@ import type {
   DefaultChatViewMode,
   DocumentDisplayMode,
 } from '../../store/settings/settingsSlice.js';
-import type { TemplateRecord } from '../../store/templates/templatesSlice.js';
+import type { PromptTemplateRecord } from '../../store/templates/templatesSlice.js';
 import type { ThemeRecord } from '../../store/themes/themesSlice.js';
 import type { ThemeId } from '../../theme/palettes.js';
 
@@ -86,8 +86,17 @@ export type SettingsRow =
       readonly providerId: string;
       readonly builtin: boolean;
     }
-  | { readonly id: string; readonly kind: 'llmAddProvider'; readonly providerType: 'openai_compatible' | 'lemonade' }
-  | { readonly id: string; readonly kind: 'llmPolicy'; readonly policyId: string; readonly builtin: boolean }
+  | {
+      readonly id: string;
+      readonly kind: 'llmAddProvider';
+      readonly providerType: 'openai_compatible' | 'lemonade';
+    }
+  | {
+      readonly id: string;
+      readonly kind: 'llmPolicy';
+      readonly policyId: string;
+      readonly builtin: boolean;
+    }
   | { readonly id: string; readonly kind: 'llmCreatePolicy' }
   | { readonly id: string; readonly kind: 'llmFeaturePolicy'; readonly feature: string }
   | { readonly id: string; readonly kind: 'tier'; readonly name: string }
@@ -120,7 +129,7 @@ export interface SettingsBuildContext {
   readonly startupRogue: StartupRogueWire | null;
   readonly startupRogueModels: Readonly<Record<string, readonly StartupRogueModelWire[]>>;
   readonly startupRogueEfforts: Readonly<Record<string, readonly string[]>>;
-  readonly templates: readonly TemplateRecord[];
+  readonly templates: readonly PromptTemplateRecord[];
   readonly themes: readonly ThemeRecord[];
   readonly barWidgets: BarWidgetsConfig;
   /** Current Codex control-backend selection (radio highlight source for Harnesses). */

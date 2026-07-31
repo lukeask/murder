@@ -2,7 +2,9 @@
  * `canvasBackground` — apply / restore the app canvas fill for Background Transparency.
  *
  * At transparency 100 the canvas is omitted (terminal default shows through). Below 100, Ink paints
- * `canvasBg` on the root; on Kitty we also register that hex via OSC 21
+ * `canvasBg` on the root; on Kitty we also register that hex via OSC 21. On other terminals we
+ * set dynamic color 11 while the canvas is painted, so terminal padding and otherwise-unpainted
+ * cells cannot retain a transparent/default background.
  * `transparent_background_color1` at opacity `(100 - transparency) / 100` so wallpaper can bleed
  * through when the window's `background_opacity` is already < 1. Outside Kitty intermediate values
  * paint opaque (no true wallpaper alpha).
@@ -22,6 +24,8 @@ const CLEANUP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 let cleanupInstalled = false;
 /** Whether we have an unmatched OSC 30001 push outstanding. */
 let stackPushed = false;
+/** Whether we changed the non-Kitty dynamic default background (OSC 11). */
+let defaultBackgroundSet = false;
 /** Last applied `(transparency, canvasHex)` — skip redundant writes. */
 let lastApplied: { transparency: number; canvasHex: string } | null = null;
 /** Live-preview override while the settings modal browses transparency rows (`null` = use persisted). */
@@ -86,12 +90,16 @@ export function useBackgroundTransparencyPreview(): number | null {
 }
 
 /**
- * Apply or clear Kitty OSC registrations for the canvas color.
+ * Apply or clear terminal registrations for the canvas color.
  * Idempotent; safe to call on every settings/theme change.
  */
 export function applyCanvasBackground(transparency: number, canvasHex: string): void {
   const t = clampTransparency(transparency);
-  if (lastApplied !== null && lastApplied.transparency === t && lastApplied.canvasHex === canvasHex) {
+  if (
+    lastApplied !== null &&
+    lastApplied.transparency === t &&
+    lastApplied.canvasHex === canvasHex
+  ) {
     return;
   }
 
@@ -102,7 +110,10 @@ export function applyCanvasBackground(transparency: number, canvasHex: string): 
   }
 
   if (!inKitty()) {
-    // Non-Kitty: Ink paints an opaque canvas; nothing to emit.
+    // OSC 11 is deliberately opaque: non-Kitty terminals do not have a portable alpha equivalent.
+    ensureCanvasBackgroundCleanup();
+    writeOsc(`${OSC}11;${canvasHex}${ST}`);
+    defaultBackgroundSet = true;
     lastApplied = { transparency: t, canvasHex };
     return;
   }
@@ -116,13 +127,21 @@ export function applyCanvasBackground(transparency: number, canvasHex: string): 
 
   const opacity = cellOpacity(t);
   // Default background + one transparent slot so unpainted cells and the painted canvasHex match.
-  writeOsc(`${OSC}21;background=${canvasHex};transparent_background_color1=${canvasHex}@${opacity}${ST}`);
+  writeOsc(
+    `${OSC}21;background=${canvasHex};transparent_background_color1=${canvasHex}@${opacity}${ST}`,
+  );
   lastApplied = { transparency: t, canvasHex };
 }
 
-/** Pop the color stack / clear registrations if we pushed. Idempotent. */
+/** Restore the terminal background registrations we changed. Idempotent. */
 export function restoreCanvasBackground(): void {
   if (!inKitty()) {
+    if (defaultBackgroundSet) {
+      // OSC 111 restores the terminal's configured dynamic default background. A future enhancement
+      // may query OSC 11 first and restore a runtime override exactly.
+      writeOsc(`${OSC}111${ST}`);
+      defaultBackgroundSet = false;
+    }
     lastApplied = null;
     return;
   }
@@ -133,9 +152,9 @@ export function restoreCanvasBackground(): void {
   lastApplied = null;
 }
 
-/** Register process-level cleanup so Kitty colors are restored on exit. Idempotent. */
+/** Register process-level cleanup so terminal colors are restored on exit. Idempotent. */
 export function ensureCanvasBackgroundCleanup(): void {
-  if (!inKitty() || cleanupInstalled) {
+  if (cleanupInstalled) {
     return;
   }
   cleanupInstalled = true;
@@ -159,6 +178,7 @@ export function ensureCanvasBackgroundCleanup(): void {
 /** Test seam — reset module state between cases. */
 export function _resetCanvasBackgroundForTests(): void {
   stackPushed = false;
+  defaultBackgroundSet = false;
   lastApplied = null;
   previewTransparency = null;
   cleanupInstalled = false;

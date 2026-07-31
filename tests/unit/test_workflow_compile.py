@@ -10,6 +10,11 @@ from types import SimpleNamespace
 import pytest
 
 from murder.app.protocol.requests import QueryName
+from murder.app.protocol.workflows import (
+    CompileWorkflowParams,
+    DeleteWorkflowParams,
+    StartWorkflowParams,
+)
 from murder.app.service.handlers import workflows as workflows_handlers
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.state.persistence.schema import get_db, init_db
@@ -40,6 +45,17 @@ def _conn(repo_root: Path) -> sqlite3.Connection:
     conn = get_db(db_file)
     init_db(conn)
     return conn
+
+
+def test_workflow_operation_params_preserve_exact_template_names() -> None:
+    """Lookup keys must not silently collapse distinct registry names."""
+    name = " Review Workflow "
+    assert CompileWorkflowParams.model_validate({"name": name}).name == name
+    assert (
+        DeleteWorkflowParams.model_validate({"name": name, "expected_revision": "revision"}).name
+        == name
+    )
+    assert StartWorkflowParams.model_validate({"name": name}).name == name
 
 
 def test_expand_inline_prompt_templates_single_pass() -> None:
@@ -83,6 +99,36 @@ def test_expand_inline_still_expands_identifier_template_names() -> None:
     )
     assert unknown == []
     assert expanded == "x BODY y CTX z A"
+
+
+def test_expand_inline_supports_quoted_prompt_template_names() -> None:
+    templates = {"Review Context": "BODY", "123": "NUMBER"}
+    expanded, unknown = expand_inline_prompt_templates(
+        'x :"Review Context": y :"123": z :"Missing Name":',
+        templates,
+    )
+    assert expanded == 'x BODY y NUMBER z :"Missing Name":'
+    assert unknown == ["Missing Name"]
+
+
+def test_expand_inline_leaves_malformed_quoted_prompt_macros_literal() -> None:
+    text = 'x :"Unclosed Name: y :"two  spaces": z :"bad:colon":'
+    expanded, unknown = expand_inline_prompt_templates(text, {"Unclosed Name": "BODY"})
+    assert expanded == text
+    assert unknown == []
+
+
+def test_compile_reports_quoted_unknown_prompt_template_with_quoted_reference() -> None:
+    result = compile_workflow_template(
+        WorkflowDef(
+            name="Review Workflow",
+            stages=[_stage(id="review", title=':"Missing Prompt":')],
+        ),
+        prompt_templates={},
+    )
+    assert not result.ok
+    assert result.issues[0].template_name == "Missing Prompt"
+    assert ':"Missing Prompt":' in result.issues[0].message
 
 
 def test_collect_placeholders_dedupes_first_occurrence_order() -> None:
@@ -283,9 +329,7 @@ def test_start_snapshots_expanded_templates_with_unresolved_inputs(
         repo_root,
         defn,
         {"subject": "billing"},
-        prompt_templates={
-            "review-context": "Review {subject}. Focus on {risk_area}."
-        },
+        prompt_templates={"review-context": "Review {subject}. Focus on {risk_area}."},
     )
 
     run = get_workflow_run(conn, result.workflow_id)
@@ -319,9 +363,7 @@ def test_post_start_run_immune_to_template_edits(repo_root: Path) -> None:
             )
         ],
     )
-    prompt_templates = {
-        "review-context": "Review {subject}. Focus on {risk_area}."
-    }
+    prompt_templates = {"review-context": "Review {subject}. Focus on {risk_area}."}
     result = start_workflow_from_def(
         conn,
         repo_root,

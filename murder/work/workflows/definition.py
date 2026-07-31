@@ -26,9 +26,15 @@ from pydantic import BaseModel, Field
 
 from murder.app.protocol.common import ApplicationModel
 
-# A workflow's firing key and each stage's local id share this charset so they're
-# safe as YAML keys, ticket-id fragments, and CLI tokens.
-_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# Workflow template names are human-readable registry keys.  A single ASCII
+# space may separate words; identifier-style names remain valid for persisted
+# records.  Quotes and colons are intentionally excluded so ``:\"Name\"`` chat
+# invocation remains unambiguous.
+_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$")
+# Stage ids are internal graph keys, not user-facing workflow-template names.
+# Keep their original identifier grammar: callers use them as stable dependency
+# references and correlation keys.
+_STAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 WorkflowInputKind = Literal["text", "multiline"]
@@ -58,7 +64,7 @@ class StageDef(BaseModel):
     edits.
     """
 
-    id: str  # stage-local; ^[A-Za-z0-9_-]+$, unique within a workflow
+    id: str  # stage-local identifier, unique within a workflow
     title: str
     instructions: str = ""
     harness: str | None = None
@@ -76,7 +82,7 @@ class WorkflowDef(BaseModel):
     the concrete class (and the name used in persisted/API payloads) for now.
     """
 
-    name: str  # firing key; ^[A-Za-z0-9_-]+$
+    name: str  # exact registry key; words may be separated by single spaces
     # Definition versions are compatibility boundaries for already-running
     # persisted state machines; changing semantics requires a new version.
     definition_version: int = Field(default=1, ge=1)
@@ -169,7 +175,10 @@ def workflow_issues(defn: WorkflowDef) -> list[WorkflowIssue]:  # noqa: PLR0912
         issues.append(
             WorkflowIssue(
                 code="invalid_name",
-                message=f"workflow name {defn.name!r} must match [A-Za-z0-9_-]+",
+                message=(
+                    f"workflow name {defn.name!r} must contain non-empty words "
+                    "of [A-Za-z0-9_-] separated by single spaces"
+                ),
                 path=["name"],
             )
         )
@@ -197,7 +206,7 @@ def workflow_issues(defn: WorkflowDef) -> list[WorkflowIssue]:  # noqa: PLR0912
     seen: set[str] = set()
     ids: set[str] = set()
     for stage_index, stage in enumerate(defn.stages):
-        if not _NAME_RE.match(stage.id):
+        if not _STAGE_ID_RE.match(stage.id):
             issues.append(
                 WorkflowIssue(
                     code="invalid_stage_id",
