@@ -1,23 +1,25 @@
 /**
  * LLM settings — global enable, providers (CRUD + model catalog), policy groups (JSON editor /
- * create / clone / delete), active + per-feature policies, and resolution preview. Persists via
- * `actions.settings.llm.*` and `actions.settings.update` (mirrors inktui).
- *
- * Still TUI-only: tier/role binding UI.
+ * create / clone / delete), tiers & role bindings, active + per-feature policies, and resolution
+ * preview. Persists via `actions.settings.llm.*` and `actions.settings.update` (mirrors inktui).
  */
 
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import {
   BUILTIN_PROVIDER_IDS,
   ENV_PROVIDERS,
+  mergedTiers,
+  ROLES,
+  tierNames,
 } from '@murder/ui-core/components/settings/items/llm.js';
 import type {
   LlmModelOverrideWire,
   LlmProviderWire,
+  LlmResolutionPreview,
 } from '@murder/ui-core/store/settings/settingsActions.js';
 import { useState } from 'react';
 import { shallow } from 'zustand/shallow';
-import { Button, Input, Select, Switch } from '../ds/index.js';
+import { Button, Input, Radio, Select, Switch } from '../ds/index.js';
 
 const BUILTIN_POLICY_IDS = [
   'local-then-free',
@@ -202,9 +204,7 @@ export function LlmSettingsSection(): React.JSX.Element {
     'crow_classification',
   );
   const [previewBusy, setPreviewBusy] = useState(false);
-  const [previewCandidates, setPreviewCandidates] = useState<
-    readonly { provider_id: string; model_id: string }[] | null
-  >(null);
+  const [previewResult, setPreviewResult] = useState<LlmResolutionPreview | null>(null);
 
   const providers = llm.providers ?? {};
   const customIds = Object.keys(providers).filter(
@@ -317,6 +317,10 @@ export function LlmSettingsSection(): React.JSX.Element {
     void update({ llm: { feature_policies: { [feature]: policyId } } });
   };
 
+  const selectRole = (role: string, tier: string): void => {
+    void update({ llm: { roles: { [role]: tier } } });
+  };
+
   const openCreatePolicy = (): void => {
     setPolicyDraft(emptyPolicyDraft());
     setPolicyError(null);
@@ -403,11 +407,14 @@ export function LlmSettingsSection(): React.JSX.Element {
     setPreviewBusy(true);
     void llmActions
       .previewResolution(previewFeature)
-      .then((candidates) => {
-        setPreviewCandidates(candidates);
+      .then((result) => {
+        setPreviewResult(result);
       })
       .finally(() => setPreviewBusy(false));
   };
+
+  const tiers = mergedTiers(llm);
+  const roleTier = tierNames(llm);
 
   const renderProviderRow = (providerId: string, builtin: boolean): React.JSX.Element => {
     const provider = providers[providerId];
@@ -597,6 +604,39 @@ export function LlmSettingsSection(): React.JSX.Element {
         </Button>
       </div>
 
+      <h4 className="settings__subheading">tiers</h4>
+      <ul className="settings__provider-list">
+        {tiers.map(([name, tier]) => (
+          <li key={name} className="settings__provider-item">
+            <span className="settings__value">
+              {name} → {tier.provider}/{tier.model}
+              {tier.auto_free ? ' (auto-free)' : ''}
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      <h4 className="settings__subheading">role bindings</h4>
+      <div className="settings__bindings">
+        {ROLES.map((role) => {
+          const mapped = llm.roles?.[role];
+          return (
+            <div key={role} className="settings__role-binding">
+              <span className="settings__binding-label">{role}</span>
+              <Radio
+                aria-label={`${role} tier`}
+                options={roleTier.map((tier) => ({ value: tier, label: tier }))}
+                {...(mapped !== undefined ? { value: mapped } : {})}
+                onChange={(tier) => selectRole(role, tier)}
+              />
+              {mapped === undefined ? (
+                <p className="settings__hint">no mapping yet → default</p>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
       <h4 className="settings__subheading">active policy</h4>
       <Select
         label="active policy"
@@ -694,20 +734,30 @@ export function LlmSettingsSection(): React.JSX.Element {
         <Button type="button" onClick={runPreview} disabled={previewBusy}>
           {previewBusy ? 'Previewing…' : 'Preview resolution'}
         </Button>
-        {previewCandidates !== null ? (
-          previewCandidates.length === 0 ? (
-            <p className="settings__hint">No candidates for this feature.</p>
-          ) : (
-            <ul className="settings__provider-list">
-              {previewCandidates.map((c) => (
-                <li key={`${c.provider_id}:${c.model_id}`} className="settings__provider-item">
-                  <span className="settings__value">
-                    {c.provider_id} / {c.model_id}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )
+        {previewResult !== null ? (
+          <>
+            <p className="settings__hint">
+              status: {previewResult.status ?? '—'}
+              {' · '}
+              policy: {previewResult.policy_id ?? '—'}
+            </p>
+            {previewResult.candidates.length === 0 ? (
+              <p className="settings__hint">No candidates for this feature.</p>
+            ) : (
+              <ul className="settings__provider-list">
+                {previewResult.candidates.map((c) => (
+                  <li key={`${c.provider_id}:${c.model_id}`} className="settings__provider-item">
+                    <span className="settings__value">
+                      {c.provider_id} / {c.model_id}
+                      {c.locality !== undefined || c.cost_class !== undefined
+                        ? ` (${[c.locality, c.cost_class].filter(Boolean).join(', ')})`
+                        : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         ) : null}
       </div>
     </section>

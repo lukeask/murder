@@ -82,6 +82,19 @@
   gap: var(--space-2);
 }
 
+.settings__role-binding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings__role-binding:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
 .settings__binding-row {
   display: flex;
   flex-wrap: wrap;

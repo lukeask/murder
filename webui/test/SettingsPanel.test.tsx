@@ -73,6 +73,14 @@ function stubSettingsUpdate(store: AppStoreApi, bus: FakeApplicationClient): voi
               ...(base.llm.providers ?? {}),
               ...(llmPatch.providers ?? {}),
             },
+            roles: {
+              ...(base.llm.roles ?? {}),
+              ...(llmPatch.roles ?? {}),
+            },
+            tiers: {
+              ...(base.llm.tiers ?? {}),
+              ...(llmPatch.tiers ?? {}),
+            },
           };
     return {
       ok: true,
@@ -666,6 +674,52 @@ describe('SettingsPanel LLM section', () => {
     });
     await waitFor(() => {
       expect(screen.getByText(/Available models: model-a, model-b/)).toBeTruthy();
+    });
+  });
+
+  it('binds a role to a tier via settings.update', async () => {
+    const { store, bus } = makeStore();
+    bus.stubQuery('themes.get', { ok: true, themes: [] });
+    stubSettingsUpdate(store, bus);
+    renderWithStore(<Harness />, { store, bus });
+
+    const group = screen.getByRole('radiogroup', { name: 'notetaker tier' });
+    fireEvent.click(within(group).getByLabelText('smart'));
+
+    expect(bus.commandCalls.at(-1)).toEqual({
+      name: 'settings.update',
+      params: { settings: { llm: { roles: { notetaker: 'smart' } } } },
+    });
+    await waitFor(() => {
+      expect(store.getState().settings.llm.roles?.['notetaker']).toBe('smart');
+    });
+  });
+
+  it('previews resolution with status, policy, locality, and cost_class', async () => {
+    const { store, bus } = makeStore();
+    bus.stubQuery('themes.get', { ok: true, themes: [] });
+    bus.stubCommand('llm.preview_resolution', () => ({
+      ok: true,
+      status: 'resolved',
+      policy_id: 'local-then-free',
+      candidates: [
+        {
+          provider_id: 'groq',
+          provider_type: 'groq',
+          model_id: 'openai/gpt-oss-120b',
+          locality: 'remote',
+          cost_class: 'free',
+        },
+      ],
+    }));
+    renderWithStore(<Harness />, { store, bus });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview resolution' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/status: resolved/)).toBeTruthy();
+      expect(screen.getByText(/policy: local-then-free/)).toBeTruthy();
+      expect(screen.getByText(/groq \/ openai\/gpt-oss-120b \(remote, free\)/)).toBeTruthy();
     });
   });
 });
