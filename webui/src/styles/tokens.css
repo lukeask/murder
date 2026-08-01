@@ -270,48 +270,49 @@
   :root {
     color-scheme: light;
 
-    /* Cool limestone paper — avoid cream + terracotta cliché */
-    --ef-bg-dim:  #e6e2da;
-    --ef-bg-0:    #f0ece4;
-    --ef-bg-1:    #e8e3da;
-    --ef-bg-2:    #ddd7cd;
-    --ef-bg-3:    #d0c9bd;
-    --ef-bg-4:    #bdb5a8;
-    --ef-bg-5:    #a39b8e;
+    /* Ink & paper — cream wordmark ground, crow-ink text, coral kept decisive */
+    --ef-bg-dim:  #e9e4d2;
+    --ef-bg-0:    #fbf9ec;
+    --ef-bg-1:    #f4f1e2;
+    --ef-bg-2:    #ece8d6;
+    --ef-bg-3:    #e3dfcc;
+    --ef-bg-4:    #d9d4bf;
+    --ef-bg-5:    #b8b2a0;
 
-    --ef-bg-red:    #edd8d2;
-    --ef-bg-green:  #dce3d2;
-    --ef-bg-yellow: #ebe0cc;
-    --ef-bg-blue:   #d6e0e4;
-    --ef-bg-aqua:   #d5e4da;
-    --ef-bg-visual: #e6ddd0;
+    --ef-bg-red:    #f6dcd8;
+    --ef-bg-green:  #e2e6cf;
+    --ef-bg-yellow: #f0e4c4;
+    --ef-bg-blue:   #dde4e2;
+    --ef-bg-aqua:   #dfe8dc;
+    --ef-bg-visual: #e8dcc8;
 
-    --ef-fg:     #2a2622;
-    --ef-grey-2: #4a4540;
-    --ef-grey-1: #5e5850;
-    --ef-grey-0: #8a8378;
+    --ef-fg:     #100e0c;
+    --ef-grey-2: #5f594c;
+    --ef-grey-1: #7d7666;
+    --ef-grey-0: #a39c8a;
 
-    --ef-red:    #c45c5e;
-    --ef-orange: #c46e3a;
-    --ef-yellow: #b08a20;
-    --ef-green:  #6a7d3e;
-    --ef-aqua:   #2f8a68;
-    --ef-blue:   #3a7a9a;
-    --ef-purple: #a85a8e;
+    --ef-red:    #c14e50;
+    --ef-orange: #b06a35;
+    --ef-yellow: #8f6b1f;
+    --ef-green:  #5f7a3d;
+    --ef-aqua:   #3f7a5c;
+    --ef-blue:   #4a7a78;
+    --ef-purple: #a05a72;
 
-    --ef-red-dim:    #f0ddd6;
-    --ef-green-dim:  #e2e8d6;
-    --ef-yellow-dim: #efe6d0;
-    --ef-aqua-dim:   #dceee4;
-    --ef-blue-dim:   #d8e6ec;
+    --ef-red-dim:    #f6dcd8;
+    --ef-green-dim:  #e2e6cf;
+    --ef-yellow-dim: #f0e4c4;
+    --ef-aqua-dim:   #dfe8dc;
+    --ef-blue-dim:   #dde4e2;
 
-    --surface-overlay: #2a2622;
-    --surface-terminal: #1a1816;
-    --text-on-accent:  #f0ece4;
-    --accent-hover:    #7a8f4a;
-    --accent-press:    #5a6d32;
-    --brand-hover:     #d46a6c;
-    --brand-press:     #b04a4c;
+    --surface-overlay: #100e0c;
+    /* The terminal stays a dark working mass even on paper — material contrast, not a bug. */
+    --surface-terminal: #141210;
+    --text-on-accent:  #fbf9ec;
+    --accent-hover:    #6f8a49;
+    --accent-press:    #506a32;
+    --brand-hover:     #cf6264;
+    --brand-press:     #a84244;
   }
 }
 
@@ -364,47 +365,47 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --ef-bg-dim:  #e6e2da;
-  --ef-bg-0:    #f0ece4;
-  --ef-bg-1:    #e8e3da;
-  --ef-bg-2:    #ddd7cd;
-  --ef-bg-3:    #d0c9bd;
-  --ef-bg-4:    #bdb5a8;
-  --ef-bg-5:    #a39b8e;
+  --ef-bg-dim:  #e9e4d2;
+  --ef-bg-0:    #fbf9ec;
+  --ef-bg-1:    #f4f1e2;
+  --ef-bg-2:    #ece8d6;
+  --ef-bg-3:    #e3dfcc;
+  --ef-bg-4:    #d9d4bf;
+  --ef-bg-5:    #b8b2a0;
 
-  --ef-bg-red:    #edd8d2;
-  --ef-bg-green:  #dce3d2;
-  --ef-bg-yellow: #ebe0cc;
-  --ef-bg-blue:   #d6e0e4;
-  --ef-bg-aqua:   #d5e4da;
-  --ef-bg-visual: #e6ddd0;
+  --ef-bg-red:    #f6dcd8;
+  --ef-bg-green:  #e2e6cf;
+  --ef-bg-yellow: #f0e4c4;
+  --ef-bg-blue:   #dde4e2;
+  --ef-bg-aqua:   #dfe8dc;
+  --ef-bg-visual: #e8dcc8;
 
-  --ef-fg:     #2a2622;
-  --ef-grey-2: #4a4540;
-  --ef-grey-1: #5e5850;
-  --ef-grey-0: #8a8378;
+  --ef-fg:     #100e0c;
+  --ef-grey-2: #5f594c;
+  --ef-grey-1: #7d7666;
+  --ef-grey-0: #a39c8a;
 
-  --ef-red:    #c45c5e;
-  --ef-orange: #c46e3a;
-  --ef-yellow: #b08a20;
-  --ef-green:  #6a7d3e;
-  --ef-aqua:   #2f8a68;
-  --ef-blue:   #3a7a9a;
-  --ef-purple: #a85a8e;
+  --ef-red:    #c14e50;
+  --ef-orange: #b06a35;
+  --ef-yellow: #8f6b1f;
+  --ef-green:  #5f7a3d;
+  --ef-aqua:   #3f7a5c;
+  --ef-blue:   #4a7a78;
+  --ef-purple: #a05a72;
 
-  --ef-red-dim:    #f0ddd6;
-  --ef-green-dim:  #e2e8d6;
-  --ef-yellow-dim: #efe6d0;
-  --ef-aqua-dim:   #dceee4;
-  --ef-blue-dim:   #d8e6ec;
+  --ef-red-dim:    #f6dcd8;
+  --ef-green-dim:  #e2e6cf;
+  --ef-yellow-dim: #f0e4c4;
+  --ef-aqua-dim:   #dfe8dc;
+  --ef-blue-dim:   #dde4e2;
 
-  --surface-overlay: #2a2622;
-  --surface-terminal: #1a1816;
-  --text-on-accent:  #f0ece4;
-  --accent-hover:    #7a8f4a;
-  --accent-press:    #5a6d32;
-  --brand-hover:     #d46a6c;
-  --brand-press:     #b04a4c;
+  --surface-overlay: #100e0c;
+  --surface-terminal: #141210;
+  --text-on-accent:  #fbf9ec;
+  --accent-hover:    #6f8a49;
+  --accent-press:    #506a32;
+  --brand-hover:     #cf6264;
+  --brand-press:     #a84244;
 }
 
 /* ── Base reset bits (tokens/base.css, non-conflicting only) ───
