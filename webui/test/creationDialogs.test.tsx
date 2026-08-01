@@ -136,6 +136,15 @@ describe('SpawnRogueDialog', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
     await waitFor(() => expect(screen.getByLabelText('Harness')).toBeTruthy());
 
+    // Step through harness → model → effort → worktree → name → Spawn.
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByLabelText('Model')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByLabelText('Effort')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByLabelText('Worktree')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'Spawn' }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -157,10 +166,14 @@ describe('SpawnRogueDialog', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Favorite')).toBeTruthy());
     fireEvent.change(screen.getByLabelText('Favorite'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => {
       expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('opus');
     });
-    expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('high');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => {
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('high');
+    });
   });
 
   it('creates a favorite via spawn_favorites.set', async () => {
@@ -238,6 +251,13 @@ describe('SpawnRogueDialog', () => {
     const onClose = vi.fn();
     renderWithStore(<SpawnRogueDialog open onClose={onClose} />, { store, bus });
 
+    await waitFor(() => expect(screen.getByLabelText('Harness')).toBeTruthy());
+    // harness → model → effort → worktree → name → context
+    for (const label of ['Model', 'Effort', 'Worktree', 'Name'] as const) {
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await waitFor(() => expect(screen.getByLabelText(label)).toBeTruthy());
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(screen.getByLabelText(/Read “ship-it”/)).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'Spawn' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());

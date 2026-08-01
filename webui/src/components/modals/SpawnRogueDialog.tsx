@@ -1,4 +1,4 @@
-/** SpawnRogueDialog — web counterpart of inktui's SpawnWizardModal (`ctrl+s`). */
+/** SpawnRogueDialog — web counterpart of inktui's SpawnWizardModal (`ctrl+s`), stepped via nextStep. */
 
 import { useAppStore, useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import {
@@ -6,6 +6,11 @@ import {
   HARNESS_ORDER,
   defaultEffortCursor,
   effortMatrixFor,
+  nextStep,
+  stepProgress,
+  stepsFor,
+  type StepConditions,
+  type WizardStep,
 } from '@murder/ui-core/components/spawnWizardMachine.js';
 import {
   modelsFor,
@@ -29,8 +34,8 @@ import { DOC_DIR } from '@murder/ui-core/store/docView/docViewSlice.js';
 import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { useEffect, useMemo, useState } from 'react';
 import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
-import { Button, Checkbox, Input, Select } from '../ds/index.js';
-import { CreationDialog } from './CreationDialog.js';
+import { Button, Checkbox, Dialog, Input, Select } from '../ds/index.js';
+import { publishModeHints, spawnDialogHints } from '../../keybindModeHints.js';
 
 export interface SpawnRogueDialogProps {
   /** Optional while App remounts-on-open; Dialog defaults to true. */
@@ -64,6 +69,24 @@ function toastError(err: unknown): void {
   toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
 }
 
+const STEP_LABEL: Readonly<Record<WizardStep, string>> = {
+  harness: 'Harness',
+  model: 'Model',
+  effort: 'Effort',
+  worktree: 'Worktree',
+  branch: 'Branch',
+  name: 'Name',
+  context: 'Context',
+  nameFavorite: 'Favorite name',
+};
+
+function prevStep(current: WizardStep, c: StepConditions): WizardStep | null {
+  const steps = stepsFor(c);
+  const idx = steps.indexOf(current);
+  if (idx <= 0) return null;
+  return steps[idx - 1] ?? null;
+}
+
 export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): React.JSX.Element {
   const bus = useApplicationClient();
   const storeApi = useAppStoreApi();
@@ -91,6 +114,7 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
   const [favoriteMode, setFavoriteMode] = useState<'idle' | 'rename' | 'confirmDelete'>('idle');
   const [includeDoc, setIncludeDoc] = useState(true);
 
+  const [step, setStep] = useState<WizardStep>('harness');
   const [harness, setHarness] = useState(initialHarness);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
@@ -101,6 +125,22 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
   const [pending, setPending] = useState(false);
 
   const favoriteActions = useMemo(() => createSpawnFavoritesActions(bus), [bus]);
+
+  const conditions: StepConditions = useMemo(
+    () => ({
+      harness,
+      model,
+      modelMap,
+      newWorktree: worktreeKey === NEW_WORKTREE_KEY,
+      hasContext: spawnContext !== null,
+      creatingFavorite: false,
+    }),
+    [harness, model, modelMap, worktreeKey, spawnContext],
+  );
+
+  const progress = stepProgress(step, conditions);
+  const following = nextStep(step, conditions);
+  const isLast = following === null;
 
   // Fetch live models / worktrees / favorites; ignore late replies after unmount.
   useEffect(() => {
@@ -133,6 +173,24 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
   useEffect(() => {
     setIncludeDoc(spawnContext !== null);
   }, [spawnContext]);
+
+  // KeybindBar mode hints track the active wizard step (TUI spawnWizardHints parity).
+  useEffect(() => {
+    if (open === false) return;
+    return publishModeHints(
+      spawnDialogHints(step, {
+        favoritesFocused: step === 'harness' && favoriteKey !== '',
+      }),
+    );
+  }, [open, step, favoriteKey]);
+
+  // Resync step if harness/worktree change skipped the current step.
+  useEffect(() => {
+    const active = stepsFor(conditions);
+    if (!active.includes(step)) {
+      setStep(active[0] ?? 'harness');
+    }
+  }, [conditions, step]);
 
   const modelList = useMemo(() => modelsFor(harness, modelMap), [harness, modelMap]);
   const effortSpec = useMemo(() => effortMatrixFor(harness, model), [harness, model]);
@@ -258,19 +316,30 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
       });
   };
 
+  const goNext = (): void => {
+    if (step === 'branch' && branch.trim().length === 0) {
+      setError('Branch name is required.');
+      return;
+    }
+    setError(null);
+    const n = nextStep(step, conditions);
+    if (n === null) {
+      submit();
+      return;
+    }
+    setStep(n);
+  };
+
+  const goBack = (): void => {
+    setError(null);
+    const p = prevStep(step, conditions);
+    if (p !== null) setStep(p);
+  };
+
   const canCreate = favoritesReady && favorites.length < MAX_FAVORITES;
 
-  return (
-    <CreationDialog
-      open={open ?? true}
-      title="Spawn Rogue"
-      onClose={onClose}
-      pending={pending}
-      submitLabel="Spawn"
-      pendingLabel="Spawning…"
-      onSubmit={submit}
-      error={error}
-    >
+  const favoritesBlock =
+    step === 'harness' ? (
       <div className="creation-form__favorites">
         <Select
           label="Favorite"
@@ -377,19 +446,26 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
           </div>
         ) : null}
       </div>
+    ) : null;
 
-      <Select
-        label="Harness"
-        value={harness}
-        disabled={pending}
-        onChange={(e) => {
-          setHarness(e.target.value);
-          setFavoriteKey('');
-        }}
-        options={harnessOptions}
-      />
-
-      {modelList.length > 0 ? (
+  let stepBody: React.ReactNode = null;
+  switch (step) {
+    case 'harness':
+      stepBody = (
+        <Select
+          label="Harness"
+          value={harness}
+          disabled={pending}
+          onChange={(e) => {
+            setHarness(e.target.value);
+            setFavoriteKey('');
+          }}
+          options={harnessOptions}
+        />
+      );
+      break;
+    case 'model':
+      stepBody = (
         <Select
           label="Model"
           value={model}
@@ -397,14 +473,17 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
           onChange={(e) => {
             const next = e.target.value;
             setModel(next);
-            setEffort(effortMatrixFor(harness, next).options[defaultEffortCursor(harness, next)] ?? '');
+            setEffort(
+              effortMatrixFor(harness, next).options[defaultEffortCursor(harness, next)] ?? '',
+            );
             setFavoriteKey('');
           }}
           options={modelList.map((m) => ({ value: m.id, label: m.label }))}
         />
-      ) : null}
-
-      {effortSpec.options.length > 0 ? (
+      );
+      break;
+    case 'effort':
+      stepBody = (
         <Select
           label="Effort"
           value={effort}
@@ -415,17 +494,21 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
           }}
           options={effortSpec.options.map((o) => ({ value: o, label: o }))}
         />
-      ) : null}
-
-      <Select
-        label="Worktree"
-        value={worktreeKey}
-        disabled={pending}
-        onChange={(e) => setWorktreeKey(e.target.value)}
-        options={worktreeOptions.map((o) => ({ value: o.key, label: o.label }))}
-      />
-
-      {worktreeKey === NEW_WORKTREE_KEY ? (
+      );
+      break;
+    case 'worktree':
+      stepBody = (
+        <Select
+          label="Worktree"
+          value={worktreeKey}
+          disabled={pending}
+          onChange={(e) => setWorktreeKey(e.target.value)}
+          options={worktreeOptions.map((o) => ({ value: o.key, label: o.label }))}
+        />
+      );
+      break;
+    case 'branch':
+      stepBody = (
         <Input
           label="Branch name"
           value={branch}
@@ -437,24 +520,70 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
             setError(null);
           }}
         />
-      ) : null}
-
-      <Input
-        label="Name"
-        value={name}
-        placeholder="blank = autogenerate"
-        disabled={pending}
-        onChange={(e) => setName(e.target.value)}
-      />
-
-      {spawnContext !== null ? (
-        <Checkbox
-          checked={includeDoc}
+      );
+      break;
+    case 'name':
+      stepBody = (
+        <Input
+          label="Name"
+          value={name}
+          placeholder="blank = autogenerate"
           disabled={pending}
-          onChange={(e) => setIncludeDoc(e.target.checked)}
-          label={`Read “${spawnContext.title}” before starting (${spawnContext.path})`}
+          onChange={(e) => setName(e.target.value)}
         />
-      ) : null}
-    </CreationDialog>
+      );
+      break;
+    case 'context':
+      stepBody =
+        spawnContext !== null ? (
+          <Checkbox
+            checked={includeDoc}
+            disabled={pending}
+            onChange={(e) => setIncludeDoc(e.target.checked)}
+            label={`Read “${spawnContext.title}” before starting (${spawnContext.path})`}
+          />
+        ) : null;
+      break;
+    default:
+      stepBody = null;
+  }
+
+  return (
+    <Dialog
+      open={open ?? true}
+      title="Spawn Rogue"
+      onClose={onClose}
+      className="spawn-wizard"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          {progress.index > 1 ? (
+            <Button variant="ghost" onClick={goBack} disabled={pending}>
+              Back
+            </Button>
+          ) : null}
+          <Button variant="primary" onClick={goNext} disabled={pending}>
+            {pending ? 'Spawning…' : isLast ? 'Spawn' : 'Next'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        className="creation-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          goNext();
+        }}
+      >
+        <p className="spawn-wizard__progress">
+          {progress.index}/{progress.total} · {STEP_LABEL[step]}
+        </p>
+        {favoritesBlock}
+        {stepBody}
+        {error !== null ? <p className="mds-field__hint mds-field__hint--error">{error}</p> : null}
+      </form>
+    </Dialog>
   );
 }
