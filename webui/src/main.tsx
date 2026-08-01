@@ -17,6 +17,7 @@ import './styles/ds-forms.css';
 import './styles/ds-data.css';
 import './styles/ds-navigation.css';
 import './styles/ds-feedback.css';
+import './styles/ds-sheet.css';
 import './styles/app.css';
 // Cockpit shell layout (the DS reskin frame) + panel CSS. Imported AFTER the ds-*.css component
 // sheets (so `.mds-*` rules exist) and after app.css (so the new `.cockpit*`/`.mw-*`/`.ticket-meta*`

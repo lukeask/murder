@@ -1,0 +1,135 @@
+/* ── Sheet — mobile bottom sheet / desktop centered card ─────────────────────────────────────
+   The browser-native counterpart of the TUI modal: on phones it docks to the bottom edge with a
+   grab handle (swipe-down dismiss) and safe-area padding; on desktop it reads as a centered
+   card, same as Dialog. Colors via --surface-*/--color-* only. */
+
+.mds-sheet-scrim {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  z-index: var(--z-dialog);
+}
+
+.mds-sheet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: calc(88vh - var(--safe-top));
+  max-height: calc(88dvh - var(--safe-top));
+  background: var(--surface-raised);
+  border-top: var(--border-hair) solid var(--border-strong);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  animation: mds-sheet-rise var(--dur) var(--ease-out);
+}
+.mds-sheet--dragging {
+  animation: none;
+  transition: none;
+}
+
+.mds-sheet__grab {
+  /* Generous thumb zone above the header; the visible handle is the small bar inside. */
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3) 0 var(--space-2);
+  touch-action: none;
+  flex-shrink: 0;
+}
+.mds-sheet__handle {
+  width: 36px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border-default);
+}
+
+.mds-sheet__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-5) var(--space-3);
+  border-bottom: var(--border-hair) solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.mds-sheet__title {
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  flex: 1;
+}
+.mds-sheet__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xl);
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+.mds-sheet__close:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.mds-sheet__body {
+  padding: var(--space-5);
+  padding-bottom: calc(var(--space-5) + var(--safe-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  line-height: var(--leading-normal);
+  min-height: 0;
+}
+/* When a footer exists, the body keeps normal padding and the footer owns the safe area. */
+.mds-sheet__body:has(+ .mds-sheet__foot) {
+  padding-bottom: var(--space-5);
+}
+
+.mds-sheet__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  padding-bottom: calc(var(--space-4) + var(--safe-bottom));
+  border-top: var(--border-hair) solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+@keyframes mds-sheet-rise {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Desktop: the sheet becomes a centered card (Dialog silhouette). */
+@media (min-width: 769px) {
+  .mds-sheet-scrim {
+    align-items: center;
+    padding: var(--space-7);
+  }
+  .mds-sheet {
+    max-width: 440px;
+    max-height: 85vh;
+    border: var(--border-hair) solid var(--border-default);
+    border-radius: var(--radius-md);
+    animation: mds-pop var(--dur) var(--ease-out);
+  }
+  .mds-sheet__grab {
+    display: none;
+  }
+  .mds-sheet__head {
+    padding-top: var(--space-4);
+  }
+  .mds-sheet__close {
+    min-width: 0;
+    min-height: 0;
+    padding: var(--space-2);
+  }
+  .mds-sheet__body,
+  .mds-sheet__foot {
+    padding-bottom: var(--space-5);
+  }
+}

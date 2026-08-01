@@ -16,6 +16,9 @@ export type { TabItem, TabsProps } from './Tabs.js';
 export { Dialog } from './Dialog.js';
 export type { DialogProps } from './Dialog.js';
 
+export { Sheet } from './Sheet.js';
+export type { SheetProps } from './Sheet.js';
+
 // ── forms ──
 export { IconButton } from './IconButton.js';
 export type { IconButtonProps } from './IconButton.js';
