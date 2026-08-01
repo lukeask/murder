@@ -7,6 +7,8 @@ import { deriveAgentIdentity } from '@murder/ui-core/selectors/agentIdentity.js'
 import {
   selectActiveAgentId,
   selectCycledRecipientTarget,
+  selectFavoriteTranscriptPanes,
+  selectOpenTranscriptPanes,
 } from '@murder/ui-core/selectors/conversationsSelectors.js';
 import type { SettingsModifier } from '@murder/ui-core/store/settings/settingsSlice.js';
 import { murderConfirmStore } from '@murder/ui-core/store/murder/murderConfirmStore.js';
@@ -22,6 +24,7 @@ import {
 import type { CreationDialogsApi } from './creationDialogs.js';
 import { closeOrToggleActiveTranscriptPane } from './components/stage/stagePanes.js';
 import { togglePanelVisibility } from './panelVisibility.js';
+import { directionFromVimKey, hopPanelFocus, panelFocusStore } from './panelFocus.js';
 
 const CHAT_INPUT_ID = 'chat-composer-input';
 
@@ -53,6 +56,7 @@ function scrollPanelIntoView(panelId: PanelId | 'settings'): void {
 }
 
 function focusChatInput(): void {
+  panelFocusStore.getState().clear();
   const input = document.getElementById(CHAT_INPUT_ID);
   if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
     input.focus();
@@ -80,6 +84,26 @@ export function useDesktopKeybinds(
       return;
     }
 
+    const toggleTargetGroupHandler = (): void => {
+      const state = storeApi.getState();
+      const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
+      const lockedVisibleTargetIds = selectOpenTranscriptPanes(
+        state.roster,
+        state.favorites,
+        state.conversations.paneOverrides,
+      ).panes.map((pane) => pane.agentId);
+      const locked = new Set(lockedVisibleTargetIds);
+      const favoriteOnlyTargetIds = selectFavoriteTranscriptPanes(state.roster, state.favorites)
+        .panes.map((pane) => pane.agentId)
+        .filter((agentId) => !locked.has(agentId));
+      const destination = locked.has(activeAgentId ?? '')
+        ? (favoriteOnlyTargetIds[0] ?? null)
+        : (lockedVisibleTargetIds[0] ?? null);
+      if (destination !== null) {
+        state.actions.conversations.setActivePaneAgentId(destination);
+      }
+    };
+
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.repeat) {
         return;
@@ -94,6 +118,22 @@ export function useDesktopKeybinds(
       ) {
         e.preventDefault();
         openNoteCapture();
+        return;
+      }
+
+      // Plain ctrl+j → toggleTargetGroup (chat-scoped; works while composing like TUI).
+      if (
+        e.key.toLowerCase() === 'j' &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
+        const panelFocused = panelFocusStore.getState().focusedId !== null;
+        if (panelFocused) {
+          return;
+        }
+        e.preventDefault();
+        toggleTargetGroupHandler();
         return;
       }
 
@@ -218,17 +258,28 @@ export function useDesktopKeybinds(
         return;
       }
 
-      if (key === 'h' || key === 'l') {
-        const result = selectCycledRecipientTarget(
-          conversations,
-          roster,
-          favorites,
-          key === 'h' ? -1 : 1,
-        );
-        if (result !== null) {
-          e.preventDefault();
-          actions.conversations.setActivePaneAgentId(result.agentId);
+      // Modifier+h/j/k/l — chat focus: h/l cycle recipients; otherwise geometric panel/stage hops.
+      // j/k always hop (recipient cycle is h/l only). Matches TUI dispatcher gate.
+      const direction = directionFromVimKey(key);
+      if (direction !== null) {
+        const panelFocused = panelFocusStore.getState().focusedId !== null;
+        const cycleTargets =
+          !panelFocused && (key === 'h' || key === 'l');
+        if (cycleTargets) {
+          const result = selectCycledRecipientTarget(
+            conversations,
+            roster,
+            favorites,
+            key === 'h' ? -1 : 1,
+          );
+          if (result !== null) {
+            e.preventDefault();
+            actions.conversations.setActivePaneAgentId(result.agentId);
+          }
+          return;
         }
+        e.preventDefault();
+        hopPanelFocus(direction);
       }
     };
 
