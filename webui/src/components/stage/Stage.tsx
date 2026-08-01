@@ -110,18 +110,26 @@ export function Stage(): React.JSX.Element {
   const setActivePane = useAppStore((s) => s.actions.conversations.setActivePaneAgentId);
   const setTranscriptPaneOpen = useAppStore((s) => s.actions.conversations.setTranscriptPaneOpen);
   const docOpen = useAppStore((s) => s.docView.open !== null);
-  const ticketOpen = useAppStore((s) => s.ticketDetail.ticketId !== null);
+  const ticketId = useAppStore((s) => s.ticketDetail.ticketId);
+  const ticketOpen = ticketId !== null;
   const isNarrow = useMediaQuery(MOBILE_QUERY);
   const [tab, setTab] = useState<StageTab>('chat');
+  /** Full-stage ticket takeover; default false = column beside transcripts (doc-column parity). */
+  const [ticketExpanded, setTicketExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!ticketOpen) setTicketExpanded(false);
+  }, [ticketOpen]);
 
   const activeAgentId = selectActiveAgentId(conversations, roster, favorites);
   const openPanes = selectStageTranscriptPanes(conversations, roster, favorites);
   const { visible, overflow } = partitionStagePanes(openPanes, MAX_VISIBLE_TRANSCRIPT_PANES);
 
+  const sideColumn = tab === 'chat' && (docOpen || (ticketOpen && !ticketExpanded));
   const orientation: StageOrientation = isNarrow ? 'portrait' : 'landscape';
   const layout = computeStageLayout(
     visible.map((p) => p.identity.agentId),
-    docOpen && tab === 'chat',
+    sideColumn,
     orientation,
   );
 
@@ -143,13 +151,26 @@ export function Stage(): React.JSX.Element {
     [conversations.activePaneAgentId, openPanes, setActivePane, setTranscriptPaneOpen],
   );
 
-  if (ticketOpen) {
+  if (ticketOpen && ticketExpanded) {
     return (
       <div className="stage mds-stage mds-stage--overlay">
-        <TicketDetail />
+        <TicketDetail
+          layoutActions={
+            <IconButton
+              size="sm"
+              label="Pop out beside transcripts"
+              title="Beside"
+              onClick={() => setTicketExpanded(false)}
+            >
+              <Icon name="back" size={14} />
+            </IconButton>
+          }
+        />
       </div>
     );
   }
+
+  const emptyStage = visible.length === 0 && !docOpen && !ticketOpen;
 
   return (
     <div className="stage mds-stage">
@@ -198,7 +219,7 @@ export function Stage(): React.JSX.Element {
           ) : (
             <TmuxFrameView sessionId={terminalSessionId} />
           )
-        ) : visible.length === 0 && !docOpen ? (
+        ) : emptyStage ? (
           <div className="mds-stage__empty">Select a crow from the roster to start chatting.</div>
         ) : (
           <div
@@ -215,6 +236,21 @@ export function Stage(): React.JSX.Element {
             {docOpen ? (
               <div className="mds-stage__doc-col">
                 <DocViewer />
+              </div>
+            ) : ticketOpen ? (
+              <div className="mds-stage__doc-col mds-stage__doc-col--ticket">
+                <TicketDetail
+                  layoutActions={
+                    <IconButton
+                      size="sm"
+                      label="Expand ticket to full stage"
+                      title="Expand"
+                      onClick={() => setTicketExpanded(true)}
+                    >
+                      <Icon name="plus" size={14} />
+                    </IconButton>
+                  }
+                />
               </div>
             ) : null}
             {visible.length > 0 ? (
