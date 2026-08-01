@@ -2,8 +2,25 @@
 
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
-import { Tag, Input, Button } from '../ds/index.js';
+import { Tag, Input, Button, Checkbox } from '../ds/index.js';
 import { StageOverlayPanel } from './DocViewer.js';
+
+/** Toggle a checklist line: `- [ ] text` ↔ `- [x] text`. Non-checklist lines unchanged. */
+function toggleChecklist(line: string): string {
+  const unchecked = line.replace(/^(\s*-\s*)\[ \]/, '$1[x]');
+  if (unchecked !== line) return unchecked;
+  const checked = line.replace(/^(\s*-\s*)\[x\]/, '$1[ ]');
+  return checked !== line ? checked : line;
+}
+
+/** Is a line a checklist item (either checked or unchecked)? */
+function isChecklistLine(line: string): boolean {
+  return /^\s*-\s*\[[x ]\]/.test(line);
+}
+
+function checklistLabel(line: string): string {
+  return line.replace(/^\s*-\s*\[[x ]\]\s*/, '');
+}
 
 export function TicketDetail(): React.JSX.Element | null {
   const detail = useAppStore((s) => s.ticketDetail, shallow);
@@ -17,8 +34,24 @@ export function TicketDetail(): React.JSX.Element | null {
 
   const fm = detail.frontmatter;
   const body = detail.editedBody ?? detail.savedBody ?? '';
-  const dirty = detail.editedBody !== null && detail.editedBody !== detail.savedBody;
   const scheduleInvalid = detail.scheduleInput !== '' && !detail.scheduleValid;
+  const scheduleAt = fm?.scheduleAt ?? null;
+  const lines = body.split('\n');
+  const checklistIndices = lines
+    .map((line, index) => (isChecklistLine(line) ? index : -1))
+    .filter((i) => i >= 0);
+
+  const toggleLine = (index: number): void => {
+    const next = lines.map((line, i) => (i === index ? toggleChecklist(line) : line));
+    setEditedBody(next.join('\n'));
+  };
+
+  /** Match TUI `w`: save body + schedule (if valid) then close overlay. */
+  const saveAndClose = (): void => {
+    void saveBody();
+    void schedule();
+    close();
+  };
 
   return (
     <StageOverlayPanel
@@ -47,6 +80,8 @@ export function TicketDetail(): React.JSX.Element | null {
           <dd>{fm.model ?? '—'}</dd>
           <dt>worktree</dt>
           <dd>{fm.worktree ?? '—'}</dd>
+          <dt>scheduled</dt>
+          <dd>{scheduleAt ?? '(none)'}</dd>
         </dl>
       ) : null}
 
@@ -66,6 +101,24 @@ export function TicketDetail(): React.JSX.Element | null {
         </Button>
       </div>
 
+      {checklistIndices.length > 0 ? (
+        <ul className="mds-ticket__checklist">
+          {checklistIndices.map((index) => {
+            const line = lines[index] ?? '';
+            const checked = /\[x\]/.test(line);
+            return (
+              <li key={index} className="mds-ticket__checklist-item">
+                <Checkbox
+                  checked={checked}
+                  label={checklistLabel(line) || '(empty)'}
+                  onChange={() => toggleLine(index)}
+                />
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
       <textarea
         className="mds-ticket__editor"
         value={body}
@@ -75,10 +128,10 @@ export function TicketDetail(): React.JSX.Element | null {
       <div className="mds-ticket__actions">
         <Button
           variant="primary"
-          disabled={!dirty || detail.status === 'saving'}
-          onClick={() => void saveBody()}
+          disabled={detail.status === 'saving'}
+          onClick={saveAndClose}
         >
-          {detail.status === 'saving' ? 'saving…' : 'save body'}
+          {detail.status === 'saving' ? 'saving…' : 'save'}
         </Button>
       </div>
     </StageOverlayPanel>
