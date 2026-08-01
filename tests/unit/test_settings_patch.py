@@ -423,6 +423,20 @@ def test_settings_payload_projects_overrides_and_effective() -> None:
     assert payload["effective_crow_harnesses"] == ["cursor"]
     assert payload["llm"]["providers"]["groq"]["auth"]["api_key"] == "***"
     assert payload["llm_env"]["groq"] is True
+    assert "project" not in payload
+
+
+def test_settings_payload_includes_project_when_provided() -> None:
+    payload = build_settings_payload(
+        UserConfig(),
+        effective=EffectiveHarnessView(
+            collaborator="claude_code",
+            planner="claude_code",
+            crow=("claude_code",),
+        ),
+        project="murder",
+    )
+    assert payload["project"] == "murder"
 
 
 def test_background_transparency_patch_and_payload() -> None:

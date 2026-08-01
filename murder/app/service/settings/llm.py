@@ -38,11 +38,12 @@ def llm_reply(
     *,
     effective: EffectiveHarnessView,
     extra: dict[str, Any] | None = None,
+    project: str | None = None,
 ) -> dict[str, Any]:
     reply: dict[str, Any] = {
         "ok": True,
         "llm": mask_llm(cfg.llm),
-        "settings": build_settings_payload(cfg, effective=effective),
+        "settings": build_settings_payload(cfg, effective=effective, project=project),
     }
     if extra:
         reply.update(extra)

@@ -23,8 +23,12 @@ def register(host: ServiceHost) -> None:  # noqa: PLR0915 - command registration
 
     def _save_reply(cfg: Any, *, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         _repository().save(cfg)
+        project = host.config.project.name if host.config.project is not None else None
         return llm_usecases.llm_reply(
-            cfg, effective=effective_harness_view(host.config), extra=extra
+            cfg,
+            effective=effective_harness_view(host.config),
+            extra=extra,
+            project=project,
         )
 
     def _llm_set_disabled(body: dict[str, Any]) -> dict[str, Any]:

@@ -210,13 +210,14 @@ def build_settings_payload(
     *,
     effective: EffectiveHarnessView,
     llm_env: Mapping[str, bool] | None = None,
+    project: str | None = None,
 ) -> dict[str, Any]:
     """Project persisted + effective settings for ``settings.get`` / update replies."""
     tui = cfg.tui
     collab_override = cfg.collaborator.harness if cfg.collaborator is not None else None
     planner_override = cfg.planner.harness if cfg.planner is not None else None
     startup_models, startup_efforts = build_startup_rogue_catalogs()
-    return {
+    payload: dict[str, Any] = {
         "theme": tui.theme,
         "modifier": tui.modifier,
         "key_overrides": dict(tui.key_overrides),
@@ -265,6 +266,9 @@ def build_settings_payload(
             else UserOracleConfig().model_dump(mode="json")
         ),
     }
+    if project is not None:
+        payload["project"] = project
+    return payload
 
 
 __all__ = [

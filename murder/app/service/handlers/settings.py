@@ -31,10 +31,13 @@ def register(
 
     def _settings_get(_body: dict[str, Any]) -> dict[str, Any]:
         cfg = _repository().load()
+        project = host.config.project.name if host.config.project is not None else None
         return {
             "ok": True,
             "settings": build_settings_payload(
-                cfg, effective=effective_harness_view(host.config)
+                cfg,
+                effective=effective_harness_view(host.config),
+                project=project,
             ),
         }
 
@@ -46,10 +49,13 @@ def register(
         commit_settings_mutation(mutation, _repository(), _live())
         # NOTE: llm env changes are NOT applied live; they take effect at next
         # daemon start via apply_llm_env in Config.load.
+        project = host.config.project.name if host.config.project is not None else None
         return {
             "ok": True,
             "settings": build_settings_payload(
-                mutation.config, effective=effective_harness_view(host.config)
+                mutation.config,
+                effective=effective_harness_view(host.config),
+                project=project,
             ),
         }
 
