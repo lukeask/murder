@@ -429,7 +429,8 @@ describe('SettingsPanel appearance + depth (C1/C2)', () => {
     stubSettingsUpdate(store, bus);
     renderWithStore(<Harness />, { store, bus });
 
-    fireEvent.change(screen.getByLabelText('spawn'), { target: { value: 'q' } });
+    fireEvent.click(screen.getByRole('button', { name: 'rebind spawn' }));
+    fireEvent.keyDown(document, { key: 'q' });
 
     expect(bus.commandCalls.at(-1)).toEqual({
       name: 'settings.update',
