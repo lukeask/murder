@@ -19,6 +19,44 @@ export interface HelpGroup {
   readonly entries: readonly HelpEntry[];
 }
 
+/** Default entry rows per help page (TUI modal + WebUI dialog). */
+export const HELP_ROWS_PER_PAGE = 14;
+
+/**
+ * Split grouped entries into pages of at most `rowsPerPage` entry rows. A group stays whole when it
+ * fits; an oversized group splits (heading repeats as `… (cont.)`). Always ≥1 page.
+ */
+export function paginateHelp(
+  groups: readonly HelpGroup[],
+  rowsPerPage = HELP_ROWS_PER_PAGE,
+): readonly (readonly HelpGroup[])[] {
+  const pages: HelpGroup[][] = [];
+  let current: HelpGroup[] = [];
+  let used = 0;
+  for (const group of groups) {
+    let rest = group.entries;
+    let first = true;
+    while (rest.length > 0) {
+      const room = rowsPerPage - used;
+      if (room <= 0) {
+        pages.push(current);
+        current = [];
+        used = 0;
+        continue;
+      }
+      const take = rest.slice(0, room);
+      current.push({ title: first ? group.title : `${group.title} (cont.)`, entries: take });
+      used += take.length;
+      rest = rest.slice(room);
+      first = false;
+    }
+  }
+  if (current.length > 0 || pages.length === 0) {
+    pages.push(current);
+  }
+  return pages;
+}
+
 /** Human display label for one panel's scope heading. */
 const PANEL_TITLE: Readonly<Record<string, string>> = {
   plans: 'Plans panel',

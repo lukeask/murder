@@ -3,9 +3,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { resolveBindings } from '../src/input/bindings.js';
-import { createKeymapRegistry } from '../src/input/keymapRegistry.js';
-import { buildHelpGroups } from '../src/selectors/helpGroups.js';
+import { resolveBindings } from '@murder/ui-core/input/bindings.js';
+import { createKeymapRegistry } from '@murder/ui-core/input/keymapRegistry.js';
+import {
+  buildHelpGroups,
+  paginateHelp,
+  type HelpGroup,
+} from '@murder/ui-core/selectors/helpGroups.js';
 
 describe('buildHelpGroups', () => {
   it('labels global binds from the resolved bindings (tracks the modifier)', () => {
@@ -49,5 +53,29 @@ describe('buildHelpGroups', () => {
     const commands = groups.find((g) => g.title === 'Commands');
     expect(commands?.entries.map((e) => e.key)).toContain(':help');
     expect(commands?.entries.map((e) => e.key)).toContain(':workflows');
+  });
+});
+
+describe('paginateHelp', () => {
+  function group(title: string, n: number): HelpGroup {
+    return {
+      title,
+      entries: Array.from({ length: n }, (_, i) => ({ key: `k${i}`, description: `d${i}` })),
+    };
+  }
+
+  it('keeps everything on one page when it fits', () => {
+    const pages = paginateHelp([group('A', 3), group('B', 2)], 10);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.map((g) => g.title)).toEqual(['A', 'B']);
+  });
+
+  it('splits onto multiple pages when the entry count exceeds the page size', () => {
+    const pages = paginateHelp([group('A', 5), group('B', 5)], 6);
+    expect(pages.length).toBeGreaterThan(1);
+    for (const page of pages) {
+      const rows = page.reduce((acc, g) => acc + g.entries.length, 0);
+      expect(rows).toBeLessThanOrEqual(6);
+    }
   });
 });

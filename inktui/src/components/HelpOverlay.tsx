@@ -27,6 +27,8 @@ import type { ResolvedBindings } from '@murder/ui-core/input/bindings.js';
 import type { KeymapRegistryApi } from '@murder/ui-core/input/keymapRegistry.js';
 import {
   buildHelpGroups,
+  HELP_ROWS_PER_PAGE,
+  paginateHelp,
   type HelpEntry,
   type HelpGroup,
 } from '@murder/ui-core/selectors/helpGroups.js';
@@ -34,55 +36,10 @@ import type { Mode, ModeStoreApi } from '../input/modeStore.js';
 import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 export type { HelpEntry, HelpGroup };
-export { buildHelpGroups };
+export { buildHelpGroups, paginateHelp };
 
 /** The stable mode id for idempotent re-enter. */
 export const HELP_MODE_ID = 'keyHelp';
-
-/** How many entry rows (across all groups, headers excluded) fit on one page. Conservative so the
- * modal stays within a small terminal even after its border + per-group headings.
- *
- * Left as a constant rather than derived from the live terminal height: pagination is computed once
- * in {@link helpMode} (a non-React closure built at open), so it has no live `rows` to read, and the
- * page count must stay stable across the open (re-paginating on resize would jump the user's page
- * index). 14 fits comfortably above the app's own min-terminal floor (16 rows) once the
- * border + headings are accounted for; if the help surface grows much larger, thread the live row
- * count into {@link paginateHelp} at the {@link helpMode} call site instead. */
-const ROWS_PER_PAGE = 14;
-
-/** Split the grouped entries into pages of at most {@link ROWS_PER_PAGE} entry rows. A group is kept
- * whole on a page where it fits; an oversized group is split across pages (its heading repeats). Pure
- * — exported for unit tests. Always returns at least one (possibly empty) page. */
-export function paginateHelp(
-  groups: readonly HelpGroup[],
-  rowsPerPage = ROWS_PER_PAGE,
-): readonly (readonly HelpGroup[])[] {
-  const pages: HelpGroup[][] = [];
-  let current: HelpGroup[] = [];
-  let used = 0;
-  for (const group of groups) {
-    let rest = group.entries;
-    let first = true;
-    while (rest.length > 0) {
-      const room = rowsPerPage - used;
-      if (room <= 0) {
-        pages.push(current);
-        current = [];
-        used = 0;
-        continue;
-      }
-      const take = rest.slice(0, room);
-      current.push({ title: first ? group.title : `${group.title} (cont.)`, entries: take });
-      used += take.length;
-      rest = rest.slice(room);
-      first = false;
-    }
-  }
-  if (current.length > 0 || pages.length === 0) {
-    pages.push(current);
-  }
-  return pages;
-}
 
 /** Options for the help mode factory. */
 export interface HelpModeOptions {
@@ -114,7 +71,7 @@ export function helpMode(
   opts: HelpModeOptions = {},
 ): Mode<HelpIntent> {
   const id = HELP_MODE_ID;
-  const pages = paginateHelp(buildHelpGroups(bindings, registry));
+  const pages = paginateHelp(buildHelpGroups(bindings, registry), HELP_ROWS_PER_PAGE);
   const s: HelpState = { page: 0, pages };
   const multiPage = pages.length > 1;
 
