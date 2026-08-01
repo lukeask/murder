@@ -21,6 +21,18 @@ dependencies = [
     "watchfiles>=0.21,<2.0",  # cross-platform inotify-ish watcher (D5)
     # Application WebSocket server (`/api/ws`) — required for supervisor startup.
     "aiohttp>=3.9,<4.0",
+    # Context Assembler 2 structural extractors (tree-sitter grammars load fail-soft).
+    "tree-sitter>=0.23.0,<0.27",
+    "tree-sitter-javascript>=0.23.0,<0.26",
+    "tree-sitter-typescript>=0.23.0,<0.24",
+    "tree-sitter-rust>=0.23.0,<0.26",
+    "tree-sitter-c>=0.23.0,<0.26",
+    "tree-sitter-cpp>=0.23.0,<0.24",
+    "tree-sitter-go>=0.23.0,<0.26",
+    "tree-sitter-html>=0.23.0,<0.26",
+    "tree-sitter-css>=0.23.0,<0.26",
+    "tree-sitter-scss>=1.0.0,<2.0",
+    "tree-sitter-less>=1.0.0,<2.0",
     # TODO(M0): tiktoken for D17 if/when context-cap enforcement lands
 ]
 
@@ -117,6 +129,14 @@ target-version = "py310"
 # TODO(M0): tighten lints once code lands
 select = ["E", "F", "I", "B", "UP", "PL"]
 ignore = ["PLR0913"]  # allow many args on dataclasses / pydantic models
+
+[tool.ruff.lint.per-file-ignores]
+# Structural parsers are intentionally branch-heavy dispatch code; the numeric
+# thresholds below describe syntax shapes rather than reusable policy knobs.
+"murder/context_compiler/extraction/**/*.py" = ["PLR0911", "PLR0912", "PLR0915", "PLR2004"]
+"murder/context_compiler/indexing/{coordinator,files}.py" = ["PLR0911", "PLR0912", "PLR0915"]
+"murder/context_compiler/candidates/{exact_hints,lexical}.py" = ["PLR0911", "PLR0912", "PLR2004"]
+"tests/unit/test_context_compiler*.py" = ["PLR2004"]
 
 [tool.mypy]
 python_version = "3.10"

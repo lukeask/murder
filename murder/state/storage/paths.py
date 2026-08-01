@@ -29,6 +29,11 @@ def db_path(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "murder.db"
 
 
+def context_index_db_path(repo_root: Path) -> Path:
+    """Experimental context-compiler index (never ``murder.db``)."""
+    return murder_dir(repo_root) / "context-index.db"
+
+
 def lock_path(repo_root: Path) -> Path:
     return agents_dir(repo_root) / ".lock"
 
