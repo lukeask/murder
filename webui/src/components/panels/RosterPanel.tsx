@@ -1,7 +1,9 @@
 /**
  * RosterPanel — live agent roster (collaborator / planners / rogue / ticket) with health and
  * favorites. Click selects the crow as the active chat target; ★ toggles favorite; ticket-bound
- * crows can be reset (with confirm). Keyboard: j/k/Enter when panel focused; f star; m murder.
+ * crows can be reset (with confirm). Keyboard: j/k/Enter when panel focused; f star; m toggle
+ * meta density (TUI parity); x murder. Width degrades meta full→compact→minimal like TUI
+ * CrowsSurface.
  */
 
 import { selectCrowsView } from '@murder/ui-core/selectors/crowsSelectors.js';
@@ -11,7 +13,9 @@ import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { murderConfirmStore } from '@murder/ui-core/store/murder/murderConfirmStore.js';
 import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { shallow } from 'zustand/shallow';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePaneExpandedState } from '../../composer/usePaneExpandedState.js';
+import { usePaneUiClampedCursor } from '../../composer/usePaneUiClampedCursor.js';
 import { useCreationDialogs } from '../../creationDialogs.js';
 import { panelFocusStore, useIsPanelFocused } from '../../panelFocus.js';
 import { usePanelListKeys } from '../../usePanelListKeys.js';
@@ -29,6 +33,11 @@ import {
 } from '../ds/index.js';
 import type { StatusDotStatus } from '../ds/index.js';
 import { SliceHint } from '../SliceHint.js';
+import {
+  crowDensityFromWidth,
+  crowShowMeta,
+  type CrowDisplayMode,
+} from './crowDensity.js';
 
 /** Map selector crow health onto a DS StatusDot status. */
 const HEALTH_TO_DOT: Readonly<Record<Health, StatusDotStatus>> = {
@@ -58,10 +67,28 @@ export function RosterPanel(): React.JSX.Element {
   const [collapsedSections, setCollapsedSections] = useState<ReadonlySet<CrowGroup>>(
     () => new Set(),
   );
+  /** TUI `expanded` — when false, hide harness/model meta (one-line density). paneUi-backed. */
+  const [expanded, setExpanded] = usePaneExpandedState('crows', true);
+  const [density, setDensity] = useState<CrowDisplayMode>('full');
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const focused = useIsPanelFocused('crows');
-  const [cursor, setCursor] = useState(0);
 
   const view = selectCrowsView(roster, Date.now(), favorites);
+
+  useEffect(() => {
+    const el = panelRef.current;
+    if (el === null) return;
+    const measure = (): void => {
+      setDensity(crowDensityFromWidth(el.getBoundingClientRect().width));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const showMeta = crowShowMeta(density, expanded);
 
   const flatRows = useMemo(
     () =>
@@ -70,6 +97,7 @@ export function RosterPanel(): React.JSX.Element {
       ),
     [view.sections, collapsedSections],
   );
+  const [cursor, setCursor] = usePaneUiClampedCursor('crows', flatRows.length);
 
   const ticketIdFor = (agentId: string): string | null =>
     rosterRows.find((r) => r.agentId === agentId)?.ticketId ?? null;
@@ -120,13 +148,17 @@ export function RosterPanel(): React.JSX.Element {
       if (row !== undefined) openCrow(row.agentId);
     },
     onAction: (key) => {
+      if (key === 'm') {
+        setExpanded((current) => !current);
+        return true;
+      }
       const row = flatRows[cursor];
       if (row === undefined) return false;
       if (key === 'f') {
         void toggleFavorite(row.agentId);
         return true;
       }
-      if (key === 'm' || key === 'x') {
+      if (key === 'x') {
         murderConfirmStore.getState().arm({ agentId: row.agentId, name: row.name });
         return true;
       }
@@ -136,12 +168,17 @@ export function RosterPanel(): React.JSX.Element {
 
   return (
     <>
+      <div ref={panelRef} className="roster-panel-shell" data-density={density}>
       <Panel
         title="crows"
         count={view.isEmpty ? null : rowCount}
         flush
         active={focused}
         data-panel-id="crows"
+        className={cx(
+          !showMeta && 'roster-panel--compact',
+          density === 'minimal' && 'roster-panel--minimal',
+        )}
         onHeaderClick={() => panelFocusStore.getState().focus('crows')}
         actions={
           <IconButton label="Spawn rogue" onClick={openSpawn}>
@@ -198,10 +235,12 @@ export function RosterPanel(): React.JSX.Element {
                           </span>
                         }
                         meta={
-                          <span className="roster-meta">
-                            <Tag>{row.harness}</Tag>
-                            <span>{row.model}</span>
-                          </span>
+                          showMeta ? (
+                            <span className="roster-meta">
+                              {density === 'full' ? <Tag>{row.harness}</Tag> : null}
+                              <span>{row.model}</span>
+                            </span>
+                          ) : undefined
                         }
                         trailing={
                           <span className="roster-trail">
@@ -244,6 +283,7 @@ export function RosterPanel(): React.JSX.Element {
           );
         })}
       </Panel>
+      </div>
 
       {resetTarget !== null ? (
         <Dialog

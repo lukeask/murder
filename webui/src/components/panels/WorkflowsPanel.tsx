@@ -12,6 +12,7 @@ import {
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useCallback, useEffect, useState } from 'react';
+import { usePaneUiClampedCursor } from '../../composer/usePaneUiClampedCursor.js';
 import { useCreationDialogs } from '../../creationDialogs.js';
 import { panelFocusStore, useIsPanelFocused } from '../../panelFocus.js';
 import { usePanelListKeys } from '../../usePanelListKeys.js';
@@ -49,7 +50,7 @@ export function WorkflowsPanel({
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<ReadonlySet<string>>(() => new Set());
   const view = useWorkflowsPanelView(workflowRuns, tickets, collapsedGroupIds);
   const focused = useIsPanelFocused('workflows');
-  const [cursor, setCursor] = useState(0);
+  const [cursor, setCursor] = usePaneUiClampedCursor('workflows', view.rows.length);
 
   const refresh = useCallback(() => {
     void refreshList();

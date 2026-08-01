@@ -8,7 +8,8 @@ import { selectHistoryView } from '@murder/ui-core/selectors/historySelectors.js
 import type { HistoryMode } from '@murder/ui-core/selectors/historySelectors.js';
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
-import { useState } from 'react';
+import { usePaneHistoryMode } from '../../composer/usePaneHistoryMode.js';
+import { usePaneUiClampedCursor } from '../../composer/usePaneUiClampedCursor.js';
 import { panelFocusStore, useIsPanelFocused } from '../../panelFocus.js';
 import { usePanelListKeys } from '../../usePanelListKeys.js';
 import { Panel, ListRow, Tag, Tabs, Button, IconButton, Icon } from '../ds/index.js';
@@ -27,10 +28,10 @@ export function HistoryPanel(): React.JSX.Element {
   const dismiss = useAppStore((s) => s.actions.history.dismiss);
   const resume = useAppStore((s) => s.actions.history.resumeConversation);
   const refresh = useAppStore((s) => s.actions.history.refresh);
-  const [mode, setMode] = useState<HistoryMode>('loose');
+  const [mode, setMode] = usePaneHistoryMode('history');
   const view = selectHistoryView(history, mode, Date.now());
   const focused = useIsPanelFocused('history');
-  const [cursor, setCursor] = useState(0);
+  const [cursor, setCursor] = usePaneUiClampedCursor('history', view.rows.length);
 
   const looseTab = { id: 'loose', label: 'loose', count: view.looseCount || undefined } as TabItem;
   const toggle = (

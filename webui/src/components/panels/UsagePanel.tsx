@@ -7,7 +7,8 @@
 import { selectUsageView } from '@murder/ui-core/selectors/usageSelectors.js';
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { usePaneUiClampedCursor } from '../../composer/usePaneUiClampedCursor.js';
 import { panelFocusStore, useIsPanelFocused } from '../../panelFocus.js';
 import { usePanelListKeys } from '../../usePanelListKeys.js';
 import { Panel, Select, cx } from '../ds/index.js';
@@ -21,7 +22,6 @@ export function UsagePanel(): React.JSX.Element {
   const sample = useAppStore((s) => s.actions.usage.sample);
   const view = selectUsageView(usage);
   const focused = useIsPanelFocused('usage');
-  const [cursor, setCursor] = useState(0);
 
   const flatGauges = useMemo(
     () =>
@@ -30,6 +30,7 @@ export function UsagePanel(): React.JSX.Element {
       ),
     [view.groups],
   );
+  const [cursor, setCursor] = usePaneUiClampedCursor('usage', flatGauges.length);
 
   usePanelListKeys({
     active: focused,

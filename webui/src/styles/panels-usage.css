@@ -37,6 +37,12 @@
   font: var(--type-meta);
 }
 
+.usage-row--cursor {
+  background: color-mix(in srgb, var(--color-accent, var(--accent)) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--color-accent, var(--accent));
+  padding-left: var(--space-2);
+}
+
 .usage-row__period {
   color: var(--text-muted);
   overflow: hidden;
