@@ -1,0 +1,215 @@
+/* Workflow template library + launch review — stone/masonry cockpit overlays (no SaaS glass). */
+
+.wflib-dialog {
+  max-width: min(920px, calc(100vw - 40px));
+  width: 100%;
+}
+
+.wflib {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 280px;
+}
+
+.wflib__toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.wflib__count {
+  margin: 0;
+  padding-bottom: 0.55rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.wflib__body {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.42fr) minmax(260px, 0.58fr);
+  gap: 0;
+  min-height: 240px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+}
+
+.wflib__list {
+  overflow: auto;
+  max-height: min(52vh, 420px);
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+  padding: var(--space-2) 0;
+}
+
+.wflib__section {
+  margin: var(--space-2) var(--space-3) var(--space-1);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.wflib__empty {
+  margin: 0 var(--space-3) var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.wflib__row.mds-row {
+  border-radius: 0;
+}
+
+.wflib__detail {
+  overflow: auto;
+  max-height: min(52vh, 420px);
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--surface-raised) 88%, var(--ef-bg-dim));
+}
+
+.wflib__details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.wflib__name {
+  margin: 0;
+  font-family: var(--font-display, var(--font-sans));
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.wflib__meta {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.wflib__meta > div {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.wflib__meta dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.wflib__meta dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.wflib__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.wflib__muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.wflib__warn {
+  color: var(--color-warning, var(--ef-yellow));
+}
+
+.wflib__notice {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.wflib__confirm-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--color-warning, var(--ef-yellow));
+}
+
+.wflaunch-dialog {
+  max-width: min(520px, calc(100vw - 40px));
+}
+
+.wflaunch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.wflaunch__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.wflaunch__name {
+  margin: 0;
+  font-family: var(--font-display, var(--font-sans));
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.wflaunch__desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.wflaunch__stats {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+.wflaunch__status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.wflaunch__error {
+  margin: 0;
+  color: var(--color-error, var(--ef-red));
+  font-size: var(--text-sm);
+}
+
+.wflaunch__form {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .wflib__body {
+    grid-template-columns: 1fr;
+  }
+
+  .wflib__list {
+    max-height: 28vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .wflib__toolbar {
+    grid-template-columns: 1fr;
+  }
+}

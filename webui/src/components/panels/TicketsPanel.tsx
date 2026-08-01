@@ -1,6 +1,6 @@
 /**
- * TicketsPanel — schedule/tickets list over `tickets` via {@link selectTicketsView}. Opens detail
- * via `ticketDetail.open`; status Badge tone comes from the selector's `statusTone`.
+ * TicketsPanel — flat schedule/tickets list over `tickets` via {@link selectTicketsView}.
+ * Prefer {@link WorkflowsPanel} for the main rail (run-first tree). Kept for ticket-only surfaces.
  */
 
 import { selectTicketsView } from '@murder/ui-core/selectors/ticketsSelectors.js';
@@ -19,10 +19,10 @@ export function TicketsPanel(): React.JSX.Element {
 
   return (
     <Panel
-      title="workflows"
+      title="tickets"
       count={view.isEmpty ? null : view.rows.length}
       flush
-      data-panel-id="workflows"
+      data-panel-id="tickets"
       actions={
         <IconButton label="New ticket" onClick={openTicket}>
           <Icon name="plus" size={14} />

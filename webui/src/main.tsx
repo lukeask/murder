@@ -31,6 +31,8 @@ import './styles/panels-usage.css';
 import './styles/panels-transit.css';
 import './styles/panels-settings.css';
 import './styles/panels-stage.css';
+import './styles/panels-workflows.css';
+import './styles/panels-modes.css';
 
 const bus = createBrowserApplicationClient();
 const { store } = createAppStore(bus);
