@@ -172,6 +172,17 @@
   gap: var(--space-4);
 }
 
+.help__page {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.help__page-hint {
+  opacity: 0.75;
+}
+
 .help__group {
   display: flex;
   flex-direction: column;

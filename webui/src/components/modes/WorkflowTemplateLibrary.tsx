@@ -8,6 +8,7 @@ import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { shallow } from 'zustand/shallow';
 import { useEffect, useMemo, useState } from 'react';
+import { WORKFLOW_LIBRARY_HINTS, publishModeHints } from '../../keybindModeHints.js';
 import {
   copyWorkflowTemplate,
   filterWorkflowTemplates,
@@ -64,6 +65,11 @@ export function WorkflowTemplateLibrary({
     setNotice(null);
     setSelectedName(focusedName);
   }, [open, load, focusedName]);
+
+  useEffect(() => {
+    if (!open) return;
+    return publishModeHints(WORKFLOW_LIBRARY_HINTS);
+  }, [open]);
 
   const visible = useMemo(
     () => filterWorkflowTemplates(sortWorkflowTemplates(workflows.items), filter),

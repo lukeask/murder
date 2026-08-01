@@ -12,6 +12,7 @@ import {
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { useEffect, useId, useState } from 'react';
 import { Button, Dialog, Input } from '../ds/index.js';
+import { WORKFLOW_LAUNCH_HINTS, publishModeHints } from '../../keybindModeHints.js';
 
 export interface WorkflowLaunchReviewProps {
   readonly open?: boolean;
@@ -46,6 +47,11 @@ export function WorkflowLaunchReview({
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    return publishModeHints(WORKFLOW_LAUNCH_HINTS);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
