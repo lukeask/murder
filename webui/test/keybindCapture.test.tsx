@@ -1,15 +1,25 @@
 /** keybindCapture + SettingsPanel capture-to-rebind tests. */
 
+import type { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
+import type { AppStoreApi } from '@murder/ui-core/store/store.js';
 import { cleanup, fireEvent, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SettingsPanel } from '../src/components/panels/SettingsPanel.js';
 import { validateRebindCapture } from '../src/keybindCapture.js';
-import { makeStore, renderWithStore, stubSettingsUpdate } from './helpers.js';
+import { makeStore, renderWithStore } from './helpers.js';
 
 afterEach(cleanup);
 
 function Harness(): React.JSX.Element {
   return <SettingsPanel />;
+}
+
+/** Echo settings.update so the command is recorded (slice updates local-first). */
+function stubSettingsUpdate(_store: AppStoreApi, bus: FakeApplicationClient): void {
+  bus.stubCommand('settings.update', (params) => ({
+    ok: true,
+    settings: params.settings,
+  }));
 }
 
 describe('validateRebindCapture', () => {
@@ -56,9 +66,19 @@ describe('SettingsPanel capture-to-rebind', () => {
     fireEvent.click(screen.getByRole('button', { name: 'rebind spawn' }));
     fireEvent.keyDown(document, { key: '3' });
 
-    expect(bus.commandCalls.some((c) => c.name === 'settings.update' && 'key_overrides' in (c.params.settings ?? {}))).toBe(
-      false,
-    );
+    expect(
+      bus.commandCalls.some(
+        (c) =>
+          c.name === 'settings.update' &&
+          c.params !== undefined &&
+          typeof c.params === 'object' &&
+          c.params !== null &&
+          'settings' in c.params &&
+          typeof (c.params as { settings: unknown }).settings === 'object' &&
+          (c.params as { settings: Record<string, unknown> }).settings !== null &&
+          'key_overrides' in (c.params as { settings: Record<string, unknown> }).settings,
+      ),
+    ).toBe(false);
     expect(screen.getByText(/reserved/i)).toBeTruthy();
   });
 

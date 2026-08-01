@@ -1,5 +1,6 @@
 /** TicketDetail — open ticket frontmatter + body editor + schedule; uses StageOverlayPanel. */
 
+import type { ReactNode } from 'react';
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { Tag, Input, Button, Checkbox } from '../ds/index.js';
@@ -22,7 +23,12 @@ function checklistLabel(line: string): string {
   return line.replace(/^\s*-\s*\[[x ]\]\s*/, '');
 }
 
-export function TicketDetail(): React.JSX.Element | null {
+export function TicketDetail({
+  layoutActions,
+}: {
+  /** Stage layout controls (expand / pop-beside) rendered in the overlay header. */
+  readonly layoutActions?: ReactNode;
+} = {}): React.JSX.Element | null {
   const detail = useAppStore((s) => s.ticketDetail, shallow);
   const setEditedBody = useAppStore((s) => s.actions.ticketDetail.setEditedBody);
   const setScheduleInput = useAppStore((s) => s.actions.ticketDetail.setScheduleInput);
@@ -65,6 +71,7 @@ export function TicketDetail(): React.JSX.Element | null {
       onClose={() => close()}
       status={detail.status}
       error={detail.error}
+      actions={layoutActions}
     >
       {fm !== null ? (
         <dl className="mds-ticket__fm">

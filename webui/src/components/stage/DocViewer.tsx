@@ -103,6 +103,21 @@ export function DocViewer(): React.JSX.Element | null {
     rows: viewport?.rows ?? null,
   });
 
+  const openDoc = useAppStore((s) => s.actions.docView.open);
+  const prevEditorStatus = useRef(editor.status);
+  useEffect(() => {
+    const prev = prevEditorStatus.current;
+    prevEditorStatus.current = editor.status;
+    // Leaving an active/starting editor session → re-fetch body (edits may have landed on disk).
+    if (
+      open !== null &&
+      (prev === 'active' || prev === 'starting') &&
+      editor.status === 'inactive'
+    ) {
+      void openDoc(open.kind, open.name);
+    }
+  }, [editor.status, open, openDoc]);
+
   const jump = useCallback(
     (line: number) => {
       const el = scrollRef.current;
