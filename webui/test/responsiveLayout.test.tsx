@@ -63,19 +63,20 @@ describe('responsive layout', () => {
     expect(container.querySelector('.cockpit')).not.toBeNull();
     expect(container.querySelector('.cockpit__cols')).not.toBeNull();
     expect(container.querySelectorAll('.rail')).toHaveLength(2);
-    // No mobile tab bar on desktop.
-    expect(container.querySelector('.tabbar')).toBeNull();
+    // No mobile bottom bar on desktop.
+    expect(container.querySelector('.mw-tabbar')).toBeNull();
   });
 
-  it('renders the single-pane + pill tab-bar mobile layout below the breakpoint', () => {
+  it('renders the single-pane + bottom-bar mobile layout below the breakpoint', () => {
     stubMatchMedia(true);
     const container = renderApp();
     expect(container.querySelector('.app')?.getAttribute('data-layout')).toBe('mobile');
     expect(container.querySelector('.app__body--mobile')).not.toBeNull();
-    // No desktop rails; a DS pill Tabs switcher instead (each tab a `.mds-tab` button).
+    // No desktop rails; the intent-based bottom bar instead: primary tabs + raised capture
+    // button + a "more" sheet opener.
     expect(container.querySelectorAll('.rail')).toHaveLength(0);
-    expect(container.querySelector('.tabbar')).not.toBeNull();
-    expect(container.querySelector('.mds-tabs--pill')).not.toBeNull();
-    expect(container.querySelectorAll('.mds-tab').length).toBeGreaterThan(1);
+    expect(container.querySelector('.mw-tabbar')).not.toBeNull();
+    expect(container.querySelectorAll('.mw-tab').length).toBe(4);
+    expect(container.querySelector('.mw-capture')).not.toBeNull();
   });
 });

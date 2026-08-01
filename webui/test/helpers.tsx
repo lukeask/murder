@@ -50,6 +50,7 @@ export function renderWithStore(
   store: AppStoreApi;
   bus: FakeApplicationClient;
   composer: ComposerStores;
+  container: HTMLElement;
   unmount: () => void;
 } {
   const bus = opts?.bus ?? new FakeApplicationClient();
@@ -64,7 +65,7 @@ export function renderWithStore(
       </ApplicationClientProvider>
     </AppStoreProvider>,
   );
-  return { store, bus, composer, unmount: view.unmount };
+  return { store, bus, composer, container: view.container, unmount: view.unmount };
 }
 
 /** Overwrite one slice's state for rendering (a ready list with rows). */

@@ -34,4 +34,11 @@ describe('ds/NavBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'b' }));
     expect(onSelect).toHaveBeenCalledWith('b');
   });
+
+  it('renders panels slot after brand', () => {
+    const { container } = render(
+      <NavBar brand="murder" panels={<span data-testid="panels">plans₁</span>} />,
+    );
+    expect(container.querySelector('.mds-nav__panels')?.textContent).toBe('plans₁');
+  });
 });

@@ -54,6 +54,64 @@
 .cockpit__conn--reconnecting .cockpit__conn-label { color: var(--color-warning); }
 .cockpit__conn--error .cockpit__conn-label { color: var(--color-error); }
 
+/* Panel toggle strip — TUI TopBar labels carved into the nav beam (ledger, not pills). */
+.panel-toggle {
+  display: inline-flex;
+  align-items: stretch;
+  height: 1.5rem;
+  border: var(--border-hair) solid var(--border-default);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs, 10px);
+  letter-spacing: var(--tracking-wide);
+  flex: none;
+  max-width: 100%;
+}
+.panel-toggle__label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-right: var(--border-hair) solid var(--border-subtle);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+.panel-toggle__label:last-child {
+  border-right: 0;
+}
+.panel-toggle__label:hover {
+  color: var(--color-fg);
+  background: color-mix(in srgb, var(--surface-panel) 70%, transparent);
+}
+.panel-toggle__label--active {
+  color: var(--color-fg);
+  font-weight: var(--weight-semibold);
+  background: color-mix(in srgb, var(--color-focus) 18%, transparent);
+}
+.panel-toggle__label--active:hover {
+  color: var(--color-fg);
+  background: color-mix(in srgb, var(--color-focus) 28%, transparent);
+}
+.panel-toggle__label--rail-break {
+  padding-left: calc(var(--space-2) + 0.55em);
+}
+.panel-toggle__sep {
+  position: absolute;
+  left: 0.15em;
+  color: var(--color-muted);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
 /* Workspace digit strip — carved into the nav beam / header, not floating pills. */
 .workspace-strip {
   display: inline-flex;
@@ -238,7 +296,13 @@
   background: var(--surface-raised);
   flex-shrink: 0;
 }
-/* Current-view label after the brand: lowercase, mono, quiet. */
+/* Brand lockup: crow mark + wordmark. */
+.mw-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* Secondary-pane label after the brand (only shown for "More" panes): lowercase, mono, quiet. */
 .mw-view {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -270,67 +334,107 @@
   -webkit-overflow-scrolling: touch;
 }
 
-/* Bottom tab ledger (not a floating pill strip). */
+/* Bottom bar: five thumb destinations — chat | crows | capture | notes | more. A ledger, not a
+   floating pill strip; the raised capture button is the one earned violation of the row. */
 .mw-tabbar {
   flex-shrink: 0;
-  position: relative;
-  padding: var(--space-2) calc(var(--space-2) + var(--safe-right))
-    calc(var(--space-2) + var(--safe-bottom)) calc(var(--space-2) + var(--safe-left));
+  display: flex;
+  align-items: stretch;
+  padding: 0 calc(var(--space-2) + var(--safe-right)) calc(var(--safe-bottom))
+    calc(var(--space-2) + var(--safe-left));
   border-top: var(--border-hair) solid var(--border-strong);
   background: var(--surface-raised);
 }
-/* Scroll affordance: tabs overflow horizontally; edge fades hint that more tabs are off-screen. */
-.mw-tabbar::before,
-.mw-tabbar::after {
-  content: "";
-  position: absolute;
-  top: var(--space-2);
-  bottom: calc(var(--space-2) + var(--safe-bottom));
-  width: 28px;
-  pointer-events: none;
-  z-index: 1;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
+.mw-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: var(--tabbar-height);
+  min-width: var(--tap-min);
+  padding: var(--space-2) 0;
+  background: transparent;
+  border: 0;
+  border-top: var(--border-thick) solid transparent;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-wide);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.mw-tabbar--scroll-left::before,
-.mw-tabbar--scroll-right::after {
-  opacity: 1;
+.mw-tab[data-on="true"] {
+  color: var(--color-text);
+  border-top-color: var(--color-brand);
 }
-.mw-tabbar::before {
-  left: calc(var(--space-2) + var(--safe-left));
-  background: linear-gradient(to right, var(--surface-raised) 35%, transparent);
+.mw-tab:active {
+  color: var(--color-text);
 }
-.mw-tabbar::after {
-  right: calc(var(--space-2) + var(--safe-right));
-  background: linear-gradient(to left, var(--surface-raised) 35%, transparent);
-}
-/* Stacked icon+label tabs: fixed width (not flex-grow) so 10 tabs scroll instead of squashing. */
-.mw-tabbar .mds-tabs--full {
-  overflow-x: auto;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-  scroll-snap-type: x proximity;
-  scroll-padding-inline: var(--space-2);
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    #000 24px,
-    #000 calc(100% - 24px),
-    transparent
-  );
-}
-.mw-tabbar .mds-tabs--full::-webkit-scrollbar { display: none; }
-.mw-tabbar .mds-tabs--full .mds-tab {
+
+/* Center capture button: coral disc raised above the ledger line. */
+.mw-capture {
   flex: 0 0 auto;
-  scroll-snap-align: start;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-brand);
+  color: var(--text-on-accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.mw-tabbar .mds-tab--stack {
-  min-width: 44px;
-  padding-inline: 6px;
+.mw-capture:active {
+  background: var(--brand-press, var(--color-brand));
 }
-.mw-tabbar .mds-tab__icon svg {
-  width: 16px;
-  height: 16px;
+
+/* Sheet action rows (capture sheet / more sheet): full-width, thumb-sized, icon + label. */
+.mw-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.mw-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mw-action:active {
+  background: var(--surface-hover);
+}
+.mw-action[data-on="true"] {
+  background: var(--surface-active);
+}
+.mw-action__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.mw-action__label {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.mw-action__hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
 
 /* ── The masthead wordmark treatment. ───────────────────── */

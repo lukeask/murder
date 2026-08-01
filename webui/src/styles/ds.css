@@ -151,6 +151,12 @@
   border-bottom: 1px solid var(--border-subtle);
   background: transparent;
 }
+.mds-panel__head--focusable {
+  cursor: pointer;
+}
+.mds-panel__head--focusable:hover .mds-panel__title {
+  color: var(--accent);
+}
 .mds-panel--active .mds-panel__head {
   border-bottom-color: var(--border-default);
 }
@@ -183,6 +189,19 @@
 }
 .mds-panel__body {
   padding: 14px;
+}
+
+/* Subtle “more above/below” fades on scrollports — inset shadow, not chrome chrome. */
+.mds-scroll-edges--more-above {
+  box-shadow: inset 0 14px 12px -12px color-mix(in srgb, var(--text-primary) 22%, transparent);
+}
+.mds-scroll-edges--more-below {
+  box-shadow: inset 0 -14px 12px -12px color-mix(in srgb, var(--text-primary) 22%, transparent);
+}
+.mds-scroll-edges--more-above.mds-scroll-edges--more-below {
+  box-shadow:
+    inset 0 14px 12px -12px color-mix(in srgb, var(--text-primary) 22%, transparent),
+    inset 0 -14px 12px -12px color-mix(in srgb, var(--text-primary) 22%, transparent);
 }
 
 /* ── Tabs ────────────────────────────────────────────────────────────────────────────────────── */

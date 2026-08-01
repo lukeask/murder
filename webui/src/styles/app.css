@@ -381,40 +381,8 @@
   overflow: hidden;
 }
 
-/* ── Mobile bottom tab bar ─────────────────────────────────────────────────────────────────── */
-.tabbar {
-  display: flex;
-  flex-shrink: 0;
-  /* 10 tabs don't fit on a phone, so the bar scrolls horizontally with momentum and the scrollbar
-   * hidden (it stays swipeable). The home-indicator inset is added below the row so the bar's tap
-   * targets clear it; left/right insets keep the first/last tab off rounded corners. */
-  height: calc(var(--tabbar-height) + var(--safe-bottom));
-  padding-bottom: var(--safe-bottom);
-  padding-left: var(--safe-left);
-  padding-right: var(--safe-right);
-  border-top: 1px solid var(--color-border-blurred);
-  background: var(--color-panel-selected-bg);
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none; /* Firefox */
-}
-.tabbar::-webkit-scrollbar { display: none; } /* WebKit/Blink */
-.tabbar__tab {
-  flex: 1 0 auto;
-  /* Each tab keeps a comfortable thumb width even when the bar overflows and scrolls. */
-  min-width: max(var(--tap-min), 64px);
-  background: none;
-  border: none;
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  cursor: pointer;
-  padding: var(--space-1);
-  -webkit-tap-highlight-color: transparent;
-}
-.tabbar__tab:active { background: var(--color-panel-header-bg); }
-.tabbar__tab[data-on="true"] { color: var(--color-focus); border-top: 2px solid var(--color-focus); }
+/* ── Mobile bottom bar ───────────────────────────────────────────────────────────────────────
+   Owned by cockpit.css (`.mw-tabbar`): five thumb destinations + raised capture button. */
 
 /* On mobile a panel/stage should fill the available column. */
 .app__body--mobile .panel,
@@ -445,6 +413,14 @@
 .creation-form__confirm {
   font-size: 12px;
   color: var(--color-muted);
+}
+.spawn-wizard__progress {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  text-transform: lowercase;
 }
 .creation-form__textarea {
   width: 100%;
@@ -479,4 +455,23 @@
     -webkit-tap-highlight-color: transparent;
   }
   .list__row:active { background: var(--color-panel-selected-bg); }
+
+  /* Thumb-sized DS controls on touch layouts. */
+  .mds-btn,
+  .mds-iconbtn,
+  .mds-tab {
+    min-height: var(--tap-min);
+  }
+  .mds-iconbtn {
+    min-width: var(--tap-min);
+  }
+
+  /* >=16px input text so iOS Safari doesn't auto-zoom on focus. */
+  .mds-input__el,
+  .mds-select__el,
+  input,
+  textarea,
+  select {
+    font-size: var(--font-input-mobile);
+  }
 }

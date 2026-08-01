@@ -20,7 +20,9 @@ export type IconName =
   | 'crosshair'
   | 'star'
   | 'send'
-  | 'back';
+  | 'back'
+  | 'menu'
+  | 'edit';
 
 /** 24px-grid path geometry per icon. Stroke styling lives on the parent <svg> in {@link Icon}. */
 const ICON_PATHS: Record<IconName, React.JSX.Element> = {
@@ -104,6 +106,19 @@ const ICON_PATHS: Record<IconName, React.JSX.Element> = {
     <>
       <path d="m12 19-7-7 7-7" />
       <path d="M19 12H5" />
+    </>
+  ),
+  menu: (
+    <>
+      <path d="M4 6h16" />
+      <path d="M4 12h16" />
+      <path d="M4 18h16" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="m15 5 4 4" />
     </>
   ),
 };

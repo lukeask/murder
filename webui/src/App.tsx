@@ -4,7 +4,7 @@ import { useAppStore, useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.j
 import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@murder/ui-core/theme/palettes.js';
 import { setTheme } from '@murder/ui-core/theme/themeStore.js';
 import { resolveBarWidgetConfig } from '@murder/ui-core/selectors/barWidgetRegistry.js';
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { ComposerStoresProvider } from './composer/ComposerStoresProvider.js';
 import { CreationDialogsProvider, type CreationDialogsApi } from './creationDialogs.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
@@ -40,33 +40,72 @@ import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflows
 import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { toWire } from '@murder/ui-core/workflowEditor/wire.js';
 import type { EditorWorkflow } from '@murder/ui-core/workflowEditor/model.js';
-import { NavBar, KeybindBar, StatusDot, type StatusDotStatus, Tabs, type TabItem, Icon, type IconName, cx } from './components/ds/index.js';
+import { NavBar, KeybindBar, StatusDot, type StatusDotStatus, Icon, type IconName, cx } from './components/ds/index.js';
+import { PanelToggleStrip } from './components/PanelToggleStrip.js';
+import { CrowMark } from './components/CrowMark.js';
+import { CaptureSheet } from './components/mobile/CaptureSheet.js';
+import { MoreSheet } from './components/mobile/MoreSheet.js';
+import { useComposerStores } from './composer/ComposerStoresProvider.js';
 import { WorkspaceStrip } from './components/WorkspaceStrip.js';
 import { UsageBarSegment } from './components/UsageBarSegment.js';
 import { desktopKeybindHints } from './commandModifierPrefix.js';
+import { useFocusedPanelId } from './panelFocus.js';
+import { SETTINGS_PANEL_HINTS, useKeybindModeHints } from './keybindModeHints.js';
 import { useWorkspaceCountSync, useWorkspaceSwitchFlash } from './composer/useWorkspaceBridge.js';
 import { useDesktopKeybinds } from './useDesktopKeybinds.js';
 import { usePanelIsVisible } from './panelVisibility.js';
+import { resolveProjectName } from './projectName.js';
 import type { PanelId } from '@murder/ui-core/input/panels.js';
 import { enabledBarWidgetIds } from '@murder/ui-core/selectors/barWidgetRegistry.js';
 
-const MOBILE_TAB_DEFS: readonly {
-  readonly id: string;
-  readonly icon: IconName;
-  readonly Pane: ComponentType;
-}[] = [
-  { id: 'chat', icon: 'message-square', Pane: Stage },
-  { id: 'crows', icon: 'crosshair', Pane: RosterPanel },
-  { id: 'workflows', icon: 'ticket', Pane: WorkflowsPanel },
-  { id: 'plans', icon: 'file-text', Pane: PlansPanel },
-  { id: 'notes', icon: 'file-text', Pane: NotesPanel },
-  { id: 'reports', icon: 'file-text', Pane: ReportsPanel },
-  { id: 'history', icon: 'git-branch', Pane: HistoryPanel },
-  { id: 'usage', icon: 'gauge', Pane: UsagePanel },
-  { id: 'tree', icon: 'git-commit', Pane: TreePanel },
-  { id: 'settings', icon: 'settings', Pane: SettingsPanel },
+/** Every pane mountable in the mobile single-pane body. */
+const MOBILE_PANES = {
+  chat: Stage,
+  crows: RosterPanel,
+  notes: NotesPanel,
+  workflows: WorkflowsPanel,
+  plans: PlansPanel,
+  reports: ReportsPanel,
+  history: HistoryPanel,
+  usage: UsagePanel,
+  tree: TreePanel,
+  settings: SettingsPanel,
+} satisfies Record<string, ComponentType>;
+type MobilePaneId = keyof typeof MOBILE_PANES;
+
+/** Primary thumb destinations flanking the center capture button. */
+const MOBILE_PRIMARY_TABS: readonly { readonly id: MobilePaneId; readonly icon: IconName }[] = [
+  { id: 'chat', icon: 'message-square' },
+  { id: 'crows', icon: 'crosshair' },
+  { id: 'notes', icon: 'file-text' },
 ];
-type MobileTab = (typeof MOBILE_TAB_DEFS)[number]['id'];
+
+/** Secondary panes behind the "More" sheet. */
+const MOBILE_MORE_ITEMS: readonly { readonly id: MobilePaneId; readonly icon: IconName }[] = [
+  { id: 'workflows', icon: 'ticket' },
+  { id: 'plans', icon: 'file-text' },
+  { id: 'reports', icon: 'file-text' },
+  { id: 'history', icon: 'git-branch' },
+  { id: 'usage', icon: 'gauge' },
+  { id: 'tree', icon: 'git-commit' },
+  { id: 'settings', icon: 'settings' },
+];
+
+/** Composer seed for the capture sheet's "Feature spec" action. */
+const SPEC_TEMPLATE = `Feature spec —
+
+Problem
+…
+
+Proposal
+…
+
+Done when
+…
+`;
+
+/** Theme applied on phones when the user hasn't picked one (still on the shipped default). */
+const MOBILE_DEFAULT_THEME_ID: ThemeId = 'crow-light';
 
 const REFRESH_ON_CONNECT = [
   'roster',
@@ -154,7 +193,12 @@ export function App({ bus }: { readonly bus: ApplicationConnectionClient }): Rea
 
   useEffect(() => {
     const syncTheme = (theme: string): void => {
-      const id: ThemeId = hasTheme(theme) ? theme : DEFAULT_THEME_ID;
+      let id: ThemeId = hasTheme(theme) ? theme : DEFAULT_THEME_ID;
+      // Mobile defaults to the ink-and-paper crow theme while the user is still on the shipped
+      // default; an explicit theme choice always wins.
+      if (isMobile && id === DEFAULT_THEME_ID && hasTheme(MOBILE_DEFAULT_THEME_ID)) {
+        id = MOBILE_DEFAULT_THEME_ID;
+      }
       setTheme(id);
     };
     syncTheme(storeApi.getState().settings.theme);
@@ -166,7 +210,7 @@ export function App({ bus }: { readonly bus: ApplicationConnectionClient }): Rea
         syncTheme(state.settings.theme);
       }
     });
-  }, [storeApi]);
+  }, [storeApi, isMobile]);
 
   return (
     <CreationDialogsProvider value={creationApi}>
@@ -205,7 +249,11 @@ function AppShell({
 
   return (
     <div className="app" data-layout={isMobile ? 'mobile' : 'desktop'}>
-      {isMobile ? <MobileLayout status={status} /> : <DesktopLayout status={status} />}
+      {isMobile ? (
+        <MobileLayout status={status} creationApi={creationApi} />
+      ) : (
+        <DesktopLayout status={status} />
+      )}
       <ToastHost />
       <MurderConfirmDialog />
       {dialog?.kind === 'spawn' && <SpawnRogueDialog onClose={closeDialog} />}
@@ -276,9 +324,28 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
   const modifier = useAppStore((s) => s.settings.modifier);
   const keyOverrides = useAppStore((s) => s.settings.keyOverrides);
   const barWidgets = useAppStore((s) => s.settings.barWidgets);
+  const focusedPanelId = useFocusedPanelId();
+  const modeHintsFromDialog = useKeybindModeHints();
+  const docOpen = useAppStore((s) => s.docView.open !== null);
+  const modeHints =
+    modeHintsFromDialog ?? (focusedPanelId === 'settings' ? SETTINGS_PANEL_HINTS : null);
+  const stageSurface =
+    focusedPanelId === null && modeHints == null
+      ? docOpen
+        ? ('doc' as const)
+        : ('transcript' as const)
+      : null;
   const hints = useMemo(
-    () => desktopKeybindHints(modifier, keyOverrides),
-    [modifier, keyOverrides],
+    () =>
+      desktopKeybindHints(
+        modifier,
+        keyOverrides,
+        focusedPanelId,
+        undefined,
+        modeHints,
+        stageSurface,
+      ),
+    [modifier, keyOverrides, focusedPanelId, modeHints, stageSurface],
   );
   const hintsEnabled = resolveBarWidgetConfig('hints', barWidgets).enabled;
   const workspaceCfg = resolveBarWidgetConfig('workspace', barWidgets);
@@ -296,10 +363,17 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
       </>
     ) : undefined;
   const stageFlash = useWorkspaceSwitchFlash();
+  const storeProject = useAppStore((s) => s.settings.project);
+  const project = useMemo(
+    () => resolveProjectName({ fromStore: storeProject }),
+    [storeProject],
+  );
   return (
     <div className="cockpit">
       <NavBar
         brand="murder"
+        project={project}
+        panels={<PanelToggleStrip />}
         trailing={
           <>
             <UsageBarSegment placement="top" />
@@ -326,7 +400,10 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
             <HistoryPanel />
           </VisiblePanel>
         </aside>
-        <section className={cx('cockpit__stage', stageFlash && 'cockpit__stage--workspace-flash')}>
+        <section
+          className={cx('cockpit__stage', stageFlash && 'cockpit__stage--workspace-flash')}
+          data-focus-id="stage"
+        >
           <Stage />
         </section>
         <aside className="rail cockpit__rail cockpit__rail--right">
@@ -349,54 +426,54 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
   );
 }
 
-/** Mobile: header / single pane / bottom pill tab bar. */
-function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
-  const [tab, setTab] = useState<MobileTab>('chat');
-  const [tabScroll, setTabScroll] = useState({ left: false, right: true });
-  const tabsRef = useRef<HTMLDivElement>(null);
-  const tabItems: TabItem[] = MOBILE_TAB_DEFS.map((t) => ({
-    id: t.id,
-    label: t.id,
-    icon: <Icon name={t.icon} size={18} />,
-  }));
-  const Pane = MOBILE_TAB_DEFS.find((t) => t.id === tab)?.Pane ?? Stage;
+/**
+ * Mobile: header / single pane / bottom bar. The bar is intent-based — chat, crows, a raised
+ * center capture button, notes, and a "More" sheet for the secondary panes — rather than a
+ * transplanted TUI panel list.
+ */
+function MobileLayout({
+  status,
+  creationApi,
+}: {
+  readonly status: ConnectionStatus;
+  readonly creationApi: CreationDialogsApi;
+}): React.JSX.Element {
+  const [pane, setPane] = useState<MobilePaneId>('chat');
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const { chatInput } = useComposerStores();
+  const Pane = MOBILE_PANES[pane];
 
-  const syncTabScroll = (): void => {
-    const el = tabsRef.current?.querySelector('.mds-tabs--full');
-    if (!(el instanceof HTMLElement)) {
-      return;
-    }
-    const max = el.scrollWidth - el.clientWidth;
-    setTabScroll({
-      left: el.scrollLeft > 4,
-      right: max > 4 && el.scrollLeft < max - 4,
-    });
+  const isPrimary = MOBILE_PRIMARY_TABS.some((t) => t.id === pane);
+  const goToChat = (): void => setPane('chat');
+  const seedSpec = (): void => {
+    chatInput.getState().clear();
+    chatInput.getState().insert(SPEC_TEMPLATE);
+    setPane('chat');
   };
 
-  useEffect(() => {
-    syncTabScroll();
-    const el = tabsRef.current?.querySelector('.mds-tabs--full');
-    if (!(el instanceof HTMLElement)) {
-      return;
-    }
-    const onScroll = (): void => syncTabScroll();
-    el.addEventListener('scroll', onScroll, { passive: true });
-    let ro: ResizeObserver | undefined;
-    if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(onScroll);
-      ro.observe(el);
-    }
-    return () => {
-      el.removeEventListener('scroll', onScroll);
-      ro?.disconnect();
-    };
-  }, []);
+  const renderTab = (id: MobilePaneId, icon: IconName): React.JSX.Element => (
+    <button
+      key={id}
+      type="button"
+      className="mw-tab"
+      data-on={pane === id ? 'true' : undefined}
+      aria-current={pane === id ? 'page' : undefined}
+      onClick={() => setPane(id)}
+    >
+      <Icon name={icon} size={20} />
+      <span className="mw-tab__label">{id}</span>
+    </button>
+  );
 
   return (
     <div className="mw-app">
       <header className="mw-header">
-        <span className="mw-brand">murder</span>
-        <span className="mw-view">{tab}</span>
+        <span className="mw-brand">
+          <CrowMark size={20} />
+          murder
+        </span>
+        {!isPrimary ? <span className="mw-view">{pane}</span> : null}
         <span className="mw-spacer" />
         <WorkspaceStrip />
         <ConnectionIndicator status={status} />
@@ -404,23 +481,45 @@ function MobileLayout({ status }: { readonly status: ConnectionStatus }): React.
       <main className="app__body app__body--mobile mw-main">
         <Pane />
       </main>
-      <nav
-        ref={tabsRef}
-        className={cx(
-          'tabbar mw-tabbar',
-          tabScroll.left && 'mw-tabbar--scroll-left',
-          tabScroll.right && 'mw-tabbar--scroll-right',
-        )}
-        aria-label="Sections"
-      >
-        <Tabs
-          variant="pill"
-          full
-          tabs={tabItems}
-          value={tab}
-          onChange={(id) => setTab(id as MobileTab)}
-        />
+      <nav className="mw-tabbar" aria-label="Sections">
+        {renderTab('chat', 'message-square')}
+        {renderTab('crows', 'crosshair')}
+        <button
+          type="button"
+          className="mw-capture"
+          aria-label="Capture"
+          onClick={() => setCaptureOpen(true)}
+        >
+          <Icon name="plus" size={24} />
+        </button>
+        {renderTab('notes', 'file-text')}
+        <button
+          type="button"
+          className="mw-tab"
+          data-on={!isPrimary || moreOpen ? 'true' : undefined}
+          aria-current={!isPrimary ? 'page' : undefined}
+          onClick={() => setMoreOpen(true)}
+        >
+          <Icon name="menu" size={20} />
+          <span className="mw-tab__label">more</span>
+        </button>
       </nav>
+      {captureOpen ? (
+        <CaptureSheet
+          onClose={() => setCaptureOpen(false)}
+          onNote={creationApi.openNoteCapture}
+          onPrompt={goToChat}
+          onSpec={seedSpec}
+        />
+      ) : null}
+      {moreOpen ? (
+        <MoreSheet
+          items={MOBILE_MORE_ITEMS.map((t) => ({ id: t.id, label: t.id, icon: t.icon }))}
+          activeId={isPrimary ? null : pane}
+          onSelect={(id) => setPane(id as MobilePaneId)}
+          onClose={() => setMoreOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

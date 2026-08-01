@@ -1,9 +1,10 @@
 /**
  * Panel — DS cockpit container (`.mds-panel`): titled, bordered, optional count + active + flush.
- * Visuals in ds.css.
+ * Visuals in ds.css. Body scrollports get subtle more-above/below edge fades.
  */
 
-import type { HTMLAttributes, MouseEvent, ReactNode } from 'react';
+import { useRef, type HTMLAttributes, type MouseEvent, type ReactNode } from 'react';
+import { scrollEdgesClassName, useScrollEdges } from '../../useScrollEdges.js';
 import { cx } from './cx.js';
 
 export interface PanelProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
@@ -34,6 +35,9 @@ export function Panel({
   children,
   ...rest
 }: PanelProps): React.JSX.Element {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(bodyRef);
+
   return (
     <section
       className={cx(
@@ -66,7 +70,9 @@ export function Panel({
           ) : null}
         </header>
       ) : null}
-      <div className="mds-panel__body">{children}</div>
+      <div ref={bodyRef} className={cx('mds-panel__body', scrollEdgesClassName(edges))}>
+        {children}
+      </div>
     </section>
   );
 }

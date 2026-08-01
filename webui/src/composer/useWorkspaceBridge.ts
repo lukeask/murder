@@ -4,10 +4,10 @@
  */
 
 import { useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
-import { applyWorkspaceCount } from '@murder/ui-core/input/workspaceSwitch.js';
 import { useEffect, useRef, useState } from 'react';
 import { useComposerStores, useWorkspaceStore } from './ComposerStoresProvider.js';
 import { toWorkspaceStores } from './createComposerStores.js';
+import { applyWorkspaceCount } from './workspaceActions.js';
 
 const STAGE_FLASH_MS = 180;
 
