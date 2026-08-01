@@ -1,0 +1,575 @@
+/**
+ * The central binding registry — the one place that knows *which key* fires *which action* and how
+ * the user's command-modifier choice (alt / ctrl / both) maps onto raw Ink `(input, key)` events.
+ *
+ * ## Why this exists
+ *
+ * The Ink rewrite scattered command-chord literals across the dispatcher, the panels, and the hint
+ * bar (`{ input: 's', key: { meta: true } }` repeated everywhere). Every new feature lands a keybind,
+ * and the settings menu (later phase) lets the user pick the modifier and rebind a few keys — so a
+ * literal-per-call-site model does not scale. This module is a **deep module** in the Ousterhout
+ * sense: callers name an {@link ActionId} and ask "what chord(s) is this?" / "does this event match
+ * it?" / "what label do I show?"; they never inspect the modifier or know whether it is alt or ctrl.
+ * All modifier logic — including the alt↔ctrl degradation when ctrl is unavailable, and the
+ * `both` two-chord expansion — is hidden behind {@link resolveBindings}.
+ *
+ * ## Pure, no React
+ *
+ * This is plain data + pure functions. The React/store wiring lives in
+ * {@link ./bindingsStore.js bindingsStore} (a vanilla Zustand store) and `useBindings()`. A test can
+ * resolve bindings and assert matching with no rendering.
+ *
+ * ## Today's behavior is the default
+ *
+ * `resolveBindings('alt', false, {})` reproduces the current TUI exactly: command actions are
+ * `alt+<key>`, the command modifier is `meta` (Ink reports Alt as `key.meta`). Phase 1 changes no
+ * behavior — it just routes the existing literals through here.
+ */
+
+import type { Key, KeyChord } from './keymap.js';
+
+/** The command modifier the user has chosen. `both` accepts either alt or ctrl for command actions
+ * (e.g. while the user is migrating muscle memory). `ctrl` requires the kitty protocol (a later
+ * phase); when unavailable it degrades to `alt` — see {@link resolveBindings}. */
+export type Modifier = 'alt' | 'ctrl' | 'both';
+
+/**
+ * The closed set of named actions. Grows one entry per feature. Two namespaces:
+ *  - `global.*` — app-wide chords the root dispatcher owns (the global-chord layer), live regardless
+ *    of focus.
+ *  - `panel.*` — chords a focused panel binds in its own keymap (e.g. favorite/star the cursor row).
+ *
+ * Note: panel-digit toggles (`alt+1`–`0`) and vim directional nav (`alt+h/j/k/l`) are command-
+ * modified but are NOT individual actions — they are total tables in {@link ./panels.js} / the
+ * dispatcher's `VIM_NAV`, gated by {@link ResolvedBindings.isCommandModified}. Only single-purpose
+ * named chords live here.
+ */
+export type ActionId =
+  | 'global.focusChat' // alt+space — focus the chat input
+  | 'global.spawn' // alt+s — open the spawn wizard (chat-focus scoped, see dispatcher)
+  | 'global.cycleChatView' // alt+t / ctrl+t — cycle the focused pane's transcript view (verbose→condensed→tmux)
+  | 'global.newPlan' // alt+p — open the new-plan popup
+  | 'global.workflowEditor' // alt+g — open the workflow template editor
+  | 'global.settings' // alt+o / ctrl+o — open the settings modal
+  | 'global.quickNote' // ctrl+n — open the quick-note capture (plain, not command-modified)
+  | 'global.keyHelp' // ? — open the keybinding help overlay (see the ACTIONS note on reachability)
+  | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the recipient target to the previous one (chat-focus only)
+  | 'global.toggleTargetGroup' // ctrl+j — toggle recipient target between locked-visible and favorite-only groups
+  | 'global.cycleTargetNext' // alt+l / ctrl+l — cycle the recipient target to the next one (chat-focus only)
+  | 'global.toggleTargetPane' // alt+w / ctrl+w — toggle show/hide for the active transcript or doc pane (chat or stage focus)
+  | 'global.murder' // ctrl+m — arm the murder confirm for the targeted crow (plain, kitty side-channel)
+  | 'global.repaint' // ctrl+r — force a full terminal redraw (plain; ctrl+l is cycleTargetNext)
+  | 'panel.star' // alt+f — favorite/star the focused panel's cursor row
+  | 'panel.resetCrow' // x — arm the two-press reset for the crows panel's cursor row
+  | 'panel.usageSteering' // s — cycle the usage panel's cursor gauge steering (auto→prefer→pause)
+  | 'panel.historyResume' // r — resume the history panel's cursor row's CC session (when resumable)
+  | 'workspace.next' // <Cmd>+Shift+J — cycle to the next workspace (wrapping)
+  | 'workspace.prev' // <Cmd>+Shift+K — cycle to the previous workspace (wrapping)
+  | 'workspace.jump.1' // <Cmd>+Shift+1 — jump to workspace 1 (index 0)
+  | 'workspace.jump.2' // <Cmd>+Shift+2 — jump to workspace 2 (index 1)
+  | 'workspace.jump.3' // <Cmd>+Shift+3 — jump to workspace 3 (index 2)
+  | 'workspace.jump.4' // <Cmd>+Shift+4 — jump to workspace 4 (index 3)
+  | 'workspace.jump.5' // <Cmd>+Shift+5 — jump to workspace 5 (index 4)
+  | 'workspace.jump.6' // <Cmd>+Shift+6 — jump to workspace 6 (index 5)
+  | 'workspace.jump.7' // <Cmd>+Shift+7 — jump to workspace 7 (index 6)
+  | 'workspace.jump.8' // <Cmd>+Shift+8 — jump to workspace 8 (index 7)
+  | 'workspace.jump.9'; // <Cmd>+Shift+9 — jump to workspace 9 (index 8)
+
+/**
+ * How an action's default binding is expressed:
+ *  - `command` — a command-modified chord. The bare `key` char is combined with the user's chosen
+ *    modifier at resolution time (alt+key / ctrl+key, or both). Rebindable to another char.
+ *    `shift: true` layers Shift on top (`<Cmd>+Shift+key`, the workspace chords); see
+ *    {@link commandChord} for how each modifier flavor carries it.
+ *  - `plain` — a literal chord, unaffected by the modifier setting (e.g. a bare special key). Used
+ *    for actions whose binding is intrinsically not a command chord.
+ */
+export type BindingSpec =
+  | { readonly kind: 'command'; readonly key: string; readonly shift?: true }
+  | {
+      readonly kind: 'plain';
+      readonly chord: KeyChord;
+      /** Optional hint-bar label override, for a chord whose mechanical shape doesn't read as the
+       * key the user presses (ctrl+m arrives as `ctrl+return` via the side-channel — labelling it
+       * `C-return` would hide the actual binding). Omitted → derived from the chord. */
+      readonly label?: string;
+    };
+
+/** One action's definition: its id, default binding, a human description (for hint/settings UIs),
+ * and whether the settings menu may rebind it. Modifier-only chords (digits) are never rebindable. */
+export interface ActionDef {
+  readonly id: ActionId;
+  readonly default: BindingSpec;
+  readonly description: string;
+  readonly rebindable: boolean;
+}
+
+/** Sugar for a command-modified default. */
+function command(key: string): BindingSpec {
+  return { kind: 'command', key };
+}
+
+/** Sugar for a plain (modifier-independent) default. */
+function plain(chord: KeyChord): BindingSpec {
+  return { kind: 'plain', chord };
+}
+
+/**
+ * The action table — the single source of truth for named chords. Mirrors today's behavior exactly:
+ * the `key` chars are the current alt+<key> literals (alt+space, alt+s, alt+t, alt+p, alt+f),
+ * plus `global.settings` (alt+o / ctrl+o default). Adding a feature is one entry here.
+ */
+export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
+  'global.focusChat': {
+    id: 'global.focusChat',
+    default: command(' '),
+    description: 'chat',
+    rebindable: false,
+  },
+  'global.spawn': {
+    id: 'global.spawn',
+    default: command('s'),
+    description: 'spawn',
+    rebindable: true,
+  },
+  // TUIchat-3: the chat-view cycle key. Took over `t` from the (now chord-less) `global.newTicket`;
+  // the old tmux chord `y` is freed/parked for a future history-pane yank.
+  'global.cycleChatView': {
+    id: 'global.cycleChatView',
+    default: command('t'),
+    description: 'view',
+    rebindable: true,
+  },
+  'global.newPlan': {
+    id: 'global.newPlan',
+    default: command('p'),
+    description: 'new plan',
+    rebindable: true,
+  },
+  'global.workflowEditor': {
+    id: 'global.workflowEditor',
+    default: command('g'),
+    description: 'workflow template editor',
+    rebindable: true,
+  },
+  'global.settings': {
+    id: 'global.settings',
+    // Default: alt+o / ctrl+o. WHY NOT ',' (the original plan-locked default): Ink's legacy keypress
+    // parser (`parse-keypress.js`, `metaKeyCodeRe = /^\x1b([a-zA-Z0-9])$/`) only sets `key.meta` for
+    // an ESC-prefixed *alphanumeric* — an ESC-prefixed punctuation byte (alt+,) parses as a bare `,`
+    // with `meta:false`, so alt+, was UNREACHABLE on the legacy/alt path (live finding). An
+    // alphanumeric key avoids that: alt+o gets `key.meta` from the legacy parser, and ctrl+o's byte
+    // (0x0f) is a clean control byte the shim/parser deliver as `{ctrl, input:'o'}` — so the menu is
+    // reachable under both the alt and ctrl/kitty modifiers. 'o' (mnemonic: "open settings") is unused
+    // by any other action and is not a meaningful panel-local plain key.
+    default: command('o'),
+    description: 'settings',
+    rebindable: false,
+  },
+  'global.quickNote': {
+    id: 'global.quickNote',
+    // A `plain` (NOT command-modified) chord: ctrl+n arrives as the clean legacy byte 0x0e which Ink
+    // reports as `{ ctrl: true, input: 'n' }`. It is deliberately modifier-independent — the quick-note
+    // capture stays on ctrl+n regardless of the user's command-modifier choice (alt/ctrl/both), and the
+    // dispatcher matches it BEFORE the command-modifier gate so a `modifier=ctrl`/`both` setting can't
+    // shadow it. Not rebindable for now (a single fixed muscle-memory chord, like the legacy TUI).
+    default: { kind: 'plain', chord: { input: 'n', key: { ctrl: true } } },
+    description: 'note',
+    rebindable: false,
+  },
+  'global.keyHelp': {
+    id: 'global.keyHelp',
+    // Item 12 wanted `super+/` (command('/')). WHY PLAIN '?' INSTEAD (flagged for arbitration):
+    // alt+/ is UNREACHABLE on the legacy/alt path — Ink's `metaKeyCodeRe = /^\x1b([a-zA-Z0-9])$/`
+    // only sets `key.meta` for an ESC-prefixed *alphanumeric*, so alt+/ parses as a bare `/` with
+    // `meta:false` (the same live finding that moved `global.settings` off ','). command('/') would
+    // therefore only resolve under the ctrl/kitty modifier (ctrl+/ rides the side-channel), leaving
+    // help unreachable for the *default* alt modifier — the majority case. A `plain` binding sidesteps
+    // the modifier entirely: bare `?` is reachable in every terminal under every modifier setting. The
+    // dispatcher gates it to the global layer ONLY when chat is NOT focused, so a literal `?` typed
+    // into the chat field is never stolen. `?` is the conventional help key and matches the spec's own
+    // "slash and `?` share a key" framing. Not rebindable (its reach property is intrinsic to the key).
+    //
+    // REACHABILITY FROM CHAT (the permanent focus home): because `?` is suppressed while chat is
+    // focused, the discoverable chat-focus path to help is the `:help` command (commandDispatch.ts),
+    // which survives chat focus — `?` only fires once focus is on a panel. The hint bar advertises
+    // `:help` as the chat-focus affordance so the documented help key is never dead in the boot state.
+    default: plain({ input: '?' }),
+    description: 'help',
+    rebindable: false,
+  },
+  'global.cycleTargetPrev': {
+    id: 'global.cycleTargetPrev',
+    // Item 9 super-chords: alt+h / ctrl+h — cycle the recipient target to the previous one. Active ONLY
+    // while the chat input has focus (otherwise alt+h is geometric panel nav); the dispatcher gates
+    // this in the chat-focus branch of the global layer, NOT as an unconditional global.
+    default: command('h'),
+    description: 'prev target',
+    rebindable: true,
+  },
+  'global.cycleTargetNext': {
+    id: 'global.cycleTargetNext',
+    // alt+l / ctrl+l — cycle the recipient target to the next one. Chat-focus only (see cycleTargetPrev).
+    default: command('l'),
+    description: 'next target',
+    rebindable: true,
+  },
+  'global.toggleTargetGroup': {
+    id: 'global.toggleTargetGroup',
+    default: plain({ input: 'j', key: { ctrl: true } }),
+    description: 'target group',
+    rebindable: false,
+  },
+  'global.toggleTargetPane': {
+    id: 'global.toggleTargetPane',
+    // Item 9: toggle show/hide for the active transcript or doc pane. From chat: toggle the current
+    // recipient target's transcript pane. From a Stage pane: hide the focused transcript or doc pane.
+    // 'w' is unclaimed by any other action, reachable under both alt (alt+w) and ctrl (ctrl+w rides a
+    // clean control byte 0x17), and is not a panel-local plain key. Chat-or-stage focus only.
+    default: command('w'),
+    description: 'toggle pane',
+    rebindable: true,
+  },
+  'global.murder': {
+    id: 'global.murder',
+    // ctrl+m — arm the two-press murder confirm for the targeted crow (the confirm press — `m` or
+    // ctrl+m again — is routed by the dispatcher's pending check, not a second binding). A `plain`
+    // chord, NOT command-modified: ctrl+m is the deliberate muscle-memory chord, independent of the
+    // alt/ctrl modifier setting. Its mechanical shape is `ctrl+return` because the terminal conflates
+    // ctrl+m with CR — the kitty side-channel delivers it as `chord { input: 'return', ctrl: true }`
+    // (see translate.ts CTRL_LETTER_COLLISIONS), which `chordToKey` lifts to `{ ctrl, return }`. The
+    // `label` override keeps the hint honest ('C-m', what the user presses). Bypass mode (no kitty)
+    // cannot distinguish ctrl+m from Enter, so the binding is simply unreachable there — acceptable:
+    // murder is a destructive chord and silently degrading it onto Enter would be far worse.
+    //
+    // LOAD-BEARING LIMITATION (no kitty = no murder, anywhere): this chord is the SOLE resolution for
+    // `global.murder`. The crows-panel local binding rides the same `chordsFor('global.murder')`
+    // result, so it is the identical `{ctrl, return}` kitty-only chord — it does NOT provide an
+    // alt/plain fallback. On a non-kitty terminal there is therefore no key path to arm a murder from
+    // anywhere; the confirm-second-press (`m`) is only reachable once the toast is already armed. This
+    // is deliberate (no destructive chord should degrade onto Enter), but it is a surfaced dead key,
+    // not a silent one: the doc viewer / settings advertise that ctrl chords require the kitty
+    // protocol, and a future fallback (if wanted) must be an explicit non-colliding chord, not a
+    // re-point of this one.
+    default: { kind: 'plain', chord: { key: { ctrl: true, return: true } }, label: 'C-m' },
+    description: 'murder crow',
+    rebindable: false,
+  },
+  'global.repaint': {
+    id: 'global.repaint',
+    // ctrl+r — force a full terminal redraw after external screen disturbances (tmux messages,
+    // terminal-side clears) that leave Ink's incremental line cache stale. A `plain` chord matched
+    // before the command-modifier gate (like quickNote). NOT ctrl+l — that key is `global.cycleTargetNext`
+    // (chat-focus target cycling) and geometric panel nav elsewhere.
+    default: { kind: 'plain', chord: { input: 'r', key: { ctrl: true } } },
+    description: 'redraw screen',
+    rebindable: false,
+  },
+  'panel.star': {
+    id: 'panel.star',
+    default: command('f'),
+    description: 'favorite',
+    rebindable: true,
+  },
+  'panel.resetCrow': {
+    id: 'panel.resetCrow',
+    // Plain `x` — a panel-scoped chord, only consumed by the CrowsPanel keymap when that panel holds
+    // focus (so it never shadows chat typing; same property as the panel's plain `r`/`m` keys). Kept
+    // in the registry (not a raw panel literal) so the help overlay and any rebind tooling see it.
+    // Two-press: first `x` arms the reset confirm for the cursor row, second `x` (within the TTL)
+    // submits `crow.reset`. Not rebindable — plain chords take no command-modifier override.
+    default: { kind: 'plain', chord: { input: 'x' } },
+    description: 'reset crow',
+    rebindable: false,
+  },
+  'panel.usageSteering': {
+    id: 'panel.usageSteering',
+    // Plain `s` — a panel-scoped chord, only consumed by the UsagePanel keymap when that panel
+    // holds focus (so it never shadows chat typing; same property as the crows panel's plain `x`).
+    // Kept in the registry (not a raw panel literal) so the help overlay sees it. Cycles the
+    // cursor gauge's harness steering auto→prefer→pause→auto. Not rebindable — plain chords take
+    // no command-modifier override.
+    default: { kind: 'plain', chord: { input: 's' } },
+    description: 'cycle steering',
+    rebindable: false,
+  },
+  'panel.historyResume': {
+    id: 'panel.historyResume',
+    // Plain `r` — a panel-scoped chord, only consumed by the HistoryPanel keymap when that panel
+    // holds focus (so it never shadows chat typing; same property as the crows panel's plain `x`).
+    // On a resumable row it resumes the CC session; on a non-resumable row it falls through to the
+    // panel's refresh. Kept in the registry (not a raw panel literal) so the help overlay sees it.
+    // Not rebindable — plain chords take no command-modifier override.
+    default: { kind: 'plain', chord: { input: 'r' } },
+    description: 'resume session',
+    rebindable: false,
+  },
+  'workspace.next': {
+    id: 'workspace.next',
+    // <Cmd>+Shift+J — cycle to the next workspace (wrapping). A `command` kind carrying
+    // `shift: true`: resolution expands it per modifier flavor (see commandChord) —
+    // alt → { input: 'J', meta, shift } (the legacy ESC+uppercase form, which the kitty shim's
+    // alt path now also produces), ctrl → { input: 'j', ctrl, shift } (the kitty side channel
+    // preserves the shift bit with the unshifted char).
+    default: { kind: 'command', key: 'j', shift: true },
+    description: 'next workspace',
+    rebindable: true,
+  },
+  'workspace.prev': {
+    id: 'workspace.prev',
+    default: { kind: 'command', key: 'k', shift: true },
+    description: 'prev workspace',
+    rebindable: true,
+  },
+  'workspace.jump.1': {
+    id: 'workspace.jump.1',
+    default: { kind: 'command', key: '1', shift: true },
+    description: 'workspace 1',
+    rebindable: true,
+  },
+  'workspace.jump.2': {
+    id: 'workspace.jump.2',
+    default: { kind: 'command', key: '2', shift: true },
+    description: 'workspace 2',
+    rebindable: true,
+  },
+  'workspace.jump.3': {
+    id: 'workspace.jump.3',
+    default: { kind: 'command', key: '3', shift: true },
+    description: 'workspace 3',
+    rebindable: true,
+  },
+  'workspace.jump.4': {
+    id: 'workspace.jump.4',
+    default: { kind: 'command', key: '4', shift: true },
+    description: 'workspace 4',
+    rebindable: true,
+  },
+  'workspace.jump.5': {
+    id: 'workspace.jump.5',
+    default: { kind: 'command', key: '5', shift: true },
+    description: 'workspace 5',
+    rebindable: true,
+  },
+  'workspace.jump.6': {
+    id: 'workspace.jump.6',
+    default: { kind: 'command', key: '6', shift: true },
+    description: 'workspace 6',
+    rebindable: true,
+  },
+  'workspace.jump.7': {
+    id: 'workspace.jump.7',
+    default: { kind: 'command', key: '7', shift: true },
+    description: 'workspace 7',
+    rebindable: true,
+  },
+  'workspace.jump.8': {
+    id: 'workspace.jump.8',
+    default: { kind: 'command', key: '8', shift: true },
+    description: 'workspace 8',
+    rebindable: true,
+  },
+  'workspace.jump.9': {
+    id: 'workspace.jump.9',
+    default: { kind: 'command', key: '9', shift: true },
+    description: 'workspace 9',
+    rebindable: true,
+  },
+};
+
+/** Every action id, in declaration order — for iterating the settings menu / building hint tables. */
+export const ACTION_IDS = Object.keys(ACTIONS) as readonly ActionId[];
+
+/**
+ * The resolved binding table for one modifier choice + override set. This is the deep interface
+ * callers use: they pass an {@link ActionId} and an Ink event; they never see the modifier.
+ */
+export interface ResolvedBindings {
+  /** The chord(s) `id` is bound to: one chord under `alt`/`ctrl`, two under `both` (alt + ctrl). */
+  chordsFor(id: ActionId): readonly KeyChord[];
+  /** True iff the Ink `(input, key)` event matches any chord bound to `id`. */
+  matches(id: ActionId, input: string, key: Key): boolean;
+  /** A short label for hint bars — `A-s` (alt), `C-s` (ctrl), `A-s/C-s` (both), or a plain key name. */
+  label(id: ActionId): string;
+  /** True iff `key` carries the command modifier (gates digit toggles + vim nav). Under `both`,
+   * either alt or ctrl qualifies. */
+  isCommandModified(key: Key): boolean;
+}
+
+/** The concrete modifiers a `command` action expands to under each {@link Modifier} choice (after
+ * degradation). `alt` → `meta`; `ctrl` → `ctrl`; `both` → both. */
+type CommandFlag = 'meta' | 'ctrl';
+
+/** Which command flags a modifier choice maps to, after ctrl-availability degradation. */
+function commandFlags(modifier: Modifier, ctrlAvailable: boolean): readonly CommandFlag[] {
+  // ctrl is only honoured when the terminal can deliver it; otherwise it degrades to alt. `both`
+  // keeps alt and adds ctrl only when available.
+  switch (modifier) {
+    case 'alt':
+      return ['meta'];
+    case 'ctrl':
+      return ctrlAvailable ? ['ctrl'] : ['meta'];
+    case 'both':
+      return ctrlAvailable ? ['meta', 'ctrl'] : ['meta'];
+  }
+}
+
+/**
+ * Build the chord for one command flag + key char. `shift` (the `<Cmd>+Shift+key` chords) is
+ * carried DIFFERENTLY per flavor, because the two arrival paths encode it differently
+ * (verified against Ink's parse-keypress + our kitty shim):
+ *
+ *  - **meta (alt):** the only wire form is the legacy ESC-prefixed char, so Shift can only travel
+ *    as the shifted char itself — alt+shift+j arrives as ESC `J`, which Ink reports as
+ *    `{ input: 'J', meta: true, shift: true }`. The chord therefore matches the UPPERCASED input
+ *    (with `shift: true` listed for precision). The kitty shim's alt path uppercases to produce the
+ *    identical bytes (see translate.ts), so kitty and legacy terminals agree.
+ *    LIMITATION: this only works for keys with case — alt+shift+<digit> produces a layout-dependent
+ *    punctuation byte that Ink's meta parser drops entirely, so a shifted `command` DIGIT binding is
+ *    unreachable under the alt modifier (kitty/ctrl only).
+ *  - **ctrl (kitty):** the side channel preserves the shift bit alongside the unshifted char —
+ *    ctrl+shift+j arrives as `{ input: 'j', ctrl: true, shift: true }`. The chord keeps the
+ *    lowercase input and requires `shift: true`.
+ *
+ * DISPATCH-ORDER NOTE for shifted chords: `shift` is don't-care for chords that don't list it
+ * (keymap.ts's strictness covers only ctrl/meta), so e.g. ctrl+shift+j also satisfies a bare
+ * ctrl+j chord. A shifted binding's dispatcher branch must run BEFORE any unshifted binding on the
+ * same base key.
+ */
+function commandChord(flag: CommandFlag, key: string, shift = false): KeyChord {
+  if (!shift) {
+    return { input: key, key: { [flag]: true } };
+  }
+  return flag === 'meta'
+    ? { input: key.toUpperCase(), key: { meta: true, shift: true } }
+    : { input: key, key: { ctrl: true, shift: true } };
+}
+
+/** The hint-bar prefix for the alt/meta modifier. `A-` (alt) reads more plainly than the old `M-`
+ * (meta) and pairs with {@link CTRL_PREFIX} (`C-`) so the bar tells the user *which* modifier a chord
+ * needs — the prefix the focused pane's hints carry varies `A-`↔`C-` with the configured modifier. */
+const ALT_PREFIX = 'A-';
+/** The hint-bar prefix for the ctrl modifier (paired with {@link ALT_PREFIX}). */
+const CTRL_PREFIX = 'C-';
+
+/** The label prefix for a command flag (`A-` alt, `C-` ctrl). */
+function flagPrefix(flag: CommandFlag): string {
+  return flag === 'meta' ? ALT_PREFIX : CTRL_PREFIX;
+}
+
+/**
+ * The display label for a single chord: its printable char (or first non-modifier special-key flag),
+ * with the modifier prefix `A-` (meta/alt) or `C-` (ctrl) when the chord carries one, and a literal
+ * space spelled `space`. Shared by the resolved-binding labels (plain actions) AND the bottom bar's
+ * per-panel hints — so a command-modified panel chord (e.g. star = alt+f → `A-f`) reads with its
+ * modifier and varies `A-`↔`C-` with the user's setting, exactly like the global hints (ctrl+n →
+ * `C-n`). One place owns the prefix rule so the panel hints and the globals can never disagree.
+ */
+export function chordLabel(chord: KeyChord): string {
+  const flags = chord.key === undefined ? [] : Object.keys(chord.key);
+  const rawBase = chord.input ?? flags.find((flag) => flag !== 'ctrl' && flag !== 'meta') ?? '?';
+  const base = rawBase === ' ' ? 'space' : rawBase;
+  // A chord can carry BOTH modifiers (no current action does, but the `label` path and any future
+  // combined chord can) — surface each it sets, rather than silently dropping meta when ctrl is set.
+  const prefix =
+    (chord.key?.ctrl === true ? CTRL_PREFIX : '') + (chord.key?.meta === true ? ALT_PREFIX : '');
+  return `${prefix}${base}`;
+}
+
+/**
+ * Resolve the full binding table for the given modifier choice, ctrl availability, and per-action
+ * key overrides. Pure — call it whenever any of those change (the store does this) and hand the
+ * result around. The returned object's identity is stable for a given input, so it is safe as a
+ * `useMemo`/effect dependency (re-registering keymaps only when settings actually change).
+ *
+ * `overrides` maps an {@link ActionId} to a replacement key char for `command`-kind actions only
+ * (the settings menu's rebinds). A `plain` action ignores overrides (its chord is intrinsic).
+ *
+ * @param modifier the user's command-modifier choice
+ * @param ctrlAvailable whether the terminal can deliver ctrl chords (kitty protocol); when false,
+ *   `ctrl`/`both` degrade toward alt
+ * @param overrides per-action key-char replacements for `command` actions
+ */
+export function resolveBindings(
+  modifier: Modifier,
+  ctrlAvailable: boolean,
+  overrides: Partial<Record<ActionId, string>>,
+): ResolvedBindings {
+  const flags = commandFlags(modifier, ctrlAvailable);
+
+  // Resolve every action to its chord list once, so chordsFor/matches/label all read the same table.
+  const table = {} as Record<ActionId, readonly KeyChord[]>;
+  for (const id of ACTION_IDS) {
+    const def = ACTIONS[id];
+    if (def.default.kind === 'plain') {
+      table[id] = [def.default.chord];
+      continue;
+    }
+    const key = overrides[id] ?? def.default.key;
+    const shift = def.default.shift === true;
+    table[id] = flags.map((flag) => commandChord(flag, key, shift));
+  }
+
+  // Precompute labels alongside the chord table.
+  const labels = {} as Record<ActionId, string>;
+  for (const id of ACTION_IDS) {
+    const def = ACTIONS[id];
+    if (def.default.kind === 'plain') {
+      labels[id] = def.default.label ?? chordLabel(def.default.chord);
+      continue;
+    }
+    const key = overrides[id] ?? def.default.key;
+    // A space key reads as `space` in the label (a literal ' ' would be invisible). Shifted
+    // command chords (`<Cmd>+Shift+key`, the workspace binds) carry an explicit `S-` marker so
+    // `C-S-5` cannot be read as bare ctrl+5 — uppercase alone only worked for letters and lied
+    // on digits.
+    const keyLabel = key === ' ' ? 'space' : key;
+    const shiftMarker = def.default.shift === true ? 'S-' : '';
+    labels[id] = flags.map((flag) => `${flagPrefix(flag)}${shiftMarker}${keyLabel}`).join('/');
+  }
+
+  return {
+    chordsFor(id) {
+      return table[id];
+    },
+    matches(id, input, key) {
+      return table[id].some((chord) => chordMatchesEvent(chord, input, key));
+    },
+    label(id) {
+      return labels[id];
+    },
+    isCommandModified(key) {
+      return flags.some((flag) => key[flag] === true);
+    },
+  };
+}
+
+/** Local chord-vs-event predicate. Mirrors {@link ../input/keymap.js chordMatches} (including the
+ * strict ctrl/meta rule — an unlisted command modifier must be FALSE in the event) but kept private
+ * here so `bindings` has no import cycle risk and the matching rule is co-located with resolution. */
+function chordMatchesEvent(chord: KeyChord, input: string, key: Key): boolean {
+  if (chord.input !== undefined && chord.input !== input) {
+    return false;
+  }
+  // The command modifiers are never don't-care: an event carrying ctrl/meta the chord didn't ask for
+  // must NOT match (keeps a plain chord from absorbing its modified variants). Mirrors keymap.ts.
+  if (chord.key?.ctrl !== true && key.ctrl) {
+    return false;
+  }
+  if (chord.key?.meta !== true && key.meta) {
+    return false;
+  }
+  if (chord.key !== undefined) {
+    for (const flag of Object.keys(chord.key) as (keyof Key)[]) {
+      if (chord.key[flag] && !key[flag]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** The default resolution — alt modifier, ctrl unavailable, no overrides. This is *today's* behavior
+ * and the fallback the dispatcher uses when a context omits explicit bindings (zero-behavior-change
+ * guarantee for existing call sites and tests). */
+export const DEFAULT_BINDINGS: ResolvedBindings = resolveBindings('alt', false, {});

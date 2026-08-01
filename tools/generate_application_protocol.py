@@ -38,7 +38,7 @@ from murder.app.protocol.subscriptions import (  # noqa: E402
 )
 from murder.app.protocol.wire import ApplicationWireMessage  # noqa: E402
 
-OUTPUT = ROOT / "inktui" / "src" / "generated" / "applicationProtocol.ts"
+OUTPUT = ROOT / "ui-core" / "src" / "generated" / "applicationProtocol.ts"
 
 
 def _union(enum: type[Enum]) -> str:

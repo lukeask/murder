@@ -1,0 +1,26 @@
+{
+  "name": "murder-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "workspaces": [
+    "ui-core",
+    "inktui",
+    "webui"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "bundle": "npm run bundle -w inktui",
+    "protocol:generate": "python tools/generate_application_protocol.py",
+    "protocol:check": "python tools/generate_application_protocol.py --check"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  }
+}

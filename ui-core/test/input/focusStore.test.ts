@@ -1,0 +1,450 @@
+/**
+ * focusStore tests — the re-home invariant (as a *derived* result), the derived candidate set, and
+ * geometry-driven nav. The headline assertion: hiding the focused panel re-homes focus to chat
+ * without any imperative re-home call — it falls out of {@link resolveFocus}.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  buildFocusGraph,
+  EMPTY_FOCUS_GRAPH_STATE,
+  type FocusGraphState,
+  focusPaneGeometriesFromRects,
+  navigateFocus,
+  normalizeFocusGraphRecipientTargets,
+  resolveEffectiveFocus,
+} from '@murder/ui-core/input/focusGraph.js';
+import type { FocusId } from '@murder/ui-core/input/focusStore.js';
+import {
+  CHAT_FOCUS,
+  createFocusStore,
+  isStagePaneId,
+  type StagePaneId,
+  selectEffectiveFocus,
+} from '@murder/ui-core/input/focusStore.js';
+import type { Rect } from '@murder/ui-core/input/geometry.js';
+import { createPanelStore } from '@murder/ui-core/input/panelStore.js';
+
+const UNIT_RECT: Rect = { x: 0, y: 0, width: 1, height: 1 };
+
+function rectsFor(ids: readonly FocusId[]): ReadonlyMap<FocusId, Rect> {
+  return new Map(ids.map((id, index) => [id, { ...UNIT_RECT, x: index }]));
+}
+
+function resolveFocus(intended: FocusId, mountedIds: readonly FocusId[]): FocusId {
+  return resolveEffectiveFocus(
+    intended,
+    buildFocusGraph({ panes: focusPaneGeometriesFromRects(rectsFor(mountedIds)) }),
+  );
+}
+
+function mountedStagePanesOf(rects: ReadonlyMap<FocusId, Rect>): Set<StagePaneId> {
+  const panes = new Set<StagePaneId>();
+  for (const id of rects.keys()) {
+    if (isStagePaneId(id)) {
+      panes.add(id);
+    }
+  }
+  return panes;
+}
+
+function focusCandidates(rects: ReadonlyMap<FocusId, Rect>): readonly FocusId[] {
+  const graph = buildFocusGraph({ panes: focusPaneGeometriesFromRects(rects) });
+  return [...graph.paneVertexIds.map((id) => id as FocusId), CHAT_FOCUS];
+}
+
+describe('resolveFocus (the re-home invariant, pure)', () => {
+  it('keeps a visible panel focused', () => {
+    expect(resolveFocus('plans', ['plans'])).toBe('plans');
+  });
+
+  it('re-homes a hidden panel to chat', () => {
+    expect(resolveFocus('plans', [])).toBe(CHAT_FOCUS);
+  });
+
+  it('chat always resolves to itself', () => {
+    expect(resolveFocus(CHAT_FOCUS, [])).toBe(CHAT_FOCUS);
+  });
+
+  it('keeps a mounted Stage pane focused', () => {
+    const pane: StagePaneId = 'stage:transcript:a1';
+    expect(resolveFocus(pane, [pane])).toBe(pane);
+  });
+
+  it('re-homes an unmounted Stage pane to chat', () => {
+    expect(resolveFocus('stage:transcript:a1', [])).toBe(CHAT_FOCUS);
+  });
+});
+
+describe('isStagePaneId / mountedStagePanesOf', () => {
+  it('discriminates stage ids from panels + chat', () => {
+    expect(isStagePaneId('stage:transcript:a1')).toBe(true);
+    expect(isStagePaneId('plans')).toBe(false);
+    expect(isStagePaneId(CHAT_FOCUS)).toBe(false);
+  });
+
+  it('derives the mounted Stage panes from the rects map keys (panels + chat excluded)', () => {
+    const r: Rect = { x: 0, y: 0, width: 1, height: 1 };
+    const rects = new Map<FocusId, Rect>([
+      ['plans', r],
+      ['stage:transcript:a1', r],
+      [CHAT_FOCUS, r],
+      ['stage:transcript:b2', r],
+    ]);
+    expect([...mountedStagePanesOf(rects)]).toEqual(['stage:transcript:a1', 'stage:transcript:b2']);
+  });
+});
+
+describe('focusCandidates (the derived candidate set)', () => {
+  it('is the mounted pane vertices by geometry order, then chat', () => {
+    expect(
+      focusCandidates(
+        new Map<FocusId, Rect>([
+          ['workflows', { x: 20, y: 0, width: 1, height: 1 }],
+          ['plans', { x: 0, y: 0, width: 1, height: 1 }],
+          ['stage:transcript:a1', { x: 40, y: 0, width: 1, height: 1 }],
+        ]),
+      ),
+    ).toEqual(['plans', 'workflows', 'stage:transcript:a1', CHAT_FOCUS]);
+  });
+
+  it('is just chat when nothing is visible/mounted — there is always somewhere to be', () => {
+    expect(focusCandidates(new Map())).toEqual([CHAT_FOCUS]);
+  });
+});
+
+describe('focusStore — effective focus & re-home', () => {
+  it('starts focused on chat (always exactly one focusable, even at boot)', () => {
+    const panels = createPanelStore();
+    const focus = createFocusStore(panels);
+    expect(selectEffectiveFocus(focus)).toBe(CHAT_FOCUS);
+  });
+
+  it('focuses a visible panel', () => {
+    const panels = createPanelStore(['plans']);
+    const focus = createFocusStore(panels);
+    focus.getState().measure('plans', UNIT_RECT);
+    focus.getState().focus('plans');
+    expect(selectEffectiveFocus(focus)).toBe('plans');
+  });
+
+  it('re-homes to chat when the focused panel unmounts — no imperative call', () => {
+    const panels = createPanelStore(['plans']);
+    const focus = createFocusStore(panels);
+    focus.getState().measure('plans', UNIT_RECT);
+    focus.getState().focus('plans');
+    expect(selectEffectiveFocus(focus)).toBe('plans');
+
+    // The pane leaves the painted candidate set. Focus is never told to re-home.
+    focus.getState().unmeasure('plans');
+
+    // The invariant holds as a derived result: effective focus is chat.
+    expect(selectEffectiveFocus(focus)).toBe(CHAT_FOCUS);
+    // ...while the stored *intent* is untouched (re-show restores focus, proving it was derived).
+    expect(focus.getState().intendedId).toBe('plans');
+    focus.getState().measure('plans', UNIT_RECT);
+    expect(selectEffectiveFocus(focus)).toBe('plans');
+  });
+
+  it('uses layout pane geometry over stale measured pane rects', () => {
+    const panels = createPanelStore(['plans', 'crows']);
+    const focus = createFocusStore(panels);
+    focus.getState().measure('crows', { x: 20, y: 0, width: 10, height: 4 });
+    focus
+      .getState()
+      .setPaneGeometries([
+        { id: 'plans', rect: { x: 0, y: 0, width: 10, height: 4 }, orderKey: 0 },
+      ]);
+    focus.getState().focus('crows');
+
+    expect(selectEffectiveFocus(focus)).toBe(CHAT_FOCUS);
+
+    focus
+      .getState()
+      .setPaneGeometries([
+        { id: 'crows', rect: { x: 20, y: 0, width: 10, height: 4 }, orderKey: 1 },
+      ]);
+    expect(selectEffectiveFocus(focus)).toBe('crows');
+  });
+
+  it('exactly one focusable is effective at all times across a toggle sequence', () => {
+    const panels = createPanelStore();
+    const focus = createFocusStore(panels);
+    const oneFocused = () => {
+      const eff = selectEffectiveFocus(focus);
+      const candidates = focusCandidates(focus.getState().rects);
+      // The effective focus is always present in the candidate set — never dangling.
+      expect(candidates).toContain(eff);
+    };
+    oneFocused();
+    panels.getState().toggle('plans');
+    focus.getState().measure('plans', UNIT_RECT);
+    focus.getState().focus('plans');
+    oneFocused();
+    panels.getState().toggle('crows');
+    focus.getState().measure('crows', { ...UNIT_RECT, x: 1 });
+    focus.getState().focus('crows');
+    oneFocused();
+    panels.getState().toggle('crows'); // hide the focused one
+    focus.getState().unmeasure('crows');
+    oneFocused();
+  });
+});
+
+describe('focusStore — open pane history', () => {
+  const plansRect: Rect = { x: 0, y: 0, width: 20, height: 4 };
+  const ticketsRect: Rect = { x: 20, y: 0, width: 20, height: 4 };
+  const stagePane: StagePaneId = 'stage:transcript:a1';
+  const stageRect: Rect = { x: 40, y: 0, width: 20, height: 4 };
+
+  it('preserves first-open order across remeasure/reorder and appends reopened panes', () => {
+    const panels = createPanelStore(['plans', 'workflows']);
+    const focus = createFocusStore(panels);
+
+    focus.getState().markPaneOpened('plans');
+    focus.getState().measure('plans', plansRect);
+    focus.getState().markPaneOpened('workflows');
+    focus.getState().measure('workflows', ticketsRect);
+    focus.getState().markPaneOpened(stagePane);
+    focus.getState().measure(stagePane, stageRect);
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
+      'plans',
+      'workflows',
+      stagePane,
+    ]);
+
+    focus.getState().markPaneOpened('plans');
+    focus.getState().measure('plans', { x: 80, y: 0, width: 20, height: 4 });
+    focus.getState().measure('workflows', { x: 0, y: 0, width: 20, height: 4 });
+    focus.getState().measure(stagePane, { x: 40, y: 0, width: 20, height: 4 });
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
+      'plans',
+      'workflows',
+      stagePane,
+    ]);
+
+    focus.getState().markPaneClosed('plans');
+    focus.getState().unmeasure('plans');
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual(['workflows', stagePane]);
+
+    focus.getState().markPaneOpened('plans');
+    focus.getState().measure('plans', plansRect);
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([
+      'workflows',
+      stagePane,
+      'plans',
+    ]);
+  });
+
+  it('does not admit chat into pane open history', () => {
+    const panels = createPanelStore();
+    const focus = createFocusStore(panels);
+
+    focus.getState().markPaneOpened(CHAT_FOCUS);
+    focus.getState().measure(CHAT_FOCUS, UNIT_RECT);
+
+    expect(focus.getState().graphState.openPaneIdsByOpenedAt).toEqual([]);
+  });
+});
+
+describe('focusStore.navigate (geometry-driven)', () => {
+  // plans (left) and tickets (right) side by side, chat below — like the real layout.
+  const plansRect: Rect = { x: 0, y: 0, width: 20, height: 4 };
+  const ticketsRect: Rect = { x: 20, y: 0, width: 20, height: 4 };
+  const chatRect: Rect = { x: 0, y: 4, width: 40, height: 3 };
+
+  function setup() {
+    const panels = createPanelStore(['plans', 'workflows']);
+    const focus = createFocusStore(panels);
+    focus.getState().measure('plans', plansRect);
+    focus.getState().measure('workflows', ticketsRect);
+    focus.getState().measure(CHAT_FOCUS, chatRect);
+    return { panels, focus };
+  }
+
+  it('moves right from plans to tickets', () => {
+    const { focus } = setup();
+    focus.getState().focus('plans');
+    focus.getState().navigate('right');
+    expect(selectEffectiveFocus(focus)).toBe('workflows');
+  });
+
+  it('moves left from tickets back to plans', () => {
+    const { focus } = setup();
+    focus.getState().focus('workflows');
+    focus.getState().navigate('left');
+    expect(selectEffectiveFocus(focus)).toBe('plans');
+  });
+
+  it('moves down from a panel to chat', () => {
+    const { focus } = setup();
+    focus.getState().focus('plans');
+    focus.getState().navigate('down');
+    expect(selectEffectiveFocus(focus)).toBe(CHAT_FOCUS);
+  });
+
+  it('does not move at the layout edge', () => {
+    const { focus } = setup();
+    focus.getState().focus('workflows');
+    focus.getState().navigate('right'); // nothing further right
+    expect(selectEffectiveFocus(focus)).toBe('workflows');
+  });
+
+  it('measure dedupes an unchanged rect (keeps map identity)', () => {
+    const { focus } = setup();
+    const before = focus.getState().rects;
+    focus.getState().measure('plans', plansRect);
+    expect(focus.getState().rects).toBe(before);
+  });
+});
+
+describe('focusGraph — directional tiebreaks', () => {
+  const rects = new Map<FocusId, Rect>([
+    ['crows', { x: 0, y: 0, width: 10, height: 10 }],
+    ['plans', { x: 10, y: 0, width: 10, height: 5 }],
+    ['workflows', { x: 10, y: 5, width: 10, height: 5 }],
+  ]);
+
+  it('prefers previous inhabitance, then most-recent open history, then live projection order', () => {
+    const withPrevious: FocusGraphState = {
+      ...EMPTY_FOCUS_GRAPH_STATE,
+      previouslyInhabitedVertexId: 'plans',
+      openPaneIdsByOpenedAt: ['plans', 'workflows'],
+    };
+    expect(
+      navigateFocus(
+        buildFocusGraph({
+          panes: focusPaneGeometriesFromRects(rects),
+          state: withPrevious,
+        }),
+        'crows',
+        'right',
+        withPrevious,
+      ).focusId,
+    ).toBe('plans');
+
+    const withOpenHistory: FocusGraphState = {
+      ...EMPTY_FOCUS_GRAPH_STATE,
+      openPaneIdsByOpenedAt: ['plans', 'workflows'],
+    };
+    expect(
+      navigateFocus(
+        buildFocusGraph({
+          panes: focusPaneGeometriesFromRects(rects),
+          state: withOpenHistory,
+        }),
+        'crows',
+        'right',
+        withOpenHistory,
+      ).focusId,
+    ).toBe('workflows');
+
+    expect(
+      navigateFocus(
+        buildFocusGraph({
+          panes: focusPaneGeometriesFromRects(rects),
+          state: EMPTY_FOCUS_GRAPH_STATE,
+        }),
+        'crows',
+        'right',
+        EMPTY_FOCUS_GRAPH_STATE,
+      ).focusId,
+    ).toBe('plans');
+  });
+
+  it('records the vertex focus left as previous inhabitance', () => {
+    const result = navigateFocus(
+      buildFocusGraph({
+        panes: focusPaneGeometriesFromRects(rects),
+        state: EMPTY_FOCUS_GRAPH_STATE,
+      }),
+      'crows',
+      'right',
+      EMPTY_FOCUS_GRAPH_STATE,
+    );
+
+    expect(result.state.previouslyInhabitedVertexId).toBe('crows');
+  });
+});
+
+describe('focusGraph — recipient target partitions', () => {
+  it('orders locked, ephemeral, and favorite-only virtual recipient targets around the active target', () => {
+    const graph = buildFocusGraph({
+      panes: [],
+      chatRect: { x: 0, y: 0, width: 40, height: 3 },
+      recipientTargets: normalizeFocusGraphRecipientTargets({
+        activeTargetId: 'agent-b',
+        lockedVisibleTargetIds: ['agent-a'],
+        ephemeralTargetId: 'agent-b',
+        favoriteOnlyTargetIds: ['agent-c'],
+      }),
+    });
+
+    expect(graph.recipientTargetVertexIds).toEqual([
+      'recipient:target:agent-a',
+      'recipient:target:agent-b',
+      'recipient:target:agent-c',
+    ]);
+    expect(graph.activeRecipientTargetVertexId).toBe('recipient:target:agent-b');
+    expect(navigateFocus(graph, CHAT_FOCUS, 'right').recipientTargetId).toBe('agent-c');
+    expect(navigateFocus(graph, CHAT_FOCUS, 'left').recipientTargetId).toBe('agent-a');
+  });
+});
+
+describe('focusStore — Stage panes (Phase 4a)', () => {
+  // A left panel and a Stage transcript pane to its right, chat below — the real Stage layout shape.
+  const plansRect: Rect = { x: 0, y: 0, width: 20, height: 6 };
+  const stagePane: StagePaneId = 'stage:transcript:a1';
+  const stageRect: Rect = { x: 20, y: 0, width: 30, height: 6 };
+  const chatRect: Rect = { x: 0, y: 6, width: 50, height: 3 };
+
+  function setup() {
+    const panels = createPanelStore(['plans']);
+    const focus = createFocusStore(panels);
+    focus.getState().measure('plans', plansRect);
+    focus.getState().measure(stagePane, stageRect);
+    focus.getState().measure(CHAT_FOCUS, chatRect);
+    return { panels, focus };
+  }
+
+  it('hjkl reaches a mounted Stage pane: right from a left panel lands on the transcript pane', () => {
+    const { focus } = setup();
+    focus.getState().focus('plans');
+    focus.getState().navigate('right');
+    expect(selectEffectiveFocus(focus)).toBe(stagePane);
+  });
+
+  it('a mounted Stage pane holds focus (resolves to itself)', () => {
+    const { focus } = setup();
+    focus.getState().focus(stagePane);
+    expect(selectEffectiveFocus(focus)).toBe(stagePane);
+  });
+
+  it('re-homes to chat when the focused Stage pane unmounts (unmeasure) — no imperative call', () => {
+    const { focus } = setup();
+    focus.getState().focus(stagePane);
+    expect(selectEffectiveFocus(focus)).toBe(stagePane);
+
+    // The pane leaves the tree: its measure-effect cleanup drops the rect. We never tell focus to
+    // re-home — it falls out of resolveFocus, exactly like hiding a focused panel.
+    focus.getState().unmeasure(stagePane);
+
+    expect(selectEffectiveFocus(focus)).toBe(CHAT_FOCUS);
+    // Intent is untouched (re-mount restores focus, proving it was derived).
+    expect(focus.getState().intendedId).toBe(stagePane);
+    focus.getState().measure(stagePane, stageRect);
+    expect(selectEffectiveFocus(focus)).toBe(stagePane);
+  });
+
+  it('unmeasure is idempotent for an absent id (keeps map identity)', () => {
+    const { focus } = setup();
+    focus.getState().unmeasure(stagePane);
+    const before = focus.getState().rects;
+    focus.getState().unmeasure(stagePane);
+    expect(focus.getState().rects).toBe(before);
+  });
+});

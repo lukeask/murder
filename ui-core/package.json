@@ -1,0 +1,43 @@
+{
+  "name": "@murder/ui-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.18.0"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build --force",
+    "typecheck": "tsc --build --force && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "lint": "biome check src test",
+    "lint:fix": "biome check --write src test",
+    "format": "biome format --write src test"
+  },
+  "peerDependencies": {
+    "react": "19.2.7",
+    "use-sync-external-store": "^1.6.0",
+    "zustand": "^5.0.14"
+  },
+  "dependencies": {
+    "string-width": "^8.2.2",
+    "wrap-ansi": "^10.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "react": "19.2.7",
+    "typescript": "^6.0.3",
+    "use-sync-external-store": "^1.6.0",
+    "vitest": "^4.1.8",
+    "zustand": "^5.0.14"
+  }
+}

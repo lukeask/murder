@@ -30,7 +30,7 @@ their owning non-fact paths.
 
 Run `python tools/generate_application_protocol.py` after changing a Pydantic
 contract. CI verifies that
-`inktui/src/generated/applicationProtocol.ts` matches the Python schema.
+`ui-core/src/generated/applicationProtocol.ts` matches the Python schema.
 
 Read-reply DTOs live in `read_models.py`. There is no parallel service-client
 protocol: websocket request, subscription, and terminal messages in this

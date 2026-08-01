@@ -20,12 +20,12 @@ def _generator() -> ModuleType:
 
 def test_generated_typescript_is_current() -> None:
     generator = _generator()
-    output = ROOT / "inktui" / "src" / "generated" / "applicationProtocol.ts"
+    output = ROOT / "ui-core" / "src" / "generated" / "applicationProtocol.ts"
     assert output.read_text(encoding="utf-8") == generator.render()
 
 
 def test_generated_contract_names_public_capabilities_not_bus_primitives() -> None:
-    generated = (ROOT / "inktui" / "src" / "generated" / "applicationProtocol.ts").read_text(
+    generated = (ROOT / "ui-core" / "src" / "generated" / "applicationProtocol.ts").read_text(
         encoding="utf-8"
     )
     assert "agent.message" in generated
