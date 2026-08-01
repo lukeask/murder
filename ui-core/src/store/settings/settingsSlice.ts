@@ -163,6 +163,8 @@ export interface SettingsState {
   readonly llm: LlmWire;
   /** Whether each env-flagged provider's key is present in the daemon's environment. */
   readonly llmEnv: LlmEnvWire;
+  /** Project/repo display name from the service (`roles.yaml` project.name), or null when unknown. */
+  readonly project: string | null;
   /** Load/save lifecycle: `idle` before the first `load`, `ready` after, `error` on a failed RPC. */
   readonly status: 'idle' | 'loading' | 'ready' | 'error';
   /** Set when the last load/save rejected; cleared on the next success. */
@@ -196,6 +198,7 @@ export const initialSettingsState: SettingsState = {
   effectiveCrowHarnesses: ['claude_code'],
   llm: {},
   llmEnv: { groq: false, cerebras: false, openrouter: false },
+  project: null,
   status: 'idle',
   error: null,
 };

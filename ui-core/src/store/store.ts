@@ -606,6 +606,7 @@ function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined):
     effectiveCrowHarnesses: wire.effective_crow_harnesses ?? prev.effectiveCrowHarnesses,
     llm: wire.llm ?? prev.llm,
     llmEnv: wire.llm_env ?? prev.llmEnv,
+    project: 'project' in wire ? (wire.project ?? null) : prev.project,
     status: 'ready',
     error: null,
   };

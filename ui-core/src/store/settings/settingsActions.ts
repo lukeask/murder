@@ -175,6 +175,8 @@ export interface SettingsWire {
   // --- llm provider/tier/role config (api keys masked) ---
   readonly llm: LlmWire;
   readonly llm_env: LlmEnvWire;
+  /** Project/repo display name from roles.yaml / service (optional for older daemons). */
+  readonly project?: string | null;
 }
 
 type SettingsReply = { readonly settings: SettingsWire };
@@ -252,9 +254,23 @@ export interface LlmActions {
   activatePolicy(policyId: string): Promise<void>;
   clonePolicy(policyId: string, name: string): Promise<string | null>;
   setFeaturePolicy(featureType: string, policyId: string | null): Promise<void>;
-  previewResolution(
-    featureType: string,
-  ): Promise<readonly { provider_id: string; model_id: string }[]>;
+  previewResolution(featureType: string): Promise<LlmResolutionPreview>;
+}
+
+/** One candidate from `llm.preview_resolution` (wire fields kept snake_case). */
+export interface LlmResolutionCandidate {
+  readonly provider_id: string;
+  readonly model_id: string;
+  readonly provider_type?: string;
+  readonly locality?: string;
+  readonly cost_class?: string;
+}
+
+/** Full reply from `llm.preview_resolution` (status + policy + candidates). */
+export interface LlmResolutionPreview {
+  readonly status: string | null;
+  readonly policy_id: string | null;
+  readonly candidates: readonly LlmResolutionCandidate[];
 }
 
 /** Project a `settings.get`/`settings.update` reply's wire record onto the slice's camelCase shape,
@@ -293,6 +309,7 @@ function applyWire(prev: SettingsState, wire: SettingsWire | undefined): Setting
     effectiveCrowHarnesses: wire.effective_crow_harnesses ?? prev.effectiveCrowHarnesses,
     llm: wire.llm ?? prev.llm,
     llmEnv: wire.llm_env ?? prev.llmEnv,
+    project: 'project' in wire ? (wire.project ?? null) : prev.project,
     status: 'ready',
     error: null,
   };
@@ -544,18 +561,36 @@ export function createSettingsActions(bus: ApplicationClient, store: StoreApi<Ap
           llmFailure(error);
         }
       },
-      async previewResolution(
-        feature_type,
-      ): Promise<readonly { provider_id: string; model_id: string }[]> {
+      async previewResolution(feature_type): Promise<LlmResolutionPreview> {
         try {
           const reply = asCommandResult<
             'llm.preview_resolution',
-            { readonly candidates: readonly { provider_id: string; model_id: string }[] }
+            {
+              readonly status?: string;
+              readonly policy_id?: string | null;
+              readonly candidates: readonly {
+                provider_id: string;
+                model_id: string;
+                provider_type?: string;
+                locality?: string;
+                cost_class?: string;
+              }[];
+            }
           >(await bus.command('llm.preview_resolution', { feature_type }));
-          return reply.candidates.map(({ provider_id, model_id }) => ({ provider_id, model_id }));
+          return {
+            status: reply.status ?? null,
+            policy_id: reply.policy_id ?? null,
+            candidates: reply.candidates.map((c) => ({
+              provider_id: c.provider_id,
+              model_id: c.model_id,
+              ...(c.provider_type !== undefined ? { provider_type: c.provider_type } : {}),
+              ...(c.locality !== undefined ? { locality: c.locality } : {}),
+              ...(c.cost_class !== undefined ? { cost_class: c.cost_class } : {}),
+            })),
+          };
         } catch (error: unknown) {
           llmFailure(error);
-          return [];
+          return { status: null, policy_id: null, candidates: [] };
         }
       },
     },
