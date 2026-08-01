@@ -171,6 +171,25 @@ uv run mypy --strict murder/
 uv run pytest
 ```
 
+### Frontend workspace
+
+The TypeScript frontends use one npm workspace. Install all frontend dependencies once at the
+repository root, then run package scripts through npm workspaces:
+
+```bash
+npm ci
+npm run protocol:check
+npm run typecheck -w @murder/ui-core
+npm run test -w @murder/ui-core
+npm run dev -w inktui
+npm run dev -w webui
+```
+
+`ui-core/` contains renderer-neutral application/state/protocol/workflow behavior. Ink rendering,
+terminal input, CLI/process behavior remain in `inktui/`; DOM rendering, CSS, browser persistence,
+and browser lifecycle remain in `webui/`. Generated protocol types live at
+`ui-core/src/generated/applicationProtocol.ts` and are refreshed with `npm run protocol:generate`.
+
 ## License and branding
 
 See [LICENSE](LICENSE), [BRANDING.md](BRANDING.md), and [LICENSES/NOTICE.md](LICENSES/NOTICE.md) for the full scoped terms.

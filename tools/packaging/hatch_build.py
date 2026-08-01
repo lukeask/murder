@@ -10,10 +10,12 @@ regenerated from source on every wheel build so staleness is structurally imposs
   bridge resolves assets at ``murder/_webui/`` first, falling back to ``webui/dist`` in a source
   checkout.
 
-This hook, during a **wheel** build, runs ``npm ci`` + the build for each front-end in its own
-dir (``inktui/`` → ``npm run bundle``; ``webui/`` → ``npm run build``), copies the output into
-``murder/_inktui/`` / ``murder/_webui/`` respectively, and force-includes both. Because the
-destinations are gitignored, hatchling would otherwise drop them from the VCS-derived file list —
+This hook, during a **wheel** build, runs one root ``npm ci`` for the npm workspace, regenerates the
+protocol in the isolated build environment, then builds ``inktui`` and ``webui`` through their workspace scripts. It copies
+the output into
+``murder/_inktui/`` and force-includes it. It likewise force-includes the browser artifact
+directory. Because those destinations are gitignored, hatchling would otherwise drop them from the
+VCS-derived file list —
 so we register them via ``build_data["force_include"]``.
 """
 
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -36,16 +39,47 @@ class InkTuiBundleHook(BuildHookInterface):
         # Only the wheel ships the prebuilt front-ends. Skip for sdist (which carries source only)
         # and any other target, so we don't shell out to npm needlessly.
         if self.target_name != "wheel":
+            if self.target_name == "sdist":
+                self._include_workspace_sources(Path(self.root), build_data)
             return
-        # Editable/dev installs resolve front-ends from the source checkout at runtime
-        # (inktui/src via tsx; webui/dist via bridge fallback) — no npm build here.
+        # Editable/dev installs resolve front-ends from the source checkout at runtime. The Ink
+        # entrypoint runs through tsx; the bridge falls back to the web build output.
         if version == "editable":
             return
 
         repo_root = Path(self.root)
         force_include = build_data.setdefault("force_include", {})
+        self._install_workspace(repo_root)
         self._build_inktui(repo_root, force_include)
         self._build_webui(repo_root, force_include)
+
+    def _include_workspace_sources(
+        self, repo_root: Path, build_data: dict[str, Any]
+    ) -> None:
+        """Force workspace source/config/test inputs into a source distribution.
+
+        Hatch's VCS file selection does not discover newly introduced workspace directories until
+        they are present in the revision used for a build. Force-including them makes an unpacked
+        sdist self-sufficient during the migration and remains correct after the directories are
+        committed.
+        """
+        force_include = build_data.setdefault("force_include", {})
+        for workspace in ("ui-core", "webui"):
+            workspace_dir = repo_root / workspace
+            if not workspace_dir.is_dir():
+                raise RuntimeError(
+                    f"hatch_build: expected {workspace}/ at {workspace_dir} for the sdist."
+                )
+            for source in workspace_dir.rglob("*"):
+                if not source.is_file() or {"node_modules", "dist"} & set(source.parts):
+                    continue
+                relative = source.relative_to(repo_root).as_posix()
+                force_include[str(source)] = relative
+
+    def _install_workspace(self, repo_root: Path) -> None:
+        """Install the complete frontend graph from the workspace root once."""
+        self._run(["npm", "ci"], cwd=repo_root)
+        self._run([sys.executable, "tools/generate_application_protocol.py"], cwd=repo_root)
 
     def _build_inktui(self, repo_root: Path, force_include: dict[str, str]) -> None:
         inktui_dir = repo_root / "inktui"
@@ -54,10 +88,6 @@ class InkTuiBundleHook(BuildHookInterface):
                 f"hatch_build: expected inktui/ at {inktui_dir}; cannot build the TUI bundle."
             )
 
-        # Install deps deterministically, then bundle. `npm ci` requires a lockfile (committed) and
-        # is reproducible; if a clean environment lacks one it should fail loudly, not silently skip
-        # the bundle (a wheel without the bundle is broken).
-        self._run(["npm", "ci"], cwd=inktui_dir)
         self._run(["npm", "run", "bundle"], cwd=inktui_dir)
 
         bundle_dir = inktui_dir / "dist" / "bundle"
@@ -89,10 +119,6 @@ class InkTuiBundleHook(BuildHookInterface):
                 f"hatch_build: expected webui/ at {webui_dir}; cannot build the web frontend."
             )
 
-        # `npm ci` is reproducible and requires the committed lockfile; the web build imports the
-        # portable core from ../inktui/src via the `@core` alias (resolved at build time by Vite),
-        # so the sdist must also carry inktui/src — see pyproject sdist includes.
-        self._run(["npm", "ci"], cwd=webui_dir)
         self._run(["npm", "run", "build"], cwd=webui_dir)
 
         dist_dir = webui_dir / "dist"

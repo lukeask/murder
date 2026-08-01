@@ -27,8 +27,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - name: Install frontend workspace
+        run: npm ci
       - name: Verify generated application protocol is committed
-        run: python tools/generate_application_protocol.py --check
+        run: npm run protocol:check
+      - name: Typecheck frontend workspaces
+        run: npm run typecheck
+      - name: Test frontend workspaces
+        run: npm run test
+      - name: Bundle Ink workspace
+        run: npm run bundle -w inktui
+      - name: Build web workspace
+        run: npm run build -w webui
       # Build the wheel (proves the hook + esbuild bundle assemble), install it, then run the
       # shipped bundle's --smoke (F7) resolved exactly as the launcher resolves it at runtime —
       # via importlib.resources, from the installed package, not the repo tree. `python -m build`

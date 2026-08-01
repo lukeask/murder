@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27", "pydantic>=2.6,<3.0", "pyyaml>=6.0,<7.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -55,28 +55,37 @@ include = [
 [tool.hatch.build.hooks.custom]
 path = "tools/packaging/hatch_build.py"
 
-# The sdist must carry the bundle's *inputs* (inktui source + lockfile + stubs + the hook), because
-# `python -m build` builds the wheel from the sdist — the hook runs `npm run bundle` in `inktui/`
-# there. dist/ and node_modules are excluded so we ship source only.
+# The sdist must carry the workspace's build inputs because `python -m build` builds the wheel from
+# the sdist. The custom hook runs one root `npm ci`, regenerates the protocol, then bundles
+# inktui and builds webui. dist/ and node_modules are excluded so we ship source only.
 [tool.hatch.build.targets.sdist]
 include = [
     "murder/",
     "tests/",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.base.json",
+    "ui-core/**",
+    "ui-core/src/",
+    "ui-core/test/",
+    "ui-core/package.json",
+    "ui-core/tsconfig.json",
+    "ui-core/tsconfig.test.json",
+    "ui-core/vitest.config.ts",
     "inktui/src/",
     "inktui/stubs/",
     "inktui/package.json",
-    "inktui/package-lock.json",
     "inktui/tsconfig.json",
+    "inktui/tsconfig.test.json",
+    "inktui/tsconfig.dev.json",
     "inktui/biome.json",
-    # Web frontend source: enough to rebuild webui/dist in CI. The web build imports the portable
-    # core from ../inktui/src via the `@core` alias, so inktui/src above is also required here.
     "webui/src/",
     "webui/index.html",
     "webui/package.json",
-    "webui/package-lock.json",
     "webui/vite.config.ts",
     "webui/tsconfig.json",
     "webui/tsconfig.app.json",
+    "tools/generate_application_protocol.py",
     "tools/packaging/hatch_build.py",
     "pyproject.toml",
     "README.md",
@@ -85,9 +94,9 @@ include = [
     "LICENSES/",
 ]
 exclude = [
-    "inktui/node_modules/",
+    "node_modules/",
+    "ui-core/dist/",
     "inktui/dist/",
-    "webui/node_modules/",
     "webui/dist/",
 ]
 

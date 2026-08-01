@@ -60,9 +60,10 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
     Returns ``(argv, cwd)`` where ``argv`` is the command to spawn and ``cwd`` is the working
     directory (or ``None`` to inherit the current one).
 
-    1. **Source checkout** — ``<repo>/inktui/src/index.tsx`` present → run ``tsx src/index.tsx``
-       from ``inktui/`` using the locally-installed ``tsx`` (a devDependency). Requires
-       ``inktui/node_modules`` to be present; a clear, distinct error fires if it is absent.
+    1. **Source checkout** — the Ink source entrypoint is present → run ``tsx`` with the
+       TUI's development tsconfig from its package directory. That config resolves shared-package
+       imports directly to workspace source. Requires ``inktui/node_modules`` to be present; a
+       clear, distinct error fires if it is absent.
     2. **Installed wheel** — else the packaged self-contained bundle at
        ``importlib.resources``→ ``murder/_inktui/index.js`` → ``node <that path>``.
     """
@@ -73,12 +74,12 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
         if not node_modules.is_dir():
             raise InkLaunchError(
                 f"inktui/node_modules is missing at {node_modules}. The dev TUI runs from source "
-                "via tsx; install the Node deps first: `cd inktui && npm install`, then re-run "
+                "via tsx; install the Node workspace first: `npm ci` from the repository root, then re-run "
                 "`murder`."
             )
         tsx_bin = node_modules / ".bin" / "tsx"
         runner = str(tsx_bin) if tsx_bin.exists() else "tsx"
-        return [runner, "src/index.tsx"], inktui_dir
+        return [runner, "--tsconfig", "tsconfig.dev.json", "src/index.tsx"], inktui_dir
 
     bundle = files("murder") / "_inktui" / "index.js"
     bundle_path = Path(str(bundle))

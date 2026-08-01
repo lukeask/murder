@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - run: npm ci
+      - run: npm run protocol:check
       - run: python -m pip install build
       - run: python -m build            # hatch hook runs esbuild here → bundle in the wheel
       - uses: pypa/gh-action-pypi-publish@release/v1   # no token: OIDC

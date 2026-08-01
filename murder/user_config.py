@@ -89,7 +89,7 @@ class StartupRogueConfig(BaseModel):
 class TuiUserConfig(BaseModel):
     """User-facing TUI preferences round-tripped by the `settings.{get,update}` RPC pair.
 
-    The frontend's binding registry (`inktui/src/input/bindings.ts`) is the authority on
+    The frontend's binding registry (`ui-core/src/input/bindings.ts`) is the authority on
     `ActionId`s, so `key_overrides` is stored opaquely here (an `ActionId -> key char` map);
     pydantic only validates the closed `modifier`/`theme` shape.
 
@@ -1121,7 +1121,7 @@ def save_spawn_favorites(records: Any, path: Path | None = None) -> list[dict[st
 _THEME_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
-# Slot keys mirrored from `inktui/src/theme/palettes.ts` — every palette must fill all of them.
+# Slot keys mirrored from `ui-core/src/theme/palettes.ts` — every palette must fill all of them.
 _PALETTE_SLOTS: tuple[str, ...] = (
     "bgDim",
     "bg0",
