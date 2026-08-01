@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,7 +18,7 @@ from murder.codebase_map.build import fresh_build, incremental_update
 from murder.codebase_map.store import latest_map_sha, load_summary, rows_for_commit
 from murder.codebase_map.summarize import FileSummarizer
 from murder.llm.clients.base import CompletionResult
-from murder.state.persistence.schema import SCHEMA_SQL
+from murder.state.persistence.connection import RepoDb
 from murder.verdict.enforcement.git_diff import head_commit
 
 _FILE_PATH_RE = re.compile(r"^File path: (.+)$", re.MULTILINE)
@@ -79,24 +78,17 @@ def _init_repo(root: Path) -> None:
     _git(root, "commit", "-q", "-m", "init")
 
 
-def _db() -> sqlite3.Connection:
-    db = sqlite3.connect(":memory:")
-    db.row_factory = sqlite3.Row
-    db.executescript(SCHEMA_SQL)
-    return db
-
-
-def _seed(root: Path, db: sqlite3.Connection) -> str:
+def _seed(root: Path, db: RepoDb) -> str:
     """Fresh-build at HEAD, return the base sha."""
     asyncio.run(fresh_build(root, FileSummarizer(RecordingStubClient()), db=db, concurrency=2))
     return latest_map_sha(db)
 
 
-def test_incremental_resummarizes_only_changed_files():
+def test_incremental_resummarizes_only_changed_files(repo_db: RepoDb):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         base = _seed(root, db)
 
         (root / "pkg" / "a.py").write_text("def a():\n    return 99\n")
@@ -119,11 +111,11 @@ def test_incremental_resummarizes_only_changed_files():
         assert "." in client.dir_paths  # root_summary uses dir_path="."
 
 
-def test_incremental_snapshots_rows_under_head_sha():
+def test_incremental_snapshots_rows_under_head_sha(repo_db: RepoDb):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         base = _seed(root, db)
 
         (root / "pkg" / "a.py").write_text("def a():\n    return 7\n")
@@ -148,13 +140,13 @@ def test_incremental_snapshots_rows_under_head_sha():
         assert "pkg/sub" not in rows
 
 
-def test_incremental_reuses_unchanged_sibling_from_db():
+def test_incremental_reuses_unchanged_sibling_from_db(repo_db: RepoDb):
     """Re-rolling pkg/ must re-feed pkg/b.py's body from the DB,
     NOT re-summarize it."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         base = _seed(root, db)
         sibling_body = load_summary(db, "pkg/b.py", base)["body"]
 
@@ -175,11 +167,11 @@ def test_incremental_reuses_unchanged_sibling_from_db():
         assert sibling_body == load_summary(db, "pkg/b.py", base)["body"]
 
 
-def test_incremental_deletion_removes_rendered_file():
+def test_incremental_deletion_removes_rendered_file(repo_db: RepoDb):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         base = _seed(root, db)
         rendered = root / ".murder" / "map" / "pkg" / "b.py.md"
         assert rendered.exists()
@@ -202,11 +194,11 @@ def test_incremental_deletion_removes_rendered_file():
         assert "pkg" in client.dir_paths
 
 
-def test_incremental_noop_when_no_changes():
+def test_incremental_noop_when_no_changes(repo_db: RepoDb):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         base = _seed(root, db)
 
         client = RecordingStubClient()
@@ -219,7 +211,7 @@ def test_incremental_noop_when_no_changes():
         assert client.dir_paths == []
 
 
-def test_incremental_second_round_reuses_latest_sibling_rows():
+def test_incremental_second_round_reuses_latest_sibling_rows(repo_db: RepoDb):
     """Round 2's base sha carries only round-1-changed rows; unchanged siblings
     live at older shas. Read-back must use the LATEST row per path — an exact
     base_sha lookup would re-summarize files from disk and feed EMPTY bodies
@@ -227,7 +219,7 @@ def test_incremental_second_round_reuses_latest_sibling_rows():
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         _seed(root, db)
 
         # Round 1: edit pkg/a.py.
@@ -267,13 +259,13 @@ def test_incremental_second_round_reuses_latest_sibling_rows():
         assert any("rollup of pkg/sub" in s for s in pkg_prompts)
 
 
-def test_incremental_deleting_last_file_removes_dirmd():
+def test_incremental_deleting_last_file_removes_dirmd(repo_db: RepoDb):
     """Deleting the only file in a dir removes the dir's DIR.md instead of
     re-rolling an empty node (regression: Fable RT3 review)."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         base = _seed(root, db)
         sub_dirmd = root / ".murder" / "map" / "pkg" / "sub" / "DIR.md"
         assert sub_dirmd.exists()
@@ -301,11 +293,11 @@ def test_incremental_deleting_last_file_removes_dirmd():
         assert not any("sub/" in s for s in pkg_prompts)
 
 
-def test_incremental_root_level_file_change_rerolls_root_only():
+def test_incremental_root_level_file_change_rerolls_root_only(repo_db: RepoDb):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         base = _seed(root, db)
 
         (root / "top.py").write_text("def t():\n    return 42\n")

@@ -14,18 +14,17 @@ import uuid
 from pathlib import Path
 
 from murder.app.service.command_dispatch import CommandDispatcher
-from murder.runtime.orchestration.events import ErrorEvent
-from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.observability.advanced_log import (
     NullAdvancedLog,
     open_advanced_log,
     set_current_advanced_log,
 )
-from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.events import ErrorEvent
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.state.persistence.commands import enqueue_command
-from murder.state.persistence.schema import get_db, init_db
-from murder.state.storage.paths import db_path
+from tests.support.database import open_test_repo_db
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -36,13 +35,13 @@ def _repo(tmp_path: Path) -> Path:
 
 def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
     repo = _repo(tmp_path)
-    conn = get_db(db_path(repo))
-    init_db(conn)
-    conn.execute(
-        "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
-        ("run-bnd", "2026-01-01T00:00:00", "{}"),
+    db = open_test_repo_db(tmp_path / "murder.db")
+    db.conn.execute(
+        "INSERT INTO runs(repository_id, run_id, started_at, config_snapshot) "
+        "VALUES (?, ?, ?, ?)",
+        (db.repository_id, "run-bnd", "2026-01-01T00:00:00", "{}"),
     )
-    conn.commit()
+    db.conn.commit()
 
     async def _run() -> Path:
         log = open_advanced_log(repo, "run-bnd", "redacted")
@@ -63,7 +62,7 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
             # --- Boundary #4: CommandDispatcher claim + complete -> command_records ---
             command_id = str(uuid.uuid4())
             enqueue_command(
-                conn,
+                db,
                 command_id=command_id,
                 run_id="run-bnd",
                 agent_id="agent-1",
@@ -75,8 +74,8 @@ def test_bus_publish_and_command_dispatch_land_rows(tmp_path):
                 correlation_id="corr-1",
                 idempotency_key="idem-1",
             )
-            conn.commit()
-            dispatcher = CommandDispatcher(conn=conn, repo_root=repo, advanced_log=log)
+            db.conn.commit()
+            dispatcher = CommandDispatcher(db=db, repo_root=repo, advanced_log=log)
             claimed = dispatcher.claim_next(
                 target_worker=WorkerName.ORCHESTRATOR, claimed_by="orchestrator#0"
             )

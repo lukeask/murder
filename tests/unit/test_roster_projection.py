@@ -10,7 +10,7 @@ import pytest
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.facts.log import replay_projection_inputs
 from murder.roster import RosterService, register_projection_provider
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 
 class _NoopBus:
@@ -20,14 +20,13 @@ class _NoopBus:
 
 def _service(tmp_path: Path) -> tuple[RosterService, Any]:
     path = tmp_path / "murder.db"
-    conn = get_db(path)
-    init_db(conn)
-    return RosterService(path), conn
+    db = open_test_repo_db(path)
+    return RosterService(db), db
 
 
 def test_agent_write_and_roster_invalidation_share_one_transaction(tmp_path: Path) -> None:
     service, conn = _service(tmp_path)
-    conn.execute(
+    conn.conn.execute(
         """
         CREATE TRIGGER reject_roster_input
         BEFORE INSERT ON projection_inputs
@@ -51,7 +50,7 @@ def test_agent_write_and_roster_invalidation_share_one_transaction(tmp_path: Pat
             pid=None,
         )
 
-    assert conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 0
+    assert conn.conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 0
 
 
 def test_registered_roster_provider_builds_the_feature_snapshot(tmp_path: Path) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from pathlib import Path
 
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
@@ -15,7 +14,8 @@ from murder.llm.harnesses.usage_sampling import (
     harness_kinds_to_sample,
     sample_harness_usages,
 )
-from murder.state.persistence.schema import init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
 class _TmuxUsageAdapter(HarnessAdapter):
@@ -84,11 +84,8 @@ def _mixed_pool_config() -> Config:
     )
 
 
-def _db() -> sqlite3.Connection:
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
-    return connection
+def _db() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
 
 
 def test_harness_kinds_to_sample_keeps_usage_inventory_broad(monkeypatch) -> None:

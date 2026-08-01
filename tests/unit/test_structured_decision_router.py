@@ -9,7 +9,6 @@ from uuid import UUID
 
 import pytest
 
-from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.llm.harness_control.capabilities.permissions import permission_fingerprint
 from murder.llm.harness_control.capabilities.questions import question_fingerprint
 from murder.llm.harness_control.model import (
@@ -23,8 +22,9 @@ from murder.llm.harness_control.model import (
     unknown_snapshot,
 )
 from murder.permissions import PermissionPrincipal, PermissionStore
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 EXPECTED_QUESTION_EXECUTIONS = 3
 
@@ -39,11 +39,10 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         "murder.runtime.terminal.tmux.send_keys",
         AsyncMock(side_effect=AssertionError("the decision router emitted terminal input")),
     )
-    db = get_db(tmp_path / "murder.db")
-    init_db(db)
-    db.execute(
-        "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
-        ("run-1", "2026-07-12T00:00:00+00:00", "{}"),
+    db = open_test_repo_db(tmp_path / "murder.db")
+    db.conn.execute(
+        "INSERT INTO runs(repository_id, run_id, started_at, config_snapshot) VALUES (?, ?, ?, ?)",
+        (db.repository_id, "run-1", "2026-07-12T00:00:00+00:00", "{}"),
     )
     bus = InProcessOrchestrationEventSink()
     now = datetime(2026, 7, 12, tzinfo=timezone.utc)
@@ -114,10 +113,10 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         await router.observe(agent, snapshot)
         await router.observe(agent, snapshot)
 
-        rows = db.execute(
+        rows = db.conn.execute(
             "SELECT decision_request_id, decision_kind, request_identity, request_json "
-            "FROM structured_decisions WHERE agent_id = ?",
-            (agent.id,),
+            "FROM structured_decisions WHERE repository_id = ? AND agent_id = ?",
+            (db.repository_id, agent.id),
         ).fetchall()
         matching = [
             {
@@ -142,10 +141,10 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         # in-memory debounce within one service lifetime.
         await StructuredDecisionRouter(runtime).observe(agent, snapshot)
         assert (
-            db.execute(
+            db.conn.execute(
                 "SELECT count(*) FROM structured_decisions "
-                "WHERE agent_id = ? AND decision_request_id = ?",
-                (agent.id, request["decision_request_id"]),
+                "WHERE repository_id = ? AND agent_id = ? AND decision_request_id = ?",
+                (db.repository_id, agent.id, request["decision_request_id"]),
             ).fetchone()[0]
             == 1
         )
@@ -205,16 +204,22 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
             }
         )
         assert accepted == {"ok": True}
-        db.execute(
+        db.conn.execute(
             """
             INSERT INTO harness_control_operations(
-                operation_id, harness_id, session_id, capability, status, phase_type,
+                repository_id, operation_id, harness_id, session_id, capability, status, phase_type,
                 phase_payload_json, request_json, operation_state_json, created_at,
                 updated_at, deadline, attempt_count, warnings_json
-            ) VALUES (?, 'codex', 'codex-agent', ?, 'SUCCEEDED', 'test', '{}', '{}', '{}',
+            ) VALUES (?, ?, 'codex', 'codex-agent', ?, 'SUCCEEDED', 'test', '{}', '{}', '{}',
                       ?, ?, NULL, 0, '[]')
             """,
-            (request["decision_request_id"], kind, now.isoformat(), now.isoformat()),
+            (
+                db.repository_id,
+                request["decision_request_id"],
+                kind,
+                now.isoformat(),
+                now.isoformat(),
+            ),
         )
         later_revision = ObservationRevision(1, revision.capture_sequence + 10, 4)
         repeated_occurrence = replace(snapshot, revision=later_revision)
@@ -223,10 +228,11 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         agent.latest_ingested_frame = SimpleNamespace(snapshot=repeated_occurrence)
         await restarted_router.observe(agent, repeated_occurrence)
         assert (
-            db.execute(
+            db.conn.execute(
                 "SELECT count(*) FROM structured_decisions "
-                "WHERE agent_id = ? AND decision_kind = ? AND request_identity = ?",
-                (agent.id, kind, identity),
+                "WHERE repository_id = ? AND agent_id = ? AND decision_kind = ? "
+                "AND request_identity = ?",
+                (db.repository_id, agent.id, kind, identity),
             ).fetchone()[0]
             == 2  # noqa: PLR2004 - two distinct occurrences of identical content
         )
@@ -241,10 +247,10 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
     agent.latest_ingested_frame = SimpleNamespace(snapshot=crash_snapshot)
     await router.observe(agent, crash_snapshot)
     crash_identity = question_fingerprint(crash_question)
-    crash_row = db.execute(
+    crash_row = db.conn.execute(
         "SELECT decision_request_id, decision_kind, request_identity, request_json "
-        "FROM structured_decisions WHERE request_identity = ?",
-        (crash_identity,),
+        "FROM structured_decisions WHERE repository_id = ? AND request_identity = ?",
+        (db.repository_id, crash_identity),
     ).fetchone()
     assert crash_row is not None
     crash_request = {
@@ -277,8 +283,10 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
 
     assert agent.answer_verified_question.await_count == EXPECTED_QUESTION_EXECUTIONS
     agent.answer_verified_permission.assert_awaited_once()
-    response_count = db.execute(
-        "SELECT count(*) FROM structured_decisions WHERE response_json IS NOT NULL"
+    response_count = db.conn.execute(
+        "SELECT count(*) FROM structured_decisions "
+        "WHERE repository_id = ? AND response_json IS NOT NULL",
+        (db.repository_id,),
     ).fetchone()[0]
     assert response_count == len(snapshots) + 1
 
@@ -293,11 +301,10 @@ async def test_permission_observe_and_respond_bridge_permission_service(
         "murder.runtime.terminal.tmux.send_keys",
         AsyncMock(side_effect=AssertionError("the decision router emitted terminal input")),
     )
-    db = get_db(tmp_path / "murder.db")
-    init_db(db)
-    db.execute(
-        "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
-        ("run-perm", "2026-07-12T00:00:00+00:00", "{}"),
+    db = open_test_repo_db(tmp_path / "murder.db")
+    db.conn.execute(
+        "INSERT INTO runs(repository_id, run_id, started_at, config_snapshot) VALUES (?, ?, ?, ?)",
+        (db.repository_id, "run-perm", "2026-07-12T00:00:00+00:00", "{}"),
     )
     bus = InProcessOrchestrationEventSink()
     now = datetime(2026, 7, 12, tzinfo=timezone.utc)
@@ -336,9 +343,10 @@ async def test_permission_observe_and_respond_bridge_permission_service(
     router = StructuredDecisionRouter(runtime)
     await router.observe(agent, snapshot)
 
-    row = db.execute(
+    row = db.conn.execute(
         "SELECT decision_request_id, decision_kind, request_identity, request_json "
-        "FROM structured_decisions"
+        "FROM structured_decisions WHERE repository_id = ?",
+        (db.repository_id,),
     ).fetchone()
     assert row is not None
     request = {

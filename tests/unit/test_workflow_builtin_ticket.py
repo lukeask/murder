@@ -7,12 +7,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from murder.state.persistence.workflow_runs import get_workflow_run
+from murder.state.storage.paths import ticket_md
 from murder.user_config import (
     delete_workflow,
     put_workflow,
     read_workflow_registry,
     save_workflows,
 )
+from murder.work.tickets.parser import parse_ticket
 from murder.work.workflows import (
     TICKET_WORKFLOW_NAME,
     StageDef,
@@ -25,6 +28,7 @@ from murder.work.workflows import (
 from murder.work.workflows.builtins import apply_launch_execution, merge_builtin_workflows
 from murder.work.workflows.launch import run_workflow_by_name
 from murder.work.workflows.materialize import materialize_workflow
+from tests.support.database import open_test_repo_db
 
 
 def test_ticket_builtin_registers_and_skips_harness_model_until_launch() -> None:
@@ -226,12 +230,9 @@ def test_run_workflow_by_name_rejects_ticket_without_required_title(
 def test_materialize_rejects_unprepared_builtin_missing_harness_model(
     repo_root: Path,
 ) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-
     db_file = repo_root / ".murder" / "murder.db"
     db_file.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_db(db_file)
-    init_db(conn)
+    conn = open_test_repo_db(db_file)
 
     unprepared = ticket_workflow_template()
     assert unprepared.builtin
@@ -239,21 +240,13 @@ def test_materialize_rejects_unprepared_builtin_missing_harness_model(
     assert unprepared.stages[0].model is None
 
     with pytest.raises(ValueError, match="requires a harness"):
-        materialize_workflow(
-            conn, repo_root, unprepared, {"title": "x", "prompt": "y"}
-        )
+        materialize_workflow(conn, repo_root, unprepared, {"title": "x", "prompt": "y"})
 
 
 def test_materialize_prepared_ticket_creates_workflow_run(repo_root: Path) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-    from murder.state.persistence.workflow_runs import get_workflow_run
-    from murder.state.storage.paths import ticket_md
-    from murder.work.tickets.parser import parse_ticket
-
     db_file = repo_root / ".murder" / "murder.db"
     db_file.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_db(db_file)
-    init_db(conn)
+    conn = open_test_repo_db(db_file)
 
     resolved = apply_launch_execution(
         ticket_workflow_template(),

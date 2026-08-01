@@ -11,21 +11,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from murder.state.persistence import tickets as dbmod
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import ticket_md
 from murder.work.tickets import carve
 from murder.work.tickets.carve_scan import detect_carve_forms
 from murder.work.tickets.parser import parse_ticket
 from murder.work.tickets.status import TicketStatus
 from murder.work.tickets.sync import TicketSync
+from tests.support.database import open_test_repo_db
 
 
 def _conn(repo_root: Path):
     db_file = repo_root / ".murder" / "murder.db"
     db_file.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_db(db_file)
-    init_db(conn)
-    return conn
+    return open_test_repo_db(db_file)
 
 
 # --------------------------------------------------------------------------- #

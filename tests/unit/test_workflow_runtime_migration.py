@@ -4,6 +4,7 @@ import json
 import sqlite3
 from uuid import UUID
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.migrations import _migrate_workflow_runs
 from murder.state.persistence.workflow_runs import (
     get_workflow_run,
@@ -17,6 +18,7 @@ from murder.work.workflows.runtime import (
 )
 
 LEGACY_DEFINITION_VERSION = 2
+LEGACY_REPOSITORY_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def _legacy_conn() -> sqlite3.Connection:
@@ -66,7 +68,19 @@ def test_legacy_workflow_backfill_creates_authoritative_state_and_waits() -> Non
     assert {"workflow_id", "state_json", "revision", "definition_version"} <= columns
     row = conn.execute("SELECT workflow_id FROM workflow_runs").fetchone()
     workflow_id = UUID(str(row["workflow_id"]))
-    run = get_workflow_run(conn, workflow_id)
+    # This isolated migration test intentionally does not run the full schema
+    # partition rebuild; add only the scope columns needed by the operational
+    # readers exercised below.
+    conn.execute(
+        f"ALTER TABLE workflow_runs ADD COLUMN repository_id TEXT NOT NULL "
+        f"DEFAULT '{LEGACY_REPOSITORY_ID}'"
+    )
+    conn.execute(
+        f"ALTER TABLE workflow_waits ADD COLUMN repository_id TEXT NOT NULL "
+        f"DEFAULT '{LEGACY_REPOSITORY_ID}'"
+    )
+    db = RepoDb(conn, LEGACY_REPOSITORY_ID)
+    run = get_workflow_run(db, workflow_id)
     assert run is not None
     assert run.parent_ticket_id == "t001"
     assert run.definition_name == "legacy-dag"
@@ -79,7 +93,7 @@ def test_legacy_workflow_backfill_creates_authoritative_state_and_waits() -> Non
         ("build", StageStatus.SUCCEEDED),
         ("test", StageStatus.READY),
     ]
-    waits = list_workflow_waits(conn, workflow_id)
+    waits = list_workflow_waits(db, workflow_id)
     assert len(waits) == 1
     assert waits[0].spec == ExternalSignalWait(
         signal_name="ticket.finished",

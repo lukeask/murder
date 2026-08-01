@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import sqlite3
+from pathlib import Path
 
 from murder.codebase_map.store import (
     latest_map_sha,
@@ -12,15 +12,10 @@ from murder.codebase_map.store import (
     snapshot_rollup,
 )
 from murder.codebase_map.summarize import FileSummary
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.migrations import _migrate_map_summaries
-from murder.state.persistence.schema import SCHEMA_SQL
-
-
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA_SQL)
-    return conn
+from murder.state.persistence.schema import init_db
+from tests.support.database import open_test_repo_db
 
 
 def _summary(path: str, body: str = "# body") -> FileSummary:
@@ -33,8 +28,8 @@ def _summary(path: str, body: str = "# body") -> FileSummary:
     )
 
 
-def test_snapshot_file_round_trips():
-    db = _db()
+def test_snapshot_file_round_trips(repo_db: RepoDb):
+    db = repo_db
     snapshot_file(db, "pkg/a.py", "sha1", _summary("pkg/a.py", body="hello"))
     row = load_summary(db, "pkg/a.py", "sha1")
     assert row is not None
@@ -45,8 +40,8 @@ def test_snapshot_file_round_trips():
     assert row["summary_tokens"] == 10
 
 
-def test_snapshot_file_upserts_not_duplicates():
-    db = _db()
+def test_snapshot_file_upserts_not_duplicates(repo_db: RepoDb):
+    db = repo_db
     snapshot_file(db, "pkg/a.py", "sha1", _summary("pkg/a.py", body="v1"))
     snapshot_file(db, "pkg/a.py", "sha1", _summary("pkg/a.py", body="v2"))
     rows = rows_for_commit(db, "sha1")
@@ -54,8 +49,8 @@ def test_snapshot_file_upserts_not_duplicates():
     assert rows[0]["body"] == "v2"
 
 
-def test_snapshot_rollup_nulls_source_fields():
-    db = _db()
+def test_snapshot_rollup_nulls_source_fields(repo_db: RepoDb):
+    db = repo_db
     snapshot_rollup(db, "pkg", "sha1", "dir", "dir body", summary_tokens=7)
     row = load_summary(db, "pkg", "sha1")
     assert row["kind"] == "dir"
@@ -65,26 +60,33 @@ def test_snapshot_rollup_nulls_source_fields():
     assert row["body"] == "dir body"
 
 
-def test_load_summary_missing_returns_none():
-    db = _db()
+def test_load_summary_missing_returns_none(repo_db: RepoDb):
+    db = repo_db
     assert load_summary(db, "nope.py", "sha1") is None
 
 
-def test_latest_map_sha_returns_most_recent():
-    db = _db()
+def test_latest_map_sha_returns_most_recent(repo_db: RepoDb):
+    db = repo_db
     snapshot_file(db, "a.py", "old_sha", _summary("a.py"))
     snapshot_file(db, "a.py", "new_sha", _summary("a.py"))
+    # `generated_at` has second resolution; make the ordering explicit rather
+    # than relying on two Turso writes landing in different seconds.
+    db.conn.execute(
+        "UPDATE map_summaries SET generated_at = ? "
+        "WHERE repository_id = ? AND commit_sha = ?",
+        ("9999-12-31T23:59:59", db.repository_id, "new_sha"),
+    )
     # new_sha was generated last → it is the latest.
     assert latest_map_sha(db) == "new_sha"
 
 
-def test_latest_map_sha_empty_is_none():
-    db = _db()
+def test_latest_map_sha_empty_is_none(repo_db: RepoDb):
+    db = repo_db
     assert latest_map_sha(db) is None
 
 
-def test_rows_for_commit_returns_all():
-    db = _db()
+def test_rows_for_commit_returns_all(repo_db: RepoDb):
+    db = repo_db
     snapshot_file(db, "a.py", "sha1", _summary("a.py"))
     snapshot_file(db, "b.py", "sha1", _summary("b.py"))
     snapshot_rollup(db, "ROOT", "sha1", "root", "root body", summary_tokens=3)
@@ -95,9 +97,9 @@ def test_rows_for_commit_returns_all():
     assert len(rows_for_commit(db, "sha2")) == 1
 
 
-def test_migration_creates_table_and_is_idempotent():
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
+def test_migration_creates_table_and_is_idempotent(tmp_path: Path):
+    db = open_test_repo_db(tmp_path / "legacy.db", initialize=False)
+    conn = db.conn
     # A DB lacking the table.
     present = {
         r["name"]
@@ -114,5 +116,7 @@ def test_migration_creates_table_and_is_idempotent():
 
     # Idempotent re-run: no error, table still present, round-trips.
     _migrate_map_summaries(conn)
-    snapshot_file(conn, "a.py", "sha1", _summary("a.py"))
-    assert load_summary(conn, "a.py", "sha1") is not None
+    init_db(conn, repository_id=db.repository_id)
+    snapshot_file(db, "a.py", "sha1", _summary("a.py"))
+    assert load_summary(db, "a.py", "sha1") is not None
+    db.close()

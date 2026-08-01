@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -8,7 +7,7 @@ import pytest
 from pydantic import JsonValue
 
 import murder.work.workflows.service as workflow_service
-from murder.state.persistence.schema import init_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.workflow_runs import (
     StaleWorkflowRevisionError,
     TerminalWorkflowTransitionError,
@@ -52,12 +51,12 @@ NOW = datetime(2026, 7, 18, 18, 0, tzinfo=timezone.utc)
 SECOND_REVISION = 2
 
 
-def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    init_db(conn)
-    return conn
+def _conn() -> RepoDb:
+    from pathlib import Path
+
+    from tests.support.database import open_test_repo_db
+
+    return open_test_repo_db(Path(":memory:"))
 
 
 def _static_run() -> WorkflowRunRecord:
@@ -96,7 +95,7 @@ def _static_run() -> WorkflowRunRecord:
     )
 
 
-def _create_static_run(conn: sqlite3.Connection) -> WorkflowRunRecord:
+def _create_static_run(conn: RepoDb) -> WorkflowRunRecord:
     run = _static_run()
     create_workflow_run(
         conn,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -61,16 +60,14 @@ from murder.state.persistence.harness_control import (
     persist_operation,
     record_effect_emissions,
 )
-from murder.state.persistence.schema import init_db
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
 HYDRATED_CAPTURE_SEQUENCE = 11
 
 
-def test_verified_attach_hydrates_only_bounded_recent_parser_history() -> None:
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
+def test_verified_attach_hydrates_only_bounded_recent_parser_history(tmp_path) -> None:
+    db = open_test_repo_db(tmp_path / "murder.db")
     total_frames = PARSER_HISTORY_FRAME_LIMIT + 6
     for index in range(total_frames):
         frame = TerminalFrame(
@@ -95,8 +92,8 @@ def test_verified_attach_hydrates_only_bounded_recent_parser_history() -> None:
             (),
             EvidenceDiagnostics("bounded-history-test"),
         )
-        persist_frame(connection, frame, session_id="long-lived-agent")
-        persist_evidence(connection, evidence)
+        persist_frame(db, frame, session_id="long-lived-agent")
+        persist_evidence(db, evidence)
 
     class Adapter:
         parser_version = "bounded-history-test/v1"
@@ -118,7 +115,7 @@ def test_verified_attach_hydrates_only_bounded_recent_parser_history() -> None:
     session = VerifiedHarnessControlSession.from_tmux(
         harness_kind="codex",
         terminal_session="codex-pane",
-        connection=connection,
+        db=db,
         persistence_session_id="long-lived-agent",
         observation_adapter=adapter,
         action_adapter=adapter,
@@ -144,15 +141,15 @@ def test_verified_attach_hydrates_only_bounded_recent_parser_history() -> None:
     assert adapter.history_ids[-1] == f"evidence-{total_frames - 1}"
 
 
-def test_verified_control_session_composes_each_supported_harness_without_legacy_sender() -> None:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
+def test_verified_control_session_composes_each_supported_harness_without_legacy_sender(
+    tmp_path,
+) -> None:
+    db = open_test_repo_db(tmp_path / "murder.db")
     for harness_kind in ("codex", "claude_code", "cursor", "antigravity", "pi"):
         session = VerifiedHarnessControlSession.from_tmux(
             harness_kind=harness_kind,
             terminal_session=f"{harness_kind}-pane",
-            connection=conn,
+            db=db,
             persistence_session_id="agent-1",
         )
         assert session.harness_id == harness_kind
@@ -201,14 +198,14 @@ def test_verified_control_session_composes_each_supported_harness_without_legacy
     )
     asyncio.run(session.controller.persist_operation(preemptible))
     asyncio.run(session._preemption_hook("preemptible")("interrupt-1"))  # noqa: SLF001
-    persisted = get_operation(conn, "preemptible")
+    persisted = get_operation(db, "preemptible")
     assert persisted is not None
     cancelled = reconstruct_persisted_operation(persisted)
     assert cancelled.envelope.status is OperationStatus.CANCELLED
     assert cancelled.envelope.warnings[-1].message.endswith("interrupt-1")
     assert all(
         candidate.operation.operation_id != "preemptible"
-        for candidate in load_recovery_candidates(conn, harness_id="pi", session_id="agent-1")
+        for candidate in load_recovery_candidates(db, harness_id="pi", session_id="agent-1")
     )
 
     unsafe = replace(
@@ -221,7 +218,7 @@ def test_verified_control_session_composes_each_supported_harness_without_legacy
     )
     asyncio.run(session.controller.persist_operation(unsafe))
     persist_action_record(
-        conn,
+        db,
         ActionRecord(
             "unsafe-usage-action",
             "unsafe-preemptible",
@@ -237,18 +234,16 @@ def test_verified_control_session_composes_each_supported_harness_without_legacy
         ),
     )
     asyncio.run(session._preemption_hook("unsafe-preemptible")("interrupt-2"))  # noqa: SLF001
-    unsafe_persisted = get_operation(conn, "unsafe-preemptible")
+    unsafe_persisted = get_operation(db, "unsafe-preemptible")
     assert unsafe_persisted is not None
     unsafe_escalated = reconstruct_persisted_operation(unsafe_persisted)
     assert unsafe_escalated.envelope.status is OperationStatus.ESCALATED
     assert unsafe_escalated.envelope.warnings[-1].code == "preempted_with_unverified_effect"
 
 
-def test_session_recovery_reconciles_typed_state_against_one_fresh_observation() -> None:
+def test_session_recovery_reconciles_typed_state_against_one_fresh_observation(tmp_path) -> None:
     async def scenario() -> None:
-        connection = sqlite3.connect(":memory:")
-        connection.row_factory = sqlite3.Row
-        init_db(connection)
+        db = open_test_repo_db(tmp_path / "murder.db")
         baseline = ObservationRevision(0, 1, 1)
         fresh = ObservationRevision(0, 2, 2)
         operation = InterruptOperation(
@@ -268,7 +263,7 @@ def test_session_recovery_reconciles_typed_state_against_one_fresh_observation()
             "interrupt-action",
         )
         persist_operation(
-            connection,
+            db,
             operation.envelope,
             harness_id="pi",
             session_id="agent-1",
@@ -276,7 +271,7 @@ def test_session_recovery_reconciles_typed_state_against_one_fresh_observation()
             operation_state=operation,
         )
         persist_action_record(
-            connection,
+            db,
             ActionRecord(
                 "interrupt-action",
                 "interrupt-before-restart",
@@ -324,7 +319,7 @@ def test_session_recovery_reconciles_typed_state_against_one_fresh_observation()
             object(),  # type: ignore[arg-type]
             harness_id="pi",
             terminal_session="pi-pane",
-            connection=connection,
+            db=db,
             persistence_session_id="agent-1",
         )
 
@@ -349,13 +344,12 @@ def test_session_recovery_reconciles_typed_state_against_one_fresh_observation()
 
 def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_replay(  # noqa: PLR0915 - end-to-end recovery trace
     monkeypatch,
+    tmp_path,
 ) -> None:
     """Restart preserves knowledge/history and drives safe observation to quiescence."""
 
     async def scenario() -> None:
-        connection = sqlite3.connect(":memory:")
-        connection.row_factory = sqlite3.Row
-        init_db(connection)
+        db = open_test_repo_db(tmp_path / "murder.db")
         baseline = ObservationRevision(4, 9, 3)
         frame = TerminalFrame("old-frame", "codex", NOW, 120, 40, "old", False, 4, 9)
         evidence = EvidenceEnvelope(
@@ -381,9 +375,9 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
                 explanation="persisted parser contradiction",
             ),
         )
-        persist_frame(connection, frame, session_id="agent-1")
-        persist_evidence(connection, evidence)
-        persist_observation_snapshot(connection, persisted, session_id="agent-1")
+        persist_frame(db, frame, session_id="agent-1")
+        persist_evidence(db, evidence)
+        persist_observation_snapshot(db, persisted, session_id="agent-1")
 
         operation = InterruptOperation(
             OperationEnvelope(
@@ -402,7 +396,7 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
             "already-emitted",
         )
         persist_operation(
-            connection,
+            db,
             operation.envelope,
             harness_id="codex",
             session_id="agent-1",
@@ -410,7 +404,7 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
             operation_state=operation,
         )
         persist_action_record(
-            connection,
+            db,
             ActionRecord(
                 "already-emitted",
                 "z-safe-recovery",
@@ -433,7 +427,7 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
             action_id="unsafe-action",
         )
         persist_operation(
-            connection,
+            db,
             unsafe.envelope,
             harness_id="codex",
             session_id="agent-1",
@@ -446,7 +440,7 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
             DuplicatePolicy.NEVER_AUTOMATICALLY_REPLAY,
         )
         persist_action_record(
-            connection,
+            db,
             ActionRecord(
                 unsafe_action.action_id,
                 unsafe_action.operation_id,
@@ -458,12 +452,12 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
             ),
         )
         record_effect_emissions(
-            connection,
+            db,
             action_id=unsafe_action.action_id,
             results=(EffectEmission("unsafe-effect", EmissionStatus.EMITTED),),
             emitted_at=NOW,
         )
-        connection.commit()
+        db.conn.commit()
 
         frames = iter(("active", "stopped"))
         latest = {"text": ""}
@@ -527,7 +521,7 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
         session = VerifiedHarnessControlSession.from_tmux(
             harness_kind="codex",
             terminal_session="codex-pane",
-            connection=connection,
+            db=db,
             persistence_session_id="agent-1",
             observation_adapter=adapter,
             action_adapter=adapter,
@@ -547,9 +541,9 @@ def test_restart_hydrates_semantic_and_evidence_baselines_then_recovers_without_
             session.controller.snapshot.revision.capture_sequence == HYDRATED_CAPTURE_SEQUENCE
         )
         assert adapter.lowered == []
-        unsafe_row = get_operation(connection, "a-unsafe-recovery")
+        unsafe_row = get_operation(db, "a-unsafe-recovery")
         assert unsafe_row is not None and unsafe_row.status == "ESCALATED"
-        recovered_row = get_operation(connection, "z-safe-recovery")
+        recovered_row = get_operation(db, "z-safe-recovery")
         assert recovered_row is not None and recovered_row.status == "SUCCEEDED"
 
     asyncio.run(scenario())

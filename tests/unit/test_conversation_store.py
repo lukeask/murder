@@ -13,11 +13,11 @@ init_db idempotency, CC fixture round-trip.
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.conversation import (
     BLOCK_KINDS,
     append_block,
@@ -32,8 +32,8 @@ from murder.state.persistence.conversation import (
     update_live_block,
     upsert_conversation,
 )
-from murder.state.persistence.schema import get_db, init_db
-from tests.support import factories
+from murder.state.persistence.schema import init_db
+from tests.support.database import open_test_repo_db
 
 _CC_EXPECTED = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cc" / "expected.json"
 
@@ -44,17 +44,25 @@ _CC_EXPECTED = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cc" 
 
 
 @pytest.fixture()
-def conn(tmp_path: Path) -> sqlite3.Connection:
+def conn(tmp_path: Path) -> RepoDb:
     """In-memory DB initialised with the full murder schema."""
-    db = get_db(tmp_path / "test.db")
-    init_db(db)
-    return db
+    db = open_test_repo_db(tmp_path / "test.db")
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def _make_conv(
-    conn: sqlite3.Connection, conv_id: str = "conv-1", agent_id: str = "agent-1"
+    conn: RepoDb, conv_id: str = "conv-1", agent_id: str = "agent-1"
 ) -> None:
-    factories.make_conversation(conn, conv_id, agent_id=agent_id)
+    upsert_conversation(
+        conn,
+        conversation_id=conv_id,
+        agent_id=agent_id,
+        harness="cc",
+        model="opus",
+    )
 
 
 # ============================================================
@@ -159,7 +167,7 @@ def test_segment_to_block_kind_all_block_kinds_valid():
 
 def test_upsert_creates_row(conn):
     _make_conv(conn)
-    row = conn.execute("SELECT * FROM conversations WHERE conversation_id = 'conv-1'").fetchone()
+    row = conn.conn.execute("SELECT * FROM conversations WHERE conversation_id = 'conv-1'").fetchone()
     assert row is not None
     assert row["agent_id"] == "agent-1"
     assert row["harness"] == "cc"
@@ -170,7 +178,7 @@ def test_upsert_creates_row(conn):
 def test_upsert_idempotent_does_not_duplicate(conn):
     _make_conv(conn)
     _make_conv(conn)
-    count = conn.execute(
+    count = conn.conn.execute(
         "SELECT COUNT(*) FROM conversations WHERE conversation_id = 'conv-1'"
     ).fetchone()[0]
     assert count == 1
@@ -179,7 +187,7 @@ def test_upsert_idempotent_does_not_duplicate(conn):
 def test_upsert_updates_harness_on_second_call(conn):
     _make_conv(conn)
     upsert_conversation(conn, conversation_id="conv-1", agent_id="agent-1", harness="codex")
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT harness FROM conversations WHERE conversation_id = 'conv-1'"
     ).fetchone()
     assert row["harness"] == "codex"
@@ -187,7 +195,7 @@ def test_upsert_updates_harness_on_second_call(conn):
 
 def test_upsert_stores_timestamps(conn):
     _make_conv(conn)
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT created_at, updated_at FROM conversations WHERE conversation_id = 'conv-1'"
     ).fetchone()
     assert row["created_at"] is not None
@@ -210,7 +218,7 @@ def test_set_status_applies_transition(conn, transitions):
     _make_conv(conn)
     for status in transitions:
         set_conversation_status(conn, "conv-1", status)
-    row = conn.execute("SELECT status FROM conversations WHERE conversation_id='conv-1'").fetchone()
+    row = conn.conn.execute("SELECT status FROM conversations WHERE conversation_id='conv-1'").fetchone()
     assert row["status"] == transitions[-1]
 
 
@@ -220,7 +228,7 @@ def test_set_status_applies_transition(conn, transitions):
 def test_set_harness_session_id_stores_value(conn):
     _make_conv(conn)
     set_harness_session_id(conn, "conv-1", "sess-abc123")
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT harness_session_id FROM conversations WHERE conversation_id='conv-1'"
     ).fetchone()
     assert row["harness_session_id"] == "sess-abc123"
@@ -228,11 +236,11 @@ def test_set_harness_session_id_stores_value(conn):
 
 def test_set_harness_session_id_updates_updated_at(conn):
     _make_conv(conn)
-    row_before = conn.execute(
+    row_before = conn.conn.execute(
         "SELECT updated_at FROM conversations WHERE conversation_id='conv-1'"
     ).fetchone()
     set_harness_session_id(conn, "conv-1", "sess-xyz")
-    row_after = conn.execute(
+    row_after = conn.conn.execute(
         "SELECT updated_at FROM conversations WHERE conversation_id='conv-1'"
     ).fetchone()
     # updated_at must be at least as recent (seconds precision might be equal in fast tests)
@@ -282,7 +290,7 @@ def test_append_block_seals_previous_live_block(conn):
     assert b0.sealed is False
     # append a new segment — should seal b0
     append_block(conn, "conv-1", {"type": "user", "text": "next"}, seal_previous=True)
-    row = conn.execute("SELECT sealed FROM conversation_blocks WHERE id = ?", (b0.id,)).fetchone()
+    row = conn.conn.execute("SELECT sealed FROM conversation_blocks WHERE id = ?", (b0.id,)).fetchone()
     assert row["sealed"] == 1
 
 
@@ -301,7 +309,7 @@ def test_live_block_rule_at_most_one_unsealed(conn):
         append_block(
             conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": f"chunk {i}"}
         )
-    count = conn.execute(
+    count = conn.conn.execute(
         "SELECT COUNT(*) FROM conversation_blocks WHERE conversation_id='conv-1' AND sealed=0"
     ).fetchone()[0]
     assert count == 1
@@ -317,7 +325,7 @@ def test_update_live_block_updates_payload(conn):
     seg2 = {"type": "assistant", "phase": "intermediate", "text": "hello world"}
     updated = update_live_block(conn, "conv-1", seg2)
     assert updated is True
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT payload_json FROM conversation_blocks WHERE id=?", (b.id,)
     ).fetchone()
     assert json.loads(row["payload_json"])["text"] == "hello world"
@@ -329,7 +337,7 @@ def test_update_live_block_seals_on_terminal_kind(conn):
     b = append_block(conn, "conv-1", {"type": "assistant", "phase": "intermediate", "text": "hi"})
     assert b.sealed is False
     update_live_block(conn, "conv-1", {"type": "assistant", "phase": "final", "text": "hi done"})
-    row = conn.execute("SELECT sealed FROM conversation_blocks WHERE id=?", (b.id,)).fetchone()
+    row = conn.conn.execute("SELECT sealed FROM conversation_blocks WHERE id=?", (b.id,)).fetchone()
     assert row["sealed"] == 1
 
 
@@ -477,7 +485,7 @@ def test_merge_conversation_doc_live_block_rule(conn):
         ]
     }
     merge_conversation_doc(conn, "conv-1", doc)
-    count = conn.execute(
+    count = conn.conn.execute(
         "SELECT COUNT(*) FROM conversation_blocks WHERE conversation_id='conv-1' AND sealed=0"
     ).fetchone()[0]
     assert count <= 1
@@ -533,13 +541,13 @@ def test_merge_conversation_doc_updates_conversation_metadata(conn):
         "segments": [{"type": "user", "text": "x"}],
     }
     merge_conversation_doc(conn, "conv-1", doc)
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT harness, live_state FROM conversations WHERE conversation_id='conv-1'"
     ).fetchone()
     assert row["harness"] == "codex"
     assert row["live_state"] == "awaiting_input"
     # The condensed column no longer exists on conversations.
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+    cols = {r[1] for r in conn.conn.execute("PRAGMA table_info(conversations)").fetchall()}
     assert "condensed" not in cols
 
 
@@ -562,7 +570,7 @@ def test_mark_stale_conversations_flips_in_progress(conn):
         upsert_conversation(conn, conversation_id=f"conv-{i}", agent_id="a", status="in_progress")
     count = mark_stale_conversations(conn)
     assert count == 3
-    rows = conn.execute("SELECT status FROM conversations").fetchall()
+    rows = conn.conn.execute("SELECT status FROM conversations").fetchall()
     assert all(r["status"] == "stale" for r in rows)
 
 
@@ -570,7 +578,7 @@ def test_mark_stale_conversations_leaves_complete_alone(conn):
     """complete rows must not be touched by startup reconciliation."""
     upsert_conversation(conn, conversation_id="conv-done", agent_id="a", status="complete")
     mark_stale_conversations(conn)
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT status FROM conversations WHERE conversation_id='conv-done'"
     ).fetchone()
     assert row["status"] == "complete"
@@ -582,7 +590,7 @@ def test_mark_stale_conversations_clears_queued_message(conn):
     upsert_conversation(conn, conversation_id="conv-q", agent_id="a", status="in_progress")
     set_queued_message(conn, "conv-q", "held while busy")
     mark_stale_conversations(conn)
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT status, queued_message FROM conversations WHERE conversation_id='conv-q'"
     ).fetchone()
     assert row["status"] == "stale"
@@ -602,12 +610,12 @@ def test_init_db_idempotent(conn):
     """Calling init_db twice on an existing DB must not raise and must not add tables."""
     tables_before = {
         r["name"]
-        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for r in conn.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
-    init_db(conn)  # second call
+    init_db(conn.conn, repository_id=conn.repository_id)  # second call
     tables_after = {
         r["name"]
-        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for r in conn.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     assert tables_before == tables_after
 
@@ -615,7 +623,7 @@ def test_init_db_idempotent(conn):
 def test_init_db_creates_conversations_table(conn):
     tables = {
         r["name"]
-        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for r in conn.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     assert "conversations" in tables
     assert "conversation_blocks" in tables
@@ -626,13 +634,18 @@ def test_init_db_creates_conversations_table(conn):
 
 def test_agent_messages_unaffected_by_conversation_store(conn):
     """Inserting conversation blocks must not touch agent_messages."""
-    conn.execute(
-        "INSERT INTO agent_messages(agent_id, ordinal, role, body, captured_at)"
-        " VALUES ('agent-1', 0, 'user', 'hello', '2026-01-01T00:00:00')"
+    conn.conn.execute(
+        "INSERT INTO agent_messages"
+        "(repository_id, agent_id, ordinal, role, body, captured_at)"
+        " VALUES (?, 'agent-1', 0, 'user', 'hello', '2026-01-01T00:00:00')",
+        (conn.repository_id,),
     )
     _make_conv(conn)
     append_block(conn, "conv-1", {"type": "user", "text": "hi"})
-    rows = conn.execute("SELECT body FROM agent_messages WHERE agent_id='agent-1'").fetchall()
+    rows = conn.conn.execute(
+        "SELECT body FROM agent_messages WHERE repository_id = ? AND agent_id = 'agent-1'",
+        (conn.repository_id,),
+    ).fetchall()
     assert len(rows) == 1
     assert rows[0]["body"] == "hello"
 
@@ -681,7 +694,7 @@ def test_answered_choice_prompt_seals_on_update(conn):
     resolved["chosen"] = 1
     _, changes = merge_non_user_segments_with_changes(conn, "conv-1", [resolved])
     assert changes and changes[0].action == "block-updated"
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT sealed FROM conversation_blocks WHERE conversation_id='conv-1'"
     ).fetchone()
     assert row["sealed"] == 1

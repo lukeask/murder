@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from murder.app.protocol.read_models import ConversationChunkSummary
 from murder.llm.harnesses.transcript_summarize import (
     SummaryPrompt,
     is_final_segment,
@@ -17,8 +18,7 @@ from murder.runtime.agents.summarization_buffer import (
     SummarizationBuffer,
 )
 from murder.state.persistence import conversation as conv_store
-from murder.state.persistence.schema import init_db
-
+from tests.support.database import open_test_repo_db
 
 # --------------------------------------------------------------------------
 # Summarizer-to-spec
@@ -181,63 +181,57 @@ def test_buffer_deterministic_under_prefix_growth() -> None:
 # --------------------------------------------------------------------------
 
 @pytest.fixture()
-def conn():
-    import sqlite3
-
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    init_db(c)
-    c.execute(
-        "INSERT INTO conversations (conversation_id, agent_id, status, created_at, updated_at)"
-        " VALUES ('conv-1', 'conv-1', 'in_progress', 't', 't')"
+def db(tmp_path):
+    db = open_test_repo_db(tmp_path / "murder.db")
+    db.conn.execute(
+        "INSERT INTO conversations "
+        "(repository_id, conversation_id, agent_id, status, created_at, updated_at) "
+        "VALUES (?, 'conv-1', 'conv-1', 'in_progress', 't', 't')",
+        (db.repository_id,),
     )
-    yield c
-    c.close()
+    yield db
+    db.close()
 
 
-def test_condensed_column_dropped(conn) -> None:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)").fetchall()}
+def test_condensed_column_dropped(db) -> None:
+    cols = {r[1] for r in db.conn.execute("PRAGMA table_info(conversations)").fetchall()}
     assert "condensed" not in cols
 
 
-def test_write_and_read_chunk_summaries_with_attribution(conn) -> None:
+def test_write_and_read_chunk_summaries_with_attribution(db) -> None:
     sid1 = conv_store.write_chunk_summary(
-        conn, "conv-1", summary="Read the schema.", block_ids=[10, 11, 12]
+        db, "conv-1", summary="Read the schema.", block_ids=[10, 11, 12]
     )
     sid2 = conv_store.write_chunk_summary(
-        conn, "conv-1", summary="Edited the parser.", block_ids=[13, 14]
+        db, "conv-1", summary="Edited the parser.", block_ids=[13, 14]
     )
     assert sid1 != sid2
 
-    rows = conv_store.read_chunk_summaries(conn, "conv-1")
+    rows = conv_store.read_chunk_summaries(db, "conv-1")
     assert [r.chunk_idx for r in rows] == [0, 1]
     assert rows[0].summary == "Read the schema."
     assert rows[0].block_ids == (10, 11, 12)
     assert rows[1].block_ids == (13, 14)
 
 
-def test_write_chunk_summary_rejects_empty(conn) -> None:
+def test_write_chunk_summary_rejects_empty(db) -> None:
     with pytest.raises(ValueError):
-        conv_store.write_chunk_summary(conn, "conv-1", summary="   ", block_ids=[1])
+        conv_store.write_chunk_summary(db, "conv-1", summary="   ", block_ids=[1])
 
 
-def test_chunk_summaries_in_read_model_snapshot(repo_root_tmp_conn=None) -> None:
+def test_chunk_summaries_in_read_model_snapshot(tmp_path) -> None:
     """The conversations snapshot carries ordered chunk summaries + block ids."""
-    import sqlite3
-
-    from murder.app.protocol.read_models import ConversationChunkSummary
-
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    init_db(c)
-    c.execute(
-        "INSERT INTO conversations (conversation_id, agent_id, status, created_at, updated_at)"
-        " VALUES ('conv-1', 'conv-1', 'in_progress', 't', 't')"
+    db = open_test_repo_db(tmp_path / "murder.db")
+    db.conn.execute(
+        "INSERT INTO conversations "
+        "(repository_id, conversation_id, agent_id, status, created_at, updated_at) "
+        "VALUES (?, 'conv-1', 'conv-1', 'in_progress', 't', 't')",
+        (db.repository_id,),
     )
-    conv_store.write_chunk_summary(c, "conv-1", summary="First.", block_ids=[1, 2])
-    conv_store.write_chunk_summary(c, "conv-1", summary="Second.", block_ids=[3])
+    conv_store.write_chunk_summary(db, "conv-1", summary="First.", block_ids=[1, 2])
+    conv_store.write_chunk_summary(db, "conv-1", summary="Second.", block_ids=[3])
 
-    rows = conv_store.read_chunk_summaries(c, "conv-1")
+    rows = conv_store.read_chunk_summaries(db, "conv-1")
     dtos = tuple(
         ConversationChunkSummary(
             summary_id=r.summary_id,
@@ -250,4 +244,4 @@ def test_chunk_summaries_in_read_model_snapshot(repo_root_tmp_conn=None) -> None
     assert dtos[0].summary == "First."
     assert dtos[0].block_ids == (1, 2)
     assert dtos[1].block_ids == (3,)
-    c.close()
+    db.close()

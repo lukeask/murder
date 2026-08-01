@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -10,11 +9,16 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+import turso
 from pydantic import ValidationError
 
 from murder.app.service.handlers import approvals as approval_handlers
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.facts.log import replay_facts, replay_projection_inputs
+from murder.llm.harness_control.model.observations import (
+    ChoiceState,
+    PermissionRequestState,
+)
 from murder.permissions import (
     ApprovalChoice,
     ApprovalRequiredError,
@@ -57,7 +61,9 @@ from murder.runtime.sessions.contracts import (
     WriteTerminalInput,
 )
 from murder.runtime.sessions.controller import SessionAuthorizationError, SessionController
-from murder.runtime.sessions.persistence import SessionStore, ensure_session_schema
+from murder.runtime.sessions.persistence import SessionStore
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 7, 18, 12, tzinfo=timezone.utc)
 
@@ -107,12 +113,12 @@ def operation(*, text: str = "hello", fence: int = 4) -> TerminalWrite:
 
 
 def permission_service(
-    connection: sqlite3.Connection,
+    db: RepoDb,
     *,
     now: datetime = NOW,
     ttl: timedelta = timedelta(seconds=30),
 ) -> tuple[PermissionService, PermissionStore]:
-    store = PermissionStore(connection)
+    store = PermissionStore(db)
     return (
         PermissionService(
             store=store,
@@ -161,9 +167,8 @@ def test_operation_digest_binds_parameters_and_lease_fence() -> None:
     )
 
 
-def test_policy_allow_persists_decision_grant_and_single_use() -> None:
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+def test_policy_allow_persists_decision_grant_and_single_use(repo_db: RepoDb) -> None:
+    service, store = permission_service(repo_db)
     proposed = operation()
 
     proof = service.request(proposed)
@@ -172,12 +177,12 @@ def test_policy_allow_persists_decision_grant_and_single_use() -> None:
     assert store.count("permission_policy_decisions") == 1
     assert store.count("permission_authorization_grants") == 1
     assert store.count("permission_authorization_uses") == 1
-    assert [fact.kind for fact in replay_facts(connection)] == [
+    assert [fact.kind for fact in replay_facts(repo_db)] == [
         "permission.grant.issued",
         "permission.grant.used",
     ]
     permission_inputs = replay_projection_inputs(
-        connection,
+        repo_db,
         projection="permissions",
     )
     assert [item.generation for item in permission_inputs] == [0, 1]
@@ -189,13 +194,13 @@ def test_grant_use_limit_is_consumed_atomically_across_connections(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "permissions.db"
-    issuing = sqlite3.connect(database, timeout=5)
+    issuing = open_test_repo_db(database)
     service, _ = permission_service(issuing)
     proposed = operation()
     proof = service.request(proposed)
     second_proof = proof.model_copy(update={"authorization_id": uuid4()})
-    first_connection = sqlite3.connect(database, timeout=5, check_same_thread=False)
-    second_connection = sqlite3.connect(database, timeout=5, check_same_thread=False)
+    first_connection = open_test_repo_db(database)
+    second_connection = open_test_repo_db(database)
     first, _ = permission_service(first_connection)
     second, _ = permission_service(second_connection)
 
@@ -218,19 +223,18 @@ def test_grant_use_limit_is_consumed_atomically_across_connections(
         )
     assert sorted(outcomes) == [False, True]
     assert (
-        issuing.execute(
+        issuing.conn.execute(
             "SELECT COUNT(*) FROM permission_authorization_uses"
         ).fetchone()[0]
         == 1
     )
 
 
-def test_permission_use_and_revocation_roll_back_when_fact_append_fails() -> None:
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+def test_permission_use_and_revocation_roll_back_when_fact_append_fails(repo_db: RepoDb) -> None:
+    service, store = permission_service(repo_db)
     proposed = operation()
     proof = service.request(proposed)
-    connection.execute(
+    repo_db.conn.execute(
         """
         CREATE TRIGGER reject_permission_outcome
         BEFORE INSERT ON retained_facts
@@ -240,21 +244,20 @@ def test_permission_use_and_revocation_roll_back_when_fact_append_fails() -> Non
         END
         """
     )
-    with pytest.raises(sqlite3.IntegrityError, match="reject permission outcome"):
+    with pytest.raises(turso.DatabaseError, match="reject permission outcome"):
         service.enforce(proposed, proof)
     assert store.grant_use_count(proof.grant_id) == 0
-    with pytest.raises(sqlite3.IntegrityError, match="reject permission outcome"):
+    with pytest.raises(turso.DatabaseError, match="reject permission outcome"):
         store.revoke_grant(proof.grant_id, revoked_at=NOW, reason="rollback")
     assert not store.grant_is_revoked(proof.grant_id)
 
-    connection.execute("DROP TRIGGER reject_permission_outcome")
+    repo_db.conn.execute("DROP TRIGGER reject_permission_outcome")
     service.enforce(proposed, proof)
     assert store.grant_use_count(proof.grant_id) == 1
 
 
-def test_proof_rejects_digest_expiry_and_revocation() -> None:
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+def test_proof_rejects_digest_expiry_and_revocation(repo_db: RepoDb) -> None:
+    service, store = permission_service(repo_db)
     proposed = operation()
     proof = service.request(proposed)
     changed = proposed.model_copy(
@@ -264,7 +267,7 @@ def test_proof_rejects_digest_expiry_and_revocation() -> None:
         service.enforce(changed, proof)
 
     store.revoke_grant(proof.grant_id, revoked_at=NOW, reason="review withdrawn")
-    assert [fact.kind for fact in replay_facts(connection)] == [
+    assert [fact.kind for fact in replay_facts(repo_db)] == [
         "permission.grant.issued",
         "permission.grant.revoked",
     ]
@@ -272,7 +275,7 @@ def test_proof_rejects_digest_expiry_and_revocation() -> None:
         service.enforce(proposed, proof)
 
     expired_service, _ = permission_service(
-        connection,
+        repo_db,
         now=NOW + timedelta(minutes=1),
     )
     with pytest.raises(InvalidAuthorizationError, match="expired|revoked"):
@@ -309,9 +312,8 @@ def test_tool_arguments_are_policy_visible_and_digest_bound() -> None:
         )
 
 
-def test_takeover_requires_persisted_approval_evidence() -> None:
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+def test_takeover_requires_persisted_approval_evidence(repo_db: RepoDb) -> None:
+    service, store = permission_service(repo_db)
     holder = principal(PrincipalKind.SERVICE, "scheduler")
     request = AcquireWriterLease(
         meta=request_meta(),
@@ -344,9 +346,10 @@ def test_takeover_requires_persisted_approval_evidence() -> None:
     assert store.count("permission_authorization_grants") == 1
 
 
-def test_standalone_denial_is_authoritative_and_fabricated_prior_evidence_is_rejected() -> None:
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+def test_standalone_denial_is_authoritative_and_fabricated_prior_evidence_is_rejected(
+    repo_db: RepoDb,
+) -> None:
+    service, store = permission_service(repo_db)
     requester = principal(PrincipalKind.SERVICE, "scheduler")
     request = AcquireWriterLease(
         meta=request_meta(),
@@ -397,10 +400,9 @@ def test_standalone_denial_is_authoritative_and_fabricated_prior_evidence_is_rej
     assert store.count("permission_authorization_grants") == 0
 
 
-def test_authenticated_product_handler_resolves_standalone_takeover() -> None:
-    connection = sqlite3.connect(":memory:")
+def test_authenticated_product_handler_resolves_standalone_takeover(repo_db: RepoDb) -> None:
     service, _ = permission_service(
-        connection,
+        repo_db,
         ttl=timedelta(days=365),
     )
     requester = principal(PrincipalKind.SERVICE, "scheduler")
@@ -424,7 +426,7 @@ def test_authenticated_product_handler_resolves_standalone_takeover() -> None:
 
     class Host:
         def __init__(self) -> None:
-            self.runtime = SimpleNamespace(db=connection)
+            self.runtime = SimpleNamespace(db=repo_db)
             self.handlers: dict[str, Any] = {}
 
         def register_application_query(self, name: object, handler: Any) -> None:
@@ -453,15 +455,15 @@ def test_authenticated_product_handler_resolves_standalone_takeover() -> None:
     assert authorization.lease_fence == proposed.current_lease_fence
 
 
-async def test_force_takeover_boolean_cannot_bypass_production_authorizer() -> None:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
-    permission, _ = permission_service(connection)
+async def test_force_takeover_boolean_cannot_bypass_production_authorizer(
+    repo_db: RepoDb,
+) -> None:
+    permission, _ = permission_service(repo_db)
     authorizer = SessionPermissionAuthorizer(permission)
     session_id = uuid4()
     record = HarnessSessionRecord(
         session_id=session_id,
-        repository_id=uuid4(),
+        repository_id=UUID(repo_db.repository_id),
         harness="terminal-only",
         transport=SessionTransport.TMUX,
         transport_ref="test",
@@ -472,7 +474,7 @@ async def test_force_takeover_boolean_cannot_bypass_production_authorizer() -> N
     )
     controller = SessionController(
         record=record,
-        store=SessionStore(connection),
+        store=SessionStore(repo_db),
         backend=RecordingBackend(),
         authorizer=authorizer,
         takeover_authorizer=lambda request, holder, current, proof: authorizer.authorize_takeover(
@@ -561,9 +563,10 @@ async def test_force_takeover_boolean_cannot_bypass_production_authorizer() -> N
     await controller.close()
 
 
-async def test_non_session_wrapper_enforces_exact_file_mutation_before_effect() -> None:
-    connection = sqlite3.connect(":memory:")
-    service, _ = permission_service(connection)
+async def test_non_session_wrapper_enforces_exact_file_mutation_before_effect(
+    repo_db: RepoDb,
+) -> None:
+    service, _ = permission_service(repo_db)
     operation = FileMutation(
         operation_id=uuid4(),
         principal=PermissionPrincipal(kind="service", id="file-writer"),
@@ -602,16 +605,16 @@ async def test_non_session_wrapper_enforces_exact_file_mutation_before_effect() 
     assert not called
 
 
-async def test_controller_validates_typed_proof_immediately_before_terminal_write() -> None:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
-    session_store = SessionStore(connection)
-    permission, _ = permission_service(connection)
+async def test_controller_validates_typed_proof_immediately_before_terminal_write(
+    repo_db: RepoDb,
+) -> None:
+    session_store = SessionStore(repo_db)
+    permission, _ = permission_service(repo_db)
     authorizer = SessionPermissionAuthorizer(permission)
     session_id = uuid4()
     record = HarnessSessionRecord(
         session_id=session_id,
-        repository_id=uuid4(),
+        repository_id=UUID(repo_db.repository_id),
         harness="terminal-only",
         transport=SessionTransport.TMUX,
         transport_ref="test",
@@ -697,9 +700,9 @@ def test_harness_file_request_maps_to_file_mutation_when_path_known() -> None:
 @pytest.mark.parametrize("kind", ("client", "llm", "user"))
 def test_harness_bridge_requires_approval_for_tool_from_client_llm_user(
     kind: str,
+    repo_db: RepoDb,
 ) -> None:
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+    service, store = permission_service(repo_db)
 
     with pytest.raises(ApprovalRequiredError) as required:
         request_harness_permission(
@@ -720,14 +723,10 @@ def test_harness_bridge_requires_approval_for_tool_from_client_llm_user(
     assert store.count("permission_authorization_grants") == 0
 
 
-def test_harness_bridge_maps_permission_request_state_and_allows_service() -> None:
-    from murder.llm.harness_control.model.observations import (
-        ChoiceState,
-        PermissionRequestState,
-    )
-
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+def test_harness_bridge_maps_permission_request_state_and_allows_service(
+    repo_db: RepoDb,
+) -> None:
+    service, store = permission_service(repo_db)
     observed = PermissionRequestState(
         "permission-1",
         "shell",
@@ -747,9 +746,8 @@ def test_harness_bridge_maps_permission_request_state_and_allows_service() -> No
     assert store.count("permission_authorization_grants") == 1
 
 
-def test_pending_approval_is_findable_by_operation_id() -> None:
-    connection = sqlite3.connect(":memory:")
-    service, store = permission_service(connection)
+def test_pending_approval_is_findable_by_operation_id(repo_db: RepoDb) -> None:
+    service, store = permission_service(repo_db)
     operation_id = uuid4()
 
     with pytest.raises(ApprovalRequiredError) as required:

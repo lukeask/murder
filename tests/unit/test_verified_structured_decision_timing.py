@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +32,8 @@ from murder.llm.harness_control.runtime.session import (
     StructuredDecisionTimingPolicy,
     VerifiedHarnessControlSession,
 )
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 START = datetime(2035, 7, 12, 12, tzinfo=timezone.utc)
 
@@ -61,6 +63,10 @@ class _Controller:
         return ReconciliationResult(advanced, decision)
 
 
+def _db() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
+
+
 def _session(
     clock: _FakeClock, interval: timedelta
 ) -> tuple[VerifiedHarnessControlSession, _Controller, list[None]]:
@@ -73,7 +79,7 @@ def _session(
         object(),  # type: ignore[arg-type]
         harness_id=HarnessId("codex"),
         terminal_session="timing-test",
-        connection=sqlite3.connect(":memory:"),
+        db=_db(),
         persistence_session_id=None,
         structured_decision_timing=StructuredDecisionTimingPolicy(
             clock=clock.now,

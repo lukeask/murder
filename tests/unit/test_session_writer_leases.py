@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -27,6 +26,7 @@ from murder.runtime.sessions.persistence import (
     StaleWriterLeaseError,
     ensure_session_schema,
 )
+from murder.state.persistence.connection import RepoDb
 
 SECOND_FENCE = 2
 
@@ -50,10 +50,10 @@ def meta(*, expected_revision: int | None = None) -> RequestMeta:
     )
 
 
-def record(session_id: UUID) -> HarnessSessionRecord:
+def record(session_id: UUID, repository_id: UUID) -> HarnessSessionRecord:
     return HarnessSessionRecord(
         session_id=session_id,
-        repository_id=uuid4(),
+        repository_id=repository_id,
         harness="codex",
         transport=SessionTransport.TMUX,
         transport_ref="murder_test",
@@ -65,24 +65,21 @@ def record(session_id: UUID) -> HarnessSessionRecord:
 
 
 @pytest.fixture
-def lease_store() -> tuple[SessionStore, Clock, UUID]:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
+def lease_store(repo_db: RepoDb) -> tuple[SessionStore, Clock, UUID]:
     clock = Clock()
-    store = SessionStore(connection, clock=clock)
+    store = SessionStore(repo_db, clock=clock)
     session_id = uuid4()
-    store.save_session(record(session_id))
+    store.save_session(record(session_id, UUID(repo_db.repository_id)))
     return store, clock, session_id
 
 
-def test_schema_setup_and_session_facts_preserve_owner_transaction() -> None:
-    connection = sqlite3.connect(":memory:", isolation_level=None)
-    ensure_session_schema(connection)
+def test_schema_setup_and_session_facts_preserve_owner_transaction(repo_db: RepoDb) -> None:
+    connection = repo_db.conn
     session_id = uuid4()
 
     connection.execute("BEGIN IMMEDIATE")
     ensure_session_schema(connection)
-    SessionStore(connection).save_session(record(session_id))
+    SessionStore(repo_db).save_session(record(session_id, UUID(repo_db.repository_id)))
     connection.rollback()
 
     assert connection.execute("SELECT COUNT(*) FROM harness_sessions").fetchone()[0] == 0
@@ -190,7 +187,7 @@ def test_force_takeover_revokes_old_holder_and_fences_late_write(
     )
     assert isinstance(takeover, WriterLeaseGranted)
     assert takeover.lease.fence == SECOND_FENCE
-    audit_count = store._connection.execute(  # noqa: SLF001
+    audit_count = store._db.conn.execute(  # noqa: SLF001
         "SELECT COUNT(*) FROM writer_lease_audit_facts WHERE session_id = ?",
         (str(session_id),),
     ).fetchone()[0]

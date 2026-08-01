@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -38,12 +38,12 @@ from murder.runtime.sessions.persistence import (
     SessionStore,
     StaleWriterLeaseError,
     WriterLeaseRequiredError,
-    ensure_session_schema,
 )
 from murder.runtime.sessions.registry import (
     SessionControllerRegistry,
     close_registry_for_connection,
 )
+from tests.support.database import open_test_repo_db
 
 SECOND_REVISION = 2
 
@@ -116,11 +116,12 @@ def meta() -> RequestMeta:
 def session_record(
     session_id: UUID,
     *,
+    repository_id: UUID,
     capabilities: SessionCapabilities | None = None,
 ) -> HarnessSessionRecord:
     return HarnessSessionRecord(
         session_id=session_id,
-        repository_id=uuid4(),
+        repository_id=repository_id,
         harness="codex",
         transport=SessionTransport.TMUX,
         transport_ref="murder_test",
@@ -136,10 +137,11 @@ def setup_controller(
     *,
     capabilities: SessionCapabilities | None = None,
 ) -> tuple[SessionController, SessionStore, RecordingBackend, HarnessSessionRecord]:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
-    store = SessionStore(connection)
-    record = session_record(uuid4(), capabilities=capabilities)
+    db = open_test_repo_db(Path(":memory:"))
+    store = SessionStore(db)
+    record = session_record(
+        uuid4(), repository_id=UUID(db.repository_id), capabilities=capabilities
+    )
     backend = RecordingBackend()
     return (
         SessionController(
@@ -185,10 +187,9 @@ async def test_mailbox_serializes_commands_and_advances_revision() -> None:
 
 
 async def test_controller_default_denies_commands_without_an_explicit_policy() -> None:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
-    store = SessionStore(connection)
-    record = session_record(uuid4())
+    db = open_test_repo_db(Path(":memory:"))
+    store = SessionStore(db)
+    record = session_record(uuid4(), repository_id=UUID(db.repository_id))
     backend = RecordingBackend()
     controller = SessionController(record=record, store=store, backend=backend)
     with pytest.raises(SessionAuthorizationError):
@@ -485,10 +486,9 @@ async def test_observation_status_and_timestamp_are_serialized(
 
 
 async def test_registry_returns_one_controller_and_recovers_persisted_record() -> None:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
-    store = SessionStore(connection)
-    record = session_record(uuid4())
+    db = open_test_repo_db(Path(":memory:"))
+    store = SessionStore(db)
+    record = session_record(uuid4(), repository_id=UUID(db.repository_id))
     store.save_session(record)
     backends: list[RecordingBackend] = []
 
@@ -517,12 +517,12 @@ async def test_registry_returns_one_controller_and_recovers_persisted_record() -
 
 
 async def test_duplicate_live_controls_share_the_persisted_session_controller() -> None:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
+    db = open_test_repo_db(Path(":memory:"))
 
     def bare_control() -> VerifiedHarnessControlSession:
         control = object.__new__(VerifiedHarnessControlSession)
-        control._connection = connection
+        control._db = db
+        control._connection = db.conn
         control._persistence_session_id = "agent-1"
         control._session_controller = None
         control._session_controller_registry = None
@@ -535,17 +535,17 @@ async def test_duplicate_live_controls_share_the_persisted_session_controller() 
     second_control = bare_control()
     first, second = await asyncio.gather(
         first_control.ensure_session_controller(
-            repository_key="repo",
+            repository_id=db.repository_id,
             agent_key="agent-1",
         ),
         second_control.ensure_session_controller(
-            repository_key="repo",
+            repository_id=db.repository_id,
             agent_key="agent-1",
         ),
     )
     assert first is second
-    await close_registry_for_connection(connection)
-    connection.close()
+    await close_registry_for_connection(db)
+    db.close()
 
 
 async def test_bound_legacy_manual_input_cannot_bypass_controller_or_fence() -> None:

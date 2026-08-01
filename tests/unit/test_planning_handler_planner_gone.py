@@ -12,31 +12,28 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-from murder.runtime.agents.planning_handler import PlanningHandler
 from murder.config import PlannerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
-from murder.state.persistence.schema import get_db, init_db
+from murder.runtime.agents.planning_handler import PlanningHandler
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
-def _db():
-    conn = get_db(Path(":memory:"))
-    init_db(conn)
-    return conn
+def _db() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
 
 
-def _insert_planner(conn, plan_name: str, status: str) -> None:
-    conn.execute(
-        "INSERT INTO agents(agent_id, role, ticket_id, status, session, started_at) "
-        "VALUES (?, 'planner', NULL, ?, ?, '2026-01-01')",
-        (f"planner-{plan_name}", status, f"planner-{plan_name}"),
+def _insert_planner(db: RepoDb, plan_name: str, status: str) -> None:
+    db.conn.execute(
+        "INSERT INTO agents(repository_id, agent_id, role, ticket_id, status, session, started_at) "
+        "VALUES (?, ?, 'planner', NULL, ?, ?, '2026-01-01')",
+        (db.repository_id, f"planner-{plan_name}", status, f"planner-{plan_name}"),
     )
 
 
-def _handler(conn) -> PlanningHandler:
+def _handler(db: RepoDb) -> PlanningHandler:
     runtime = MagicMock()
-    runtime.db = conn
+    runtime.db = db
     runtime.orchestration_events = MagicMock()
     runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
@@ -54,36 +51,36 @@ def _handler(conn) -> PlanningHandler:
 
 
 def test_planner_gone_when_session_absent_and_db_dead(fake_tmux):
-    conn = _db()
-    _insert_planner(conn, "planX", "dead")
-    handler = _handler(conn)
+    db = _db()
+    _insert_planner(db, "planX", "dead")
+    handler = _handler(db)
     fake_tmux.set_session_exists(False)  # session gone
 
     assert asyncio.run(handler._planner_is_gone()) is True
 
 
 def test_planner_gone_when_session_absent_and_db_row_missing(fake_tmux):
-    conn = _db()
+    db = _db()
     # No planner row at all (force-stopped, never reinserted).
-    handler = _handler(conn)
+    handler = _handler(db)
     fake_tmux.set_session_exists(False)
 
     assert asyncio.run(handler._planner_is_gone()) is True
 
 
 def test_planner_not_gone_when_session_still_live(fake_tmux):
-    conn = _db()
-    _insert_planner(conn, "planX", "dead")  # DB dead but...
-    handler = _handler(conn)
+    db = _db()
+    _insert_planner(db, "planX", "dead")  # DB dead but...
+    handler = _handler(db)
     fake_tmux.set_session_exists(True)  # ...session still live → transient blip
 
     assert asyncio.run(handler._planner_is_gone()) is False
 
 
 def test_planner_not_gone_when_db_still_running(fake_tmux):
-    conn = _db()
-    _insert_planner(conn, "planX", "running")  # alive in DB
-    handler = _handler(conn)
+    db = _db()
+    _insert_planner(db, "planX", "running")  # alive in DB
+    handler = _handler(db)
     fake_tmux.set_session_exists(False)  # session momentarily missing
 
     # Session absent but DB says running: ambiguous → keep relaying (not gone).
@@ -92,9 +89,9 @@ def test_planner_not_gone_when_db_still_running(fake_tmux):
 
 def test_loop_self_terminates_when_planner_gone(fake_tmux):
     """A poll failure with a genuinely-gone planner stops the handler quietly."""
-    conn = _db()
-    _insert_planner(conn, "planX", "dead")
-    handler = _handler(conn)
+    db = _db()
+    _insert_planner(db, "planX", "dead")
+    handler = _handler(db)
     from murder.runtime.agents.base import AgentStatus
 
     handler.status = AgentStatus.RUNNING
@@ -118,12 +115,12 @@ def test_loop_self_terminates_when_planner_gone(fake_tmux):
 
 def test_loop_grace_sleeps_before_first_tick(fake_tmux, monkeypatch):
     """The startup grace window runs before the handler's first capture_pane."""
-    from murder.runtime.agents.base import AgentStatus
     import murder.runtime.agents.planning_handler as ph_mod
+    from murder.runtime.agents.base import AgentStatus
 
-    conn = _db()
-    _insert_planner(conn, "planX", "running")
-    handler = _handler(conn)
+    db = _db()
+    _insert_planner(db, "planX", "running")
+    handler = _handler(db)
     handler.status = AgentStatus.RUNNING
     handler.config.startup_grace_s = 2.5
     fake_tmux.set_session_exists(True)

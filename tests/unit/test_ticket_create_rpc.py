@@ -14,20 +14,20 @@ from uuid import uuid4
 
 import pytest
 
-from murder.runtime.orchestration.events import CommandEvent
-from murder.runtime.orchestration.worker_names import WorkerName
-from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.config import (
     Config,
     CrowHandlerConfig,
     HarnessRoleConfig,
     ProjectConfig,
 )
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.orchestrator_worker import OrchestratorCommandWorker
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import ticket_md
+from tests.support.database import open_test_repo_db
 
 
 @dataclass
@@ -50,15 +50,16 @@ class _Runtime:
 
 
 def _orch(repo_root: Path) -> Orchestrator:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    database = repo_root / ".murder" / "murder.db"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    db = open_test_repo_db(database)
     config = Config(
         project=ProjectConfig(name="repo"),
         collaborator=HarnessRoleConfig(harness="codex"),
         default_crow=HarnessRoleConfig(harness="codex"),
         crow_handler=CrowHandlerConfig(model="test-model"),
     )
-    rt = _Runtime(repo_root=repo_root, config=config, db=conn)
+    rt = _Runtime(repo_root=repo_root, config=config, db=db)
     return Orchestrator(rt)  # type: ignore[arg-type]
 
 
@@ -76,7 +77,7 @@ def test_quick_create_writes_file_and_db_row(repo_root: Path) -> None:
     assert path.exists()
     assert "Fix the thing" in path.read_text()
     # DB row inserted as PLANNED.
-    row = orch.rt.db.execute(  # type: ignore[union-attr]
+    row = orch.rt.db.conn.execute(  # type: ignore[union-attr]
         "SELECT id, title, status FROM tickets WHERE id = 't001'"
     ).fetchone()
     assert row is not None

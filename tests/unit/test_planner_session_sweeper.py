@@ -12,17 +12,16 @@ from pathlib import Path
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.planner_session_sweeper import PlannerSessionSweeperWorker
 from murder.state.persistence.agents import list_orphaned_planner_sessions
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
-def _db():
-    conn = get_db(Path(":memory:"))
-    init_db(conn)
-    return conn
+def _db() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
 
 
 def _insert_agent(
-    conn,
+    db: RepoDb,
     agent_id: str,
     role: str,
     status: str,
@@ -30,21 +29,21 @@ def _insert_agent(
     *,
     started_at: str = "2026-01-01",
 ) -> None:
-    conn.execute(
-        "INSERT INTO agents(agent_id, role, status, session, started_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (agent_id, role, status, session, started_at),
+    db.conn.execute(
+        "INSERT INTO agents(repository_id, agent_id, role, status, session, started_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (db.repository_id, agent_id, role, status, session, started_at),
     )
 
 
-def _insert_plan(conn, name: str, status: str, *, updated_at: str) -> None:
-    conn.execute(
+def _insert_plan(db: RepoDb, name: str, status: str, *, updated_at: str) -> None:
+    db.conn.execute(
         """
-        INSERT INTO plans(name, status, created_at, updated_at, body, body_hash,
+        INSERT INTO plans(repository_id, name, status, created_at, updated_at, body, body_hash,
                           materialized_path)
-        VALUES (?, ?, '2026-01-01', ?, '', 'h', ?)
+        VALUES (?, ?, ?, '2026-01-01', ?, '', 'h', ?)
         """,
-        (name, status, updated_at, f".murder/plans/{name}.md"),
+        (db.repository_id, name, status, updated_at, f".murder/plans/{name}.md"),
     )
 
 
@@ -74,7 +73,7 @@ def test_superseded_plan_older_than_threshold_returned():
 def test_superseded_plan_recent_not_returned():
     conn = _db()
     # updated_at = now → newer than 30 min ago → not yet sweepable.
-    now = conn.execute("SELECT datetime('now') AS n").fetchone()["n"]
+    now = conn.conn.execute("SELECT datetime('now') AS n").fetchone()["n"]
     _insert_plan(conn, "p3", "superseded", updated_at=now)
     _insert_agent(conn, "planner-p3", "planner", "running", "planner-p3-sess")
 
@@ -118,15 +117,15 @@ def test_iso_t_timestamps_compare_correctly():
     same-day anchors never 'old' ('T' > ' '); the predicate must normalize."""
     conn = _db()
     # Anchor 2 hours ago in ISO-T form → older than 30 min → sweepable.
-    old_iso_t = conn.execute(
+    old_iso_t = conn.conn.execute(
         "SELECT strftime('%Y-%m-%dT%H:%M:%S', datetime('now', '-2 hours')) AS t"
     ).fetchone()["t"]
     _insert_plan(conn, "p9", "superseded", updated_at=old_iso_t)
     _insert_agent(conn, "planner-p9", "planner", "running", "planner-p9-sess")
     # Anchor just now in ISO-T form → NOT sweepable.
-    now_iso_t = conn.execute(
-        "SELECT strftime('%Y-%m-%dT%H:%M:%S', 'now') AS t"
-    ).fetchone()["t"]
+    now_iso_t = conn.conn.execute("SELECT strftime('%Y-%m-%dT%H:%M:%S', 'now') AS t").fetchone()[
+        "t"
+    ]
     _insert_plan(conn, "p10", "superseded", updated_at=now_iso_t)
     _insert_agent(conn, "planner-p10", "planner", "running", "planner-p10-sess")
 
@@ -180,8 +179,9 @@ def test_worker_single_sweep_kills_nulls_session_and_marks_dead(monkeypatch):
     asyncio.run(worker.run(ctx, stop))
 
     assert killed == ["planner-px-sess"]
-    row = conn.execute(
-        "SELECT session, status FROM agents WHERE agent_id = 'planner-px'"
+    row = conn.conn.execute(
+        "SELECT session, status FROM agents WHERE repository_id = ? AND agent_id = 'planner-px'",
+        (conn.repository_id,),
     ).fetchone()
     assert row["session"] is None
     assert row["status"] == "dead"

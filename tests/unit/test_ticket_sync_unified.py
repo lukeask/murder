@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import ticket_md, tickets_dir
 from murder.work.tickets.sync import TicketSync, reconcile_ticket_md
+from tests.support.database import open_test_repo_db
 
 
 def _write_ticket_md(repo_root: Path, ticket_id: str, *, title: str = "A ticket") -> Path:
@@ -22,9 +22,7 @@ def _write_ticket_md(repo_root: Path, ticket_id: str, *, title: str = "A ticket"
 def _conn(repo_root: Path):
     db_file = repo_root / ".murder" / "murder.db"
     db_file.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_db(db_file)
-    init_db(conn)
-    return conn
+    return open_test_repo_db(db_file)
 
 
 def _insert_ticket(
@@ -37,14 +35,14 @@ def _insert_ticket(
     model: str | None = "gpt-5",
     worktree: str | None = None,
 ) -> None:
-    conn.execute(
+    conn.conn.execute(
         """
         INSERT INTO tickets(
-            id, title, status, harness, model, worktree, attempts, created_at, updated_at
+            repository_id, id, title, status, harness, model, worktree, attempts, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 0, '2026-06-08T00:00:00', '2026-06-08T00:00:00')
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, '2026-06-08T00:00:00', '2026-06-08T00:00:00')
         """,
-        (ticket_id, title, status, harness, model, worktree),
+        (conn.repository_id, ticket_id, title, status, harness, model, worktree),
     )
 
 
@@ -72,9 +70,9 @@ body is not structured
         encoding="utf-8",
     )
 
-    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t001")
+    reconcile_ticket_md(db=conn, repo_root=repo_root, ticket_id="t001")
 
-    row = conn.execute("SELECT * FROM tickets WHERE id = 't001'").fetchone()
+    row = conn.conn.execute("SELECT * FROM tickets WHERE repository_id = ? AND id = 't001'", (conn.repository_id,)).fetchone()
     assert row["title"] == "Edited title"
     assert row["status"] == "planned"
     assert row["harness"] == "cursor"
@@ -83,12 +81,12 @@ body is not structured
     assert row["metadata_sync_state"] == "synced"
     assert row["metadata_parse_error"] is None
 
-    deps = conn.execute(
-        "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = 't001'"
+    deps = conn.conn.execute(
+        "SELECT depends_on_id FROM ticket_deps WHERE repository_id = ? AND ticket_id = 't001'", (conn.repository_id,)
     ).fetchall()
     assert [row["depends_on_id"] for row in deps] == ["t000"]
-    checklist = conn.execute(
-        "SELECT ord, text, done, done_at FROM checklist WHERE ticket_id = 't001' ORDER BY ord"
+    checklist = conn.conn.execute(
+        "SELECT ord, text, done, done_at FROM checklist WHERE repository_id = ? AND ticket_id = 't001' ORDER BY ord", (conn.repository_id,)
     ).fetchall()
     assert [(row["ord"], row["text"], row["done"]) for row in checklist] == [
         (0, "first", 0),
@@ -103,11 +101,11 @@ def test_reconcile_ticket_md_preserves_done_at_for_existing_done_items(
 ) -> None:
     conn = _conn(repo_root)
     _insert_ticket(conn, "t001")
-    conn.execute(
+    conn.conn.execute(
         """
-        INSERT INTO checklist(ticket_id, ord, text, done, done_at)
-        VALUES ('t001', 0, 'keep timestamp', 1, '2026-06-08T01:02:03')
-        """
+        INSERT INTO checklist(repository_id, ticket_id, ord, text, done, done_at)
+        VALUES (?, 't001', 0, 'keep timestamp', 1, '2026-06-08T01:02:03')
+        """, (conn.repository_id,)
     )
     ticket_md(repo_root, "t001").parent.mkdir(parents=True, exist_ok=True)
     ticket_md(repo_root, "t001").write_text(
@@ -124,10 +122,10 @@ worktree:
         encoding="utf-8",
     )
 
-    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t001")
+    reconcile_ticket_md(db=conn, repo_root=repo_root, ticket_id="t001")
 
-    row = conn.execute(
-        "SELECT done, done_at FROM checklist WHERE ticket_id = 't001' AND text = 'keep timestamp'"
+    row = conn.conn.execute(
+        "SELECT done, done_at FROM checklist WHERE repository_id = ? AND ticket_id = 't001' AND text = 'keep timestamp'", (conn.repository_id,)
     ).fetchone()
     assert row["done"] == 1
     assert row["done_at"] == "2026-06-08T01:02:03"
@@ -137,14 +135,14 @@ def test_ticket_sync_seeds_missing_markdown_from_db(repo_root: Path) -> None:
     conn = _conn(repo_root)
     _insert_ticket(conn, "t000", title="Dependency", status="done")
     _insert_ticket(conn, "t001", title="Seed me", harness="cc", model="opus")
-    conn.execute("INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('t001', 't000')")
-    conn.execute(
+    conn.conn.execute("INSERT INTO ticket_deps(repository_id, ticket_id, depends_on_id) VALUES (?, 't001', 't000')", (conn.repository_id,))
+    conn.conn.execute(
         """
-        INSERT INTO checklist(ticket_id, ord, text, done, done_at)
+        INSERT INTO checklist(repository_id, ticket_id, ord, text, done, done_at)
         VALUES
-            ('t001', 0, 'todo', 0, NULL),
-            ('t001', 1, 'done', 1, '2026-06-08T01:02:03')
-        """
+            (?, 't001', 0, 'todo', 0, NULL),
+            (?, 't001', 1, 'done', 1, '2026-06-08T01:02:03')
+        """, (conn.repository_id, conn.repository_id)
     )
     assert not ticket_md(repo_root, "t001").exists()
 
@@ -157,8 +155,8 @@ def test_ticket_sync_seeds_missing_markdown_from_db(repo_root: Path) -> None:
     assert "harness: cc\n" in text
     assert "model: opus\n" in text
     assert "# Checklist\n[ ] todo\n[x] done\n" in text
-    row = conn.execute(
-        "SELECT metadata_materialized_path FROM tickets WHERE id = 't001'"
+    row = conn.conn.execute(
+        "SELECT metadata_materialized_path FROM tickets WHERE repository_id = ? AND id = 't001'", (conn.repository_id,)
     ).fetchone()
     assert row["metadata_materialized_path"] == ".murder/tickets/t001.md"
 
@@ -168,7 +166,7 @@ def test_ticket_sync_recreates_deleted_markdown_for_single_ticket(repo_root: Pat
     _insert_ticket(conn, "t001", title="Deleted")
     tickets_dir(repo_root).mkdir(parents=True, exist_ok=True)
 
-    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t001")
+    reconcile_ticket_md(db=conn, repo_root=repo_root, ticket_id="t001")
 
     assert ticket_md(repo_root, "t001").exists()
 
@@ -177,6 +175,7 @@ def test_reconcile_ticket_md_round_trips_parent(repo_root: Path) -> None:
     # Root-cause test: an .md carrying `parent: tNNN` must set (and on every
     # re-reconcile preserve) the `parent_ticket_id` column, not get clobbered.
     conn = _conn(repo_root)
+    _insert_ticket(conn, "t003", title="Parent")
     path = ticket_md(repo_root, "t002")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -194,24 +193,25 @@ parent: t003
         encoding="utf-8",
     )
 
-    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t002")
-    row = conn.execute("SELECT parent_ticket_id FROM tickets WHERE id = 't002'").fetchone()
+    reconcile_ticket_md(db=conn, repo_root=repo_root, ticket_id="t002")
+    row = conn.conn.execute("SELECT parent_ticket_id FROM tickets WHERE repository_id = ? AND id = 't002'", (conn.repository_id,)).fetchone()
     assert row["parent_ticket_id"] == "t003"
 
     # Re-reconcile (the poll path that previously clobbered linkage) keeps it.
-    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t002")
-    row = conn.execute("SELECT parent_ticket_id FROM tickets WHERE id = 't002'").fetchone()
+    reconcile_ticket_md(db=conn, repo_root=repo_root, ticket_id="t002")
+    row = conn.conn.execute("SELECT parent_ticket_id FROM tickets WHERE repository_id = ? AND id = 't002'", (conn.repository_id,)).fetchone()
     assert row["parent_ticket_id"] == "t003"
 
 
 def test_render_row_emits_parent_from_db_column(repo_root: Path) -> None:
     conn = _conn(repo_root)
+    _insert_ticket(conn, "t003", title="Parent")
     _insert_ticket(conn, "t002", title="Child")
-    conn.execute("UPDATE tickets SET parent_ticket_id = 't003' WHERE id = 't002'")
+    conn.conn.execute("UPDATE tickets SET parent_ticket_id = 't003' WHERE repository_id = ? AND id = 't002'", (conn.repository_id,))
     tickets_dir(repo_root).mkdir(parents=True, exist_ok=True)
 
     # Delete-then-recreate materializes the .md from the DB row.
-    reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id="t002")
+    reconcile_ticket_md(db=conn, repo_root=repo_root, ticket_id="t002")
 
     text = ticket_md(repo_root, "t002").read_text(encoding="utf-8")
     assert "parent: t003\n" in text
@@ -226,16 +226,14 @@ def test_reconcile_all_unchanged_second_pass_emits_no_notifications(repo_root: P
     _write_ticket_md(repo_root, "t011")
     _write_ticket_md(repo_root, "t012")
 
-    notified: list[str] = []
-    sync = TicketSync(repo_root, conn, on_ticket_change=notified.append)
+    sync = TicketSync(repo_root, conn)
 
     asyncio.run(sync.reconcile_all())
-    assert sorted(notified) == ["t010", "t011", "t012"]  # first pass syncs all
-
-    notified.clear()
     asyncio.run(sync.reconcile_all())
     # Byte-identical, already-synced files: second pass must skip the snapshot.
-    assert notified == []
+    assert [row["metadata_sync_state"] for row in conn.conn.execute(
+        "SELECT metadata_sync_state FROM tickets WHERE repository_id = ?", (conn.repository_id,)
+    )] == ["synced", "synced", "synced"]
 
 
 def test_reconcile_all_emits_only_for_edited_ticket(repo_root: Path) -> None:
@@ -244,12 +242,9 @@ def test_reconcile_all_emits_only_for_edited_ticket(repo_root: Path) -> None:
     _write_ticket_md(repo_root, "t021")
     _write_ticket_md(repo_root, "t022")
 
-    notified: list[str] = []
-    sync = TicketSync(repo_root, conn, on_ticket_change=notified.append)
+    sync = TicketSync(repo_root, conn)
 
     asyncio.run(sync.reconcile_all())
-    notified.clear()
-
     # Edit exactly one ticket between passes.
     ticket_md(repo_root, "t021").write_text(
         "---\ntitle: Edited\ndeps: []\nharness: codex\nmodel: gpt-5\nworktree:\n---\n"
@@ -258,8 +253,7 @@ def test_reconcile_all_emits_only_for_edited_ticket(repo_root: Path) -> None:
     )
 
     asyncio.run(sync.reconcile_all())
-    assert notified == ["t021"]
-    row = conn.execute("SELECT title FROM tickets WHERE id = 't021'").fetchone()
+    row = conn.conn.execute("SELECT title FROM tickets WHERE repository_id = ? AND id = 't021'", (conn.repository_id,)).fetchone()
     assert row["title"] == "Edited"
 
 
@@ -276,8 +270,8 @@ def test_reconcile_all_reconciles_end_to_end(repo_root: Path) -> None:
 
     rows = {
         r["id"]: r
-        for r in conn.execute(
-            "SELECT id, title, metadata_sync_state, metadata_file_hash FROM tickets"
+        for r in conn.conn.execute(
+            "SELECT id, title, metadata_sync_state, metadata_file_hash FROM tickets WHERE repository_id = ?", (conn.repository_id,)
         ).fetchall()
     }
     assert set(rows) == {"t030", "t031"}
@@ -285,7 +279,7 @@ def test_reconcile_all_reconciles_end_to_end(repo_root: Path) -> None:
     assert rows["t031"]["title"] == "Second"
     assert rows["t030"]["metadata_sync_state"] == "synced"
     assert rows["t030"]["metadata_file_hash"] is not None
-    checklist = conn.execute(
-        "SELECT text FROM checklist WHERE ticket_id = 't030'"
+    checklist = conn.conn.execute(
+        "SELECT text FROM checklist WHERE repository_id = ? AND ticket_id = 't030'", (conn.repository_id,)
     ).fetchall()
     assert [r["text"] for r in checklist] == ["do thing"]

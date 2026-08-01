@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from collections.abc import AsyncIterator
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from murder.llm.harness_control.agent_sdk.bootstrap import start_agent_sdk_session
 from murder.llm.harness_control.agent_sdk.connection import AgentSdkConnection
 from murder.llm.harness_control.model.actions import InputChunk, InputProvenance
 from murder.llm.harness_control.model.operations import OperationOutcome
 from murder.llm.harness_control.runtime.agent_sdk_frame_observer import AgentSdkFrameObserver
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
-from murder.state.persistence.schema import init_db
+from tests.support.database import open_test_repo_db
 
 
 class FakeAgentSdkClient:
@@ -84,11 +85,8 @@ async def _no_sleep(_: float) -> None:
     return None
 
 
-def _db() -> sqlite3.Connection:
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
-    return connection
+def _db():  # noqa: ANN201
+    return open_test_repo_db(Path(":memory:"))
 
 
 async def _session(
@@ -100,7 +98,7 @@ async def _session(
         agent_sdk=connection,
         harness_kind="claude_code",
         terminal_session="test",
-        connection=_db(),
+        db=_db(),
         persistence_session_id="agent-sdk-smoke",
         prompt_policy=PromptDriverPolicy(
             observation_interval=timedelta(),
@@ -146,8 +144,6 @@ async def test_start_agent_sdk_session_closes_connection_when_start_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bootstrap must aclose the new connection if connect/start fails."""
-
-    from murder.llm.harness_control.agent_sdk.bootstrap import start_agent_sdk_session
 
     closed: list[bool] = []
 

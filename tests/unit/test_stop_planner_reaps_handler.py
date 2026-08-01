@@ -12,8 +12,8 @@ from pathlib import Path
 
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
 from murder.runtime.orchestration.agent_ops import AgentOps
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.agents import get_agent_status
+from murder.state.persistence.connection import RepoDb
 
 
 def _config() -> Config:
@@ -26,7 +26,7 @@ def _config() -> Config:
 
 
 class _Runtime:
-    def __init__(self, db, registered: dict) -> None:
+    def __init__(self, db: RepoDb, registered: dict) -> None:
         self.db = db
         self.config = _config()
         self.repo_root = Path("/tmp")
@@ -59,15 +59,20 @@ def _ops(rt) -> AgentOps:
     )
 
 
+def _db() -> RepoDb:
+    from tests.support.database import open_test_repo_db
+
+    return open_test_repo_db(Path(":memory:"))
+
+
 def test_stop_planner_reaps_registered_handler():
-    conn = get_db(Path(":memory:"))
-    init_db(conn)
+    db = _db()
     # Both halves are live in the in-memory registry.
     registered = {
         "planner-planX": object(),
         "planning_handler-planX": object(),
     }
-    rt = _Runtime(conn, registered)
+    rt = _Runtime(db, registered)
     ops = _ops(rt)
 
     result = asyncio.run(ops.stop_agent("planner-planX"))
@@ -79,29 +84,28 @@ def test_stop_planner_reaps_registered_handler():
 
 
 def test_stop_planner_marks_unregistered_handler_dead():
-    conn = get_db(Path(":memory:"))
-    init_db(conn)
+    db = _db()
     # Handler exists only in the DB (prior service run), not the registry.
-    conn.execute(
-        "INSERT INTO agents(agent_id, role, status, session, started_at) "
-        "VALUES ('planning_handler-planX', 'planning_handler', 'running', NULL, '2026-01-01')"
+    db.conn.execute(
+        "INSERT INTO agents(repository_id, agent_id, role, status, session, started_at) "
+        "VALUES (?, 'planning_handler-planX', 'planning_handler', 'running', NULL, '2026-01-01')",
+        (db.repository_id,),
     )
     registered = {"planner-planX": object()}  # handler NOT registered
-    rt = _Runtime(conn, registered)
+    rt = _Runtime(db, registered)
     ops = _ops(rt)
 
     asyncio.run(ops.stop_agent("planner-planX"))
 
     # The planner was reaped; the orphan DB handler row was marked dead.
     assert "planner-planX" in rt.reaped
-    assert get_agent_status(conn, "planning_handler-planX") == "dead"
+    assert get_agent_status(db, "planning_handler-planX") == "dead"
 
 
 def test_stop_planner_with_no_handler_is_noop_for_companion():
-    conn = get_db(Path(":memory:"))
-    init_db(conn)
+    db = _db()
     registered = {"planner-planX": object()}
-    rt = _Runtime(conn, registered)
+    rt = _Runtime(db, registered)
     ops = _ops(rt)
 
     # No handler anywhere — must not raise.

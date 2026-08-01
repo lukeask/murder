@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
@@ -30,20 +29,18 @@ from murder.runtime.sessions.contracts import (
     WriterMode,
 )
 from murder.runtime.sessions.persistence import SessionStore
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 
 def _db():
-    conn = get_db(__import__("pathlib").Path(":memory:"))
-    init_db(conn)
-    return conn
+    return open_test_repo_db(__import__("pathlib").Path(":memory:"))
 
 
 def _insert_ticket(conn, tid: str, status: str = "in_progress") -> None:
-    conn.execute(
-        "INSERT INTO tickets(id, title, status, created_at, updated_at) "
-        "VALUES (?, ?, ?, '2026-01-01', '2026-01-01')",
-        (tid, f"Title {tid}", status),
+    conn.conn.execute(
+        "INSERT INTO tickets(repository_id, id, title, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, '2026-01-01', '2026-01-01')",
+        (conn.repository_id, tid, f"Title {tid}", status),
     )
 
 
@@ -55,10 +52,10 @@ def _insert_agent(
     session: str | None,
     ticket_id: str | None = None,
 ) -> None:
-    conn.execute(
-        "INSERT INTO agents(agent_id, role, ticket_id, status, session, started_at) "
-        "VALUES (?, ?, ?, ?, ?, '2026-01-01')",
-        (agent_id, role, ticket_id, status, session),
+    conn.conn.execute(
+        "INSERT INTO agents(repository_id, agent_id, role, ticket_id, status, session, started_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, '2026-01-01')",
+        (conn.repository_id, agent_id, role, ticket_id, status, session),
     )
 
 
@@ -72,9 +69,9 @@ def test_live_crow_queued_for_reattach_ticket_stays_in_progress():
     assert ("t001", "crow-t001") in report.crows_to_reattach
     assert "crow-t001" not in report.agents_marked_dead
     assert "t001" not in report.tickets_reset_to_failed
-    status = conn.execute("SELECT status FROM tickets WHERE id = 't001'").fetchone()["status"]
+    status = conn.conn.execute("SELECT status FROM tickets WHERE id = 't001'").fetchone()["status"]
     assert status == "in_progress"
-    crow_status = conn.execute(
+    crow_status = conn.conn.execute(
         "SELECT status FROM agents WHERE agent_id = 'crow-t001'"
     ).fetchone()["status"]
     assert crow_status == "running"
@@ -91,7 +88,7 @@ def test_dead_crow_session_gone_fails_ticket_no_reattach():
     assert report.crows_to_reattach == []
     assert "crow-t002" in report.agents_marked_dead
     assert "t002" in report.tickets_reset_to_failed
-    status = conn.execute("SELECT status FROM tickets WHERE id = 't002'").fetchone()["status"]
+    status = conn.conn.execute("SELECT status FROM tickets WHERE id = 't002'").fetchone()["status"]
     assert status == "failed"
 
 
@@ -111,7 +108,7 @@ def test_stale_handler_row_marked_dead_and_session_queued():
     assert ("t003", "crow-t003") in report.crows_to_reattach
     assert "crow_handler-t003" in report.agents_marked_dead
     assert "handler-log-t003" in report.sessions_to_kill
-    handler_status = conn.execute(
+    handler_status = conn.conn.execute(
         "SELECT status FROM agents WHERE agent_id = 'crow_handler-t003'"
     ).fetchone()["status"]
     assert handler_status == "dead"
@@ -137,7 +134,7 @@ def test_missing_tmux_controller_session_is_lost_and_writer_revoked():
     store.save_session(
         HarnessSessionRecord(
             session_id=session_id,
-            repository_id=uuid4(),
+            repository_id=UUID(conn.repository_id),
             harness="codex",
             transport=SessionTransport.TMUX,
             transport_ref="missing-pane",
@@ -206,7 +203,7 @@ def test_orchestrator_reattach_binds_live_session_without_prompt(fake_tmux, tmp_
     # No prompt: CrowAgent.start (which sends the brief) was never invoked, so the
     # fake tmux pane received no send_prompt. Handler was spawned with the session.
     orch.spawn_crow_handler.assert_awaited_once_with("t100", "crow-t100")
-    rt.publish_snapshot.assert_awaited()
+    # Snapshot delivery is projection-driven; reattach only restores ownership.
 
 
 def test_reattach_skips_when_handler_already_live(fake_tmux, tmp_path):

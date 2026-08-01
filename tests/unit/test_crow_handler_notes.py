@@ -14,14 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.outcome import TicketOutcomeService
 from murder.state.persistence.conversation import project_parsed_doc_with_changes
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import ticket_md
+from tests.support.database import open_test_repo_db
 
 SESSION = "crow-t001"
 
@@ -46,10 +46,9 @@ PANE_WITH_NOTE = ">>> NOTE: discovered the config lives in settings.json\n>>> EN
 
 @pytest.fixture
 def db(tmp_path: Path):
-    conn = get_db(tmp_path / "murder.db")
-    init_db(conn)
-    yield conn
-    conn.close()
+    database = open_test_repo_db(tmp_path / "murder.db")
+    yield database
+    database.close()
 
 
 @pytest.fixture
@@ -76,13 +75,13 @@ def handler(db, tmp_path: Path) -> CrowHandler:
 
 
 def _seed_ticket(db, repo_root: Path) -> Path:
-    db.execute(
-        "INSERT INTO runs(run_id, started_at, config_snapshot) "
-        "VALUES ('test-run', '2026-01-01', '{}')"
+    db.conn.execute(
+        "INSERT INTO runs(repository_id, run_id, started_at, config_snapshot) "
+        "VALUES (?, 'test-run', '2026-01-01', '{}')", (db.repository_id,)
     )
-    db.execute(
-        "INSERT INTO tickets(id, title, status, created_at, updated_at) "
-        "VALUES ('t001', 'Wire up the thing', 'in_progress', '2026-01-01', '2026-01-01')"
+    db.conn.execute(
+        "INSERT INTO tickets(repository_id, id, title, status, created_at, updated_at) "
+        "VALUES (?, 't001', 'Wire up the thing', 'in_progress', '2026-01-01', '2026-01-01')", (db.repository_id,)
     )
     tpath = ticket_md(repo_root, "t001")
     tpath.parent.mkdir(parents=True, exist_ok=True)

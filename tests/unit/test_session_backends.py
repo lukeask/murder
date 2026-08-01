@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -31,6 +30,7 @@ from murder.runtime.sessions.controller import (
     trusted_local_session_authorizer,
 )
 from murder.runtime.sessions.persistence import SessionStore, ensure_session_schema
+from tests.support.database import open_test_repo_db
 
 
 class RecordingAppServerClient:
@@ -62,14 +62,14 @@ class RecordingAppServerClient:
         self.calls.append(("recover", record.session_id))
 
 
-def test_app_server_and_terminal_capabilities_share_controller_boundary() -> None:
+def test_app_server_and_terminal_capabilities_share_controller_boundary(tmp_path) -> None:
     async def scenario() -> None:
-        connection = sqlite3.connect(":memory:")
-        ensure_session_schema(connection)
+        db = open_test_repo_db(tmp_path / "murder.db")
+        ensure_session_schema(db.conn)
         client = RecordingAppServerClient()
         record = HarnessSessionRecord(
             session_id=uuid4(),
-            repository_id=uuid4(),
+            repository_id=db.repository_id,
             harness="structured-test",
             transport=SessionTransport.APP_SERVER,
             transport_ref="app-server:thread-1",
@@ -83,7 +83,7 @@ def test_app_server_and_terminal_capabilities_share_controller_boundary() -> Non
         )
         controller = SessionController(
             record=record,
-            store=SessionStore(connection),
+            store=SessionStore(db),
             backend=AppServerSessionBackend(client),
             authorizer=trusted_local_session_authorizer,
         )
@@ -111,7 +111,7 @@ def test_app_server_and_terminal_capabilities_share_controller_boundary() -> Non
 
 
 def test_terminal_only_tmux_backend_uses_same_fenced_controller(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, object]] = []
 
@@ -144,11 +144,11 @@ def test_terminal_only_tmux_backend_uses_same_fenced_controller(
     monkeypatch.setattr("murder.runtime.sessions.backend.tmux.kill_session", kill_session)
 
     async def scenario() -> None:
-        connection = sqlite3.connect(":memory:")
-        ensure_session_schema(connection)
+        db = open_test_repo_db(tmp_path / "murder.db")
+        ensure_session_schema(db.conn)
         record = HarnessSessionRecord(
             session_id=uuid4(),
-            repository_id=uuid4(),
+            repository_id=db.repository_id,
             harness="terminal-only",
             transport=SessionTransport.TMUX,
             transport_ref="tmux-terminal-only",
@@ -159,7 +159,7 @@ def test_terminal_only_tmux_backend_uses_same_fenced_controller(
         )
         controller = SessionController(
             record=record,
-            store=SessionStore(connection),
+            store=SessionStore(db),
             backend=TmuxSessionBackend(record.transport_ref),
             authorizer=trusted_local_session_authorizer,
         )

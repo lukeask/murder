@@ -13,8 +13,8 @@ from murder.config import (
 from murder.runtime.agents.base import AgentRole
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.agents import upsert_agent
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.worktrees import WorktreeRef
+from tests.support.database import open_test_repo_db
 
 
 @dataclass
@@ -59,14 +59,23 @@ class _LiveCollaborator:
         self.stopped = True
 
 
+async def _skip_model_refresh(*_args, **_kwargs) -> None:
+    return None
+
+
 def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
     repo_root: Path, monkeypatch
 ) -> None:
     # Isolate user config: collaborator harness now resolves from user scope /
     # bundled defaults (claude_code), never the project roles.yaml.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(repo_root.parent / "xdg"))
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    monkeypatch.setattr(
+        "murder.llm.harnesses.model_cache.refresh_and_persist_harness_models",
+        _skip_model_refresh,
+    )
+    db_path = repo_root / ".murder" / "murder.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = open_test_repo_db(db_path)
     roles_path = repo_root / ".murder" / "roles.yaml"
     roles_path.write_text(
         Path("murder/resources/templates/roles.yaml").read_text(encoding="utf-8"),
@@ -125,8 +134,13 @@ def test_reconfigure_collaborator_returns_startup_failure_error(
     repo_root: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(repo_root.parent / "xdg"))
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    monkeypatch.setattr(
+        "murder.llm.harnesses.model_cache.refresh_and_persist_harness_models",
+        _skip_model_refresh,
+    )
+    db_path = repo_root / ".murder" / "murder.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = open_test_repo_db(db_path)
     roles_path = repo_root / ".murder" / "roles.yaml"
     roles_path.write_text(
         Path("murder/resources/templates/roles.yaml").read_text(encoding="utf-8"),
@@ -175,13 +189,15 @@ def test_reconfigure_collaborator_returns_startup_failure_error(
 
 
 def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> None:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
-    conn.execute(
+    db_path = repo_root / ".murder" / "murder.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = open_test_repo_db(db_path)
+    conn.conn.execute(
         """
-        INSERT INTO tickets(id, title, status, created_at, updated_at)
-        VALUES ('t001', 'Fix thing', 'ready', '2026-01-01', '2026-01-01')
-        """
+        INSERT INTO tickets(repository_id, id, title, status, created_at, updated_at)
+        VALUES (?, 't001', 'Fix thing', 'ready', '2026-01-01', '2026-01-01')
+        """,
+        (conn.repository_id,),
     )
     config = Config(
         project=ProjectConfig(name="repo"),
@@ -231,13 +247,15 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
 def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
     repo_root: Path, monkeypatch
 ) -> None:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
-    conn.execute(
+    db_path = repo_root / ".murder" / "murder.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = open_test_repo_db(db_path)
+    conn.conn.execute(
         """
-        INSERT INTO tickets(id, title, status, worktree, created_at, updated_at)
-        VALUES ('t001', 'Fix thing', 'ready', 'feature/c6', '2026-01-01', '2026-01-01')
-        """
+        INSERT INTO tickets(repository_id, id, title, status, worktree, created_at, updated_at)
+        VALUES (?, 't001', 'Fix thing', 'ready', 'feature/c6', '2026-01-01', '2026-01-01')
+        """,
+        (conn.repository_id,),
     )
     config = Config(
         project=ProjectConfig(name="repo"),

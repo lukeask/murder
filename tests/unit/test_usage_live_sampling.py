@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from pathlib import Path
 
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
@@ -15,7 +14,8 @@ from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,
     sample_live_session_usage,
 )
-from murder.state.persistence.schema import init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
 class _StubUsageAdapter(HarnessAdapter):
@@ -79,11 +79,8 @@ def _config() -> Config:
     )
 
 
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
-    return conn
+def _db() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
 
 
 def _status() -> HarnessUsageStatus:
@@ -106,7 +103,7 @@ def test_live_sample_persists_only_verified_usage_result(tmp_path: Path) -> None
 
     assert result == LiveSessionUsageResult(outcome="stored")
     assert control.triggers == ["agent_startup"]
-    row = db.execute("SELECT status_json FROM harness_usage_snapshots").fetchone()
+    row = db.conn.execute("SELECT status_json FROM harness_usage_snapshots").fetchone()
     assert row is not None
     assert json.loads(row["status_json"])["raw"]["trigger"] == "agent_startup"
 
@@ -117,9 +114,7 @@ def test_live_sample_skips_without_a_verified_usage_capability(tmp_path: Path) -
 
     result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_shutdown"))
 
-    assert result == LiveSessionUsageResult(
-        outcome="skipped", reason="verified_usage_unavailable"
-    )
+    assert result == LiveSessionUsageResult(outcome="skipped", reason="verified_usage_unavailable")
 
 
 def test_live_sample_noops_for_side_channel_harness(tmp_path: Path) -> None:
@@ -151,7 +146,5 @@ def test_live_sample_reports_failed_verified_usage_request(tmp_path: Path) -> No
 
     result = asyncio.run(sample_live_session_usage(agent, ctx, "agent_shutdown"))
 
-    assert result == LiveSessionUsageResult(
-        outcome="failed", reason="verified_usage_unavailable"
-    )
+    assert result == LiveSessionUsageResult(outcome="failed", reason="verified_usage_unavailable")
     assert control.triggers == ["agent_shutdown"]

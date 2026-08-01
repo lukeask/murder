@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -9,7 +8,7 @@ import pytest
 
 from murder.permissions import PermissionStore
 from murder.state.persistence.agents import upsert_agent
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.worktrees import (
     WorktreeEntry,
     WorktreeError,
@@ -23,6 +22,27 @@ from murder.state.storage.worktrees import (
     safe_branch_segment,
     worktree_ref,
 )
+from tests.support.database import open_test_repo_db
+
+
+@pytest.fixture
+def permission_db(tmp_path: Path) -> RepoDb:
+    db = open_test_repo_db(tmp_path / "permissions.db")
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@pytest.fixture
+def main_db(repo_root: Path) -> RepoDb:
+    database = repo_root / ".murder" / "murder.db"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    db = open_test_repo_db(database)
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def test_safe_branch_name_allows_slashes() -> None:
@@ -115,7 +135,9 @@ def test_safe_branch_segment_rejects_path_shape() -> None:
     assert safe_branch_segment("bad..ref.lock") == "bad.ref-lock"
 
 
-def test_prune_worktree_path_uses_git_safe_remove(tmp_path: Path) -> None:
+def test_prune_worktree_path_uses_git_safe_remove(
+    tmp_path: Path, permission_db: RepoDb
+) -> None:
     repo = _seed_repo(tmp_path)
 
     ref = asyncio.run(ensure_worktree_for_branch(repo, "feature/prune-me"))
@@ -126,7 +148,7 @@ def test_prune_worktree_path_uses_git_safe_remove(tmp_path: Path) -> None:
             prune_worktree_path(
                 repo,
                 ref.path,
-                permission_connection=sqlite3.connect(":memory:"),
+                permission_connection=permission_db,
             )
         )
         is True
@@ -135,41 +157,41 @@ def test_prune_worktree_path_uses_git_safe_remove(tmp_path: Path) -> None:
 
 
 def test_prune_worktree_path_enforces_and_audits_destructive_git(
-    tmp_path: Path,
+    tmp_path: Path, permission_db: RepoDb
 ) -> None:
     repo = _seed_repo(tmp_path)
     ref = asyncio.run(ensure_worktree_for_branch(repo, "feature/audited-prune"))
-    conn = sqlite3.connect(":memory:")
 
     assert (
         asyncio.run(
             prune_worktree_path(
                 repo,
                 ref.path,
-                permission_connection=conn,
+                permission_connection=permission_db,
             )
         )
         is True
     )
     assert not ref.path.exists()
-    store = PermissionStore(conn)
+    store = PermissionStore(permission_db)
     assert store.count("permission_policy_decisions") == 1
     assert store.count("permission_authorization_grants") == 1
     assert store.count("permission_authorization_uses") == 1
 
 
-def test_prune_terminal_crow_worktree_uses_stored_path(repo_root: Path, monkeypatch) -> None:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
-    conn.execute(
+def test_prune_terminal_crow_worktree_uses_stored_path(
+    repo_root: Path, main_db: RepoDb, monkeypatch
+) -> None:
+    main_db.conn.execute(
         """
-        INSERT INTO tickets(id, title, status, created_at, updated_at)
-        VALUES ('t001', 'Fix thing', 'done', '2026-01-01', '2026-01-01')
-        """
+        INSERT INTO tickets(repository_id, id, title, status, created_at, updated_at)
+        VALUES (?, 't001', 'Fix thing', 'done', '2026-01-01', '2026-01-01')
+        """,
+        (main_db.repository_id,),
     )
     stored = str(repo_root / ".murder" / "worktrees" / "feature-stored")
     upsert_agent(
-        conn,
+        main_db,
         agent_id="crow-t001",
         role="crow",
         ticket_id="t001",
@@ -188,27 +210,27 @@ def test_prune_terminal_crow_worktree_uses_stored_path(repo_root: Path, monkeypa
         _repo: Path,
         path: str | Path,
         *,
-        permission_connection: sqlite3.Connection,
+        permission_connection: RepoDb,
     ) -> bool:
-        assert permission_connection is conn
+        assert permission_connection is main_db
         pruned.append(str(path))
         return True
 
     monkeypatch.setattr("murder.state.storage.worktrees.prune_worktree_path", fake_prune)
 
-    assert asyncio.run(prune_terminal_crow_worktree(conn, repo_root, "t001")) is True
+    assert asyncio.run(prune_terminal_crow_worktree(main_db, repo_root, "t001")) is True
     assert pruned == [stored]
 
 
-def test_prune_terminal_crow_worktree_noops_without_stored_path(repo_root: Path) -> None:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+def test_prune_terminal_crow_worktree_noops_without_stored_path(
+    repo_root: Path, main_db: RepoDb
+) -> None:
 
-    assert asyncio.run(prune_terminal_crow_worktree(conn, repo_root, "missing")) is False
+    assert asyncio.run(prune_terminal_crow_worktree(main_db, repo_root, "missing")) is False
 
 
 def test_prune_worktree_path_resolves_relative_paths_from_repo_root(
-    repo_root: Path, monkeypatch
+    repo_root: Path, permission_db: RepoDb, monkeypatch
 ) -> None:
     worktree = repo_root / ".murder" / "worktrees" / "t001"
     worktree.mkdir(parents=True)
@@ -225,7 +247,7 @@ def test_prune_worktree_path_resolves_relative_paths_from_repo_root(
             prune_worktree_path(
                 repo_root,
                 ".murder/worktrees/t001",
-                permission_connection=sqlite3.connect(":memory:"),
+                permission_connection=permission_db,
             )
         )
         is True

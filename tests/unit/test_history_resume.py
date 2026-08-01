@@ -13,7 +13,6 @@ the orchestrator method / worker handler directly and never start the runtime.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -21,17 +20,16 @@ from unittest.mock import AsyncMock, MagicMock
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.runtime.workers.orchestrator_worker import _HANDLERS
 from murder.state.persistence import conversation
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
-def _db() -> sqlite3.Connection:
-    conn = get_db(Path(":memory:"))
-    init_db(conn)
-    return conn
+def _db() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
 
 
 def _add_conversation(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
     conversation_id: str,
     *,
     harness: str | None,
@@ -49,10 +47,10 @@ def _add_conversation(
     )
     if status != "in_progress":
         conversation.set_conversation_status(conn, conversation_id, status)
-    conn.commit()
+    conn.conn.commit()
 
 
-def _orchestrator(conn: sqlite3.Connection) -> tuple[Orchestrator, MagicMock, list[dict[str, Any]]]:
+def _orchestrator(conn: RepoDb) -> tuple[Orchestrator, MagicMock, list[dict[str, Any]]]:
     rt = MagicMock()
     rt.db = conn
     rt.get_agent = MagicMock(return_value=None)

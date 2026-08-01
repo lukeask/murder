@@ -1,25 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-
 from datetime import datetime
 
 from murder.state.persistence import plans as plan_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.schema import get_db, init_db
+from murder.state.storage.paths import db_path, plan_md
 from murder.work.plans.parser import parse, render
 from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import PlanSync, content_hash
-from murder.state.storage.paths import db_path, plan_md
+from tests.support.database import open_test_repo_db
 
 _LEGACY_PLAN_MATERIALIZED_HASH_COLUMN = "last_" "materialized_" "hash"
 _LEGACY_PLAN_CONFLICT_COLUMN = "conflict" "_reason"
 _LEGACY_PLAN_CONFLICT_STATE = "con" "flict"
+REVISION_COUNT = 3
 
 
 def _connect(repo_root):
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
-    return conn
+    return open_test_repo_db(repo_root / "shared-murder.db")
 
 
 def _plan(
@@ -35,15 +35,15 @@ def _plan(
         created_at=now,
         updated_at=updated_at or now,
         revisions=0,
-        related_tickets=["t001"],
+        related_tickets=[],
         frontmatter={"owner": "planner"},
         body=body,
     )
 
 
 def test_reconcile_file_creates_revision_for_each_real_edit(repo_root) -> None:
-    conn = _connect(repo_root)
-    sync = PlanSync(repo_root, conn)
+    db = _connect(repo_root)
+    sync = PlanSync(repo_root, db)
     path = plan_md(repo_root, "single-master")
 
     first = _plan("single-master", body="# First\n")
@@ -67,15 +67,16 @@ def test_reconcile_file_creates_revision_for_each_real_edit(repo_root) -> None:
     path.write_text(render(third), encoding="utf-8")
     asyncio.run(sync.reconcile_file(path))
 
-    row = plan_db.get_plan_row(conn, "single-master")
-    revisions = conn.execute(
-        "SELECT source, body FROM plan_revisions WHERE plan_name = ? ORDER BY id",
-        ("single-master",),
+    row = plan_db.get_plan_row(db, "single-master")
+    revisions = db.conn.execute(
+        "SELECT source, body FROM plan_revisions "
+        "WHERE repository_id = ? AND plan_name = ? ORDER BY id",
+        (db.repository_id, "single-master"),
     ).fetchall()
 
     assert row is not None
     assert row["sync_state"] == "synced"
-    assert row["revision_count"] == 3
+    assert row["revision_count"] == REVISION_COUNT
     assert row["body"] == "# Third\n"
     assert [(r["source"], r["body"]) for r in revisions] == [
         ("import", "# First\n"),
@@ -85,8 +86,8 @@ def test_reconcile_file_creates_revision_for_each_real_edit(repo_root) -> None:
 
 
 def test_reconcile_file_semantic_noop_updates_file_hash_without_new_revision(repo_root) -> None:
-    conn = _connect(repo_root)
-    sync = PlanSync(repo_root, conn)
+    db = _connect(repo_root)
+    sync = PlanSync(repo_root, db)
     plan = _plan("semantic-noop")
     path = plan_md(repo_root, plan.name)
     canonical = render(plan)
@@ -94,7 +95,7 @@ def test_reconcile_file_semantic_noop_updates_file_hash_without_new_revision(rep
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(canonical, encoding="utf-8")
     asyncio.run(sync.reconcile_file(path))
-    initial_row = plan_db.get_plan_row(conn, plan.name)
+    initial_row = plan_db.get_plan_row(db, plan.name)
     assert initial_row is not None
 
     variant = """---
@@ -102,7 +103,7 @@ updated_at: 2026-01-01T12:00:00
 status: draft
 name: semantic-noop
 revisions: 0
-related_tickets: [t001]
+related_tickets: []
 owner: planner
 created_at: 2026-01-01T12:00:00
 ---
@@ -114,7 +115,7 @@ created_at: 2026-01-01T12:00:00
     path.write_text(variant, encoding="utf-8")
     asyncio.run(sync.reconcile_file(path))
 
-    row = plan_db.get_plan_row(conn, plan.name)
+    row = plan_db.get_plan_row(db, plan.name)
     assert row is not None
     assert row["sync_state"] == "synced"
     assert row["revision_count"] == 1
@@ -123,13 +124,13 @@ created_at: 2026-01-01T12:00:00
 
 
 def test_reconcile_all_rebuilds_missing_plan_markdown_from_db(repo_root) -> None:
-    conn = _connect(repo_root)
+    db = _connect(repo_root)
     plan = _plan("restore-me", body="# Restore\n")
     rendered = render(plan)
     path = plan_md(repo_root, plan.name)
 
     plan_db.upsert_plan(
-        conn,
+        db,
         plan,
         content_hash=content_hash(rendered),
         materialized_path=str(path.relative_to(repo_root)),
@@ -139,9 +140,9 @@ def test_reconcile_all_rebuilds_missing_plan_markdown_from_db(repo_root) -> None
         revision_source="db",
     )
 
-    asyncio.run(PlanSync(repo_root, conn).reconcile_all())
+    asyncio.run(PlanSync(repo_root, db).reconcile_all())
 
-    row = plan_db.get_plan_row(conn, plan.name)
+    row = plan_db.get_plan_row(db, plan.name)
     assert row is not None
     assert path.exists()
     assert parse(path.read_text(encoding="utf-8")).name == plan.name
@@ -204,7 +205,11 @@ def test_init_db_migrates_legacy_plans_table_to_single_master(repo_root) -> None
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'plans'"
         ).fetchone()["sql"]
     )
-    row = plan_db.get_plan_row(conn, "legacy")
+    legacy_db = RepoDb(
+        conn=conn,
+        repository_id="00000000-0000-0000-0000-000000000000",
+    )
+    row = plan_db.get_plan_row(legacy_db, "legacy")
     columns = {
         column["name"] for column in conn.execute("PRAGMA table_info(plans)").fetchall()
     }

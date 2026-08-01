@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from murder.llm.harness_control.capabilities.model_selection import (
@@ -42,7 +41,8 @@ from murder.llm.harness_control.runtime.model_driver import (
 )
 from murder.llm.harness_control.runtime.observer import ObservationStore
 from murder.llm.harness_control.runtime.sqlite_journal import SqliteHarnessControlJournal
-from murder.state.persistence.schema import init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 7, 12, 12, tzinfo=timezone.utc)
 TARGET = ModelTarget("gpt-5.5", provider="openai", effort="high")
@@ -134,8 +134,8 @@ class ModelEvidenceAdapter:
 
 
 class DatabaseAwareTransport:
-    def __init__(self, connection: sqlite3.Connection, events: list[str]) -> None:
-        self._connection = connection
+    def __init__(self, db: RepoDb, events: list[str]) -> None:
+        self._db = db
         self._events = events
 
     async def send_literal_keys(self, text, *, inter_key_delay) -> None:
@@ -147,9 +147,10 @@ class DatabaseAwareTransport:
         raise AssertionError("model lowering must use the named test effect")
 
     async def send_named_key(self, key) -> None:
-        assert self._connection.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[
-            0
-        ]
+        assert self._db.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_actions WHERE repository_id = ?",
+            (self._db.repository_id,),
+        ).fetchone()[0]
         self._events.append(f"effect:{key}")
 
 
@@ -173,17 +174,15 @@ def _configuration(model_id: str) -> ModelConfigurationState:
     )
 
 
-def _driver(*states: str):
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
+def _driver(tmp_path, *states: str):
+    db = open_test_repo_db(tmp_path / "murder.db")
     events: list[str] = []
     controller = HarnessController(
         ModelEvidenceAdapter(),
         ModelEvidenceAdapter(),
         ObservationStore(unknown_snapshot(HarnessId("test-model"), captured_at=NOW)),
-        HarnessActuator(DatabaseAwareTransport(connection, events)),
-        SqliteHarnessControlJournal(connection, session_id="model-driver-test"),
+        HarnessActuator(DatabaseAwareTransport(db, events)),
+        SqliteHarnessControlJournal(db, session_id="model-driver-test"),
     )
     return (
         VerifiedModelSelectionDriver(
@@ -194,14 +193,15 @@ def _driver(*states: str):
             now=lambda: NOW,
         ),
         controller,
-        connection,
+        db,
         events,
     )
 
 
-def test_driver_configures_reopens_and_waits_for_delayed_active_readback() -> None:
+def test_driver_configures_reopens_and_waits_for_delayed_active_readback(tmp_path) -> None:
     async def scenario() -> None:
-        driver, _controller, connection, events = _driver(
+        driver, _controller, db, events = _driver(
+            tmp_path,
             "initial",
             "initial",
             "configured",
@@ -215,23 +215,27 @@ def test_driver_configures_reopens_and_waits_for_delayed_active_readback() -> No
         assert result.outcome is ModelSelectionOutcome.ACTIVATED
         assert result.active_model == ModelState("gpt-5.5", "high", "GPT-5.5", "openai")
         assert len(events) == MODEL_ACTION_COUNT
-        actions = connection.execute(
+        actions = db.conn.execute(
             "SELECT semantic_action_type, emission_status FROM harness_control_actions "
-            "ORDER BY requested_at"
+            "WHERE repository_id = ? ORDER BY requested_at",
+            (db.repository_id,),
         ).fetchall()
         assert len(actions) == MODEL_ACTION_COUNT
         assert all(row["emission_status"] == "EMITTED" for row in actions)
         assert all(row["semantic_action_type"].endswith("SelectModel") for row in actions)
         assert (
-            connection.execute("SELECT COUNT(*) FROM harness_control_decisions").fetchone()[0]
+            db.conn.execute(
+                "SELECT COUNT(*) FROM harness_control_decisions WHERE repository_id = ?",
+                (db.repository_id,),
+            ).fetchone()[0]
             >= MINIMUM_DECISION_COUNT
         )
 
     asyncio.run(scenario())
 
 
-def test_create_operation_defaults_to_one_minute_deadline() -> None:
-    driver, _controller, _connection, _events = _driver("initial")
+def test_create_operation_defaults_to_one_minute_deadline(tmp_path) -> None:
+    driver, _controller, _db, _events = _driver(tmp_path, "initial")
 
     operation = driver.create_operation(TARGET)
 
@@ -239,9 +243,9 @@ def test_create_operation_defaults_to_one_minute_deadline() -> None:
     assert operation.envelope.deadline == NOW + DEFAULT_MODEL_SELECTION_DEADLINE
 
 
-def test_resume_after_activation_effect_uses_fresh_readback_and_never_replays() -> None:
+def test_resume_after_activation_effect_uses_fresh_readback_and_never_replays(tmp_path) -> None:
     async def scenario() -> None:
-        driver, _controller, connection, events = _driver("configured")
+        driver, _controller, db, events = _driver(tmp_path, "configured")
         operation = SelectModelOperation(
             envelope=OperationEnvelope(
                 operation_id="recovered-model-op",
@@ -263,16 +267,23 @@ def test_resume_after_activation_effect_uses_fresh_readback_and_never_replays() 
 
         assert result.outcome is ModelSelectionOutcome.ESCALATED
         assert events == []
-        assert connection.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0] == 0
-        persisted = connection.execute(
-            "SELECT status FROM harness_control_operations WHERE operation_id = ?",
-            ("recovered-model-op",),
+        assert (
+            db.conn.execute(
+                "SELECT COUNT(*) FROM harness_control_actions WHERE repository_id = ?",
+                (db.repository_id,),
+            ).fetchone()[0]
+            == 0
+        )
+        persisted = db.conn.execute(
+            "SELECT status FROM harness_control_operations "
+            "WHERE repository_id = ? AND operation_id = ?",
+            (db.repository_id, "recovered-model-op"),
         ).fetchone()
         assert persisted["status"] == "ESCALATED"
-        decision = connection.execute(
+        decision = db.conn.execute(
             "SELECT selected_decision FROM harness_control_decisions "
-            "WHERE operation_id = ? ORDER BY id DESC LIMIT 1",
-            ("recovered-model-op",),
+            "WHERE repository_id = ? AND operation_id = ? ORDER BY id DESC LIMIT 1",
+            (db.repository_id, "recovered-model-op"),
         ).fetchone()
         assert decision["selected_decision"] == "ESCALATE"
 

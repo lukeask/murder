@@ -8,31 +8,33 @@ and transitions the ticket to ready (not failed).
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from murder.runtime.orchestration.ticket_ops import TicketOps
 from murder.runtime.workers.orchestrator_worker import _HANDLERS
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
-def _db():
-    conn = get_db(Path(":memory:"))
-    init_db(conn)
-    return conn
+def _db() -> RepoDb:
+    from pathlib import Path
+
+    return open_test_repo_db(Path(":memory:"))
 
 
-def _insert_ticket(conn, tid: str, status: str = "in_progress", last_error: str | None = None):
-    conn.execute(
-        "INSERT INTO tickets(id, title, status, last_error, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, '2026-01-01', '2026-01-01')",
-        (tid, f"Title {tid}", status, last_error),
+def _insert_ticket(
+    db: RepoDb, tid: str, status: str = "in_progress", last_error: str | None = None
+):
+    db.conn.execute(
+        "INSERT INTO tickets(repository_id, id, title, status, last_error, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, '2026-01-01', '2026-01-01')",
+        (db.repository_id, tid, f"Title {tid}", status, last_error),
     )
 
 
-def _ops(conn):
+def _ops(db: RepoDb):
     rt = MagicMock()
-    rt.db = conn
+    rt.db = db
     rt.reap = AsyncMock()
     emitted: list[tuple] = []
 
@@ -43,15 +45,18 @@ def _ops(conn):
 
 
 def test_reset_crow_from_in_progress_reaps_and_readies():
-    conn = _db()
-    _insert_ticket(conn, "t001", "in_progress", last_error="boom")
-    ops, rt, emitted = _ops(conn)
+    db = _db()
+    _insert_ticket(db, "t001", "in_progress", last_error="boom")
+    ops, rt, emitted = _ops(db)
 
     result = asyncio.run(ops.reset_crow("t001"))
 
     assert result["ok"] is True
     assert result["prev_status"] == "in_progress"
-    row = conn.execute("SELECT status, last_error FROM tickets WHERE id = 't001'").fetchone()
+    row = db.conn.execute(
+        "SELECT status, last_error FROM tickets WHERE repository_id = ? AND id = 't001'",
+        (db.repository_id,),
+    ).fetchone()
     assert row["status"] == "ready"
     assert row["last_error"] is None
     reaped = {c.args[0] for c in rt.reap.await_args_list}
@@ -62,8 +67,8 @@ def test_reset_crow_from_in_progress_reaps_and_readies():
 
 
 def test_reset_crow_unknown_ticket_errors_cleanly():
-    conn = _db()
-    ops, rt, emitted = _ops(conn)
+    db = _db()
+    ops, rt, emitted = _ops(db)
 
     result = asyncio.run(ops.reset_crow("t404"))
 
@@ -76,13 +81,14 @@ def test_reset_crow_unknown_ticket_errors_cleanly():
 def test_reset_crow_kills_db_recorded_session_when_no_inmemory_agent(monkeypatch):
     """A crow from a previous process has no in-memory agent to reap; the
     session recorded in the agents table must still be killed and NULLed."""
-    conn = _db()
-    _insert_ticket(conn, "t002", "in_progress")
-    conn.execute(
-        "INSERT INTO agents(agent_id, role, ticket_id, status, session, started_at) "
-        "VALUES ('crow-t002', 'crow', 't002', 'running', 'crow-t002-sess', '2026-01-01')"
+    db = _db()
+    _insert_ticket(db, "t002", "in_progress")
+    db.conn.execute(
+        "INSERT INTO agents(repository_id, agent_id, role, ticket_id, status, session, started_at) "
+        "VALUES (?, 'crow-t002', 'crow', 't002', 'running', 'crow-t002-sess', '2026-01-01')",
+        (db.repository_id,),
     )
-    ops, rt, _ = _ops(conn)
+    ops, rt, _ = _ops(db)
 
     killed: list[str] = []
 
@@ -97,7 +103,10 @@ def test_reset_crow_kills_db_recorded_session_when_no_inmemory_agent(monkeypatch
 
     assert result["ok"] is True
     assert killed == ["crow-t002-sess"]
-    row = conn.execute("SELECT session FROM agents WHERE agent_id = 'crow-t002'").fetchone()
+    row = db.conn.execute(
+        "SELECT session FROM agents WHERE repository_id = ? AND agent_id = 'crow-t002'",
+        (db.repository_id,),
+    ).fetchone()
     assert row["session"] is None
 
 

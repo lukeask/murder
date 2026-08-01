@@ -23,7 +23,7 @@ from murder.llm.harnesses.cursor import CursorAdapter
 from murder.llm.harnesses.models import HarnessStartSpec
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.crow import CrowAgent
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
@@ -79,14 +79,13 @@ def _send_texts(ft: FakeTmux) -> list[str]:
 
 
 def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
-    connection = get_db(tmp_path / "state.db")
-    init_db(connection)
+    db = open_test_repo_db(tmp_path / "state.db")
 
     async def no_sleep(_: float) -> None:
         return None
 
     return SimpleNamespace(
-        db=connection,
+        db=db,
         orchestration_events=None,
         run_id=None,
         sync_agent=MagicMock(),
@@ -108,10 +107,10 @@ def _script_visible_payload_without_acknowledgment(ft: FakeTmux, text: str) -> N
     ft.queue_pane_after_effect(visible, effect="paste_buffer_literal", effect_text=text)
 
 
-def _assert_verified_prompt_trace(connection, ft: FakeTmux) -> None:
-    assert connection.execute("SELECT COUNT(*) FROM harness_control_operations").fetchone()[0] == 1
+def _assert_verified_prompt_trace(db, ft: FakeTmux) -> None:  # noqa: ANN001
+    assert db.conn.execute("SELECT COUNT(*) FROM harness_control_operations").fetchone()[0] == 1
     assert (
-        connection.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0]
+        db.conn.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0]
         >= MINIMUM_EVIDENCE_RECORDS
     )
     enters = [args for args, _ in ft.calls_to("send_keys") if args[1] == "Enter"]

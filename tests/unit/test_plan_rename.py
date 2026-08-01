@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,17 +12,18 @@ from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence import plans as plan_db
 from murder.state.persistence.agents import upsert_agent
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.paths import db_path, deprecated_plans_dir, plan_md
 from murder.work.plans.parser import parse, render, write
 from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import PlanSync, content_hash
+from tests.support.database import open_test_repo_db
 
 
-def _connect(repo_root):
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
-    return conn
+def _connect(repo_root: Path) -> RepoDb:
+    path = db_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return open_test_repo_db(path)
 
 
 def _plan(name: str, body: str = "# Body\n") -> Plan:
@@ -38,7 +40,17 @@ def _plan(name: str, body: str = "# Body\n") -> Plan:
     )
 
 
-def _insert_plan(conn, repo_root, plan: Plan) -> None:
+def _insert_plan(conn: RepoDb, repo_root: Path, plan: Plan) -> None:
+    for ticket_id in plan.related_tickets:
+        conn.conn.execute(
+            """
+            INSERT OR IGNORE INTO tickets(
+                repository_id, id, title, status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, 'planned', '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+            """,
+            (conn.repository_id, ticket_id, f"Ticket {ticket_id}"),
+        )
     text = render(plan)
     plan_db.upsert_plan(
         conn,
@@ -54,10 +66,22 @@ def _insert_plan(conn, repo_root, plan: Plan) -> None:
 def test_rename_plan_moves_primary_key_and_child_references(repo_root) -> None:
     conn = _connect(repo_root)
     _insert_plan(conn, repo_root, _plan("old"))
-    conn.execute(
-        "CREATE TABLE plan_tickets(plan_name TEXT NOT NULL, ticket_id TEXT NOT NULL)"
+    conn.conn.execute(
+        """
+        CREATE TABLE plan_tickets(
+            repository_id TEXT NOT NULL,
+            plan_name TEXT NOT NULL,
+            ticket_id TEXT NOT NULL
+        )
+        """
     )
-    conn.execute("INSERT INTO plan_tickets(plan_name, ticket_id) VALUES ('old', 't001')")
+    conn.conn.execute(
+        """
+        INSERT INTO plan_tickets(repository_id, plan_name, ticket_id)
+        VALUES (?, 'old', 't001')
+        """,
+        (conn.repository_id,),
+    )
 
     row = plan_db.rename_plan(
         conn,
@@ -68,12 +92,25 @@ def test_rename_plan_moves_primary_key_and_child_references(repo_root) -> None:
 
     assert row["name"] == "new"
     assert plan_db.get_plan_row(conn, "old") is None
-    assert conn.execute("SELECT plan_name FROM plan_revisions").fetchone()["plan_name"] == "new"
+    revision = conn.conn.execute(
+        "SELECT plan_name FROM plan_revisions WHERE repository_id = ?",
+        (conn.repository_id,),
+    ).fetchone()
+    assert revision["plan_name"] == "new"
     assert (
-        conn.execute("SELECT plan_name FROM plan_related_tickets").fetchone()["plan_name"]
+        conn.conn.execute(
+            "SELECT plan_name FROM plan_related_tickets WHERE repository_id = ?",
+            (conn.repository_id,),
+        ).fetchone()["plan_name"]
         == "new"
     )
-    assert conn.execute("SELECT plan_name FROM plan_tickets").fetchone()["plan_name"] == "new"
+    assert (
+        conn.conn.execute(
+            "SELECT plan_name FROM plan_tickets WHERE repository_id = ?",
+            (conn.repository_id,),
+        ).fetchone()["plan_name"]
+        == "new"
+    )
 
 
 def test_rename_plan_rejects_missing_and_colliding_names(repo_root) -> None:
@@ -202,9 +239,10 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
     registry.register(handler)
     sync_agent(planner)
     sync_agent(handler)
-    conn.execute(
-        "INSERT INTO agent_messages(agent_id, ordinal, role, body, captured_at) "
-        "VALUES ('planner-old', 0, 'user', 'hello', '2026-01-01T00:00:00')"
+    conn.conn.execute(
+        "INSERT INTO agent_messages(repository_id, agent_id, ordinal, role, body, captured_at) "
+        "VALUES (?, 'planner-old', 0, 'user', 'hello', '2026-01-01T00:00:00')",
+        (conn.repository_id,),
     )
 
     asyncio.run(Orchestrator(rt)._retarget_plan_runtime("old", "new"))
@@ -219,10 +257,16 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
     assert handler.id == "planning_handler-new"
     assert handler.plan_name == "new"
     assert handler.planner_session == "murder_demo_planner_old"
-    rows = conn.execute("SELECT agent_id, session FROM agents ORDER BY agent_id").fetchall()
+    rows = conn.conn.execute(
+        "SELECT agent_id, session FROM agents WHERE repository_id = ? ORDER BY agent_id",
+        (conn.repository_id,),
+    ).fetchall()
     assert [(r["agent_id"], r["session"]) for r in rows] == [
         ("planner-new", "murder_demo_planner_old"),
         ("planning_handler-new", "murder_demo_planning_handler_old"),
     ]
-    msg_row = conn.execute("SELECT agent_id FROM agent_messages").fetchone()
+    msg_row = conn.conn.execute(
+        "SELECT agent_id FROM agent_messages WHERE repository_id = ?",
+        (conn.repository_id,),
+    ).fetchone()
     assert msg_row["agent_id"] == "planner-new"

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -19,7 +19,9 @@ from murder.app.protocol.wire import ReplyMessage, TerminalFrameMessage
 from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.app.service.socket_server import ApplicationConnection, ApplicationSocketServer
-from murder.facts.log import FactLog, ProjectionInputLog, ensure_fact_schema
+from murder.facts.log import FactLog, ProjectionInputLog
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
 class _Application:
@@ -38,7 +40,7 @@ class _Application:
         try:
             if self.delay_s > 0:
                 await asyncio.sleep(self.delay_s)
-            return {"ok": True, "name": name.value}
+            return {"ok": True, "pid": 1}
         except asyncio.CancelledError:
             self.cancelled.set()
             raise
@@ -47,21 +49,20 @@ class _Application:
         return {}
 
 
-def _memory_logs() -> tuple[sqlite3.Connection, FactLog, ProjectionInputLog]:
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    ensure_fact_schema(conn)
-    return conn, FactLog(conn, poll_interval_s=0.01), ProjectionInputLog(conn, poll_interval_s=0.01)
+def _test_logs(tmp_path: Path) -> tuple[RepoDb, FactLog, ProjectionInputLog]:
+    db = open_test_repo_db(tmp_path / f"application-socket-{uuid4()}.db")
+    return db, FactLog(db, poll_interval_s=0.01), ProjectionInputLog(db, poll_interval_s=0.01)
 
 
 async def _start_server(
     *,
+    tmp_path: Path,
     application: _Application | None = None,
     terminal_capture: Any = None,
     terminal_interval_s: float = 0.05,
-) -> tuple[ApplicationSocketServer, str, _Application]:
+) -> tuple[ApplicationSocketServer, str, _Application, RepoDb]:
     app = application or _Application()
-    _conn, facts, inputs = _memory_logs()
+    db, facts, inputs = _test_logs(tmp_path)
     server = ApplicationSocketServer(
         gateway=ApplicationGateway(app),
         facts=facts,
@@ -71,8 +72,19 @@ async def _start_server(
         terminal_capture=terminal_capture,
         terminal_interval_s=terminal_interval_s,
     )
-    host, port = await server.start(host="127.0.0.1", port=0)
-    return server, f"ws://{host}:{port}/api/ws", app
+    try:
+        host, port = await server.start(host="127.0.0.1", port=0)
+    except Exception:
+        db.close()
+        raise
+    return server, f"ws://{host}:{port}/api/ws", app, db
+
+
+async def _stop_server(server: ApplicationSocketServer, db: RepoDb) -> None:
+    try:
+        await server.stop()
+    finally:
+        db.close()
 
 
 async def _hello(ws: Any, *, client_id: str = "test-client") -> dict[str, Any]:
@@ -100,8 +112,8 @@ async def _receive_until(ws: Any, *, op: str, timeout_s: float = 2.0) -> dict[st
 
 
 @pytest.mark.asyncio
-async def test_request_reply_over_real_websocket() -> None:
-    server, url, _app = await _start_server()
+async def test_request_reply_over_real_websocket(tmp_path: Path) -> None:
+    server, url, _app, db = await _start_server(tmp_path=tmp_path)
     try:
         async with ClientSession() as http, http.ws_connect(url) as ws:
             await _hello(ws)
@@ -117,14 +129,14 @@ async def test_request_reply_over_real_websocket() -> None:
             assert reply["request_id"] == "r1"
             assert reply["result"]["ok"] is True
     finally:
-        await server.stop()
+        await _stop_server(server, db)
 
 
 @pytest.mark.asyncio
-async def test_request_timeout_s_is_applied_by_gateway() -> None:
+async def test_request_timeout_s_is_applied_by_gateway(tmp_path: Path) -> None:
     application = _Application()
     application.delay_s = 1.0
-    server, url, _ = await _start_server(application=application)
+    server, url, _, db = await _start_server(tmp_path=tmp_path, application=application)
     try:
         async with ClientSession() as http, http.ws_connect(url) as ws:
             await _hello(ws)
@@ -143,12 +155,12 @@ async def test_request_timeout_s_is_applied_by_gateway() -> None:
             await application.started.wait()
             await asyncio.wait_for(application.cancelled.wait(), timeout=1.0)
     finally:
-        await server.stop()
+        await _stop_server(server, db)
 
 
 @pytest.mark.asyncio
-async def test_stream_failure_sends_scoped_error_and_clears_registry() -> None:
-    server, url, _ = await _start_server(terminal_capture=None)
+async def test_stream_failure_sends_scoped_error_and_clears_registry(tmp_path: Path) -> None:
+    server, url, _, db = await _start_server(tmp_path=tmp_path, terminal_capture=None)
     try:
         async with ClientSession() as http, http.ws_connect(url) as ws:
             await _hello(ws)
@@ -165,12 +177,12 @@ async def test_stream_failure_sends_scoped_error_and_clears_registry() -> None:
             assert error["error"]["code"] == ErrorCode.STREAM_FAILED
             assert "unavailable" in error["error"]["message"]
     finally:
-        await server.stop()
+        await _stop_server(server, db)
 
 
 @pytest.mark.asyncio
-async def test_unsupported_subscription_sends_scoped_error() -> None:
-    server, url, _ = await _start_server()
+async def test_unsupported_subscription_sends_scoped_error(tmp_path: Path) -> None:
+    server, url, _, db = await _start_server(tmp_path=tmp_path)
     try:
         async with ClientSession() as http, http.ws_connect(url) as ws:
             await _hello(ws)
@@ -188,11 +200,11 @@ async def test_unsupported_subscription_sends_scoped_error() -> None:
             assert error["subscription_id"] == "sub-1"
             assert error["error"]["code"] == ErrorCode.UNSUPPORTED_SUBSCRIPTION
     finally:
-        await server.stop()
+        await _stop_server(server, db)
 
 
 @pytest.mark.asyncio
-async def test_terminal_frames_and_replies_share_serialized_writer() -> None:
+async def test_terminal_frames_and_replies_share_serialized_writer(tmp_path: Path) -> None:
     session_id = uuid4()
     frames_emitted = 0
 
@@ -201,7 +213,11 @@ async def test_terminal_frames_and_replies_share_serialized_writer() -> None:
         frames_emitted += 1
         return SimpleNamespace(data=f"frame-{frames_emitted}", columns=40, rows=12)
 
-    server, url, _ = await _start_server(terminal_capture=capture, terminal_interval_s=0.02)
+    server, url, _, db = await _start_server(
+        tmp_path=tmp_path,
+        terminal_capture=capture,
+        terminal_interval_s=0.02,
+    )
     try:
         async with ClientSession() as http, http.ws_connect(url) as ws:
             await _hello(ws)
@@ -228,13 +244,14 @@ async def test_terminal_frames_and_replies_share_serialized_writer() -> None:
             assert reply["request_id"] == "during-stream"
             assert reply["result"]["ok"] is True
     finally:
-        await server.stop()
+        await _stop_server(server, db)
 
 
 @pytest.mark.asyncio
 async def test_terminal_frames_coalesce_under_writer_backpressure() -> None:
     sent: list[dict[str, Any]] = []
     release = asyncio.Event()
+    last_sequence = 7
 
     class _BlockingSocket:
         async def send_json(self, payload: dict[str, Any]) -> None:
@@ -251,7 +268,7 @@ async def test_terminal_frames_coalesce_under_writer_backpressure() -> None:
         await asyncio.sleep(0)
         session_id = uuid4()
         now = datetime.now(timezone.utc)
-        for sequence in range(1, 8):
+        for sequence in range(1, last_sequence + 1):
             await connection.send(
                 TerminalFrameMessage(
                     stream_id="s1",
@@ -275,8 +292,8 @@ async def test_terminal_frames_coalesce_under_writer_backpressure() -> None:
             await asyncio.sleep(0.01)
         frames = [item for item in sent if item.get("op") == "terminal.frame"]
         assert len(frames) == 1
-        assert frames[0]["frame"]["sequence"] == 7
-        assert frames[0]["frame"]["data"] == "seq-7"
+        assert frames[0]["frame"]["sequence"] == last_sequence
+        assert frames[0]["frame"]["data"] == f"seq-{last_sequence}"
         assert any(item.get("request_id") == "after" for item in sent)
     finally:
         await connection.close()
@@ -288,7 +305,7 @@ async def test_gateway_timeout_cancels_application_await() -> None:
     application.delay_s = 1.0
     gateway = ApplicationGateway(application)
 
-    with pytest.raises(TimeoutError, match="health.get timed out"):
+    with pytest.raises(TimeoutError, match="request timed out after"):
         await gateway.request(QueryRequest(name=QueryName.HEALTH_GET), timeout_s=0.05)
 
     await application.started.wait()

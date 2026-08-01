@@ -88,7 +88,11 @@ def test_existing_ticket_schema_migrates_wave_skills_and_worktree(tmp_path: Path
     assert row["worktree"] is None
     assert row["attempts"] == TICKET_ATTEMPTS
 
-    conn.execute("INSERT INTO ticket_deps(ticket_id, depends_on_id) VALUES ('t001', 't002')")
+    conn.execute(
+        "INSERT INTO ticket_deps(repository_id, ticket_id, depends_on_id) "
+        "VALUES (?, 't001', 't002')",
+        ("00000000-0000-0000-0000-000000000000",),
+    )
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -173,8 +177,10 @@ def test_plans_single_master_migration_does_not_corrupt_child_fks(tmp_path: Path
     rel_sql = _plan_related_fk_target(conn)
     assert "plans_old_single_master_migration" not in rev_sql
     assert "plans_old_single_master_migration" not in rel_sql
-    assert "REFERENCES plans(name)" in rev_sql
-    assert "REFERENCES plans(name)" in rel_sql
+    # This direct forward-migration test runs before repository partitioning.
+    # Turso normalizes the inline legacy FK with a space before its column list.
+    assert "REFERENCES plans (name)" in rev_sql
+    assert "REFERENCES plans (name)" in rel_sql
 
     conn.execute(
         """
@@ -183,7 +189,9 @@ def test_plans_single_master_migration_does_not_corrupt_child_fks(tmp_path: Path
         VALUES ('p1', '2026-06-07T00:00:02', 'import', 'draft', 'b', 'ch')
         """
     )
-    conn.execute("INSERT INTO plan_related_tickets(plan_name, ticket_id) VALUES ('p1', 't1')")
+    conn.execute(
+        "INSERT INTO plan_related_tickets(plan_name, ticket_id) VALUES ('p1', 't1')"
+    )
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -249,8 +257,8 @@ def test_repair_heals_dangling_plans_fk(tmp_path: Path) -> None:
     rel_sql = _plan_related_fk_target(conn)
     assert "plans_old_single_master_migration" not in rev_sql
     assert "plans_old_single_master_migration" not in rel_sql
-    assert "REFERENCES plans(name)" in rev_sql
-    assert "REFERENCES plans(name)" in rel_sql
+    assert "REFERENCES plans (repository_id, name)" in rev_sql
+    assert "REFERENCES plans (repository_id, name)" in rel_sql
 
     # Pre-existing rows preserved.
     assert conn.execute("SELECT plan_name, body FROM plan_revisions").fetchall()[0]["body"] == "b"
@@ -261,20 +269,34 @@ def test_repair_heals_dangling_plans_fk(tmp_path: Path) -> None:
     assert "idx_plan_revisions_plan" in _index_names(conn)
 
     # INSERT now succeeds and FK is satisfied.
+    conn.executescript(
+        """
+        INSERT INTO tickets(repository_id, id, title, status, created_at, updated_at)
+        VALUES
+            ('00000000-0000-0000-0000-000000000000', 't1', 'one', 'draft',
+             '2026-06-07T00:00:00', '2026-06-07T00:00:00'),
+            ('00000000-0000-0000-0000-000000000000', 't2', 'two', 'draft',
+             '2026-06-07T00:00:00', '2026-06-07T00:00:00');
+        """
+    )
     conn.execute(
         """
         INSERT INTO plan_revisions
-            (plan_name, created_at, source, status, body, content_hash)
-        VALUES ('p1', '2026-06-07T00:00:03', 'db', 'draft', 'b2', 'ch2')
+            (repository_id, plan_name, created_at, source, status, body, content_hash)
+        VALUES ('00000000-0000-0000-0000-000000000000', 'p1',
+                '2026-06-07T00:00:03', 'db', 'draft', 'b2', 'ch2')
         """
     )
-    conn.execute("INSERT INTO plan_related_tickets(plan_name, ticket_id) VALUES ('p1', 't2')")
+    conn.execute(
+        "INSERT INTO plan_related_tickets(repository_id, plan_name, ticket_id) "
+        "VALUES ('00000000-0000-0000-0000-000000000000', 'p1', 't2')"
+    )
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
     # Repair must be a clean no-op on an already-healed DB.
     init_db(conn)
     assert "plans_old_single_master_migration" not in _plan_revisions_fk_target(conn)
-    assert "REFERENCES plans(name)" in _plan_revisions_fk_target(conn)
+    assert "REFERENCES plans (repository_id, name)" in _plan_revisions_fk_target(conn)
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

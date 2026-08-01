@@ -23,17 +23,17 @@ from pathlib import Path
 import pytest
 
 from murder.app.service.runtime import Runtime
-from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.config import (
     Config,
     CrowHandlerConfig,
     HarnessRoleConfig,
     ProjectConfig,
 )
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.state.persistence.plans import live_plan_name_exists
 from murder.state.persistence.runs import insert_run
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import plan_md
+from tests.support.database import open_test_repo_db
 
 
 def _config() -> Config:
@@ -46,12 +46,12 @@ def _config() -> Config:
 
 
 def _runtime(repo_root: Path) -> Runtime:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    (repo_root / ".murder").mkdir(exist_ok=True)
+    db = open_test_repo_db(repo_root / ".murder" / "murder.db")
     rt = Runtime(_config(), repo_root)
-    rt.db = conn
+    rt.db = db
     rt.run_id = "run-test"
-    insert_run(conn, rt.run_id, "{}")
+    insert_run(db, rt.run_id, "{}")
     rt.orchestration_events = InProcessOrchestrationEventSink()
     return rt
 
@@ -68,20 +68,20 @@ async def _drain(rt: Runtime) -> None:
 
 
 def _row(rt: Runtime, name: str):
-    r = rt.db.execute(
-        "SELECT name, status, body FROM plans WHERE name = ?", (name,)
+    r = rt.db.conn.execute(
+        "SELECT name, status, body FROM plans WHERE repository_id = ? AND name = ?", (rt.db.repository_id, name)
     ).fetchone()
     return dict(r) if r else None
 
 
 def _set_status(rt: Runtime, name: str, status: str) -> None:
-    rt.db.execute("UPDATE plans SET status = ? WHERE name = ?", (status, name))
-    rt.db.commit()
+    rt.db.conn.execute("UPDATE plans SET status = ? WHERE repository_id = ? AND name = ?", (status, rt.db.repository_id, name))
+    rt.db.conn.commit()
 
 
 def _set_body(rt: Runtime, name: str, body: str) -> None:
-    rt.db.execute("UPDATE plans SET body = ? WHERE name = ?", (body, name))
-    rt.db.commit()
+    rt.db.conn.execute("UPDATE plans SET body = ? WHERE repository_id = ? AND name = ?", (body, rt.db.repository_id, name))
+    rt.db.conn.commit()
 
 
 # === guard helper ============================================================
@@ -137,7 +137,7 @@ async def test_create_over_live_plan_rejected_data_intact(repo_root: Path) -> No
     assert row["status"] == "draft"
     assert row["body"] == "PRECIOUS ORIGINAL BODY"
     # No archived/duplicate row was created.
-    count = rt.db.execute("SELECT COUNT(*) AS c FROM plans WHERE name LIKE 'keep%'").fetchone()["c"]
+    count = rt.db.conn.execute("SELECT COUNT(*) AS c FROM plans WHERE repository_id = ? AND name LIKE 'keep%'", (rt.db.repository_id,)).fetchone()["c"]
     assert count == 1
 
 
@@ -170,8 +170,8 @@ async def test_create_over_superseded_succeeds_old_data_preserved(repo_root: Pat
     _set_body(rt, "recycle", "OLD SUPERSEDED BODY")
     _set_status(rt, "recycle", "superseded")
     # A revision row exists for the original plan (scaffold creates one).
-    old_revs = rt.db.execute(
-        "SELECT COUNT(*) AS c FROM plan_revisions WHERE plan_name = ?", ("recycle",)
+    old_revs = rt.db.conn.execute(
+        "SELECT COUNT(*) AS c FROM plan_revisions WHERE repository_id = ? AND plan_name = ?", (rt.db.repository_id, "recycle")
     ).fetchone()["c"]
     assert old_revs >= 1
 
@@ -185,20 +185,20 @@ async def test_create_over_superseded_succeeds_old_data_preserved(repo_root: Pat
     assert new_row["body"] != "OLD SUPERSEDED BODY"
 
     # The old plan's data is fully preserved under an archived key.
-    archived = rt.db.execute(
+    archived = rt.db.conn.execute(
         "SELECT name, status, body FROM plans WHERE name LIKE 'recycle-superseded%'"
     ).fetchone()
     assert archived is not None
     assert archived["status"] == "superseded"
     assert archived["body"] == "OLD SUPERSEDED BODY"
     # Its revision history followed it (rename_plan moves child references).
-    moved_revs = rt.db.execute(
+    moved_revs = rt.db.conn.execute(
         "SELECT COUNT(*) AS c FROM plan_revisions WHERE plan_name = ?", (archived["name"],)
     ).fetchone()["c"]
     assert moved_revs == old_revs
 
     # Exactly two rows now share the recycle prefix: the new live one + archive.
-    count = rt.db.execute(
+    count = rt.db.conn.execute(
         "SELECT COUNT(*) AS c FROM plans WHERE name LIKE 'recycle%'"
     ).fetchone()["c"]
     assert count == 2
@@ -224,12 +224,12 @@ async def test_create_over_superseded_twice_archives_uniquely(repo_root: Path) -
 
     bodies = {
         str(r["body"])
-        for r in rt.db.execute(
+        for r in rt.db.conn.execute(
             "SELECT body FROM plans WHERE name LIKE 'multi-superseded%'"
         ).fetchall()
     }
     assert bodies == {"BODY ONE", "BODY TWO"}
     # No data lost; collision-safe suffixing kept both archives distinct.
-    assert rt.db.execute(
+    assert rt.db.conn.execute(
         "SELECT COUNT(*) AS c FROM plans WHERE name = 'multi'"
     ).fetchone()["c"] == 1

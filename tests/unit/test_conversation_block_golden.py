@@ -34,19 +34,19 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.conversation import (
     append_block,
     block_to_wire,
     update_live_block,
     upsert_conversation,
 )
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 # The golden is committed under the Ink test tree (the TS contract test imports it).
 GOLDEN_PATH = (
@@ -183,7 +183,7 @@ _SEGMENTS: list[tuple[str, dict[str, Any]]] = [
 ]
 
 
-def _build_wire_events(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def _build_wire_events(conn: RepoDb) -> list[dict[str, Any]]:
     """Run every segment through the real producer path, capturing each emitted
     `conversation.block` wire event exactly as the bus would carry it."""
     upsert_conversation(conn, conversation_id=AGENT_ID, agent_id=AGENT_ID, harness="cc", model="m")
@@ -222,13 +222,15 @@ def _build_wire_events(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 @pytest.fixture()
-def conn(tmp_path: Path) -> sqlite3.Connection:
-    db = get_db(tmp_path / "test.db")
-    init_db(db)
-    return db
+def conn(tmp_path: Path) -> RepoDb:
+    db = open_test_repo_db(tmp_path / "test.db")
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-def test_block_to_wire_matches_golden(conn: sqlite3.Connection) -> None:
+def test_block_to_wire_matches_golden(conn: RepoDb) -> None:
     """The real producer's wire output still equals the committed cross-language
     golden. Fails if any block wire key/type drifts on the Python side."""
     events = _build_wire_events(conn)
@@ -248,7 +250,7 @@ def test_block_to_wire_matches_golden(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_golden_covers_every_block_kind(conn: sqlite3.Connection) -> None:
+def test_golden_covers_every_block_kind(conn: RepoDb) -> None:
     """Guard the fixture's coverage: every canonical block kind appears, incl.
     agent_event and choice_prompt (both answered and live)."""
     events = _build_wire_events(conn)

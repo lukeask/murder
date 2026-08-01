@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -54,7 +53,8 @@ from murder.llm.harness_control.runtime.usage_driver import (
     UsageDriverPolicy,
     VerifiedUsageDriver,
 )
-from murder.state.persistence.schema import init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2035, 7, 12, 12, tzinfo=timezone.utc)
 EXPECTED_PERCENT_USED = 25.0
@@ -143,8 +143,8 @@ class _UsageAdapter:
 
 
 class _Transport:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
+    def __init__(self, db: RepoDb) -> None:
+        self.db = db
         self.effects: list[str] = []
 
     async def send_literal_keys(self, text, *, inter_key_delay) -> None:
@@ -155,7 +155,7 @@ class _Transport:
         self.effects.append(text)
 
     async def send_named_key(self, key) -> None:
-        assert self.connection.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0]
+        assert self.db.conn.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0]
         self.effects.append(key)
 
 
@@ -169,16 +169,16 @@ def _observed_surface(kind: SurfaceKind, *, blocks: bool):
 
 
 def _driver(*states: str):
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
-    transport = _Transport(connection)
+    from pathlib import Path
+
+    db = open_test_repo_db(Path(":memory:"))
+    transport = _Transport(db)
     controller = HarnessController(
         _UsageAdapter(),
         _UsageAdapter(),
         ObservationStore(unknown_snapshot(HarnessId("usage-test"), captured_at=NOW)),
         HarnessActuator(transport),
-        SqliteHarnessControlJournal(connection, session_id="usage-driver-test"),
+        SqliteHarnessControlJournal(db, session_id="usage-driver-test"),
     )
     return (
         VerifiedUsageDriver(
@@ -188,7 +188,7 @@ def _driver(*states: str):
             sleep=_no_sleep,
             now=lambda: NOW,
         ),
-        connection,
+        db,
         transport,
     )
 
@@ -201,7 +201,7 @@ def _request() -> RequestUsage:
 
 def test_verified_usage_driver_records_request_then_requires_fresh_usage_evidence() -> None:
     async def scenario() -> None:
-        driver, connection, transport = _driver("composer", "usage", "composer")
+        driver, db, transport = _driver("composer", "usage", "composer")
 
         result = await driver.collect(UsageRequest(timedelta(minutes=1), require_current=True))
 
@@ -209,13 +209,13 @@ def test_verified_usage_driver_records_request_then_requires_fresh_usage_evidenc
         assert result.usage is not None
         assert result.usage.windows[0].percent_used == EXPECTED_PERCENT_USED
         assert transport.effects == ["UsageProbe", "Escape"]
-        action = connection.execute(
+        action = db.conn.execute(
             "SELECT semantic_action_type, emission_status FROM harness_control_actions"
         ).fetchone()
         assert action["semantic_action_type"].endswith("RequestUsage")
         assert action["emission_status"] == "EMITTED"
         assert (
-            connection.execute("SELECT COUNT(*) FROM harness_control_frames").fetchone()[0]
+            db.conn.execute("SELECT COUNT(*) FROM harness_control_frames").fetchone()[0]
             >= MINIMUM_USAGE_TRACE_FRAMES
         )
 
@@ -224,20 +224,20 @@ def test_verified_usage_driver_records_request_then_requires_fresh_usage_evidenc
 
 def test_usage_driver_uses_visible_current_usage_without_emitting_a_probe() -> None:
     async def scenario() -> None:
-        driver, connection, transport = _driver("usage")
+        driver, db, transport = _driver("usage")
 
         result = await driver.collect_usage(require_current=True)
 
         assert result.outcome is UsageCollectionOutcome.COLLECTED
         assert transport.effects == []
-        assert connection.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0] == 0
 
     asyncio.run(scenario())
 
 
 def test_resume_after_request_emission_never_replays_usage_command() -> None:
     async def scenario() -> None:
-        driver, connection, transport = _driver("composer")
+        driver, db, transport = _driver("composer")
         operation = UsageOperation(
             OperationEnvelope(
                 "recovered-usage",
@@ -257,7 +257,7 @@ def test_resume_after_request_emission_never_replays_usage_command() -> None:
 
         assert result.outcome is UsageCollectionOutcome.ESCALATED
         assert transport.effects == []
-        assert connection.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0] == 0
+        assert db.conn.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0] == 0
 
     asyncio.run(scenario())
 

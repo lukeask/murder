@@ -5,16 +5,16 @@ from datetime import datetime
 from murder.app.service.read_model import ServiceReadModel
 from murder.state.persistence import plans as plan_db
 from murder.state.persistence.conversation import append_block, upsert_conversation
-from murder.state.persistence.schema import get_db, init_db
-from murder.state.storage.paths import db_path, plan_md, report_md, reports_dir
+from murder.state.persistence.reports import upsert_report
+from murder.state.storage.paths import plan_md, report_md, reports_dir
 from murder.work.plans.parser import render
 from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import content_hash
+from tests.support.database import open_test_repo_db
 
 
 def test_get_plan_display_reads_repo_relative_materialized_path(repo_root) -> None:
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
+    conn = open_test_repo_db(repo_root / "murder.db")
     now = datetime(2026, 1, 1, 12, 0, 0)
     plan = Plan(
         name="display-plan",
@@ -39,7 +39,7 @@ def test_get_plan_display_reads_repo_relative_materialized_path(repo_root) -> No
         revision_source="import",
     )
 
-    display = ServiceReadModel(db_path(repo_root)).get_plan_display(plan.name)
+    display = ServiceReadModel(conn, repo_root).get_plan_display(plan.name)
 
     assert display is not None
     assert display.markdown == text
@@ -50,42 +50,41 @@ def test_get_reports_snapshot_lists_markdown_reports(repo_root) -> None:
     # F5.4: get_reports_snapshot reads the reports DB table, not disk.
     # Seed the DB row so it appears; the disk file is still written for
     # parity (materialized_path recorded) but the snapshot reads from DB.
-    from murder.state.persistence.reports import upsert_report
-
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
+    conn = open_test_repo_db(repo_root / "murder.db")
     reports_dir(repo_root).mkdir(parents=True, exist_ok=True)
     body = "# First\n\nbody\n"
     report_md(repo_root, "first").write_text(body, encoding="utf-8")
     rel = str(report_md(repo_root, "first").relative_to(repo_root))
     upsert_report(conn, "first", body=body, materialized_path=rel)
-    conn.close()
     # Non-md file on disk — should still be ignored.
     (reports_dir(repo_root) / "ignore.txt").write_text("not a report", encoding="utf-8")
 
-    snapshot = ServiceReadModel(db_path(repo_root)).get_reports_snapshot()
+    snapshot = ServiceReadModel(conn, repo_root).get_reports_snapshot()
 
     assert [report.name for report in snapshot.reports] == ["first"]
     assert snapshot.reports[0].char_count > 0
 
 
 def test_get_report_display_reads_report_markdown(repo_root) -> None:
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
-    conn.close()
+    conn = open_test_repo_db(repo_root / "murder.db")
     reports_dir(repo_root).mkdir(parents=True, exist_ok=True)
     text = "# Report\n\nvisible content\n"
     report_md(repo_root, "weekly").write_text(text, encoding="utf-8")
+    upsert_report(
+        conn,
+        "weekly",
+        body=text,
+        materialized_path=str(report_md(repo_root, "weekly").relative_to(repo_root)),
+    )
 
-    display = ServiceReadModel(db_path(repo_root)).get_report_display("weekly")
+    display = ServiceReadModel(conn, repo_root).get_report_display("weekly")
 
     assert display is not None
     assert display.markdown == text
 
 
 def test_get_conversations_snapshot_returns_active_histories(repo_root) -> None:
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
+    conn = open_test_repo_db(repo_root / "murder.db")
     upsert_conversation(
         conn,
         conversation_id="crow-t001",
@@ -104,9 +103,7 @@ def test_get_conversations_snapshot_returns_active_histories(repo_root) -> None:
         status="stale",
     )
     append_block(conn, "old", {"type": "user", "text": "stale"})
-    conn.close()
-
-    snapshot = ServiceReadModel(db_path(repo_root)).get_conversations_snapshot()
+    snapshot = ServiceReadModel(conn, repo_root).get_conversations_snapshot()
 
     assert [c.conversation_id for c in snapshot.conversations] == ["crow-t001"]
     conversation = snapshot.conversations[0]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -19,7 +18,7 @@ from murder.llm.harnesses.model_cache import (
     refresh_and_persist_harness_models,
 )
 from murder.state.persistence.harness_models import get_all_harness_models, upsert_harness_models
-from murder.state.persistence.schema import init_db
+from tests.support.database import open_test_repo_db
 
 
 def test_accessor_returns_configured_catalog_and_fresh_list() -> None:
@@ -40,20 +39,18 @@ def test_failed_live_refresh_preserves_the_previously_persisted_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_probes(monkeypatch)
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
+    db = open_test_repo_db(tmp_path / "murder.db")
 
     upsert_harness_models(
-        connection,
+        db,
         harness="codex",
         models=[{"id": "last-good", "label": "Last Good"}],
         fetched_at="2026-01-01T00:00:00+00:00",
     )
-    connection.commit()
-    asyncio.run(refresh_and_persist_harness_models(tmp_path, connection))
+    db.conn.commit()
+    asyncio.run(refresh_and_persist_harness_models(tmp_path, db))
 
-    rows = get_all_harness_models(connection)
+    rows = get_all_harness_models(db)
     assert {row["harness"] for row in rows} == {"claude_code", "codex", "pi"}
     assert (
         next(row for row in rows if row["harness"] == "claude_code")["discovery_error"]
@@ -78,14 +75,12 @@ def test_refresh_caches_and_persists_live_codex_models(
         return LiveModelProbeResult(False, (), f"{kind} unavailable")
 
     monkeypatch.setattr("murder.llm.harnesses.model_cache.probe_live_models", probe)
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
+    db = open_test_repo_db(tmp_path / "murder.db")
 
-    asyncio.run(refresh_and_persist_harness_models(tmp_path, connection))
+    asyncio.run(refresh_and_persist_harness_models(tmp_path, db))
 
     assert get_available_models("codex") == [("gpt-current", "GPT Current")]
-    row = next(row for row in get_all_harness_models(connection) if row["harness"] == "codex")
+    row = next(row for row in get_all_harness_models(db) if row["harness"] == "codex")
     assert row["models"] == [{"id": "gpt-current", "label": "GPT Current"}]
     assert row["discovery_error"] is None
 

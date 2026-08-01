@@ -17,12 +17,12 @@ from datetime import datetime
 from murder.app.service.read_model import ServiceReadModel
 from murder.state.persistence import plans as plan_db
 from murder.state.persistence import tickets as ticket_db
-from murder.state.persistence.schema import get_db, init_db
-from murder.state.storage.paths import db_path, tickets_dir
+from murder.state.storage.paths import tickets_dir
 from murder.work.plans.schema import Plan, PlanStatus
 from murder.work.plans.sync import content_hash
 from murder.work.tickets.schema import ChecklistItem, Ticket
 from murder.work.tickets.status import TicketStatus
+from tests.support.database import open_test_repo_db
 
 TICKET_MD = """\
 ---
@@ -44,8 +44,7 @@ Build the thing.
 
 
 def _seed_ticket(repo_root) -> ServiceReadModel:
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
+    conn = open_test_repo_db(repo_root / "murder.db")
     now = datetime(2026, 1, 1, 12, 0, 0)
     # Dependency ticket must exist (ticket_deps FK references tickets.id).
     ticket_db.insert_ticket(
@@ -77,11 +76,10 @@ def _seed_ticket(repo_root) -> ServiceReadModel:
             ],
         ),
     )
-    conn.close()
     tdir = tickets_dir(repo_root)
     tdir.mkdir(parents=True, exist_ok=True)
     (tdir / "t007.md").write_text(TICKET_MD, encoding="utf-8")
-    return ServiceReadModel(db_path(repo_root))
+    return ServiceReadModel(conn, repo_root)
 
 
 def test_ticket_detail_carries_body_and_header_fields(repo_root) -> None:
@@ -120,8 +118,7 @@ def test_ticket_detail_body_falls_back_when_no_frontmatter(repo_root) -> None:
 
 
 def test_plans_snapshot_carries_parent_recency_and_size(repo_root) -> None:
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
+    conn = open_test_repo_db(repo_root / "murder.db")
     parent_dt = datetime(2026, 1, 1, 9, 0, 0)
     child_dt = datetime(2026, 1, 2, 9, 0, 0)
     parent = Plan(
@@ -151,9 +148,7 @@ def test_plans_snapshot_carries_parent_recency_and_size(repo_root) -> None:
             create_revision=True,
             revision_source="import",
         )
-    conn.close()
-
-    snapshot = ServiceReadModel(db_path(repo_root)).get_plans_snapshot()
+    snapshot = ServiceReadModel(conn, repo_root).get_plans_snapshot()
     by_name = {p.name: p for p in snapshot.plans}
 
     assert by_name["newui"].parent is None

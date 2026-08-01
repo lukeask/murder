@@ -16,28 +16,34 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.runtime.orchestration.events import ConversationBlockEvent
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.results import fail_result
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.collaborator import CollaboratorAgent
+from murder.runtime.orchestration.events import ConversationBlockEvent
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.conversation import read_conversation_blocks, upsert_conversation
-from murder.state.persistence.schema import get_db, init_db
 from murder.user_config import TuiUserConfig, UserConfig
+from tests.support.database import open_test_repo_db
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
 CC_IDLE = (_FIXTURES / "cc_idle.txt").read_text(encoding="utf-8")
 CC_BUSY = (_FIXTURES / "cc_busy.txt").read_text(encoding="utf-8")
 PROMPT_COUNT = 2
+BACKEND_CONNECTION_COUNT = 2
 
 
 async def _no_sleep(_: float) -> None:
     """Keep reconciliation traces deterministic without making them timing tests."""
 
 
-def _runtime(conn: object, *, events: object | None = None) -> SimpleNamespace:
+def _db(tmp_path: Path) -> RepoDb:
+    return open_test_repo_db(tmp_path / "state.db")
+
+
+def _runtime(conn: RepoDb, *, events: object | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         db=conn,
         orchestration_events=events,
@@ -85,8 +91,7 @@ def test_start_and_followup_use_verified_prompt_control(
 ) -> None:
     """Messages use persisted verified control rather than adapter send_prompt."""
 
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     agent, runtime = _new_agent(fake_tmux=fake_tmux, tmp_path=tmp_path, conn=conn)
     _script_acknowledged_submission(fake_tmux, "fresh brief")
 
@@ -102,19 +107,35 @@ def test_start_and_followup_use_verified_prompt_control(
 
     # The raw terminal fact, broad parser evidence, semantic operation, and
     # emitted action are all durable.  A tmux Enter alone is never the result.
-    assert conn.execute("SELECT COUNT(*) FROM harness_control_frames").fetchone()[0] > 0
-    assert conn.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0] > 0
     assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM harness_control_operations WHERE capability = 'submit_prompt'"
+        conn.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_frames WHERE repository_id = ?",
+            (conn.repository_id,),
+        ).fetchone()[0]
+        > 0
+    )
+    assert (
+        conn.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_evidence WHERE repository_id = ?",
+            (conn.repository_id,),
+        ).fetchone()[0]
+        > 0
+    )
+    assert (
+        conn.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_operations "
+            "WHERE repository_id = ? AND capability = 'submit_prompt'",
+            (conn.repository_id,),
         ).fetchone()[0]
         == PROMPT_COUNT
     )
     assert (
-        conn.execute(
+        conn.conn.execute(
             "SELECT COUNT(*) FROM harness_control_actions "
-            "WHERE semantic_action_type LIKE '%CommitPromptSubmission' "
-            "AND emission_status = 'EMITTED'"
+            "WHERE repository_id = ? "
+            "AND semantic_action_type LIKE '%CommitPromptSubmission' "
+            "AND emission_status = 'EMITTED'",
+            (conn.repository_id,),
         ).fetchone()[0]
         == PROMPT_COUNT
     )
@@ -134,8 +155,7 @@ def test_collaborator_send_escalates_when_enter_has_no_later_acknowledgment(
 ) -> None:
     """Commit emission remains ambiguous when only pre-Enter evidence is visible."""
 
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     agent, _runtime_scope = _new_agent(
         fake_tmux=fake_tmux, tmp_path=tmp_path, conn=conn
     )
@@ -157,12 +177,20 @@ def test_collaborator_send_escalates_when_enter_has_no_later_acknowledgment(
     enter_calls = [args for args, _ in fake_tmux.calls_to("send_keys") if args[1] == "Enter"]
     assert len(enter_calls) == PROMPT_COUNT  # startup acknowledgment + one ambiguous commit
     assert not hasattr(agent.harness_session, "send_prompt")
-    latest = conn.execute(
+    latest = conn.conn.execute(
         "SELECT status FROM harness_control_operations "
-        "WHERE capability = 'submit_prompt' ORDER BY updated_at DESC LIMIT 1"
+        "WHERE repository_id = ? AND capability = 'submit_prompt' "
+        "ORDER BY updated_at DESC LIMIT 1",
+        (conn.repository_id,),
     ).fetchone()
     assert latest["status"] == "ESCALATED"
-    assert conn.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0] > 0
+    assert (
+        conn.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_evidence WHERE repository_id = ?",
+            (conn.repository_id,),
+        ).fetchone()[0]
+        > 0
+    )
 
 
 # ============================================================
@@ -174,11 +202,11 @@ def test_collaborator_start_clears_prior_conversation(
     fake_tmux: FakeTmux,
     tmp_path: Path,
 ) -> None:
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
-    conn.execute(
-        "INSERT INTO agent_messages(agent_id, ordinal, role, body, captured_at) "
-        "VALUES ('collaborator-0', 0, 'user', 'stale', '2026-06-02T00:00:00Z')"
+    conn = _db(tmp_path)
+    conn.conn.execute(
+        "INSERT INTO agent_messages(repository_id, agent_id, ordinal, role, body, captured_at) "
+        "VALUES (?, 'collaborator-0', 0, 'user', 'stale', '2026-06-02T00:00:00Z')",
+        (conn.repository_id,),
     )
     runtime = _runtime(conn)
     agent = CollaboratorAgent(
@@ -194,15 +222,16 @@ def test_collaborator_start_clears_prior_conversation(
     # above.
     agent.start_conversation()
 
-    rows = conn.execute(
-        "SELECT body FROM agent_messages WHERE agent_id = 'collaborator-0'"
+    rows = conn.conn.execute(
+        "SELECT body FROM agent_messages "
+        "WHERE repository_id = ? AND agent_id = 'collaborator-0'",
+        (conn.repository_id,),
     ).fetchall()
     assert rows == []
 
 
 def test_record_user_block_event_publishes_conversation_block(tmp_path: Path) -> None:
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     bus = SimpleNamespace(publish=AsyncMock())
     runtime = SimpleNamespace(
         db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
@@ -232,8 +261,7 @@ def test_stop_clean_sets_conversation_complete_without_legacy_exit_scrape(
     tmp_path: Path,
 ) -> None:
     """Clean stop completes the conversation without unowned `/exit` input."""
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     runtime = SimpleNamespace(
         db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
     )
@@ -247,9 +275,10 @@ def test_stop_clean_sets_conversation_complete_without_legacy_exit_scrape(
     upsert_conversation(conn, conversation_id="collaborator-0", agent_id="collaborator-0")
     asyncio.run(agent.stop(failed=False, kill_session=True))
 
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT status, harness_session_id FROM conversations"
-        " WHERE conversation_id = 'collaborator-0'"
+        " WHERE repository_id = ? AND conversation_id = 'collaborator-0'",
+        (conn.repository_id,),
     ).fetchone()
     assert row["status"] == "complete"
     assert row["harness_session_id"] is None
@@ -262,8 +291,7 @@ def test_stop_preserve_session_leaves_conversation_in_progress(
 ) -> None:
     """1.g: graceful TUI-quit (kill_session=False) leaves conversation in_progress
     so next startup can mark it stale."""
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     runtime = SimpleNamespace(
         db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
     )
@@ -278,8 +306,10 @@ def test_stop_preserve_session_leaves_conversation_in_progress(
 
     asyncio.run(agent.stop(failed=True, kill_session=False))
 
-    row = conn.execute(
-        "SELECT status FROM conversations WHERE conversation_id = 'collaborator-0'"
+    row = conn.conn.execute(
+        "SELECT status FROM conversations "
+        "WHERE repository_id = ? AND conversation_id = 'collaborator-0'",
+        (conn.repository_id,),
     ).fetchone()
     assert row["status"] == "in_progress"
 
@@ -288,8 +318,7 @@ def test_destructive_stop_closes_owned_backend_connections(
     fake_tmux: FakeTmux,
     tmp_path: Path,
 ) -> None:
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     runtime = SimpleNamespace(
         db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
     )
@@ -324,8 +353,7 @@ def test_preserved_session_keeps_owned_backend_connections_open(
     fake_tmux: FakeTmux,
     tmp_path: Path,
 ) -> None:
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     runtime = SimpleNamespace(
         db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
     )
@@ -352,8 +380,7 @@ def test_reinitialize_after_destructive_stop_creates_fresh_backend_connection(
 ) -> None:
     """stop() clears owned backends so the next init bootstraps a new connection."""
 
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     runtime = SimpleNamespace(
         db=conn,
         orchestration_events=None,
@@ -407,7 +434,7 @@ def test_reinitialize_after_destructive_stop_creates_fresh_backend_connection(
     second = agent.agent_sdk_connection
     assert second is bootstrapped[1]
     assert second is not first
-    assert len(bootstrapped) == 2
+    assert len(bootstrapped) == BACKEND_CONNECTION_COUNT
 
 
 # ============================================================
@@ -424,8 +451,7 @@ def test_collaborator_ground_truth_block_survives_refresh(
     and the projector reuses one persistent producer across refreshes.
     """
 
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     runtime = _runtime(conn)
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -455,8 +481,7 @@ def test_collaborator_ground_truth_block_survives_refresh(
 
 
 def test_collaborator_start_failure_records_notice(tmp_path: Path) -> None:
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = _db(tmp_path)
     bus = SimpleNamespace(publish=AsyncMock())
     runtime = SimpleNamespace(
         db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
+import turso
 from pydantic import ValidationError
 
 from murder.facts.log import get_fact, replay_facts, replay_projection_inputs
@@ -15,7 +15,7 @@ from murder.permissions import (
     PermissionPrincipal,
 )
 from murder.state.persistence.approvals import resolve_approval_request
-from murder.state.persistence.schema import init_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.workflow_runs import (
     SignalDeduplicationConflictError,
     StaleWorkflowRevisionError,
@@ -28,8 +28,8 @@ from murder.state.persistence.workflow_runs import (
     load_workflow_decision_input,
     require_workflow_run,
 )
-from murder.work.workflows.definition import StageDef, WorkflowDef
 from murder.work.workflows import WorkflowNodeRun, WorkflowRun
+from murder.work.workflows.definition import StageDef, WorkflowDef
 from murder.work.workflows.runtime import (
     ActivityFinishedSignal,
     ActivityWait,
@@ -66,12 +66,12 @@ DECISION_REVISION = 7
 FINITE_SIGNAL_LIMIT = 2
 
 
-def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    init_db(conn)
-    return conn
+def _conn() -> RepoDb:
+    from pathlib import Path
+
+    from tests.support.database import open_test_repo_db
+
+    return open_test_repo_db(Path(":memory:"))
 
 
 def _state(status: StageStatus = StageStatus.READY) -> VersionedState:
@@ -116,7 +116,7 @@ def test_authoritative_run_round_trips_without_python_execution_state() -> None:
     assert loaded.revision == 0
     assert loaded.state.schema_name == "static_dag"
 
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(workflow_runs)")}
+    columns = {row["name"] for row in conn.conn.execute("PRAGMA table_info(workflow_runs)")}
     assert {
         "workflow_id",
         "definition_name",
@@ -327,11 +327,13 @@ def test_apply_plan_atomically_consumes_replaces_and_increments_revision() -> No
     assert consumed.consumed_at_revision == 1
     current_waits = list_workflow_waits(conn, run.workflow_id)
     assert [record.spec for record in current_waits] == [replacement]
-    outbox = conn.execute(
+    outbox = conn.conn.execute(
         "SELECT kind, workflow_revision FROM workflow_transition_outbox"
     ).fetchall()
     assert outbox == []
-    facts = conn.execute("SELECT fact_id, kind FROM retained_facts ORDER BY sequence").fetchall()
+    facts = conn.conn.execute(
+        "SELECT fact_id, kind FROM retained_facts ORDER BY sequence"
+    ).fetchall()
     assert [row["kind"] for row in facts] == [
         "workflow.started",
         "workflow.transition.applied",
@@ -422,7 +424,7 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
         ),
         applied_at=NOW,
     )
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT payload_json FROM permission_approval_requests WHERE approval_id = ?",
         (str(approval_id),),
     ).fetchone()
@@ -440,9 +442,7 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
             rationale="looks safe",
             decided_at=NOW + timedelta(seconds=1),
         )
-    assert conn.execute(
-        "SELECT COUNT(*) FROM permission_approval_evidence"
-    ).fetchone()[0] == 0
+    assert conn.conn.execute("SELECT COUNT(*) FROM permission_approval_evidence").fetchone()[0] == 0
     assert len(replay_facts(conn, kind="permission.approval.requested")) == 1
     assert len(replay_projection_inputs(conn, projection="approvals")) == 1
 
@@ -458,11 +458,9 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
             rationale="self-approved",
             decided_at=NOW + timedelta(seconds=1),
         )
-    assert conn.execute(
-        "SELECT COUNT(*) FROM permission_approval_evidence"
-    ).fetchone()[0] == 0
+    assert conn.conn.execute("SELECT COUNT(*) FROM permission_approval_evidence").fetchone()[0] == 0
 
-    conn.execute(
+    conn.conn.execute(
         """
         UPDATE workflow_runs SET status = 'cancelled', revision = 2
         WHERE workflow_id = ?
@@ -481,10 +479,10 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
             rationale="too late",
             decided_at=NOW + timedelta(seconds=1),
         )
-    assert conn.execute(
-        "SELECT COUNT(*) FROM permission_authorization_grants"
-    ).fetchone()[0] == 0
-    conn.execute(
+    assert (
+        conn.conn.execute("SELECT COUNT(*) FROM permission_authorization_grants").fetchone()[0] == 0
+    )
+    conn.conn.execute(
         """
         UPDATE workflow_runs SET status = 'waiting', revision = 1
         WHERE workflow_id = ?
@@ -492,7 +490,7 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
         (str(run.workflow_id),),
     )
 
-    conn.execute(
+    conn.conn.execute(
         """
         CREATE TRIGGER reject_permission_grant_fact
         BEFORE INSERT ON retained_facts
@@ -502,7 +500,7 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
         END
         """
     )
-    with pytest.raises(sqlite3.IntegrityError, match="reject grant fact"):
+    with pytest.raises(turso.DatabaseError, match="reject grant fact"):
         resolve_approval_request(
             conn,
             workflow_id=run.workflow_id,
@@ -514,13 +512,11 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
             rationale="must roll back",
             decided_at=NOW + timedelta(seconds=1),
         )
-    assert conn.execute(
-        "SELECT COUNT(*) FROM permission_approval_evidence"
-    ).fetchone()[0] == 0
-    assert conn.execute(
-        "SELECT COUNT(*) FROM permission_authorization_grants"
-    ).fetchone()[0] == 0
-    persisted_request = conn.execute(
+    assert conn.conn.execute("SELECT COUNT(*) FROM permission_approval_evidence").fetchone()[0] == 0
+    assert (
+        conn.conn.execute("SELECT COUNT(*) FROM permission_authorization_grants").fetchone()[0] == 0
+    )
+    persisted_request = conn.conn.execute(
         """
         SELECT status FROM permission_approval_requests
         WHERE approval_id = ?
@@ -528,7 +524,7 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
         (str(approval_id),),
     ).fetchone()
     assert persisted_request["status"] == "pending"
-    conn.execute("DROP TRIGGER reject_permission_grant_fact")
+    conn.conn.execute("DROP TRIGGER reject_permission_grant_fact")
 
     decision, grant, authorization = resolve_approval_request(
         conn,
@@ -555,7 +551,8 @@ def test_approval_creation_resolution_grant_signal_and_fact_are_atomic() -> None
         for item in signals
     )
     wait = next(
-        item for item in list_workflow_waits(conn, run.workflow_id)
+        item
+        for item in list_workflow_waits(conn, run.workflow_id)
         if isinstance(item.spec, ApprovalWait)
     )
     assert wait.satisfied_at is not None
@@ -653,7 +650,7 @@ def test_approval_deny_and_partial_resolution_yield_no_authorization() -> None:
     assert grant is None
     assert authorization is None
     assert (
-        conn.execute(
+        conn.conn.execute(
             "SELECT status FROM permission_approval_requests WHERE approval_id = ?",
             (str(partial_id),),
         ).fetchone()["status"]
@@ -683,7 +680,7 @@ def test_factless_transition_still_invalidates_workflow_projection_transactional
         applied_at=NOW,
     )
 
-    facts = conn.execute("SELECT kind FROM retained_facts ORDER BY sequence").fetchall()
+    facts = conn.conn.execute("SELECT kind FROM retained_facts ORDER BY sequence").fetchall()
     assert [row["kind"] for row in facts] == [
         "workflow.started",
         "workflow.transition.applied",
@@ -706,7 +703,7 @@ def test_apply_plan_rolls_back_every_write_when_wait_replacement_fails() -> None
         deduplication_key="wake",
         payload=ExternalWorkflowSignal(name="wake"),
     )
-    conn.executescript(
+    conn.conn.executescript(
         """
         CREATE TRIGGER reject_resource_wait
         BEFORE INSERT ON workflow_waits
@@ -726,7 +723,7 @@ def test_apply_plan_rolls_back_every_write_when_wait_replacement_fails() -> None
         replace_waits=(ResourceWait(resource_kind="gpu", selector={}),),
     )
 
-    with pytest.raises(sqlite3.IntegrityError, match="injected wait failure"):
+    with pytest.raises(turso.DatabaseError, match="injected wait failure"):
         apply_transition_plan(conn, workflow_id=run.workflow_id, plan=plan)
     assert require_workflow_run(conn, run.workflow_id).revision == 0
     persisted_signal = get_workflow_signal(conn, signal.signal_id)

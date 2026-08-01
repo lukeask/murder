@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import sqlite3
 from importlib import resources
 from pathlib import Path
 
 import pytest
 
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
-from murder.state.persistence.schema import init_db
 from murder.state.storage.paths import murder_dir, plans_dir, tickets_dir
 from murder.work.examples import EXAMPLE_TEMPLATES, example_path, seed_examples
 from murder.work.plans import parser as plan_parser
 from murder.work.tickets.parser import parse_ticket
 from murder.work.tickets.sync import _TICKET_ID_RE
+from tests.support.database import open_test_repo_db
 
 
 def _template_text(filename: str) -> str:
@@ -86,10 +85,8 @@ def test_seed_is_idempotent_and_preserves_edits(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_supervisor_reconcile_restores_example(tmp_path: Path) -> None:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
-    supervisor = FilesystemSyncSupervisor.attach(tmp_path, conn)
+    db = open_test_repo_db(tmp_path / "murder.db")
+    supervisor = FilesystemSyncSupervisor.attach(tmp_path, db)
 
     await supervisor.reconcile_all()
     target = example_path(tmp_path, "example_ticket.md")
@@ -98,3 +95,4 @@ async def test_supervisor_reconcile_restores_example(tmp_path: Path) -> None:
     target.unlink()
     await supervisor.reconcile_all()
     assert target.exists()
+    db.close()

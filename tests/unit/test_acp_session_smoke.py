@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -16,7 +16,7 @@ from murder.llm.harness_control.model.operations import OperationOutcome
 from murder.llm.harness_control.runtime.acp_frame_observer import AcpFrameObserver
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
-from murder.state.persistence.schema import init_db
+from tests.support.database import open_test_repo_db
 
 
 class AutoRespondTransport:
@@ -123,11 +123,8 @@ async def _no_sleep(_: float) -> None:
     return None
 
 
-def _db() -> sqlite3.Connection:
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    init_db(connection)
-    return connection
+def _db():  # noqa: ANN201
+    return open_test_repo_db(Path(":memory:"))
 
 
 async def _session(
@@ -143,7 +140,7 @@ async def _session(
         acp=acp,
         harness_kind="cursor",
         terminal_session="test",
-        connection=db,
+        db=db,
         persistence_session_id="acp-smoke",
         prompt_policy=PromptDriverPolicy(
             observation_interval=timedelta(),

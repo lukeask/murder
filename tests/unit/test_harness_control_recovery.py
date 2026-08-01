@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -60,6 +59,7 @@ from murder.llm.harness_control.runtime.recovery import (
     classify_recovery_candidate,
     reconstruct_persisted_operation,
 )
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.harness_control import (
     PersistedAction,
     PersistedOperation,
@@ -67,17 +67,15 @@ from murder.state.persistence.harness_control import (
     get_operation,
     persist_operation,
 )
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 REVISION = ObservationRevision(2, 9, 4)
 
 
 @pytest.fixture()
-def conn(tmp_path) -> sqlite3.Connection:
-    connection = get_db(tmp_path / "recovery.db")
-    init_db(connection)
-    return connection
+def conn(tmp_path) -> RepoDb:
+    return open_test_repo_db(tmp_path / "recovery.db")
 
 
 def _envelope(capability: str, phase: object) -> OperationEnvelope[object]:
@@ -226,7 +224,7 @@ def test_safe_precondition_action_still_requires_fresh_observation() -> None:
 
 @pytest.mark.parametrize("operation", _operations(), ids=lambda op: type(op).__name__)
 def test_persisted_semantic_operations_reconstruct_exact_typed_state(
-    conn: sqlite3.Connection, operation: object
+    conn: RepoDb, operation: object
 ) -> None:
     persist_operation(
         conn,

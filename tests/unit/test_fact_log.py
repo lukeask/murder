@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
+import turso
 from pydantic import ValidationError
 
 from murder.facts.contracts import (
@@ -24,21 +24,17 @@ from murder.facts.log import (
     ProjectionInputLog,
     append_fact,
     append_projection_input,
-    ensure_fact_schema,
     replay_facts,
     replay_projection_inputs,
 )
-from murder.state.persistence.schema import init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 7, 18, 15, 0, tzinfo=timezone.utc)
 
 
-def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    init_db(conn)
-    return conn
+def _conn() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
 
 
 def _draft() -> RetainedFactDraft:
@@ -95,9 +91,8 @@ def test_retained_fact_draft_derives_kind_from_typed_payload() -> None:
 
 
 def test_authoritative_fact_schema_supports_independent_projection_inputs() -> None:
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.execute("PRAGMA foreign_keys = ON")
-    ensure_fact_schema(conn)
+    db = _conn()
+    conn = db.conn
 
     columns = {
         str(row["name"]): row
@@ -113,10 +108,10 @@ def test_authoritative_fact_schema_supports_independent_projection_inputs() -> N
 
 
 def test_fact_and_projection_inputs_append_atomically_and_replay_by_cursor() -> None:
-    conn = _conn()
+    db = _conn()
     draft = _draft()
     fact, inputs = append_fact(
-        conn,
+        db,
         draft,
         projection_inputs=(
             ProjectionInputDraft(
@@ -131,38 +126,38 @@ def test_fact_and_projection_inputs_append_atomically_and_replay_by_cursor() -> 
     assert fact.sequence == 1
     assert fact.fact_id == draft.fact_id
     assert len(inputs) == 1
-    assert replay_facts(conn, after_sequence=1) == ()
-    assert replay_facts(conn, after_sequence=0) == (fact,)
+    assert replay_facts(db, after_sequence=1) == ()
+    assert replay_facts(db, after_sequence=0) == (fact,)
     assert (
         replay_projection_inputs(
-            conn,
+            db,
             projection="schedule",
             after_sequence=inputs[0].sequence,
         )
         == ()
     )
-    assert replay_projection_inputs(conn, projection="schedule") == inputs
+    assert replay_projection_inputs(db, projection="schedule") == inputs
 
 
 def test_projection_input_can_be_durable_without_inventing_a_fact() -> None:
-    conn = _conn()
+    db = _conn()
     draft = ProjectionInputDraft(
         projection="activities",
         subject_key="activity-1",
         generation=4,
     )
 
-    first = append_projection_input(conn, draft, created_at=NOW)
-    duplicate = append_projection_input(conn, draft, created_at=NOW)
+    first = append_projection_input(db, draft, created_at=NOW)
+    duplicate = append_projection_input(db, draft, created_at=NOW)
 
     assert duplicate == first
     assert first.source_fact_id is None
-    assert replay_projection_inputs(conn, projection="activities") == (first,)
-    assert conn.execute("SELECT COUNT(*) AS n FROM retained_facts").fetchone()["n"] == 0
+    assert replay_projection_inputs(db, projection="activities") == (first,)
+    assert db.conn.execute("SELECT COUNT(*) AS n FROM retained_facts").fetchone()["n"] == 0
 
 
 def test_fact_retry_is_idempotent_but_identity_reuse_with_new_content_fails() -> None:
-    conn = _conn()
+    db = _conn()
     draft = _draft()
     invalidation = ProjectionInputDraft(
         projection="schedule",
@@ -170,23 +165,23 @@ def test_fact_retry_is_idempotent_but_identity_reuse_with_new_content_fails() ->
         generation=4,
     )
     first = append_fact(
-        conn,
+        db,
         draft,
         projection_inputs=(invalidation,),
         recorded_at=NOW,
     )
     duplicate = append_fact(
-        conn,
+        db,
         draft,
         projection_inputs=(invalidation,),
         recorded_at=NOW,
     )
     assert duplicate == first
-    assert conn.execute("SELECT COUNT(*) FROM retained_facts").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM projection_inputs").fetchone()[0] == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM retained_facts").fetchone()[0] == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM projection_inputs").fetchone()[0] == 1
 
     offset_retry = append_fact(
-        conn,
+        db,
         draft.model_copy(
             update={"occurred_at": NOW.astimezone(timezone(timedelta(hours=2)))}
         ),
@@ -197,7 +192,7 @@ def test_fact_retry_is_idempotent_but_identity_reuse_with_new_content_fails() ->
 
     with pytest.raises(FactIdentityConflictError):
         append_fact(
-            conn,
+            db,
             draft.model_copy(
                 update={
                     "payload": PrivateFactPayload(
@@ -211,12 +206,12 @@ def test_fact_retry_is_idempotent_but_identity_reuse_with_new_content_fails() ->
 
 
 def test_projection_input_failure_rolls_back_fact_and_database_rejects_mutation() -> None:
-    conn = _conn()
+    db = _conn()
     draft = _draft()
-    _install_rejecting_projection_trigger(conn)
-    with pytest.raises(sqlite3.IntegrityError):
+    _install_rejecting_projection_trigger(db)
+    with pytest.raises(turso.DatabaseError):
         append_fact(
-            conn,
+            db,
             draft,
             projection_inputs=(
                 ProjectionInputDraft(
@@ -235,19 +230,19 @@ def test_projection_input_failure_rolls_back_fact_and_database_rejects_mutation(
             ),
             recorded_at=NOW,
         )
-    assert conn.execute("SELECT COUNT(*) FROM retained_facts").fetchone()[0] == 0
-    assert conn.execute("SELECT COUNT(*) FROM projection_inputs").fetchone()[0] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM retained_facts").fetchone()[0] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM projection_inputs").fetchone()[0] == 0
 
-    fact, _ = append_fact(conn, draft, recorded_at=NOW)
-    with pytest.raises(sqlite3.IntegrityError, match="retained facts are immutable"):
-        conn.execute(
+    fact, _ = append_fact(db, draft, recorded_at=NOW)
+    with pytest.raises(turso.DatabaseError, match="retained facts are immutable"):
+        db.conn.execute(
             "UPDATE retained_facts SET kind = 'changed' WHERE fact_id = ?",
             (str(fact.fact_id),),
         )
 
 
-def _install_rejecting_projection_trigger(conn: sqlite3.Connection) -> None:
-    conn.execute(
+def _install_rejecting_projection_trigger(db: RepoDb) -> None:
+    db.conn.execute(
         """
         CREATE TRIGGER reject_forbidden_projection
         BEFORE INSERT ON projection_inputs
@@ -260,17 +255,17 @@ def _install_rejecting_projection_trigger(conn: sqlite3.Connection) -> None:
 
 
 def test_only_retained_facts_are_visible_as_public_facts() -> None:
-    conn = _conn()
-    assert replay_facts(conn) == ()
+    db = _conn()
+    assert replay_facts(db) == ()
 
 
 def test_fact_cursor_reports_retention_gap_instead_of_reading_compatibility_events() -> None:
-    conn = _conn()
-    first, _ = append_fact(conn, _draft(), recorded_at=NOW)
-    second, _ = append_fact(conn, _draft(), recorded_at=NOW)
-    facts = FactLog(conn)
+    db = _conn()
+    first, _ = append_fact(db, _draft(), recorded_at=NOW)
+    second, _ = append_fact(db, _draft(), recorded_at=NOW)
+    facts = FactLog(db)
     assert facts.is_cursor_retained(0)
-    conn.execute(
+    db.conn.execute(
         "DELETE FROM retained_facts WHERE fact_id = ?",
         (str(first.fact_id),),
     )
@@ -279,10 +274,10 @@ def test_fact_cursor_reports_retention_gap_instead_of_reading_compatibility_even
 
 
 def test_fact_and_projection_retention_are_pruned_independently() -> None:
-    conn = _conn()
+    db = _conn()
     for generation in (1, 2):
         append_fact(
-            conn,
+            db,
             _draft(),
             projection_inputs=(
                 ProjectionInputDraft(
@@ -294,7 +289,7 @@ def test_fact_and_projection_retention_are_pruned_independently() -> None:
             recorded_at=NOW,
         )
     append_projection_input(
-        conn,
+        db,
         ProjectionInputDraft(
             projection="activities",
             subject_key="activity-3",
@@ -302,11 +297,11 @@ def test_fact_and_projection_retention_are_pruned_independently() -> None:
         ),
         created_at=NOW,
     )
-    facts = FactLog(conn, retention_min_records=1, retention_max_age_days=1)
-    inputs = ProjectionInputLog(conn, retention_min_records=1, retention_max_age_days=1)
+    facts = FactLog(db, retention_min_records=1, retention_max_age_days=1)
+    inputs = ProjectionInputLog(db, retention_min_records=1, retention_max_age_days=1)
 
     assert inputs.prune(now=NOW + timedelta(days=2)) == 2  # noqa: PLR2004
     assert facts.prune(now=NOW + timedelta(days=2)) == 1
     assert not inputs.is_cursor_retained(0)
-    assert conn.execute("SELECT COUNT(*) AS n FROM projection_inputs").fetchone()["n"] == 1
-    assert conn.execute("SELECT COUNT(*) AS n FROM retained_facts").fetchone()["n"] == 1
+    assert db.conn.execute("SELECT COUNT(*) AS n FROM projection_inputs").fetchone()["n"] == 1
+    assert db.conn.execute("SELECT COUNT(*) AS n FROM retained_facts").fetchone()["n"] == 1

@@ -15,6 +15,7 @@ from pathlib import Path
 from murder.codebase_map.build import fresh_build
 from murder.codebase_map.summarize import FileSummarizer
 from murder.llm.clients.base import CompletionResult
+from murder.state.persistence.connection import RepoDb
 
 
 class ConcurrencyStubClient:
@@ -92,18 +93,12 @@ def test_fresh_build_respects_concurrency_bound():
         assert client.max_in_flight <= 2
 
 
-def test_fresh_build_snapshots_to_db():
-    import sqlite3
-
+def test_fresh_build_snapshots_to_db(repo_db: RepoDb):
     from murder.codebase_map.store import latest_map_sha, rows_for_commit
-    from murder.state.persistence.schema import SCHEMA_SQL
-
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = sqlite3.connect(":memory:")
-        db.row_factory = sqlite3.Row
-        db.executescript(SCHEMA_SQL)
+        db = repo_db
 
         client = ConcurrencyStubClient()
         summarizer = FileSummarizer(client)

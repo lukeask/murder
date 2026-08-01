@@ -8,15 +8,21 @@ EDGE CASES = per-frame monotonic accumulation invariants across all harness
 
 from __future__ import annotations
 
-import sqlite3
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from murder.runtime.agents.conversation_producer import ConversationProducer
-from murder.state.persistence.conversation import read_conversation_blocks, read_conversation_doc
-from murder.state.persistence.schema import get_db, init_db
+from murder.runtime.orchestration.events import ConversationBlockEvent
+from murder.state.persistence.connection import RepoDb
+from murder.state.persistence.conversation import (
+    read_chunk_summaries,
+    read_conversation_blocks,
+    read_conversation_doc,
+)
+from tests.support.database import open_test_repo_db
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "transcripts"
 _FRAMES_DIR = _FIXTURES / "cc" / "frames"
@@ -27,14 +33,16 @@ _CURSOR_FRAMES_DIR = _FIXTURES / "cursor" / "frames"
 
 
 @pytest.fixture()
-def conn(tmp_path: Path) -> sqlite3.Connection:
-    db = get_db(tmp_path / "test.db")
-    init_db(db)
-    return db
+def conn(tmp_path: Path) -> RepoDb:
+    db = open_test_repo_db(tmp_path / "test.db")
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def _make_producer(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
     published: list[tuple[str, dict[str, Any]]],
     *,
     conversation_id: str = "crow-t001",
@@ -64,12 +72,10 @@ def _load_frame(frames_dir: Path, n: int) -> str:
 # ============================================================
 
 
-def test_poll_persists_assistant_block_and_sets_harness(conn: sqlite3.Connection) -> None:
+def test_poll_persists_assistant_block_and_sets_harness(conn: RepoDb) -> None:
     """A frame containing an assistant reply produces a persisted block + event."""
     published: list[tuple[str, dict[str, Any]]] = []
     producer = _make_producer(conn, published)
-
-    import asyncio
 
     # Feed enough frames to get a complete transcript
     for i in range(len(list(_FRAMES_DIR.iterdir()))):
@@ -88,12 +94,10 @@ def test_poll_persists_assistant_block_and_sets_harness(conn: sqlite3.Connection
     assert all(action in ("block-appended", "block-updated") for action, _ in published)
 
 
-def test_poll_hash_skip_is_noop(conn: sqlite3.Connection) -> None:
+def test_poll_hash_skip_is_noop(conn: RepoDb) -> None:
     """Polling the same pane twice produces no new events on the second call."""
     published: list[tuple[str, dict[str, Any]]] = []
     producer = _make_producer(conn, published)
-
-    import asyncio
 
     pane = _load_frame(_FRAMES_DIR, 50)
     asyncio.run(producer.poll(pane))
@@ -105,7 +109,7 @@ def test_poll_hash_skip_is_noop(conn: sqlite3.Connection) -> None:
 
 
 def test_document_identity_is_content_addressed_not_capture_provenance(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     """The same verified document from another capture is a true producer no-op."""
     published: list[tuple[str, dict[str, Any]]] = []
@@ -118,10 +122,8 @@ def test_document_identity_is_content_addressed_not_capture_provenance(
         "segments": [{"type": "assistant", "phase": "final", "text": "same reply"}],
     }
 
-    import asyncio
-
     first = asyncio.run(producer.poll_document(doc))
-    captured_at = conn.execute(
+    captured_at = conn.conn.execute(
         "SELECT captured_at FROM agent_messages WHERE agent_id = ?", ("agent-content-hash",)
     ).fetchone()["captured_at"]
     second = asyncio.run(producer.poll_document(dict(doc)))
@@ -130,17 +132,15 @@ def test_document_identity_is_content_addressed_not_capture_provenance(
     assert not second.changed
     assert second.changes == ()
     assert len(published) == 1
-    assert conn.execute(
+    assert conn.conn.execute(
         "SELECT captured_at FROM agent_messages WHERE agent_id = ?", ("agent-content-hash",)
     ).fetchone()["captured_at"] == captured_at
 
 
-def test_poll_growing_pane_appends(conn: sqlite3.Connection) -> None:
+def test_poll_growing_pane_appends(conn: RepoDb) -> None:
     """Feeding a later frame that extends the transcript appends new blocks."""
     published: list[tuple[str, dict[str, Any]]] = []
     producer = _make_producer(conn, published)
-
-    import asyncio
 
     # Start with an early frame that has fewer segments.
     asyncio.run(producer.poll(_load_frame(_FRAMES_DIR, 20)))
@@ -171,7 +171,7 @@ def test_poll_growing_pane_appends(conn: sqlite3.Connection) -> None:
     ids=["cc", "codex", "pi", "antigravity", "cursor"],
 )
 def test_per_frame_accumulation_invariants(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
     harness_kind: str,
     conversation_id: str,
     frames_dir: Path,
@@ -190,8 +190,6 @@ def test_per_frame_accumulation_invariants(
         harness_kind=harness_kind,
         system_prompt=system_prompt,
     )
-
-    import asyncio
 
     frame_count = len(list(frames_dir.iterdir()))
     prev_block_count = 0
@@ -220,7 +218,7 @@ def test_per_frame_accumulation_invariants(
                 )
 
 
-def test_poll_summarizes_off_hot_path_into_chunk_storage(conn: sqlite3.Connection) -> None:
+def test_poll_summarizes_off_hot_path_into_chunk_storage(conn: RepoDb) -> None:
     """A sealed intermediate run past the char threshold lands a chunk summary.
 
     The summary call is dispatched via create_task (off the hot path); poll()
@@ -228,13 +226,6 @@ def test_poll_summarizes_off_hot_path_into_chunk_storage(conn: sqlite3.Connectio
     chunk landed in conversation_chunk_summaries with explicit block-id
     attribution, draining the background task at the end.
     """
-    import asyncio
-
-    from murder.state.persistence.conversation import (
-        read_chunk_summaries,
-        read_conversation_blocks,
-    )
-
     class _StubProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -274,7 +265,7 @@ def test_poll_summarizes_off_hot_path_into_chunk_storage(conn: sqlite3.Connectio
 
 
 def test_short_turn_flushes_chunk_on_working_to_idle_boundary(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     """A short turn below the rolling char threshold still yields a chunk summary.
 
@@ -286,13 +277,6 @@ def test_short_turn_flushes_chunk_on_working_to_idle_boundary(
     the working→idle transition force-flushes the tail so the turn produces at
     least one summary even with the *production* threshold left high.
     """
-    import asyncio
-
-    from murder.state.persistence.conversation import (
-        read_chunk_summaries,
-        read_conversation_blocks,
-    )
-
     class _StubProvider:
         def __init__(self) -> None:
             self.calls = 0
@@ -348,7 +332,7 @@ def test_short_turn_flushes_chunk_on_working_to_idle_boundary(
 
 
 def test_chunk_summarized_publish_constructs_a_valid_bus_event(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     """The producer's ``chunk-summarized`` publish must build a valid ConversationBlockEvent.
 
@@ -362,10 +346,6 @@ def test_chunk_summarized_publish_constructs_a_valid_bus_event(
     Verbose even though the chunk summary was written to the DB. This test wires
     ``publish`` through the SAME model so a regressing Literal fails here.
     """
-    import asyncio
-
-    from murder.runtime.orchestration.events import ConversationBlockEvent
-
     class _StubProvider:
         async def summarize(self, prompt: Any) -> str:
             return "Short turn summary."
@@ -418,14 +398,12 @@ def test_chunk_summarized_publish_constructs_a_valid_bus_event(
         assert "block_ids" in ev.block
 
 
-def test_poll_different_conversation_ids_are_isolated(conn: sqlite3.Connection) -> None:
+def test_poll_different_conversation_ids_are_isolated(conn: RepoDb) -> None:
     """Two producers with different conversation_ids write to separate stores."""
     published_a: list[tuple[str, dict[str, Any]]] = []
     published_b: list[tuple[str, dict[str, Any]]] = []
     prod_a = _make_producer(conn, published_a, conversation_id="crow-a001")
     prod_b = _make_producer(conn, published_b, conversation_id="crow-b001")
-
-    import asyncio
 
     pane = _load_frame(_FRAMES_DIR, 50)
     asyncio.run(prod_a.poll(pane))

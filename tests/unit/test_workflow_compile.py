@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,7 +16,7 @@ from murder.app.protocol.workflows import (
 )
 from murder.app.service.handlers import workflows as workflows_handlers
 from murder.app.service.projection_registry import ProjectionProviderRegistry
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.workflow_runs import get_workflow_run
 from murder.state.storage.paths import ticket_md
 from murder.work.tickets.parser import parse_ticket
@@ -31,6 +30,7 @@ from murder.work.workflows.compile import (
 from murder.work.workflows.definition import StageDef, WorkflowDef, WorkflowInputDecl
 from murder.work.workflows.launch import start_workflow_from_def
 from murder.work.workflows.runtime import StaticDagWorkflowStateV1
+from tests.support.database import open_test_repo_db
 
 
 def _stage(**kw: object) -> StageDef:
@@ -39,12 +39,10 @@ def _stage(**kw: object) -> StageDef:
     return StageDef(**kw)  # type: ignore[arg-type]
 
 
-def _conn(repo_root: Path) -> sqlite3.Connection:
+def _conn(repo_root: Path) -> RepoDb:
     db_file = repo_root / ".murder" / "murder.db"
     db_file.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_db(db_file)
-    init_db(conn)
-    return conn
+    return open_test_repo_db(db_file)
 
 
 def test_workflow_operation_params_preserve_exact_template_names() -> None:

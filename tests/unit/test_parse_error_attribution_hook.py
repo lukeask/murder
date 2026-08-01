@@ -8,31 +8,31 @@ from pathlib import Path
 
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.state.persistence import plans as dbmod
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import plan_md, ticket_md, tickets_dir
 from murder.work.plans.schema import Plan
 from murder.work.plans.sync import PlanSync
 from murder.work.tickets.sync import TicketSync
-from tests.support import factories
+from tests.support.database import open_test_repo_db
 
 
 def _conn(repo_root: Path):
     db_file = repo_root / ".murder" / "murder.db"
     db_file.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_db(db_file)
-    init_db(conn)
-    return conn
+    return open_test_repo_db(db_file)
 
 
 def _insert_ticket(conn, ticket_id: str) -> None:
-    factories.insert_ticket(
-        conn,
-        ticket_id,
-        title="T",
-        harness="codex",
-        model="gpt-5",
-        created_at="2026-06-08T00:00:00",
-        updated_at="2026-06-08T00:00:00",
+    conn.conn.execute(
+        """
+        INSERT INTO tickets(
+            repository_id, id, title, status, harness, model, created_at, updated_at
+        )
+        VALUES (
+            ?, ?, 'T', 'planned', 'codex', 'gpt-5',
+            '2026-06-08T00:00:00', '2026-06-08T00:00:00'
+        )
+        """,
+        (conn.repository_id, ticket_id),
     )
 
 
@@ -86,7 +86,10 @@ def test_malformed_ticket_edit_notifies_owning_crow(repo_root: Path) -> None:
     assert len(calls) == 1
     assert calls[0][0] == path
     assert calls[0][1]
-    row = conn.execute("SELECT metadata_sync_state FROM tickets WHERE id='t001'").fetchone()
+    row = conn.conn.execute(
+        "SELECT metadata_sync_state FROM tickets WHERE repository_id = ? AND id = 't001'",
+        (conn.repository_id,),
+    ).fetchone()
     assert row["metadata_sync_state"] == "parse_error"
 
 

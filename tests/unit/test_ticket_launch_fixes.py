@@ -19,19 +19,19 @@ from murder.llm.harnesses.base import HarnessSession
 from murder.llm.harnesses.results import fail_result
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.agents import upsert_agent
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.persistence.tickets import get_ticket_status, insert_ticket
 from murder.state.storage.paths import db_path
 from murder.verdict.completion.coordinator import CompletionCoordinator
 from murder.verdict.completion.registry import CheckRegistry
 from murder.work.tickets.schema import Ticket
 from murder.work.tickets.status import TicketStatus
+from tests.support.database import open_test_repo_db
 
 
 def _connect(repo_root: Path):
-    conn = get_db(db_path(repo_root))
-    init_db(conn)
-    return conn
+    database = db_path(repo_root)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    return open_test_repo_db(database)
 
 
 # ============================================================
@@ -146,14 +146,17 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
         ),
     )
     rt = SimpleNamespace(
-        db=conn, repo_root=repo_root, orchestration_events=None, run_id=None,
+        db=conn,
+        repo_root=repo_root,
+        orchestration_events=None,
+        run_id=None,
         publish_snapshot=AsyncMock(),
     )
     orch = Orchestrator(rt)
 
     asyncio.run(orch.set_schedule_at("t097a", "2026-05-29T09:00:00"))
 
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT schedule_at, updated_at FROM tickets WHERE id = ?", ("t097a",)
     ).fetchone()
     assert row["schedule_at"] == "2026-05-29T09:00:00"
@@ -201,7 +204,7 @@ def test_codex_rogue_reaps_session_on_startup_failure(
             project=SimpleNamespace(name="test"),
             runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
         ),
-        get_agent=lambda agent_id: agents.get(agent_id),
+        get_agent=agents.get,
         register_agent=lambda agent: agents.setdefault(agent.id, agent),
         sync_agent=MagicMock(),
         publish_snapshot=AsyncMock(),
@@ -231,7 +234,10 @@ def test_transition_done_heals_ready_status(repo_root: Path) -> None:
         ),
     )
     rt = SimpleNamespace(
-        db=conn, repo_root=repo_root, orchestration_events=None, run_id=None,
+        db=conn,
+        repo_root=repo_root,
+        orchestration_events=None,
+        run_id=None,
         publish_snapshot=AsyncMock(),
     )
     coordinator = CompletionCoordinator(rt, CheckRegistry())

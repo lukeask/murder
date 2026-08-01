@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -29,7 +28,7 @@ from murder.codebase_map.build import reconcile_map
 from murder.codebase_map.store import load_latest_summary
 from murder.codebase_map.summarize import FileSummarizer
 from murder.llm.clients.base import CompletionResult
-from murder.state.persistence.schema import SCHEMA_SQL
+from murder.state.persistence.connection import RepoDb
 
 _FILE_PATH_RE = re.compile(r"^File path: (.+)$", re.MULTILINE)
 _DIR_RE = re.compile(r"^Directory: (.+)$", re.MULTILINE)
@@ -86,24 +85,17 @@ def _init_repo(root: Path) -> None:
     _git(root, "commit", "-q", "-m", "init")
 
 
-def _db() -> sqlite3.Connection:
-    db = sqlite3.connect(":memory:")
-    db.row_factory = sqlite3.Row
-    db.executescript(SCHEMA_SQL)
-    return db
-
-
-def _reconcile(root: Path, db: sqlite3.Connection) -> RecordingStubClient:
+def _reconcile(root: Path, db: RepoDb) -> RecordingStubClient:
     client = RecordingStubClient()
     asyncio.run(reconcile_map(root, FileSummarizer(client), db=db, concurrency=2))
     return client
 
 
-def test_first_run_summarizes_and_renders_everything():
+def test_first_run_summarizes_and_renders_everything(repo_db: RepoDb):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
 
         client = _reconcile(root, db)
 
@@ -117,12 +109,12 @@ def test_first_run_summarizes_and_renders_everything():
         assert load_latest_summary(db, "pkg/a.py") is not None
 
 
-def test_second_run_is_a_no_op_zero_model_calls():
+def test_second_run_is_a_no_op_zero_model_calls(repo_db: RepoDb):
     """The core fix: once current, a reconcile burns no API."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         _reconcile(root, db)  # first full build
 
         client = _reconcile(root, db)  # nothing changed
@@ -131,19 +123,22 @@ def test_second_run_is_a_no_op_zero_model_calls():
         assert client.dir_paths == []
 
 
-def test_resumes_only_missing_files_after_interruption():
+def test_resumes_only_missing_files_after_interruption(repo_db: RepoDb):
     """Simulate a crash mid-build: drop two files' snapshots + rendered nodes.
     The next reconcile re-summarizes ONLY those, reusing the rest."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         _reconcile(root, db)
 
         # Wipe the persisted progress for two files (as if never reached).
         map_root = root / ".murder" / "map"
         for path in ("pkg/b.py", "pkg/sub/c.py"):
-            db.execute("DELETE FROM map_summaries WHERE path = ?", (path,))
+            db.conn.execute(
+                "DELETE FROM map_summaries WHERE repository_id = ? AND path = ?",
+                (db.repository_id, path),
+            )
             (map_root / (path + ".md")).unlink()
 
         client = _reconcile(root, db)
@@ -154,12 +149,12 @@ def test_resumes_only_missing_files_after_interruption():
         assert "top.py" not in client.file_paths
 
 
-def test_failed_batch_settles_before_reconcile_returns():
+def test_failed_batch_settles_before_reconcile_returns(repo_db: RepoDb):
     """A failed file must not leave siblings running into the next worker tick."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
 
         class FailingClient(RecordingStubClient):
             def __init__(self) -> None:
@@ -192,13 +187,13 @@ def test_failed_batch_settles_before_reconcile_returns():
         asyncio.run(drive())
 
 
-def test_missing_render_is_repaired_without_a_model_call():
+def test_missing_render_is_repaired_without_a_model_call(repo_db: RepoDb):
     """A current snapshot whose <file>.md vanished is re-rendered from the DB,
     not re-summarized."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         _reconcile(root, db)
 
         rendered = root / ".murder" / "map" / "pkg" / "a.py.md"
@@ -214,12 +209,12 @@ def test_missing_render_is_repaired_without_a_model_call():
         assert "." not in client.dir_paths
 
 
-def test_edited_file_resummarized_without_git_commit():
+def test_edited_file_resummarized_without_git_commit(repo_db: RepoDb):
     """reconcile keys on content hash, so an uncommitted edit is caught."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         _reconcile(root, db)
 
         (root / "pkg" / "a.py").write_text("def a():\n    return 999\n")
@@ -232,7 +227,7 @@ def test_edited_file_resummarized_without_git_commit():
         assert "pkg/sub" not in client.dir_paths
 
 
-def test_oversize_generated_and_fixture_files_are_never_summarized():
+def test_oversize_generated_and_fixture_files_are_never_summarized(repo_db: RepoDb):
     """The pre-summarize blockers: 250 KB hard cap, lockfiles, .jsonl streams,
     and anything under a fixtures/ tree are excluded from the map entirely."""
     with tempfile.TemporaryDirectory() as d:
@@ -251,7 +246,7 @@ def test_oversize_generated_and_fixture_files_are_never_summarized():
         _git(root, "add", "-A")
         _git(root, "commit", "-q", "-m", "add noise")
 
-        db = _db()
+        db = repo_db
         client = _reconcile(root, db)
 
         for ruled_out in (
@@ -268,11 +263,11 @@ def test_oversize_generated_and_fixture_files_are_never_summarized():
         assert not (root / ".murder" / "map" / "pkg" / "huge.py.md").exists()
 
 
-def test_deleted_file_is_pruned_not_summarized():
+def test_deleted_file_is_pruned_not_summarized(repo_db: RepoDb):
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         _reconcile(root, db)
         rendered = root / ".murder" / "map" / "pkg" / "b.py.md"
         assert rendered.exists()
@@ -293,14 +288,14 @@ def test_deleted_file_is_pruned_not_summarized():
         assert again.dir_paths == []
 
 
-def test_deletion_with_already_missing_render_still_rerolls_then_idles():
+def test_deletion_with_already_missing_render_still_rerolls_then_idles(repo_db: RepoDb):
     """BUG B: a source file deleted while its <file>.md was ALREADY missing
     must still be caught (parent re-rolled to drop the child), and the DB
     tombstone must stop it re-firing on the next tick."""
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         _init_repo(root)
-        db = _db()
+        db = repo_db
         _reconcile(root, db)
         rendered = root / ".murder" / "map" / "pkg" / "b.py.md"
         assert rendered.exists()

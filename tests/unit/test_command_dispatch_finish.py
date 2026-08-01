@@ -16,12 +16,12 @@ import pytest
 from pydantic import ValidationError
 
 from murder.app.service.command_dispatch import CommandDispatcher, command_from_row
-from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.state.persistence import commands as command_db
 from murder.state.persistence.runs import insert_run
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 
 def _command(kind: OrchestrationCommand = OrchestrationCommand.AGENT_STOP) -> CommandEvent:
@@ -40,7 +40,7 @@ def _command(kind: OrchestrationCommand = OrchestrationCommand.AGENT_STOP) -> Co
 
 
 def _dispatcher() -> tuple[CommandDispatcher, list[tuple[str, bool]]]:
-    dispatcher = CommandDispatcher(conn=None, repo_root=Path("."))  # type: ignore[arg-type]
+    dispatcher = CommandDispatcher(db=open_test_repo_db(Path(":memory:")), repo_root=Path("."))
     failures: list[tuple[str, bool]] = []
     completions: list[object] = []
     dispatcher.fail = lambda command_id, last_error, *, retryable=True: failures.append(  # type: ignore[method-assign]
@@ -203,12 +203,11 @@ def test_claim_next_quarantines_non_uuid_row() -> None:
 
 
 def test_renewed_live_command_is_not_reaped_or_redispatched(tmp_path, monkeypatch) -> None:
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
-    insert_run(conn, "run", "{}")
+    db = open_test_repo_db(tmp_path / "state.db")
+    insert_run(db, "run", "{}")
     command_id = str(uuid4())
     command_db.enqueue_command(
-        conn,
+        db,
         command_id=command_id,
         run_id="run",
         agent_id="",
@@ -220,7 +219,7 @@ def test_renewed_live_command_is_not_reaped_or_redispatched(tmp_path, monkeypatc
         correlation_id="c",
         idempotency_key="i",
     )
-    dispatcher = CommandDispatcher(conn=conn, repo_root=tmp_path, lease_ttl_s=30)
+    dispatcher = CommandDispatcher(db=db, repo_root=tmp_path, lease_ttl_s=30)
     monkeypatch.setattr("murder.app.service.command_dispatch.time.time", lambda: 100.0)
     claimed = dispatcher.claim_next(
         target_worker=WorkerName.ORCHESTRATOR, claimed_by="orchestrator"
@@ -228,19 +227,22 @@ def test_renewed_live_command_is_not_reaped_or_redispatched(tmp_path, monkeypatc
     assert claimed is not None
     assert claimed.event.target_worker is WorkerName.ORCHESTRATOR
     assert claimed.event.kind is OrchestrationCommand.CROW_SPAWN_ROGUE
-    stored = conn.execute(
-        "SELECT target_worker, kind FROM commands WHERE id = ?", (command_id,)
+    stored = db.conn.execute(
+        "SELECT target_worker, kind FROM commands WHERE repository_id = ? AND id = ?",
+        (db.repository_id, command_id),
     ).fetchone()["target_worker"]
     assert stored == WorkerName.ORCHESTRATOR.value
-    stored_kind = conn.execute(
-        "SELECT kind FROM commands WHERE id = ?", (command_id,)
+    stored_kind = db.conn.execute(
+        "SELECT kind FROM commands WHERE repository_id = ? AND id = ?",
+        (db.repository_id, command_id),
     ).fetchone()["kind"]
     assert stored_kind == OrchestrationCommand.CROW_SPAWN_ROGUE.value
 
     monkeypatch.setattr("murder.app.service.command_dispatch.time.time", lambda: 125.0)
     assert dispatcher.renew(command_id, claimed_by="orchestrator")
     assert dispatcher.reap_stale() == {"retried": [], "failed": []}
-    row = conn.execute(
-        "SELECT status, attempt_count FROM commands WHERE id = ?", (command_id,)
+    row = db.conn.execute(
+        "SELECT status, attempt_count FROM commands WHERE repository_id = ? AND id = ?",
+        (db.repository_id, command_id),
     ).fetchone()
     assert dict(row) == {"status": "in_flight", "attempt_count": 1}

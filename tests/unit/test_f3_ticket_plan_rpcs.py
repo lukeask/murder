@@ -17,20 +17,19 @@ from pathlib import Path
 
 import pytest
 
-from murder.app.service.runtime import Runtime
 from murder.app.protocol.requests import CommandName
-from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
+from murder.app.service.runtime import Runtime
 from murder.config import (
     Config,
     CrowHandlerConfig,
     HarnessRoleConfig,
     ProjectConfig,
 )
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.state.persistence.runs import insert_run
-from murder.state.persistence.schema import get_db, init_db
 from murder.state.storage.paths import plan_md, ticket_md
 from murder.work.tickets.parser import parse_ticket
-
+from tests.support.database import open_test_repo_db
 from tests.unit.test_ticket_sync_unified import _insert_ticket
 
 
@@ -44,12 +43,12 @@ def _config() -> Config:
 
 
 def _runtime(repo_root: Path) -> Runtime:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    (repo_root / ".murder").mkdir(exist_ok=True)
+    db = open_test_repo_db(repo_root / ".murder" / "murder.db")
     rt = Runtime(_config(), repo_root)
-    rt.db = conn
+    rt.db = db
     rt.run_id = "run-test"
-    insert_run(conn, rt.run_id, "{}")
+    insert_run(db, rt.run_id, "{}")
     rt.orchestration_events = InProcessOrchestrationEventSink()
     return rt
 
@@ -92,8 +91,8 @@ async def test_save_body_persists_body_and_preserves_frontmatter(repo_root: Path
     # Reconciled into the DB: the new checklist item replaced the old one.
     texts = [
         str(r["text"])
-        for r in rt.db.execute(
-            "SELECT text, done FROM checklist WHERE ticket_id = ? ORDER BY ord", ("t001",)
+        for r in rt.db.conn.execute(
+            "SELECT text, done FROM checklist WHERE repository_id = ? AND ticket_id = ? ORDER BY ord", (rt.db.repository_id, "t001")
         ).fetchall()
     ]
     assert texts == ["new item"]
@@ -106,10 +105,10 @@ async def test_save_body_appends_schedule_projection_input(repo_root: Path) -> N
 
     await _orch(rt).save_ticket_body("t002", "# Checklist\n[ ] a\n")
 
-    row = rt.db.execute(
+    row = rt.db.conn.execute(
         "SELECT projection, subject_key, generation FROM projection_inputs "
-        "WHERE projection = 'schedule' AND subject_key = 't002' "
-        "ORDER BY generation DESC LIMIT 1"
+        "WHERE repository_id = ? AND projection = 'schedule' AND subject_key = 't002' "
+        "ORDER BY generation DESC LIMIT 1", (rt.db.repository_id,)
     ).fetchone()
     assert dict(row) == {"projection": "schedule", "subject_key": "t002", "generation": 0}
 
@@ -134,8 +133,8 @@ async def test_schedule_sets_future_timestamp(repo_root: Path) -> None:
     result = await _orch(rt).schedule_ticket("t010", "1h30m")
 
     assert result["handled"] is True
-    stored = rt.db.execute(
-        "SELECT schedule_at FROM tickets WHERE id = ?", ("t010",)
+    stored = rt.db.conn.execute(
+        "SELECT schedule_at FROM tickets WHERE repository_id = ? AND id = ?", (rt.db.repository_id, "t010")
     ).fetchone()["schedule_at"]
     parsed = datetime.fromisoformat(stored)
     # ~1h30m ahead of the call (allow generous slack for test runtime).
@@ -146,14 +145,14 @@ async def test_schedule_sets_future_timestamp(repo_root: Path) -> None:
 async def test_schedule_empty_duration_clears(repo_root: Path) -> None:
     rt = _runtime(repo_root)
     _insert_ticket(rt.db, "t011")
-    rt.db.execute("UPDATE tickets SET schedule_at = ? WHERE id = ?", ("2030-01-01T00:00:00", "t011"))
-    rt.db.commit()
+    rt.db.conn.execute("UPDATE tickets SET schedule_at = ? WHERE repository_id = ? AND id = ?", ("2030-01-01T00:00:00", rt.db.repository_id, "t011"))
+    rt.db.conn.commit()
 
     result = await _orch(rt).schedule_ticket("t011", "  ")
 
     assert result["schedule_at"] is None
-    stored = rt.db.execute(
-        "SELECT schedule_at FROM tickets WHERE id = ?", ("t011",)
+    stored = rt.db.conn.execute(
+        "SELECT schedule_at FROM tickets WHERE repository_id = ? AND id = ?", (rt.db.repository_id, "t011")
     ).fetchone()["schedule_at"]
     assert stored is None
 
@@ -171,9 +170,9 @@ async def test_schedule_emits_ticket_snapshot(repo_root: Path) -> None:
     rt = _runtime(repo_root)
     _insert_ticket(rt.db, "t013")
     await _orch(rt).schedule_ticket("t013", "30m")
-    row = rt.db.execute(
+    row = rt.db.conn.execute(
         "SELECT subject_key FROM projection_inputs WHERE projection = 'schedule' "
-        "AND subject_key = 't013'"
+        "AND repository_id = ? AND subject_key = 't013'", (rt.db.repository_id,)
     ).fetchone()
     assert row is not None
 
@@ -189,7 +188,7 @@ async def test_create_plan_no_message_scaffolds_and_emits(repo_root: Path) -> No
 
     assert result == {"handled": True, "ok": True, "plan_name": "my-plan", "agent_id": None}
     assert plan_md(repo_root, "my-plan").exists()
-    row = rt.db.execute("SELECT name FROM plans WHERE name = ?", ("my-plan",)).fetchone()
+    row = rt.db.conn.execute("SELECT name FROM plans WHERE repository_id = ? AND name = ?", (rt.db.repository_id, "my-plan")).fetchone()
     assert row is not None
 
 

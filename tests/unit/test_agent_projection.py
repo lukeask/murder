@@ -14,12 +14,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from murder.runtime.orchestration.events import ConversationBlockEvent
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.crow import CrowAgent
+from murder.runtime.orchestration.events import ConversationBlockEvent
 from murder.state.persistence.conversation import read_conversation_blocks
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 from tests.support.fake_tmux import FakeTmux
 
 _FRAMES_DIR = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cc" / "frames"
@@ -51,10 +51,9 @@ def test_rogue_project_once_persists_assistant_reply(
 ) -> None:
     """A rogue's assistant reply lands in conversation_blocks + emits an event,
     with no CrowHandler involved — driven solely by project_once()."""
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    db = open_test_repo_db(tmp_path / "state.db")
     bus = SimpleNamespace(publish=AsyncMock())
-    agent = _rogue(conn, bus, tmp_path)
+    agent = _rogue(db, bus, tmp_path)
 
     # spawn_rogue calls start_conversation() directly (it bypasses CrowAgent.start);
     # that builds the producer with no I/O and no background task.
@@ -75,7 +74,7 @@ def test_rogue_project_once_persists_assistant_reply(
 
     captures = fake_tmux.calls_to("capture_pane")[captures_before:]
     assert len(captures) == 1
-    persisted = conn.execute(
+    persisted = db.conn.execute(
         """
         SELECT raw_text
         FROM harness_control_frames
@@ -86,7 +85,7 @@ def test_rogue_project_once_persists_assistant_reply(
         (agent.id,),
     ).fetchone()
     assert persisted is not None and persisted["raw_text"] == pane
-    blocks = read_conversation_blocks(conn, "claude-rogue-testingpostworker")
+    blocks = read_conversation_blocks(db, "claude-rogue-testingpostworker")
     kinds = {b.kind for b in blocks}
     assert kinds & {"assistant_final", "assistant_intermediate"}, kinds
     bus.publish.assert_awaited()
@@ -132,10 +131,9 @@ def test_project_once_is_noop_without_producer(fake_tmux: FakeTmux, tmp_path: Pa
 
 def test_project_once_noop_when_terminal(fake_tmux: FakeTmux, tmp_path: Path) -> None:
     """A terminal agent (session gone) is skipped without capturing the pane."""
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    db = open_test_repo_db(tmp_path / "state.db")
     bus = SimpleNamespace(publish=AsyncMock())
-    agent = _rogue(conn, bus, tmp_path)
+    agent = _rogue(db, bus, tmp_path)
     agent.start_conversation()
     agent.status = AgentStatus.DONE
 

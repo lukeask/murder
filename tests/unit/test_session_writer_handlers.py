@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -26,6 +25,7 @@ from murder.runtime.sessions.contracts import (
 )
 from murder.runtime.sessions.persistence import SessionStore, ensure_session_schema
 from murder.runtime.sessions.registry import SessionControllerRegistry
+from tests.support.database import open_test_repo_db
 
 
 class RecordingBackend:
@@ -60,10 +60,10 @@ class _FakeHost:
         self.handlers[str(name)] = handler
 
 
-def _session_record(session_id):
+def _session_record(session_id, repository_id: str):
     return HarnessSessionRecord(
         session_id=session_id,
-        repository_id=uuid4(),
+        repository_id=repository_id,
         harness="codex",
         transport=SessionTransport.TMUX,
         transport_ref="murder_test",
@@ -75,24 +75,25 @@ def _session_record(session_id):
 
 
 @pytest.fixture
-def wired_handlers():
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
-    store = SessionStore(connection)
+def wired_handlers(tmp_path):
+    db = open_test_repo_db(tmp_path / "murder.db")
+    ensure_session_schema(db.conn)
+    store = SessionStore(db)
     session_id = uuid4()
-    store.save_session(_session_record(session_id))
+    store.save_session(_session_record(session_id, db.repository_id))
     registry = SessionControllerRegistry(
         store=store,
         backend_factory=lambda _record: RecordingBackend(),
         controller_factory=SessionControllerRegistry.trusted_local_controller_factory(store),
     )
-    host = _FakeHost(SimpleNamespace(db=connection, session_controllers=registry))
+    host = _FakeHost(SimpleNamespace(db=db, session_controllers=registry))
     sessions_handlers.register(
         host,  # type: ignore[arg-type]
         ProjectionProviderRegistry(),
         host.runtime,
     )
-    return host, session_id, store, registry
+    yield host, session_id, store, registry
+    db.close()
 
 
 @pytest.mark.asyncio
@@ -237,14 +238,14 @@ async def test_session_command_execute_requires_principal(wired_handlers) -> Non
 
 
 @pytest.mark.asyncio
-async def test_session_writer_requires_live_controller_when_no_backend() -> None:
-    connection = sqlite3.connect(":memory:")
-    ensure_session_schema(connection)
-    store = SessionStore(connection)
+async def test_session_writer_requires_live_controller_when_no_backend(tmp_path) -> None:
+    db = open_test_repo_db(tmp_path / "murder.db")
+    ensure_session_schema(db.conn)
+    store = SessionStore(db)
     session_id = uuid4()
-    store.save_session(_session_record(session_id))
+    store.save_session(_session_record(session_id, db.repository_id))
     registry = SessionControllerRegistry(store=store)
-    host = _FakeHost(SimpleNamespace(db=connection, session_controllers=registry))
+    host = _FakeHost(SimpleNamespace(db=db, session_controllers=registry))
     sessions_handlers.register(
         host,  # type: ignore[arg-type]
         ProjectionProviderRegistry(),

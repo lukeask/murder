@@ -6,10 +6,7 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from murder.observability.advanced_log import (
-    AdvancedLog,
     ApiRecord,
     ChangeGate,
     NullAdvancedLog,
@@ -18,8 +15,10 @@ from murder.observability.advanced_log import (
     redact,
 )
 from murder.observability.log_context import log_context
-from murder.state.persistence.schema import get_db, init_db
-from murder.state.storage.paths import advlogs_dir, db_path
+from murder.state.storage.paths import advlogs_dir
+from tests.support.database import open_test_repo_db
+
+HTTP_OK = 200
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -40,18 +39,18 @@ def test_null_writer_creates_no_file(tmp_path):
 
 def test_redacted_mode_creates_db_with_schema_and_session_info(tmp_path):
     repo = _repo(tmp_path)
-    conn = get_db(db_path(repo))
-    init_db(conn)
-    conn.execute(
-        "INSERT INTO runs(run_id, started_at, config_snapshot) VALUES (?, ?, ?)",
-        ("run-2", "2026-01-01T00:00:00", '{"x": 1}'),
+    db = open_test_repo_db(tmp_path / "murder.db")
+    db.conn.execute(
+        "INSERT INTO runs(repository_id, run_id, started_at, config_snapshot) "
+        "VALUES (?, ?, ?, ?)",
+        (db.repository_id, "run-2", "2026-01-01T00:00:00", '{"x": 1}'),
     )
-    conn.commit()
+    db.conn.commit()
 
     async def _run():
         log = open_advanced_log(repo, "run-2", "redacted")
         await log.start()
-        log.write_session_info(main_db=conn)
+        log.write_session_info(main_db=db.conn)
         await log.stop()
         return log._db_path
 
@@ -91,7 +90,7 @@ def test_redact_replaces_secrets_keeps_structure():
     assert out["nested"]["password"]["__redacted__"] is True
     # Non-secrets preserved.
     assert out["model"] == "gpt-5"
-    assert out["status"] == 200
+    assert out["status"] == HTTP_OK
     assert out["run_id"] == "r1"
     assert out["nested"]["ok"] == "fine"
 

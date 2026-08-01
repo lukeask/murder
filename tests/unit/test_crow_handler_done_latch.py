@@ -17,15 +17,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.config import CrowHandlerConfig
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow_handler import CrowHandler
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.outcome import TicketOutcomeService
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.tickets import get_ticket_status
 from murder.verdict.completion.coordinator import CompletionCoordinator
 from murder.work.tickets.status import TicketStatus
+from tests.support.database import open_test_repo_db
 
 # A claude_code assistant turn ending in a standalone `>>> DONE` line. The
 # transcript parser projects this pane into an assistant segment whose text the
@@ -52,21 +53,23 @@ PANE_DONE_SCROLLED_OUT = """\
 
 @pytest.fixture
 def db(tmp_path: Path):
-    conn = get_db(tmp_path / "murder.db")
-    init_db(conn)
-    yield conn
-    conn.close()
+    database = open_test_repo_db(tmp_path / "murder.db")
+    try:
+        yield database
+    finally:
+        database.close()
 
 
-def _seed_ticket(db, status: str = "in_progress") -> None:
-    db.execute(
-        "INSERT INTO runs(run_id, started_at, config_snapshot) "
-        "VALUES ('test-run', '2026-01-01', '{}')"
+def _seed_ticket(db: RepoDb, status: str = "in_progress") -> None:
+    db.conn.execute(
+        "INSERT INTO runs(repository_id, run_id, started_at, config_snapshot) "
+        "VALUES (?, 'test-run', '2026-01-01', '{}')",
+        (db.repository_id,),
     )
-    db.execute(
-        "INSERT INTO tickets(id, title, status, created_at, updated_at) "
-        "VALUES ('t001', 'Wire up the thing', ?, '2026-01-01', '2026-01-01')",
-        (status,),
+    db.conn.execute(
+        "INSERT INTO tickets(repository_id, id, title, status, created_at, updated_at) "
+        "VALUES (?, 't001', 'Wire up the thing', ?, '2026-01-01', '2026-01-01')",
+        (db.repository_id, status),
     )
 
 

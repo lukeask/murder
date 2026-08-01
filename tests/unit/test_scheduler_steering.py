@@ -10,39 +10,43 @@ Convention: ``asyncio.run`` via the harness below; we drive ``on_command`` /
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from murder.runtime.orchestration.events import CommandEvent
+from murder.app.service.schedule_snapshot import _load_gauges
 from murder.runtime.orchestration.command_repository import (
     PersistingCommandSubmitter,
     SqliteCommandRepository,
 )
+from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.runtime.workers.base import WorkerCtx
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.migrations import _migrate_scheduler_steering
+from murder.state.persistence.schema import init_db
 from murder.state.persistence.usage_status import UsageWindow
+from tests.support.database import open_test_repo_db
 
 
 def _ctx(repo_root: Path) -> WorkerCtx:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    db = open_test_repo_db(repo_root / "murder.db")
     # commands/events FK runs(run_id); insert so enqueue_command lands (its
     # IntegrityError is otherwise swallowed inside _evaluate_window).
-    conn.execute(
-        "INSERT INTO runs(run_id, started_at, config_snapshot) "
-        "VALUES ('run-test', '2026-01-01', '{}')"
+    db.conn.execute(
+        "INSERT INTO runs(repository_id, run_id, started_at, config_snapshot) "
+        "VALUES (?, 'run-test', '2026-01-01', '{}')",
+        (db.repository_id,),
     )
     events = InProcessOrchestrationEventSink()
-    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id="run-test")
+    ctx = WorkerCtx(repo_root=repo_root, db=db, run_id="run-test")
     ctx.metadata.update(
         events=events,
-        command_submitter=PersistingCommandSubmitter(SqliteCommandRepository(conn), events),
+        command_submitter=PersistingCommandSubmitter(SqliteCommandRepository(db), events),
     )
     return ctx
 
@@ -81,76 +85,69 @@ def _set_steering_command(harness: str, steering: str) -> CommandEvent:
 
 
 def _add_ready_ticket(ctx: WorkerCtx, ticket_id: str, harness: str | None) -> None:
-    ctx.db.execute(
-        "INSERT INTO tickets(id, title, status, harness, created_at, updated_at) "
-        "VALUES (?, ?, 'ready', ?, '2026-01-01', '2026-01-01')",
-        (ticket_id, ticket_id, harness),
+    ctx.db.conn.execute(
+        "INSERT INTO tickets(repository_id, id, title, status, harness, created_at, updated_at) "
+        "VALUES (?, ?, ?, 'ready', ?, '2026-01-01', '2026-01-01')",
+        (ctx.db.repository_id, ticket_id, ticket_id, harness),
     )
 
 
 def _kickoff_count(ctx: WorkerCtx, harness_hint: str | None = None) -> int:
-    rows = ctx.db.execute(
-        "SELECT payload_json FROM commands WHERE kind = 'scheduler.kickoff_ready'"
+    rows = ctx.db.conn.execute(
+        "SELECT payload_json FROM commands "
+        "WHERE repository_id = ? AND kind = 'scheduler.kickoff_ready'",
+        (ctx.db.repository_id,),
     ).fetchall()
     return len(rows)
 
 
 def _decision_cache(ctx: WorkerCtx, harness: str) -> object:
-    return ctx.db.execute(
+    return ctx.db.conn.execute(
         "SELECT decision, rationale, kicked_ticket_id FROM scheduler_decision_cache "
-        "WHERE harness = ?",
-        (harness,),
+        "WHERE repository_id = ? AND harness = ?",
+        (ctx.db.repository_id, harness),
     ).fetchone()
 
 
 # === 1. migration ============================================================
 
 
-def test_init_db_creates_steering_table_and_is_idempotent() -> None:
-    import sqlite3
-
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
+def test_init_db_creates_steering_table_and_is_idempotent(tmp_path: Path) -> None:
+    db = open_test_repo_db(tmp_path / "murder.db")
     assert (
-        conn.execute(
+        db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduler_steering'"
         ).fetchone()
         is not None
     )
     # idempotent: second init_db must not raise.
-    init_db(conn)
+    init_db(db.conn, repository_id=db.repository_id)
     assert (
-        conn.execute(
+        db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduler_steering'"
         ).fetchone()
         is not None
     )
 
 
-def test_migrate_scheduler_steering_adds_table_to_old_db() -> None:
-    import sqlite3
-
-    from murder.state.persistence.migrations import _migrate_scheduler_steering
-
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
+def test_migrate_scheduler_steering_adds_table_to_old_db(tmp_path: Path) -> None:
+    db = open_test_repo_db(tmp_path / "murder.db", initialize=False)
     # Simulate an old DB without the table.
     assert (
-        conn.execute(
+        db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduler_steering'"
         ).fetchone()
         is None
     )
-    _migrate_scheduler_steering(conn)
+    _migrate_scheduler_steering(db.conn)
     assert (
-        conn.execute(
+        db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduler_steering'"
         ).fetchone()
         is not None
     )
     # idempotent when run again.
-    _migrate_scheduler_steering(conn)
+    _migrate_scheduler_steering(db.conn)
 
 
 # === 2. set_steering upsert + key-only emit ==================================
@@ -163,33 +160,39 @@ def test_set_steering_upserts_and_emits_key_only_queue_row(repo_root: Path) -> N
 
         res = await worker.on_command(_set_steering_command("codex", "pause"), ctx)
         assert res == {"handled": True, "harness": "codex", "steering": "pause"}
-        row = ctx.db.execute(
-            "SELECT steering FROM scheduler_steering WHERE harness = 'codex'"
+        row = ctx.db.conn.execute(
+            "SELECT steering FROM scheduler_steering "
+            "WHERE repository_id = ? AND harness = 'codex'",
+            (ctx.db.repository_id,),
         ).fetchone()
         assert row["steering"] == "pause"
 
-        input_row = ctx.db.execute(
+        input_row = ctx.db.conn.execute(
             "SELECT projection, subject_key, generation FROM projection_inputs "
-            "WHERE projection = 'schedule' AND subject_key = 'steering:codex'"
+            "WHERE repository_id = ? AND projection = 'schedule' "
+            "AND subject_key = 'steering:codex'",
+            (ctx.db.repository_id,),
         ).fetchone()
         assert input_row is not None
         assert input_row["generation"] == 0
 
         # Update (upsert) the same harness.
         await worker.on_command(_set_steering_command("codex", "prefer"), ctx)
-        row = ctx.db.execute(
-            "SELECT steering FROM scheduler_steering WHERE harness = 'codex'"
+        row = ctx.db.conn.execute(
+            "SELECT steering FROM scheduler_steering "
+            "WHERE repository_id = ? AND harness = 'codex'",
+            (ctx.db.repository_id,),
         ).fetchone()
         assert row["steering"] == "prefer"
         # exactly one row for the harness (upsert, not insert).
         assert (
-            ctx.db.execute(
-                "SELECT COUNT(*) AS n FROM scheduler_steering WHERE harness = 'codex'"
+            ctx.db.conn.execute(
+                "SELECT COUNT(*) AS n FROM scheduler_steering "
+                "WHERE repository_id = ? AND harness = 'codex'",
+                (ctx.db.repository_id,),
             ).fetchone()["n"]
             == 1
         )
-
-    import asyncio
 
     asyncio.run(_run())
 
@@ -202,8 +205,6 @@ def test_set_steering_rejects_invalid_value(repo_root: Path) -> None:
             await worker.on_command(_set_steering_command("codex", "bogus"), ctx)
         with pytest.raises(ValueError):
             await worker.on_command(_set_steering_command("  ", "auto"), ctx)
-
-    import asyncio
 
     asyncio.run(_run())
 
@@ -232,8 +233,6 @@ def test_pause_does_not_kick_and_records_paused_decision(repo_root: Path) -> Non
         assert row["rationale"] == "paused by user"
         assert row["kicked_ticket_id"] is None
 
-    import asyncio
-
     asyncio.run(_run())
 
 
@@ -258,8 +257,6 @@ def test_prefer_reserves_null_harness_tickets_for_preferred(repo_root: Path) -> 
         await worker._evaluate_window(ctx, "hA", _window(now, 99.0), now)
         assert _kickoff_count(ctx) == 1
 
-    import asyncio
-
     asyncio.run(_run())
 
 
@@ -275,8 +272,6 @@ def test_prefer_does_not_block_explicitly_tagged_tickets(repo_root: Path) -> Non
 
         await worker._evaluate_window(ctx, "hB", _window(now, 99.0), now)
         assert _kickoff_count(ctx) == 1
-
-    import asyncio
 
     asyncio.run(_run())
 
@@ -302,21 +297,20 @@ def test_auto_missing_and_garbage_behave_like_no_steering(
             # _load_steering coercion of an unknown value is asserted directly in
             # test_load_steering_fail_soft_on_unknown_value; here we just confirm
             # a stale/unknown row never reserves NULL tickets (no prefer present).
-            ctx.db.execute("DROP TABLE scheduler_steering")
-            ctx.db.execute(
-                "CREATE TABLE scheduler_steering (harness TEXT PRIMARY KEY, "
+            ctx.db.conn.execute("DROP TABLE scheduler_steering")
+            ctx.db.conn.execute(
+                "CREATE TABLE scheduler_steering (repository_id TEXT NOT NULL, harness TEXT, "
                 "steering TEXT NOT NULL, updated_at TEXT NOT NULL)"
             )
-            ctx.db.execute(
-                "INSERT INTO scheduler_steering(harness, steering, updated_at) "
-                "VALUES ('codex', 'wat', '2026-01-01')"
+            ctx.db.conn.execute(
+                "INSERT INTO scheduler_steering(repository_id, harness, steering, updated_at) "
+                "VALUES (?, 'codex', 'wat', '2026-01-01')",
+                (ctx.db.repository_id,),
             )
 
         # NULL-harness ticket is visible (today's behavior) -> kick.
         await worker._evaluate_window(ctx, "codex", _window(now, 99.0), now)
         assert _kickoff_count(ctx) == 1
-
-    import asyncio
 
     asyncio.run(_run())
 
@@ -329,9 +323,10 @@ def test_load_steering_fail_soft_on_unknown_value(repo_root: Path) -> None:
     ctx = _ctx(repo_root)
     worker = _worker(ctx)
     # Insert a valid row, then read with the helper — known-good baseline.
-    ctx.db.execute(
-        "INSERT INTO scheduler_steering(harness, steering, updated_at) "
-        "VALUES ('codex', 'prefer', '2026-01-01')"
+    ctx.db.conn.execute(
+        "INSERT INTO scheduler_steering(repository_id, harness, steering, updated_at) "
+        "VALUES (?, 'codex', 'prefer', '2026-01-01')",
+        (ctx.db.repository_id,),
     )
     steering, any_prefer = worker._load_steering(ctx.db, "codex")
     assert steering == "prefer"
@@ -346,10 +341,7 @@ def test_load_steering_fail_soft_on_unknown_value(repo_root: Path) -> None:
 
 
 def test_load_gauges_carries_steering(repo_root: Path) -> None:
-    from murder.app.service.schedule_snapshot import _load_gauges
-
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    db = open_test_repo_db(repo_root / "murder.db")
     now = datetime.now(timezone.utc)
     snapshot_json = (
         '{"windows": [{"name": "5h", "percent_used": 42.0, '
@@ -357,22 +349,25 @@ def test_load_gauges_carries_steering(repo_root: Path) -> None:
         f'"starts_at": "{now.isoformat()}", '
         f'"ends_at": "{(now + timedelta(hours=5)).isoformat()}"}}]}}'
     )
-    conn.execute(
-        "INSERT INTO harness_usage_snapshots(harness, source, fetched_at, status_json) "
-        "VALUES ('codex', 'test', '2026-06-11T00:00:00', ?)",
-        (snapshot_json,),
+    db.conn.execute(
+        "INSERT INTO harness_usage_snapshots("
+        "repository_id, harness, source, fetched_at, status_json) "
+        "VALUES (?, 'codex', 'test', '2026-06-11T00:00:00', ?)",
+        (db.repository_id, snapshot_json),
     )
-    conn.execute(
-        "INSERT INTO harness_usage_snapshots(harness, source, fetched_at, status_json) "
-        "VALUES ('claude', 'test', '2026-06-11T00:00:00', ?)",
-        (snapshot_json,),
+    db.conn.execute(
+        "INSERT INTO harness_usage_snapshots("
+        "repository_id, harness, source, fetched_at, status_json) "
+        "VALUES (?, 'claude', 'test', '2026-06-11T00:00:00', ?)",
+        (db.repository_id, snapshot_json),
     )
-    conn.execute(
-        "INSERT INTO scheduler_steering(harness, steering, updated_at) "
-        "VALUES ('codex', 'pause', '2026-06-11T00:00:00')"
+    db.conn.execute(
+        "INSERT INTO scheduler_steering(repository_id, harness, steering, updated_at) "
+        "VALUES (?, 'codex', 'pause', '2026-06-11T00:00:00')",
+        (db.repository_id,),
     )
 
-    gauges = _load_gauges(conn)
+    gauges = _load_gauges(db)
     by_harness = {g.harness: g for g in gauges}
     assert by_harness["codex"].steering == "pause"
     assert by_harness["codex"].fetched_at == "2026-06-11T00:00:00"

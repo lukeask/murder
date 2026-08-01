@@ -14,7 +14,7 @@ from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.state.persistence.runs import insert_run
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 
 def _command() -> CommandEvent:
@@ -34,9 +34,8 @@ def _command() -> CommandEvent:
 async def test_event_fanout_is_ephemeral_and_command_submission_is_durable(
     tmp_path: Path,
 ) -> None:
-    connection = get_db(tmp_path / "state.db")
-    init_db(connection)
-    insert_run(connection, "run-ports", "{}")
+    db = open_test_repo_db(tmp_path / "state.db")
+    insert_run(db, "run-ports", "{}")
     events = InProcessOrchestrationEventSink()
     observed: list[CommandEvent] = []
 
@@ -48,13 +47,13 @@ async def test_event_fanout_is_ephemeral_and_command_submission_is_durable(
     command = _command()
 
     await events.publish(command)
-    assert connection.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == 0
 
     submitter = PersistingCommandSubmitter(
-        SqliteCommandRepository(connection),
+        SqliteCommandRepository(db),
         events,
     )
     await submitter.submit(command)
 
-    assert connection.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM commands").fetchone()[0] == 1
     assert observed == [command, command]

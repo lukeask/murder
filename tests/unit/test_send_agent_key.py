@@ -18,21 +18,21 @@ from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.runtime.terminal import tmux
 from murder.state.persistence.agents import get_agent_messages
 from murder.state.persistence.conversation import read_conversation_blocks
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 from tests.support.fake_tmux import FakeTmux
 
 MANUAL_ENTER_EFFECT_COUNT = 2
 
 
 def _verified_agent(repo_root: Path, session_name: str) -> tuple[SimpleNamespace, object]:
-    db = get_db(repo_root / ".murder" / "murder.db")
-    init_db(db)
+    db = open_test_repo_db(repo_root / "murder.db")
     control = VerifiedHarnessControlSession.from_tmux(
         harness_kind="codex",
         terminal_session=session_name,
-        connection=db,
+        db=db,
         persistence_session_id="crow-t001",
     )
+    asyncio.run(control.ensure_session_controller(repository_id=db.repository_id))
     return SimpleNamespace(session=session_name, verified_harness_control=control), db
 
 
@@ -119,9 +119,18 @@ def test_send_agent_key_can_submit_enter_and_log_user_input(
     original_send_keys = tmux.send_keys
 
     async def _send_keys_after_durable_action(*args: object, **kwargs: object) -> None:
-        assert db.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0] == 1
         assert (
-            db.execute("SELECT COUNT(*) FROM harness_control_effects").fetchone()[0]
+            db.conn.execute(
+                "SELECT COUNT(*) FROM harness_control_actions WHERE repository_id = ?",
+                (db.repository_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            db.conn.execute(
+                "SELECT COUNT(*) FROM harness_control_effects WHERE repository_id = ?",
+                (db.repository_id,),
+            ).fetchone()[0]
             == MANUAL_ENTER_EFFECT_COUNT
         )
         await original_send_keys(*args, **kwargs)
@@ -144,19 +153,20 @@ def test_send_agent_key_can_submit_enter_and_log_user_input(
         (("murder_demo_crow_t001", "2"), {"literal": True, "enter": False}),
         (("murder_demo_crow_t001", "Enter"), {"literal": False, "enter": False}),
     ]
-    operation = db.execute(
+    operation = db.conn.execute(
         "SELECT capability, status, phase_type FROM harness_control_operations "
-        "WHERE operation_id = ?",
-        (result["operation_id"],),
+        "WHERE repository_id = ? AND operation_id = ?",
+        (db.repository_id, result["operation_id"]),
     ).fetchone()
     assert tuple(operation) == (
         "manual_terminal_input",
         "RUNNING",
         "murder.llm.harness_control.runtime.manual_input.ManualInputPhase",
     )
-    action = db.execute(
-        "SELECT duplicate_policy, emission_status FROM harness_control_actions WHERE action_id = ?",
-        (result["action_id"],),
+    action = db.conn.execute(
+        "SELECT duplicate_policy, emission_status FROM harness_control_actions "
+        "WHERE repository_id = ? AND action_id = ?",
+        (db.repository_id, result["action_id"]),
     ).fetchone()
     assert tuple(action) == ("NEVER_AUTOMATICALLY_REPLAY", "EMITTED")
     assert get_agent_messages(db, "crow-t001") == [
@@ -190,8 +200,7 @@ def test_send_agent_key_rejects_missing_verified_control() -> None:
 def test_send_agent_message_reports_delivery_failure_without_user_block(
     repo_root: Path,
 ) -> None:
-    db = get_db(repo_root / ".murder" / "murder.db")
-    init_db(db)
+    db = open_test_repo_db(repo_root / "murder.db")
 
     class _Agent:
         async def send(self, _message: str):
@@ -219,8 +228,7 @@ def test_send_agent_message_reports_delivery_failure_without_user_block(
 def test_send_agent_message_queues_while_crow_is_still_starting(
     repo_root: Path,
 ) -> None:
-    db = get_db(repo_root / ".murder" / "murder.db")
-    init_db(db)
+    db = open_test_repo_db(repo_root / "murder.db")
     runtime = SimpleNamespace(
         db=db,
         orchestration_events=None,
@@ -249,9 +257,9 @@ def test_send_agent_message_queues_while_crow_is_still_starting(
 
     assert result == {"handled": True, "queued": True}
     assert agent.pending_message == "test before startup"
-    row = db.execute(
-        "SELECT queued_message FROM conversations WHERE conversation_id = ?",
-        (agent.id,),
+    row = db.conn.execute(
+        "SELECT queued_message FROM conversations WHERE repository_id = ? AND conversation_id = ?",
+        (db.repository_id, agent.id),
     ).fetchone()
     assert row["queued_message"] == "test before startup"
 
@@ -271,8 +279,7 @@ def test_send_agent_message_queues_while_crow_is_still_starting(
 def test_send_agent_message_records_user_block_after_delivery_acceptance(
     repo_root: Path,
 ) -> None:
-    db = get_db(repo_root / ".murder" / "murder.db")
-    init_db(db)
+    db = open_test_repo_db(repo_root / "murder.db")
 
     class _Agent:
         async def send(self, _message: str):
@@ -297,8 +304,7 @@ def test_send_agent_message_records_user_block_after_delivery_acceptance(
 def test_send_agent_message_persists_client_message_id_on_user_block(
     repo_root: Path,
 ) -> None:
-    db = get_db(repo_root / ".murder" / "murder.db")
-    init_db(db)
+    db = open_test_repo_db(repo_root / "murder.db")
 
     class _Agent:
         async def send(self, _message: str):

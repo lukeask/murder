@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 
+from murder.app.service.handlers import trigger as trigger_handler
 from murder.app.service.runtime import Runtime
 from murder.facts.contracts import (
     FactActor,
@@ -16,7 +16,8 @@ from murder.facts.contracts import (
     RetainedFactDraft,
 )
 from murder.facts.log import append_fact
-from murder.runtime.activity_dispatcher import ActivityDispatcher
+from murder.runtime import trigger_dispatcher as td
+from murder.runtime.activity_dispatcher import ActivityDispatcher, build_default_activity_dispatcher
 from murder.runtime.admission import (
     AdmissionContext,
     Admitted,
@@ -39,8 +40,13 @@ from murder.state.persistence.activities import (
     renew_activity_claim,
     start_activity,
 )
-from murder.state.persistence.schema import init_db
-from murder.state.persistence.triggers import create_trigger, fire_trigger
+from murder.state.persistence.connection import DB_INTEGRITY_ERRORS, RepoDb
+from murder.state.persistence.harness_models import upsert_harness_models
+from murder.state.persistence.triggers import (
+    create_trigger,
+    enqueue_manual_trigger_fire,
+    fire_trigger,
+)
 from murder.state.persistence.workflow_runs import (
     apply_transition_plan,
     create_workflow_run,
@@ -82,6 +88,7 @@ from murder.work.workflows.runtime import (
     WorkflowTransitionPlan,
     versioned_state,
 )
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 7, 18, 20, 0, tzinfo=timezone.utc)
 TRIGGER_SPEC_COUNT = 4
@@ -97,12 +104,8 @@ MODEL_ASSIGNMENT_ROLES = (
 )
 
 
-def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    init_db(conn)
-    return conn
+def _conn() -> RepoDb:
+    return open_test_repo_db(Path(":memory:"))
 
 
 def _run() -> WorkflowRunRecord:
@@ -129,7 +132,7 @@ def _run() -> WorkflowRunRecord:
     )
 
 
-def _create_activity(conn: sqlite3.Connection) -> tuple[WorkflowRunRecord, UUID]:
+def _create_activity(conn: RepoDb) -> tuple[WorkflowRunRecord, UUID]:
     run = _run()
     create_workflow_run(
         conn,
@@ -170,7 +173,7 @@ def _create_activity(conn: sqlite3.Connection) -> tuple[WorkflowRunRecord, UUID]
 
 
 def _route_and_admit(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
     activity_id: UUID,
     *,
     now: datetime = NOW,
@@ -219,11 +222,14 @@ def test_transition_creates_exact_waited_activity_atomically() -> None:
     assert activity.workflow_id == run.workflow_id
     assert activity.workflow_revision == 1
     assert activity.status == ActivityStatus.PENDING
-    assert conn.execute(
-        "SELECT COUNT(*) AS n FROM workflow_transition_outbox WHERE kind = 'activity'"
-    ).fetchone()["n"] == 0
+    assert (
+        conn.conn.execute(
+            "SELECT COUNT(*) AS n FROM workflow_transition_outbox WHERE kind = 'activity'"
+        ).fetchone()["n"]
+        == 0
+    )
     duplicate_id = uuid4()
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(DB_INTEGRITY_ERRORS):
         apply_transition_plan(
             conn,
             workflow_id=run.workflow_id,
@@ -337,15 +343,21 @@ def test_route_admit_fenced_claim_renew_and_complete() -> None:
     )
     completed = get_activity(conn, activity_id)
     assert completed is not None and completed.status == ActivityStatus.SUCCEEDED
-    assert conn.execute(
-        "SELECT released_at FROM activity_reservations WHERE activity_id = ?",
-        (str(activity_id),),
-    ).fetchone()["released_at"] is not None
-    assert conn.execute(
-        "SELECT kind FROM retained_facts WHERE fact_id = ?",
-        (str(result.result_id),),
-    ).fetchone()["kind"] == "activity.succeeded"
-    projection_rows = conn.execute(
+    assert (
+        conn.conn.execute(
+            "SELECT released_at FROM activity_reservations WHERE activity_id = ?",
+            (str(activity_id),),
+        ).fetchone()["released_at"]
+        is not None
+    )
+    assert (
+        conn.conn.execute(
+            "SELECT kind FROM retained_facts WHERE fact_id = ?",
+            (str(result.result_id),),
+        ).fetchone()["kind"]
+        == "activity.succeeded"
+    )
+    projection_rows = conn.conn.execute(
         """
         SELECT source_fact_id, generation
           FROM projection_inputs
@@ -359,7 +371,7 @@ def test_route_admit_fenced_claim_renew_and_complete() -> None:
     assert projection_rows[-1]["source_fact_id"] == str(result.result_id)
     lifecycle_kinds = [
         str(row["kind"])
-        for row in conn.execute(
+        for row in conn.conn.execute(
             """
             SELECT kind FROM retained_facts
              WHERE kind LIKE 'activity.%'
@@ -430,7 +442,7 @@ def test_lock_expiry_and_retryable_attempt_results() -> None:
         ActivitySuccess(output={"done": True}),
         now=NOW + timedelta(minutes=2, seconds=10),
     )
-    rows = conn.execute(
+    rows = conn.conn.execute(
         "SELECT attempt FROM activity_results WHERE activity_id = ? ORDER BY attempt",
         (str(first_id),),
     ).fetchall()
@@ -462,7 +474,7 @@ def test_trigger_signal_firing_is_atomic_and_deduplicated() -> None:
     create_trigger(conn, trigger)
 
     def no_start(
-        connection: sqlite3.Connection,
+        connection: RepoDb,
         target: object,
         now: datetime,
     ) -> UUID:
@@ -484,7 +496,7 @@ def test_trigger_signal_firing_is_atomic_and_deduplicated() -> None:
         now=NOW,
     )
     assert first == duplicate
-    assert conn.execute("SELECT COUNT(*) AS n FROM trigger_firings").fetchone()["n"] == 1
+    assert conn.conn.execute("SELECT COUNT(*) AS n FROM trigger_firings").fetchone()["n"] == 1
 
 
 def test_trigger_started_workflow_is_woken_and_progresses() -> None:
@@ -500,7 +512,7 @@ def test_trigger_started_workflow_is_woken_and_progresses() -> None:
     create_trigger(conn, trigger)
 
     def start(
-        connection: sqlite3.Connection,
+        connection: RepoDb,
         target: StartWorkflowTarget,
         now: datetime,
     ) -> UUID:
@@ -620,7 +632,7 @@ def test_all_trigger_specs_validate_and_start_rollback_is_atomic() -> None:
     create_trigger(conn, trigger)
 
     def failing_start(
-        connection: sqlite3.Connection,
+        connection: RepoDb,
         target: StartWorkflowTarget,
         now: datetime,
     ) -> UUID:
@@ -641,8 +653,8 @@ def test_all_trigger_specs_validate_and_start_rollback_is_atomic() -> None:
             start_workflow=failing_start,
             now=NOW,
         )
-    assert conn.execute("SELECT COUNT(*) AS n FROM trigger_firings").fetchone()["n"] == 0
-    assert conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 0
+    assert conn.conn.execute("SELECT COUNT(*) AS n FROM trigger_firings").fetchone()["n"] == 0
+    assert conn.conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 0
 
 
 def test_dispatcher_recovers_expired_claim_and_executes() -> None:
@@ -703,7 +715,7 @@ def test_dispatcher_recovers_expired_claim_and_executes() -> None:
 def test_dispatcher_records_executor_exception_as_activity_failure() -> None:
     conn = _conn()
     _, activity_id = _create_activity(conn)
-    conn.execute(
+    conn.conn.execute(
         "UPDATE activities SET max_attempts = 1 WHERE activity_id = ?",
         (str(activity_id),),
     )
@@ -758,7 +770,7 @@ def test_dispatcher_records_executor_exception_as_activity_failure() -> None:
     activity = get_activity(conn, activity_id)
     assert activity is not None
     assert activity.status == ActivityStatus.FAILED
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT outcome_json FROM activity_results WHERE activity_id = ?",
         (str(activity_id),),
     ).fetchone()
@@ -772,7 +784,7 @@ def test_dispatcher_defers_reservation_lock_conflict_without_wedging_tick() -> N
     _, first_id = _create_activity(conn)
     _, second_id = _create_activity(conn)
     # Ensure the unadmitted activity is processed first (would wedge the tick).
-    conn.execute(
+    conn.conn.execute(
         "UPDATE activities SET priority = 10 WHERE activity_id = ?",
         (str(first_id),),
     )
@@ -913,11 +925,11 @@ def test_trigger_dispatcher_polls_all_sources_and_persists_cursors() -> None:
     )
     assert dispatcher.tick() == TRIGGER_SPEC_COUNT
     assert (
-        conn.execute("SELECT COUNT(*) AS n FROM trigger_firings").fetchone()["n"]
+        conn.conn.execute("SELECT COUNT(*) AS n FROM trigger_firings").fetchone()["n"]
         == TRIGGER_SPEC_COUNT
     )
     assert (
-        conn.execute("SELECT COUNT(*) AS n FROM trigger_cursors").fetchone()["n"]
+        conn.conn.execute("SELECT COUNT(*) AS n FROM trigger_cursors").fetchone()["n"]
         == TRIGGER_SPEC_COUNT
     )
 
@@ -965,10 +977,13 @@ def test_default_fact_trigger_observes_retained_facts_and_resumes() -> None:
     dispatcher = build_default_trigger_dispatcher(conn)
     assert dispatcher.tick() == 1
     assert dispatcher.tick() == 0
-    assert conn.execute(
-        "SELECT cursor FROM trigger_cursors WHERE trigger_id = ?",
-        (str(trigger_id),),
-    ).fetchone()["cursor"] == "2"
+    assert (
+        conn.conn.execute(
+            "SELECT cursor FROM trigger_cursors WHERE trigger_id = ?",
+            (str(trigger_id),),
+        ).fetchone()["cursor"]
+        == "2"
+    )
 
 
 def test_trigger_loop_continues_after_transient_tick_failure() -> None:
@@ -993,8 +1008,6 @@ def test_trigger_loop_continues_after_transient_tick_failure() -> None:
 
 
 def test_cron_trigger_fires_when_due() -> None:
-    from murder.runtime import trigger_dispatcher as td
-
     conn = _conn()
     trigger_id = uuid4()
     create_trigger(
@@ -1016,22 +1029,21 @@ def test_cron_trigger_fires_when_due() -> None:
         clock=lambda: clock["now"],
     )
     assert dispatcher.tick() == 0  # seed cursor, no backlog
-    assert conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 0
+    assert conn.conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 0
     clock["now"] = NOW + timedelta(hours=1)
     assert dispatcher.tick() == 1
-    assert conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 1
+    assert conn.conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 1
     assert dispatcher.tick() == 0
-    assert conn.execute(
-        "SELECT COUNT(*) AS n FROM trigger_firings WHERE trigger_id = ?",
-        (str(trigger_id),),
-    ).fetchone()["n"] == 1
+    assert (
+        conn.conn.execute(
+            "SELECT COUNT(*) AS n FROM trigger_firings WHERE trigger_id = ?",
+            (str(trigger_id),),
+        ).fetchone()["n"]
+        == 1
+    )
 
 
 def test_manual_enqueue_tick_starts_workflow() -> None:
-    from murder.app.service.handlers import trigger as trigger_handler
-    from murder.runtime import trigger_dispatcher as td
-    from murder.state.persistence.triggers import enqueue_manual_trigger_fire
-
     conn = _conn()
     trigger_id = uuid4()
     create_trigger(
@@ -1073,22 +1085,21 @@ def test_manual_enqueue_tick_starts_workflow() -> None:
         clock=lambda: NOW,
     )
     assert dispatcher.tick() == 1
-    assert conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 1
+    assert conn.conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 1
     assert dispatcher.tick() == 0
-    assert conn.execute(
-        "SELECT occurrence_key FROM trigger_firings WHERE trigger_id = ?",
-        (str(trigger_id),),
-    ).fetchone()["occurrence_key"] == "click-42"
+    assert (
+        conn.conn.execute(
+            "SELECT occurrence_key FROM trigger_firings WHERE trigger_id = ?",
+            (str(trigger_id),),
+        ).fetchone()["occurrence_key"]
+        == "click-42"
+    )
 
 
 def test_repository_fingerprint_change_fires_after_debounce() -> None:
-    from uuid import NAMESPACE_URL, uuid5
-
-    from murder.runtime import trigger_dispatcher as td
-
     conn = _conn()
     repo_root = Path("/tmp/murder-repo-trigger-test")
-    repository_id = uuid5(NAMESPACE_URL, f"murder:repository:{repo_root.resolve()}")
+    repository_id = UUID(conn.repository_id)
     fingerprints = ["aaa"]
 
     create_trigger(
@@ -1127,14 +1138,11 @@ def test_repository_fingerprint_change_fires_after_debounce() -> None:
     assert dispatcher.tick() == 0
     clock["now"] = NOW + timedelta(seconds=REPOSITORY_DEBOUNCE_SECONDS)
     assert dispatcher.tick() == 1
-    assert conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 1
+    assert conn.conn.execute("SELECT COUNT(*) AS n FROM workflow_runs").fetchone()["n"] == 1
     assert dispatcher.tick() == 0
 
 
 def test_default_activity_dispatcher_routes_admits_and_requires_session() -> None:
-    from murder.runtime.activity_dispatcher import build_default_activity_dispatcher
-    from murder.state.persistence.harness_models import upsert_harness_models
-
     conn = _conn()
     _, activity_id = _create_activity(conn)
     upsert_harness_models(
@@ -1151,7 +1159,7 @@ def test_default_activity_dispatcher_routes_admits_and_requires_session() -> Non
     assert report.completed == 1
     # No live session yet — executor fails retryably and returns to admission.
     assert activity.status == ActivityStatus.WAITING_ADMISSION
-    row = conn.execute(
+    row = conn.conn.execute(
         "SELECT outcome_json FROM activity_results WHERE activity_id = ?",
         (str(activity_id),),
     ).fetchone()

@@ -15,11 +15,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.runtime.orchestration.events import ConversationStateEvent
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.runtime.agents.crow import CrowAgent
-from murder.state.persistence.schema import get_db, init_db
+from murder.runtime.orchestration.events import ConversationStateEvent
+from tests.support.database import open_test_repo_db
 from tests.unit.test_harness_adapters import CC_BUSY, CC_IDLE
 
 SESSION = "crow_cc_rogue_test"
@@ -29,14 +29,13 @@ MINIMUM_EVIDENCE_RECORDS = 3
 
 @pytest.fixture
 def agent(fake_tmux, tmp_path: Path) -> CrowAgent:
-    connection = get_db(tmp_path / "state.db")
-    init_db(connection)
+    db = open_test_repo_db(tmp_path / "state.db")
 
     async def no_sleep(_: float) -> None:
         return None
 
     runtime = SimpleNamespace()
-    runtime.db = connection
+    runtime.db = db
     runtime.orchestration_events = MagicMock()
     runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
@@ -73,14 +72,14 @@ async def _prepare_verified_delivery(agent: CrowAgent, fake_tmux, text: str) -> 
 def _assert_verified_submission(agent: CrowAgent, fake_tmux) -> None:
     """The behavioral assertion is operation/evidence convergence, not tmux I/O."""
 
-    connection = agent.runtime.db
-    assert connection.execute("SELECT COUNT(*) FROM harness_control_operations").fetchone()[0] == 1
+    db = agent.runtime.db
+    assert db.conn.execute("SELECT COUNT(*) FROM harness_control_operations").fetchone()[0] == 1
     assert (
-        connection.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0]
+        db.conn.execute("SELECT COUNT(*) FROM harness_control_actions").fetchone()[0]
         >= MINIMUM_VERIFIED_ACTIONS
     )
     assert (
-        connection.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0]
+        db.conn.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0]
         >= MINIMUM_EVIDENCE_RECORDS
     )
     enters = [args for args, _ in fake_tmux.calls_to("send_keys") if args[1] == "Enter"]

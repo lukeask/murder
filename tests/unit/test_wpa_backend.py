@@ -11,7 +11,6 @@ import re
 from pathlib import Path
 
 from murder.app.service.runtime import Runtime
-from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -19,10 +18,11 @@ from murder.config import (
     NotetakerConfig,
     ProjectConfig,
 )
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence.runs import insert_run
-from murder.state.persistence.schema import get_db, init_db
 from murder.work import notes as notes_mod
+from tests.support.database import open_test_repo_db
 
 
 def _config() -> Config:
@@ -36,8 +36,9 @@ def _config() -> Config:
 
 
 def _runtime(repo_root: Path) -> Runtime:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
+    database = repo_root / ".murder" / "murder.db"
+    database.parent.mkdir(parents=True, exist_ok=True)
+    conn = open_test_repo_db(database)
     rt = Runtime(_config(), repo_root)
     rt.db = conn
     rt.run_id = "run-test"
@@ -66,7 +67,12 @@ def test_send_message_no_spawn_when_planner_not_live(repo_root: Path) -> None:
     orch.ensure_planning_agent = _fake_ensure  # type: ignore[assignment]
 
     result = asyncio.run(
-        orch.send_agent_message("planner-demo", "your plan is malformed", None, spawn_if_needed=False)
+        orch.send_agent_message(
+            "planner-demo",
+            "your plan is malformed",
+            None,
+            spawn_if_needed=False,
+        )
     )
 
     assert result["ok"] is False
@@ -113,7 +119,6 @@ def test_send_message_delivers_to_live_planner_without_spawn(repo_root: Path) ->
 
         async def send(self, message: str):
             sent.append(message)
-            return None
 
     agent = _FakeAgent()
     rt._agents._agents["planner-demo"] = agent  # type: ignore[attr-defined]
@@ -145,7 +150,10 @@ def test_create_plan_with_body_seeds_markdown(repo_root: Path) -> None:
 
     assert result["ok"] is True
     assert result["plan_name"] == "seeded"
-    row = rt.db.execute("SELECT body FROM plans WHERE name = 'seeded'").fetchone()
+    row = rt.db.conn.execute(  # type: ignore[union-attr]
+        "SELECT body FROM plans WHERE repository_id = ? AND name = 'seeded'",
+        (rt.db.repository_id,),  # type: ignore[union-attr]
+    ).fetchone()
     assert "Seeded body content." in row["body"]
 
 
@@ -168,7 +176,13 @@ def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path, mon
     assert result["ok"] is True
     name = result["plan_name"]
     assert name.startswith("plan-")
-    assert rt.db.execute("SELECT 1 FROM plans WHERE name = ?", (name,)).fetchone() is not None
+    assert (
+        rt.db.conn.execute(  # type: ignore[union-attr]
+            "SELECT 1 FROM plans WHERE repository_id = ? AND name = ?",
+            (rt.db.repository_id, name),  # type: ignore[union-attr]
+        ).fetchone()
+        is not None
+    )
 
 
 def test_create_plan_auto_name_uses_llm_slug(repo_root: Path, monkeypatch) -> None:
@@ -238,9 +252,7 @@ def test_submit_capture_blank_title_uses_llm_path(repo_root: Path) -> None:
     orig = notes_mod.llm_capture_metadata
     notes_mod.llm_capture_metadata = _fake_meta  # type: ignore[assignment]
     try:
-        result = asyncio.run(
-            orch.submit_notetaker_capture({"raw": "some capture", "title": "   "})
-        )
+        result = asyncio.run(orch.submit_notetaker_capture({"raw": "some capture", "title": "   "}))
         asyncio.run(_drain(rt))
     finally:
         notes_mod.llm_capture_metadata = orig  # type: ignore[assignment]
@@ -261,9 +273,7 @@ def test_submit_capture_llm_error_keeps_timestamped_note(repo_root: Path) -> Non
     notes_mod.llm_capture_metadata = _boom  # type: ignore[assignment]
     try:
         result = asyncio.run(
-            orch.submit_notetaker_capture(
-                {"raw": "First line of capture\nsecond line"}
-            )
+            orch.submit_notetaker_capture({"raw": "First line of capture\nsecond line"})
         )
         asyncio.run(_drain(rt))
     finally:
@@ -277,6 +287,4 @@ def test_submit_capture_llm_error_keeps_timestamped_note(repo_root: Path) -> Non
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{8}T\d{12}Z(-\d+)?", name), name
     assert result["short_vers"] == "First line of capture"
     # The note file/DB row must actually exist.
-    assert notes_mod.read_note(rt.db, name).strip().startswith(
-        "First line of capture"
-    )
+    assert notes_mod.read_note(rt.db, name).strip().startswith("First line of capture")

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,7 +36,7 @@ from murder.state.persistence.conversation import (
     project_parsed_doc_with_changes,
     read_conversation_blocks,
 )
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 7, 20, tzinfo=timezone.utc)
 
@@ -318,12 +317,11 @@ def test_usage_limit_notice_lands_in_conversation_blocks(tmp_path: Path) -> None
     ]
     assert isinstance(transcript, dict)
 
-    conn: sqlite3.Connection = get_db(tmp_path / "usage-limit.db")
-    init_db(conn)
-    append_user_message(conn, "crow-limit", "do the thing")
-    _merged, changes = project_parsed_doc_with_changes(conn, "crow-limit", transcript)
+    db = open_test_repo_db(tmp_path / "usage-limit.db")
+    append_user_message(db, "crow-limit", "do the thing")
+    _merged, changes = project_parsed_doc_with_changes(db, "crow-limit", transcript)
 
-    blocks = read_conversation_blocks(conn, "crow-limit")
+    blocks = read_conversation_blocks(db, "crow-limit")
     kinds = [block.kind for block in blocks]
     assert "user" in kinds
     assert "notice" in kinds
@@ -331,4 +329,7 @@ def test_usage_limit_notice_lands_in_conversation_blocks(tmp_path: Path) -> None
     assert notice.payload["type"] == "notice"
     assert notice.payload["severity"] == "error"
     assert "usage limit" in str(notice.payload.get("message", "")).casefold()
-    assert any(change.action == "block-appended" and change.block.kind == "notice" for change in changes)
+    assert any(
+        change.action == "block-appended" and change.block.kind == "notice"
+        for change in changes
+    )

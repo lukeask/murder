@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from murder.facts.log import replay_projection_inputs
 from murder.state.persistence import tickets as ticket_db
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 from murder.work.tickets.schema import Ticket
 from murder.work.tickets.status import TicketStatus
 
@@ -21,10 +21,8 @@ class _NoopBus:
         pass
 
 
-def _conn(tmp_path: Path) -> sqlite3.Connection:
-    conn = get_db(tmp_path / "murder.db")
-    init_db(conn)
-    return conn
+def _conn(tmp_path: Path) -> RepoDb:
+    return open_test_repo_db(tmp_path / "murder.db")
 
 
 def test_update_ticket_status_appends_schedule_projection_input(tmp_path: Path) -> None:

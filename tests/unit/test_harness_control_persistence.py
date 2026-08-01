@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import turso
 
 from murder.llm.harness_control.model.actions import (
     CommitPromptSubmission,
@@ -48,6 +48,7 @@ from murder.llm.harness_control.model.operations import (
 )
 from murder.llm.harness_control.runtime.sqlite_journal import SqliteHarnessControlJournal
 from murder.state.persistence import harness_control as harness_control_persistence
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.harness_control import (
     get_evidence,
     latest_observation,
@@ -61,17 +62,15 @@ from murder.state.persistence.harness_control import (
     prune_capture_history,
     record_effect_emissions,
 )
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 NOW = datetime(2026, 7, 11, 12, 30, tzinfo=timezone.utc)
 REVISION = ObservationRevision(3, 41, 7)
 
 
 @pytest.fixture()
-def conn(tmp_path) -> sqlite3.Connection:
-    db = get_db(tmp_path / "test.db")
-    init_db(db)
-    return db
+def conn(tmp_path) -> RepoDb:
+    return open_test_repo_db(tmp_path / "test.db")
 
 
 def _frame() -> TerminalFrame:
@@ -204,9 +203,9 @@ def _action_record(*, effects: tuple[SendNamedKey, ...] | None = None) -> Action
     )
 
 
-def _transition_row_counts(conn: sqlite3.Connection) -> tuple[int, int, int, int]:
+def _transition_row_counts(conn: RepoDb) -> tuple[int, int, int, int]:
     return tuple(
-        int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        int(conn.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
         for table in (
             "harness_control_operations",
             "harness_control_decisions",
@@ -280,32 +279,40 @@ def test_prune_capture_history_removes_only_captures_older_than_cutoff(conn) -> 
     def insert_capture(capture_id: str, captured_at: datetime, sequence: int) -> None:
         captured_at_iso = captured_at.isoformat()
         frame_id = f"frame-{capture_id}"
-        conn.execute(
+        conn.conn.execute(
             """
             INSERT INTO harness_control_frames(
-                frame_id, harness_id, session_id, captured_at, width, height, raw_text,
+                repository_id, frame_id, harness_id, session_id, captured_at,
+                width, height, raw_text,
                 ansi_preserved, pane_epoch, capture_sequence, stored_at
-            ) VALUES (?, 'codex', 'session-a', ?, 80, 24, 'frame', 0, 1, ?, ?)
+            ) VALUES (?, ?, 'codex', 'session-a', ?, 80, 24, 'frame', 0, 1, ?, ?)
             """,
-            (frame_id, captured_at_iso, sequence, captured_at_iso),
+            (conn.repository_id, frame_id, captured_at_iso, sequence, captured_at_iso),
         )
-        conn.execute(
+        conn.conn.execute(
             """
             INSERT INTO harness_control_evidence(
-                evidence_id, frame_id, harness_id, parser_version, evidence_type,
+                repository_id, evidence_id, frame_id, harness_id, parser_version, evidence_type,
                 captured_at, payload_json, source_regions_json, diagnostics_json, stored_at
-            ) VALUES (?, ?, 'codex', 'v1', 'codex.frame', ?, '{}', '[]', '{}', ?)
+            ) VALUES (?, ?, ?, 'codex', 'v1', 'codex.frame', ?, '{}', '[]', '{}', ?)
             """,
-            (f"evidence-{capture_id}", frame_id, captured_at_iso, captured_at_iso),
+            (
+                conn.repository_id,
+                f"evidence-{capture_id}",
+                frame_id,
+                captured_at_iso,
+                captured_at_iso,
+            ),
         )
-        conn.execute(
+        conn.conn.execute(
             """
             INSERT INTO harness_control_observations(
-                harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence,
+                repository_id, harness_id, session_id, pane_epoch, capture_sequence,
+                semantic_sequence,
                 captured_at, snapshot_json, evidence_refs_json, stored_at
-            ) VALUES ('codex', 'session-a', 1, ?, 0, ?, '{}', '[]', ?)
+            ) VALUES (?, 'codex', 'session-a', 1, ?, 0, ?, '{}', '[]', ?)
             """,
-            (sequence, captured_at_iso, captured_at_iso),
+            (conn.repository_id, sequence, captured_at_iso, captured_at_iso),
         )
 
     insert_capture("old", NOW - timedelta(microseconds=1), 1)
@@ -315,15 +322,16 @@ def test_prune_capture_history_removes_only_captures_older_than_cutoff(conn) -> 
     prune_capture_history(conn, captured_before=NOW)
 
     assert {
-        row["frame_id"] for row in conn.execute("SELECT frame_id FROM harness_control_frames")
+        row["frame_id"]
+        for row in conn.conn.execute("SELECT frame_id FROM harness_control_frames")
     } == {"frame-boundary", "frame-recent"}
     assert {
         row["evidence_id"]
-        for row in conn.execute("SELECT evidence_id FROM harness_control_evidence")
+        for row in conn.conn.execute("SELECT evidence_id FROM harness_control_evidence")
     } == {"evidence-boundary", "evidence-recent"}
     assert {
         row["capture_sequence"]
-        for row in conn.execute("SELECT capture_sequence FROM harness_control_observations")
+        for row in conn.conn.execute("SELECT capture_sequence FROM harness_control_observations")
     } == {2, 3}
 
 
@@ -345,7 +353,7 @@ def test_action_and_effects_are_durable_before_emission_result(conn) -> None:
     )
     persist_action_record(conn, record)
 
-    before = conn.execute(
+    before = conn.conn.execute(
         "SELECT emission_status FROM harness_control_effects WHERE effect_id = 'effect-enter'"
     ).fetchone()
     assert before["emission_status"] == "PENDING"
@@ -356,10 +364,10 @@ def test_action_and_effects_are_durable_before_emission_result(conn) -> None:
         results=(EffectEmission("effect-enter", EmissionStatus.EMITTED),),
         emitted_at=NOW,
     )
-    after = conn.execute(
+    after = conn.conn.execute(
         "SELECT emission_status FROM harness_control_effects WHERE effect_id = 'effect-enter'"
     ).fetchone()
-    action_after = conn.execute(
+    action_after = conn.conn.execute(
         "SELECT emission_status FROM harness_control_actions WHERE action_id = 'commit-1'"
     ).fetchone()
     assert after["emission_status"] == "EMITTED"
@@ -396,7 +404,7 @@ def test_journal_rolls_back_the_entire_transition_when_a_stage_fails(
 
 
 def test_journal_rolls_back_a_transition_when_a_later_effect_insert_fails(conn) -> None:
-    conn.execute(
+    conn.conn.execute(
         """
         CREATE TRIGGER fail_second_effect
         BEFORE INSERT ON harness_control_effects
@@ -415,7 +423,7 @@ def test_journal_rolls_back_a_transition_when_a_later_effect_insert_fails(conn) 
     )
 
     async def scenario() -> None:
-        with pytest.raises(sqlite3.IntegrityError, match="injected later effect failure"):
+        with pytest.raises(turso.DatabaseError, match="injected later effect failure"):
             await journal.record_transition(_operation_state(), _snapshot(), _decision(), record)
 
     asyncio.run(scenario())
@@ -424,7 +432,7 @@ def test_journal_rolls_back_a_transition_when_a_later_effect_insert_fails(conn) 
 
 def test_journal_prepare_action_rolls_back_all_effects_when_a_later_insert_fails(conn) -> None:
     persist_operation(conn, _operation(), harness_id="codex", session_id="session-a")
-    conn.execute(
+    conn.conn.execute(
         """
         CREATE TRIGGER fail_manual_second_effect
         BEFORE INSERT ON harness_control_effects
@@ -443,7 +451,7 @@ def test_journal_prepare_action_rolls_back_all_effects_when_a_later_insert_fails
     )
 
     async def scenario() -> None:
-        with pytest.raises(sqlite3.IntegrityError, match="injected later effect failure"):
+        with pytest.raises(turso.DatabaseError, match="injected later effect failure"):
             await journal.prepare_action(record)
 
     asyncio.run(scenario())

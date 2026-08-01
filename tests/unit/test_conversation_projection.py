@@ -14,13 +14,13 @@ Covers the projector that unifies collaborator/crow/planner parsing:
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
 
 from murder.facts.log import replay_projection_inputs
 from murder.state.persistence.agents import get_agent_messages
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.conversation import (
     append_user_message,
     merge_non_user_segments,
@@ -29,7 +29,7 @@ from murder.state.persistence.conversation import (
     read_conversation_blocks,
     read_conversation_doc,
 )
-from murder.state.persistence.schema import get_db, init_db
+from tests.support.database import open_test_repo_db
 
 _CC_EXPECTED = Path(__file__).parent.parent / "fixtures" / "transcripts" / "cc" / "expected.json"
 _CODEX_EXPECTED = (
@@ -38,10 +38,12 @@ _CODEX_EXPECTED = (
 
 
 @pytest.fixture()
-def conn(tmp_path: Path) -> sqlite3.Connection:
-    db = get_db(tmp_path / "test.db")
-    init_db(db)
-    return db
+def conn(tmp_path: Path) -> RepoDb:
+    db = open_test_repo_db(tmp_path / "test.db")
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def _assistant(text: str, phase: str = "final") -> dict[str, object]:
@@ -57,7 +59,7 @@ def _doc(*segments: dict[str, object], state: str = "awaiting_input") -> dict[st
 # ---------------------------------------------------------------------------
 
 
-def test_project_applies_parse_against_interleaved_ground_truth(conn: sqlite3.Connection) -> None:
+def test_project_applies_parse_against_interleaved_ground_truth(conn: RepoDb) -> None:
     """Ground-truth user blocks are interleaved into storage, but the parsed
     doc has its user segments stripped. Reconciling the stripped parse against
     *all* stored blocks would look shorter and get dropped as pane noise — the
@@ -118,7 +120,7 @@ def test_project_applies_parse_against_interleaved_ground_truth(conn: sqlite3.Co
     ]
 
 
-def test_project_grows_live_assistant_tail_after_user(conn: sqlite3.Connection) -> None:
+def test_project_grows_live_assistant_tail_after_user(conn: RepoDb) -> None:
     """An in-progress assistant turn after a ground-truth user block updates the
     live trailing block in place rather than appending duplicates."""
     agent = "agent-1"
@@ -142,7 +144,7 @@ def test_project_grows_live_assistant_tail_after_user(conn: sqlite3.Connection) 
 
 
 def test_cumulative_projection_restores_turn_order_after_users_arrive_first(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     """A projection catch-up must not render all users before all replies."""
     agent = "cursor-rogue-startup"
@@ -175,7 +177,7 @@ def test_cumulative_projection_restores_turn_order_after_users_arrive_first(
 
 
 def test_unchanged_projection_repairs_and_invalidates_existing_bad_order(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     agent = "cursor-existing-bad-order"
     doc = _doc(
@@ -191,11 +193,11 @@ def test_unchanged_projection_repairs_and_invalidates_existing_bad_order(
     by_text = {str(block.payload.get("text")): block for block in blocks}
     # Recreate the old persisted shape: all authoritative users, then replies.
     for ordinal, text in enumerate(("one", "two", "answer one", "answer two")):
-        conn.execute(
+        conn.conn.execute(
             "UPDATE conversation_blocks SET ordinal = ? WHERE id = ?",
             (ordinal + 10, by_text[text].id),
         )
-    conn.execute(
+    conn.conn.execute(
         "UPDATE conversation_blocks SET ordinal = ordinal - 10 WHERE conversation_id = ?",
         (agent,),
     )
@@ -213,7 +215,7 @@ def test_unchanged_projection_repairs_and_invalidates_existing_bad_order(
     assert len(replay_projection_inputs(conn, projection="conversations")) == len(before) + 1
 
 
-def test_parser_user_noise_is_not_used_as_an_order_anchor(conn: sqlite3.Connection) -> None:
+def test_parser_user_noise_is_not_used_as_an_order_anchor(conn: RepoDb) -> None:
     agent = "collaborator-0"
     append_user_message(conn, agent, "real question")
     project_parsed_doc(
@@ -232,7 +234,7 @@ def test_parser_user_noise_is_not_used_as_an_order_anchor(conn: sqlite3.Connecti
     ]
 
 
-def test_project_grows_sealed_assistant_final_prefix(conn: sqlite3.Connection) -> None:
+def test_project_grows_sealed_assistant_final_prefix(conn: RepoDb) -> None:
     """Cursor can briefly look idle while a final reply is still only a prefix.
 
     The next parse at the same position must be able to replace that sealed
@@ -262,7 +264,7 @@ def test_project_grows_sealed_assistant_final_prefix(conn: sqlite3.Connection) -
 # ---------------------------------------------------------------------------
 
 
-def test_project_strips_re_derived_user_segments(conn: sqlite3.Connection) -> None:
+def test_project_strips_re_derived_user_segments(conn: RepoDb) -> None:
     """The collaborator corruption was murder's injected brief re-derived from
     the pane as alternating user/assistant turns. The projector strips *all*
     parsed user segments; only ground-truth users (recorded at send) survive.
@@ -293,7 +295,7 @@ def test_project_strips_re_derived_user_segments(conn: sqlite3.Connection) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_cc_fixture_projects_non_user_segments(conn: sqlite3.Connection) -> None:
+def test_cc_fixture_projects_non_user_segments(conn: RepoDb) -> None:
     """A real Claude Code transcript doc projects all its non-user segments into
     the store in order; its (re-derived) user segments are stripped."""
     agent = "crow-t001"
@@ -307,7 +309,7 @@ def test_cc_fixture_projects_non_user_segments(conn: sqlite3.Connection) -> None
     assert all(b.kind != "user" for b in blocks)
 
 
-def test_codex_fixture_projects_non_user_segments(conn: sqlite3.Connection) -> None:
+def test_codex_fixture_projects_non_user_segments(conn: RepoDb) -> None:
     """A real Codex transcript doc projects all its non-user segments into
     the store in order, using the same unified path as Claude Code."""
     agent = "crow-codex-t001"
@@ -321,7 +323,7 @@ def test_codex_fixture_projects_non_user_segments(conn: sqlite3.Connection) -> N
     assert all(b.kind != "user" for b in blocks)
 
 
-def test_merge_non_user_segments_ignores_shorter_parse(conn: sqlite3.Connection) -> None:
+def test_merge_non_user_segments_ignores_shorter_parse(conn: RepoDb) -> None:
     """A parse with fewer non-user segments than stored is transient pane noise
     and must not truncate the stored conversation."""
     agent = "agent-1"
@@ -336,7 +338,7 @@ def test_merge_non_user_segments_ignores_shorter_parse(conn: sqlite3.Connection)
     assert [b.payload for b in after] == [b.payload for b in before]
 
 
-def test_project_reports_changes_only_for_real_mutations(conn: sqlite3.Connection) -> None:
+def test_project_reports_changes_only_for_real_mutations(conn: RepoDb) -> None:
     """1.d push dedupe boundary: first parse appends, duplicate parse emits no
     changes, and a growing live tail reports one update."""
     agent = "agent-1"
@@ -364,7 +366,7 @@ def test_project_reports_changes_only_for_real_mutations(conn: sqlite3.Connectio
 
 
 def test_conversation_writes_emit_durable_snapshot_invalidations(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     """The inktui refresh path tails conversations projection inputs.
 
@@ -394,7 +396,7 @@ def test_conversation_writes_emit_durable_snapshot_invalidations(
 
 
 def test_duplicate_projection_does_not_emit_redundant_invalidation(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     agent = "agent-dedup"
     doc = _doc(_assistant("still working", phase="intermediate"), state="working")
@@ -408,7 +410,7 @@ def test_duplicate_projection_does_not_emit_redundant_invalidation(
 
 
 def test_superseding_a_live_intermediate_emits_its_seal_as_update(
-    conn: sqlite3.Connection,
+    conn: RepoDb,
 ) -> None:
     """Appending past a live ``assistant_intermediate`` emits a seal ``block-updated``.
 

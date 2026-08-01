@@ -14,13 +14,17 @@ from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectC
 from murder.llm.harness_control.runtime.prompt_driver import PromptDriverPolicy
 from murder.llm.harnesses.claude_code import ClaudeCodeAdapter
 from murder.llm.harnesses.usage_sampling import LiveSessionUsageResult
+from murder.runtime.agents.base import AgentStatus
 from murder.runtime.agents.collaborator import CollaboratorAgent
 from murder.runtime.agents.crow import CrowAgent
 from murder.runtime.agents.planning_agent import PlanningAgent
+from murder.runtime.terminal import tmux as tmux_mod
+from tests.support.database import open_test_repo_db
 from tests.support.fake_tmux import FakeTmux
 
 _FIXTURES = Path(__file__).parent.parent / "fixtures" / "harness_panes"
 CC_IDLE = (_FIXTURES / "cc_idle.txt").read_text(encoding="utf-8")
+MINIMUM_PROMPT_EVIDENCE_COUNT = 3
 
 
 def _config() -> Config:
@@ -60,8 +64,6 @@ def _script_verified_claude_prompt(ft: FakeTmux, text: str) -> None:
 
 @pytest.fixture
 def fake_tmux(monkeypatch):
-    import murder.runtime.terminal.tmux as tmux_mod
-
     ft = FakeTmux()
     ft.install(monkeypatch, tmux_mod)
 
@@ -91,13 +93,10 @@ def test_startup_samples_before_first_prompt(
     sample_mock: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-
     fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
     _script_verified_claude_prompt(fake_tmux, "system brief")
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     runtime = _runtime(conn, tmp_path)
     agent = CrowAgent(
         agent_id="crow-t1",
@@ -136,13 +135,10 @@ def test_collaborator_startup_samples_before_brief_send(
     sample_mock: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-
     fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
     _script_verified_claude_prompt(fake_tmux, "collab brief")
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -170,7 +166,13 @@ def test_collaborator_startup_samples_before_brief_send(
     assert order[0] == "sample:agent_startup"
     assert "verified_submit" in order
     assert order.index("sample:agent_startup") < order.index("verified_submit")
-    assert conn.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0] > 0
+    assert (
+        conn.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_evidence WHERE repository_id = ?",
+            (conn.repository_id,),
+        ).fetchone()[0]
+        > 0
+    )
 
 
 def test_graceful_stop_samples_before_exit(
@@ -178,10 +180,7 @@ def test_graceful_stop_samples_before_exit(
     sample_mock: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = CrowAgent(
         agent_id="crow-t1",
         ticket_id="t1",
@@ -210,10 +209,7 @@ def test_planning_graceful_stop_samples_before_interrupt(
     sample_mock: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = PlanningAgent(
         agent_id="planner-planA",
         session="murder_test_planner",
@@ -248,14 +244,10 @@ def test_planning_startup_submits_brief_through_verified_control(
 ) -> None:
     """A planner brief is not delivered merely because a terminal call returned."""
 
-    from murder.runtime.agents.base import AgentStatus
-    from murder.state.persistence.schema import get_db, init_db
-
     fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
     _script_verified_claude_prompt(fake_tmux, "plan the migration")
-    connection = get_db(tmp_path / "state.db")
-    init_db(connection)
+    connection = open_test_repo_db(tmp_path / "state.db")
     agent = PlanningAgent(
         agent_id="planner-planA",
         session="murder_test_planner",
@@ -268,8 +260,20 @@ def test_planning_startup_submits_brief_through_verified_control(
     asyncio.run(agent.start("plan the migration", {}))
 
     assert agent.status is AgentStatus.RUNNING
-    assert connection.execute("SELECT COUNT(*) FROM harness_control_operations").fetchone()[0] == 1
-    assert connection.execute("SELECT COUNT(*) FROM harness_control_evidence").fetchone()[0] >= 3
+    assert (
+        connection.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_operations WHERE repository_id = ?",
+            (connection.repository_id,),
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        connection.conn.execute(
+            "SELECT COUNT(*) FROM harness_control_evidence WHERE repository_id = ?",
+            (connection.repository_id,),
+        ).fetchone()[0]
+        >= MINIMUM_PROMPT_EVIDENCE_COUNT
+    )
     enters = [args for args, _ in fake_tmux.calls_to("send_keys") if args[1] == "Enter"]
     assert len(enters) == 1
     sample_mock.assert_awaited_once()
@@ -289,10 +293,7 @@ def test_hard_or_preserve_stop_skips_shutdown_sampling(
     failed: bool,
     kill_session: bool,
 ) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = CrowAgent(
         agent_id="crow-t1",
         ticket_id="t1",
@@ -312,14 +313,10 @@ def test_sampler_skip_does_not_block_startup(
     sample_mock: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    from murder.runtime.agents.base import AgentStatus
-    from murder.state.persistence.schema import get_db, init_db
-
     fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
     _script_verified_claude_prompt(fake_tmux, "system brief")
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = CrowAgent(
         agent_id="crow-t1",
         ticket_id="t1",
@@ -340,11 +337,7 @@ def test_sampler_failure_does_not_block_graceful_stop(
     sample_mock: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    from murder.runtime.agents.base import AgentStatus
-    from murder.state.persistence.schema import get_db, init_db
-
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = CrowAgent(
         agent_id="crow-t1",
         ticket_id="t1",
@@ -362,11 +355,10 @@ def test_sampler_failure_does_not_block_graceful_stop(
     assert not any(name == "send_keys" for name, *_ in fake_tmux.calls)
 
 
-def test_live_usage_store_invalidates_schedule_for_tui(tmp_path: Path, sample_mock: AsyncMock) -> None:
-    from murder.state.persistence.schema import get_db, init_db
-
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+def test_live_usage_store_invalidates_schedule_for_tui(
+    tmp_path: Path, sample_mock: AsyncMock
+) -> None:
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = CrowAgent(
         agent_id="crow-t1",
         ticket_id="t1",
@@ -381,8 +373,10 @@ def test_live_usage_store_invalidates_schedule_for_tui(tmp_path: Path, sample_mo
 
     subjects = [
         row["subject_key"]
-        for row in conn.execute(
-            "SELECT subject_key FROM projection_inputs WHERE projection = 'schedule'"
+        for row in conn.conn.execute(
+            "SELECT subject_key FROM projection_inputs "
+            "WHERE repository_id = ? AND projection = 'schedule'",
+            (conn.repository_id,),
         ).fetchall()
     ]
     assert subjects == ["usage:claude_code"]
@@ -390,11 +384,7 @@ def test_live_usage_store_invalidates_schedule_for_tui(tmp_path: Path, sample_mo
 
 def test_collect_verified_usage_pauses_projection_for_overlay(tmp_path: Path) -> None:
     """While /usage is open, project_once must not publish the probe to chat."""
-    from murder.runtime.agents.base import AgentStatus
-    from murder.state.persistence.schema import get_db, init_db
-
-    conn = get_db(tmp_path / "state.db")
-    init_db(conn)
+    conn = open_test_repo_db(tmp_path / "state.db")
     agent = CrowAgent(
         agent_id="crow-t1",
         ticket_id="t1",
@@ -408,7 +398,6 @@ def test_collect_verified_usage_pauses_projection_for_overlay(tmp_path: Path) ->
     async def _collect(*, trigger: str):
         del trigger
         seen.append(agent.usage_capture_in_progress)
-        return None
 
     agent.verified_harness_control = SimpleNamespace(collect_usage=_collect)  # type: ignore[assignment]
 

@@ -19,7 +19,8 @@ from murder.config import (
     ProjectConfig,
 )
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb
+from tests.support.database import open_test_repo_db
 
 
 @dataclass
@@ -50,23 +51,22 @@ def _config() -> Config:
     )
 
 
-def _insert_agent(conn, agent_id: str, session: str, status: str = "running") -> None:
-    conn.execute(
+def _insert_agent(db: RepoDb, agent_id: str, session: str, status: str = "running") -> None:
+    db.conn.execute(
         """
-        INSERT INTO agents(agent_id, role, status, session, started_at)
-        VALUES (?, 'crow', ?, ?, '2026-01-01')
+        INSERT INTO agents(repository_id, agent_id, role, status, session, started_at)
+        VALUES (?, ?, 'crow', ?, ?, '2026-01-01')
         """,
-        (agent_id, status, session),
+        (db.repository_id, agent_id, status, session),
     )
 
 
 def test_stop_unregistered_rogue_kills_session_and_marks_dead(
     repo_root: Path, monkeypatch
 ) -> None:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
-    _insert_agent(conn, "codex-rogue-planreview", "murder_repo_crow_codex_rogue_planreview")
-    rt = _Runtime(repo_root=repo_root, config=_config(), db=conn)
+    db = open_test_repo_db(repo_root / "murder.db")
+    _insert_agent(db, "codex-rogue-planreview", "murder_repo_crow_codex_rogue_planreview")
+    rt = _Runtime(repo_root=repo_root, config=_config(), db=db)
 
     killed: list[str] = []
 
@@ -76,7 +76,9 @@ def test_stop_unregistered_rogue_kills_session_and_marks_dead(
     async def fake_kill(name: str) -> None:
         killed.append(name)
 
-    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.session_exists", fake_exists)
+    monkeypatch.setattr(
+        "murder.runtime.orchestration.orchestrator.tmux.session_exists", fake_exists
+    )
     monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.kill_session", fake_kill)
 
     result = asyncio.run(Orchestrator(rt).stop_agent("codex-rogue-planreview"))  # type: ignore[arg-type]
@@ -86,24 +88,25 @@ def test_stop_unregistered_rogue_kills_session_and_marks_dead(
     # Read back through a *fresh* connection — the read_model that feeds the
     # roster opens its own connection per call, so the write must be committed
     # (autocommit/WAL) or the murdered crow would linger as RUNNING.
-    fresh = get_db(repo_root / ".murder" / "murder.db")
-    status = fresh.execute(
-        "SELECT status FROM agents WHERE agent_id = ?", ("codex-rogue-planreview",)
+    fresh = open_test_repo_db(repo_root / "murder.db")
+    status = fresh.conn.execute(
+        "SELECT status FROM agents WHERE repository_id = ? AND agent_id = ?",
+        (fresh.repository_id, "codex-rogue-planreview"),
     ).fetchone()["status"]
     assert status == "dead"
 
 
 def test_stop_unregistered_crow_also_reaps_handler(repo_root: Path, monkeypatch) -> None:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
-    _insert_agent(conn, "crow-t001", "murder_repo_crow_t001")
-    conn.execute(
+    db = open_test_repo_db(repo_root / "murder.db")
+    _insert_agent(db, "crow-t001", "murder_repo_crow_t001")
+    db.conn.execute(
         """
-        INSERT INTO agents(agent_id, role, status, session, started_at)
-        VALUES ('crow_handler-t001', 'crow_handler', 'running', NULL, '2026-01-01')
-        """
+        INSERT INTO agents(repository_id, agent_id, role, status, session, started_at)
+        VALUES (?, 'crow_handler-t001', 'crow_handler', 'running', NULL, '2026-01-01')
+        """,
+        (db.repository_id,),
     )
-    rt = _Runtime(repo_root=repo_root, config=_config(), db=conn)
+    rt = _Runtime(repo_root=repo_root, config=_config(), db=db)
 
     async def fake_exists(name: str) -> bool:
         return True
@@ -111,7 +114,9 @@ def test_stop_unregistered_crow_also_reaps_handler(repo_root: Path, monkeypatch)
     async def fake_kill(name: str) -> None:
         return None
 
-    monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.session_exists", fake_exists)
+    monkeypatch.setattr(
+        "murder.runtime.orchestration.orchestrator.tmux.session_exists", fake_exists
+    )
     monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.kill_session", fake_kill)
 
     result = asyncio.run(Orchestrator(rt).stop_agent("crow-t001"))  # type: ignore[arg-type]
@@ -119,15 +124,17 @@ def test_stop_unregistered_crow_also_reaps_handler(repo_root: Path, monkeypatch)
     assert result["handled"] is True
     rows = {
         r["agent_id"]: r["status"]
-        for r in conn.execute("SELECT agent_id, status FROM agents").fetchall()
+        for r in db.conn.execute(
+            "SELECT agent_id, status FROM agents WHERE repository_id = ?",
+            (db.repository_id,),
+        ).fetchall()
     }
     assert rows == {"crow-t001": "dead", "crow_handler-t001": "dead"}
 
 
 def test_stop_truly_unknown_agent_reports_real_error(repo_root: Path) -> None:
-    conn = get_db(repo_root / ".murder" / "murder.db")
-    init_db(conn)
-    rt = _Runtime(repo_root=repo_root, config=_config(), db=conn)
+    db = open_test_repo_db(repo_root / "murder.db")
+    rt = _Runtime(repo_root=repo_root, config=_config(), db=db)
 
     result = asyncio.run(Orchestrator(rt).stop_agent("nope-rogue-ghost"))  # type: ignore[arg-type]
 
