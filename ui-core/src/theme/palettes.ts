@@ -66,6 +66,67 @@ export const everforestLightHard = {
   grey2: '#829181',
 } as const;
 
+/**
+ * Crow Light — "ink & paper". Cream paper ground (`#FBF9EC` from the 3-crow wordmark) with
+ * near-black crow ink text and the Murder coral as the one committed accent. Status accents are
+ * deepened so they hold contrast on paper.
+ */
+export const crowLight: Palette = {
+  bgDim: '#e9e4d2',
+  bg0: '#fbf9ec',
+  bg1: '#f4f1e2',
+  bg2: '#ece8d6',
+  bg3: '#e3dfcc',
+  bg4: '#d9d4bf',
+  bg5: '#b8b2a0',
+  bgVisual: '#e8dcc8',
+  bgRed: '#f6dcd8',
+  bgGreen: '#e2e6cf',
+  bgBlue: '#dde4e2',
+  bgYellow: '#f0e4c4',
+  fg: '#100e0c',
+  red: '#c14e50',
+  orange: '#b06a35',
+  yellow: '#8f6b1f',
+  green: '#5f7a3d',
+  aqua: '#3f7a5c',
+  blue: '#4a7a78',
+  purple: '#a05a72',
+  grey0: '#a39c8a',
+  grey1: '#7d7666',
+  grey2: '#5f594c',
+};
+
+/**
+ * Crow Dark — "night roost". The wordmark inverted: crow-ink ground (`#100E0C`), cream text,
+ * the same coral accent. Surface ramp is a warm ink wash rather than Everforest green-grey.
+ */
+export const crowDark: Palette = {
+  bgDim: '#0b0a08',
+  bg0: '#100e0c',
+  bg1: '#181512',
+  bg2: '#201c18',
+  bg3: '#292420',
+  bg4: '#322c26',
+  bg5: '#3d362e',
+  bgVisual: '#3a2a2c',
+  bgRed: '#3a2422',
+  bgGreen: '#232a1e',
+  bgBlue: '#1e2a28',
+  bgYellow: '#2e2818',
+  fg: '#fbf9ec',
+  red: '#e67e80',
+  orange: '#e69875',
+  yellow: '#dbbc7f',
+  green: '#a7c080',
+  aqua: '#83c092',
+  blue: '#7fbbb3',
+  purple: '#d699b6',
+  grey0: '#6e675c',
+  grey1: '#8a8274',
+  grey2: '#a89f8e',
+};
+
 /** The shape every palette satisfies. Typed off the dark palette since both share identical keys. */
 export type Palette = { readonly [K in keyof typeof everforestDarkHard]: string };
 
@@ -121,6 +182,16 @@ registerOne('everforest-light', everforestLightHard, {
   variant: 'light',
   builtin: true,
 });
+registerOne('crow-light', crowLight, {
+  name: 'Crow (Paper)',
+  variant: 'light',
+  builtin: true,
+});
+registerOne('crow-dark', crowDark, {
+  name: 'Crow (Night Roost)',
+  variant: 'dark',
+  builtin: true,
+});
 
 /** Merge server-loaded theme records into the in-memory registry (server wins per id). */
 export function applyThemeRecords(records: readonly ThemeRecord[]): void {
@@ -149,6 +220,16 @@ export function clearThemeRegistryForTests(): void {
   registerOne('everforest-light', everforestLightHard, {
     name: 'Everforest Light',
     variant: 'light',
+    builtin: true,
+  });
+  registerOne('crow-light', crowLight, {
+    name: 'Crow (Paper)',
+    variant: 'light',
+    builtin: true,
+  });
+  registerOne('crow-dark', crowDark, {
+    name: 'Crow (Night Roost)',
+    variant: 'dark',
     builtin: true,
   });
 }

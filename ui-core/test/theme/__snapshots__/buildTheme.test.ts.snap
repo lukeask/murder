@@ -1,5 +1,75 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`buildTheme — per-palette role mapping > snapshots the semantic theme for crow-dark 1`] = `
+{
+  "accent": "#7fbbb3",
+  "active": "#a7c080",
+  "borderBlurred": "#6e675c",
+  "brand": "#e67e80",
+  "canvasBg": "#100e0c",
+  "error": "#e67e80",
+  "focus": "#a7c080",
+  "gaugeHigh": "#e67e80",
+  "gaugeLabelText": "#100e0c",
+  "gaugeNormal": "#a7c080",
+  "gaugeTrack": "#8a8274",
+  "heading": "#83c092",
+  "inactive": "#6e675c",
+  "laneColors": [
+    "#83c092",
+    "#d699b6",
+    "#e69875",
+    "#dbbc7f",
+    "#7fbbb3",
+    "#e67e80",
+  ],
+  "muted": "#8a8274",
+  "panelHeaderBg": "#100e0c",
+  "panelSelectedBg": "#201c18",
+  "rowAltBg": "#181512",
+  "rowSelectedBg": "#232a1e",
+  "success": "#a7c080",
+  "text": "#fbf9ec",
+  "titleBlurred": "#fbf9ec",
+  "warning": "#dbbc7f",
+}
+`;
+
+exports[`buildTheme — per-palette role mapping > snapshots the semantic theme for crow-light 1`] = `
+{
+  "accent": "#4a7a78",
+  "active": "#5f7a3d",
+  "borderBlurred": "#a39c8a",
+  "brand": "#c14e50",
+  "canvasBg": "#fbf9ec",
+  "error": "#c14e50",
+  "focus": "#5f7a3d",
+  "gaugeHigh": "#c14e50",
+  "gaugeLabelText": "#fbf9ec",
+  "gaugeNormal": "#5f7a3d",
+  "gaugeTrack": "#7d7666",
+  "heading": "#3f7a5c",
+  "inactive": "#a39c8a",
+  "laneColors": [
+    "#3f7a5c",
+    "#a05a72",
+    "#b06a35",
+    "#8f6b1f",
+    "#4a7a78",
+    "#c14e50",
+  ],
+  "muted": "#7d7666",
+  "panelHeaderBg": "#d9d4bf",
+  "panelSelectedBg": "#b8b2a0",
+  "rowAltBg": "#ece8d6",
+  "rowSelectedBg": "#e2e6cf",
+  "success": "#5f7a3d",
+  "text": "#100e0c",
+  "titleBlurred": "#100e0c",
+  "warning": "#8f6b1f",
+}
+`;
+
 exports[`buildTheme — per-palette role mapping > snapshots the semantic theme for everforest-dark 1`] = `
 {
   "accent": "#7fbbb3",
