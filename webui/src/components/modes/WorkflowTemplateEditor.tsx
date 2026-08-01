@@ -64,7 +64,8 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
-import { Button } from '../ds/index.js';
+import { Button, cx } from '../ds/index.js';
+import { WORKFLOW_EDITOR_HINTS, publishModeHints } from '../../keybindModeHints.js';
 import { DependencyEdge } from '../workflowEditor/DependencyEdge.js';
 import {
   DEPENDENCY_EDGE_TYPE,
@@ -138,7 +139,7 @@ function WorkflowTemplateEditorInner({
 }: WorkflowTemplateEditorProps): React.JSX.Element {
   const bus = useApplicationClient();
   const storeApi = useAppStoreApi();
-  const { fitView } = useReactFlow();
+  const { fitView, getNode } = useReactFlow();
 
   const [editor, setEditor] = useState<EditorState>(() => initialEditorState(blankWorkflow()));
   const [originalName, setOriginalName] = useState<string | null>(null);
@@ -150,11 +151,16 @@ function WorkflowTemplateEditorInner({
   const [harnessModels, setHarnessModels] =
     useState<Record<string, readonly HarnessModel[]>>(STATIC_HARNESS_MODELS);
   const [worktrees, setWorktrees] = useState<readonly WorktreeOption[]>(EMPTY_WORKTREES);
+  /** TUI `/` search — filter stages by id/title and jump on Enter. */
+  const [stageSearch, setStageSearch] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const positionsRef = useRef(positions);
   positionsRef.current = positions;
   const editorRef = useRef(editor);
   editorRef.current = editor;
+
+  useEffect(() => publishModeHints(WORKFLOW_EDITOR_HINTS), []);
 
   // Load template + option lists once on mount / source change.
   useEffect(() => {
@@ -352,13 +358,14 @@ function WorkflowTemplateEditorInner({
 
   const onConnect: OnConnect = useCallback(
     (connection) => {
+      if (frozen) return;
       const source = connection.source;
       const target = connection.target;
       if (source == null || target == null) return;
       if (dependencyLegality(editorRef.current.draft, target, source) !== 'add') return;
       dispatchEdit({ type: 'toggle-dependency', target, source });
     },
-    [dispatchEdit],
+    [dispatchEdit, frozen],
   );
 
   const onSelectionChange = useCallback((params: OnSelectionChangeParams) => {
@@ -430,6 +437,35 @@ function WorkflowTemplateEditorInner({
       void fitView({ padding: 0.18, duration: 200 });
     });
   }, [fitView]);
+
+  const focusStage = useCallback(
+    (key: StageKey) => {
+      setEditor((prev) => ({ ...prev, selected: key }));
+      requestAnimationFrame(() => {
+        const node = getNode(key);
+        if (node !== undefined) {
+          void fitView({ nodes: [node], padding: 0.4, duration: 200 });
+        }
+      });
+    },
+    [fitView, getNode],
+  );
+
+  const stageSearchMatches = useMemo(() => {
+    if (stageSearch === null) return [];
+    const q = stageSearch.toLowerCase();
+    return editor.draft.stages.filter((stage) =>
+      `${stage.id} ${stage.title}`.toLowerCase().includes(q),
+    );
+  }, [editor.draft.stages, stageSearch]);
+
+  const commitStageSearch = useCallback(() => {
+    const match = stageSearchMatches[0];
+    if (match !== undefined) {
+      focusStage(match.key);
+    }
+    setStageSearch(null);
+  }, [focusStage, stageSearchMatches]);
 
   const onUndo = useCallback(() => {
     setEditor((prev) => reduceEditor(prev, { type: 'undo' }));
@@ -510,7 +546,7 @@ function WorkflowTemplateEditorInner({
   }, [save]);
 
   const onLaunchClick = useCallback(() => {
-    if (onLaunch === undefined) return;
+    if (onLaunch === undefined || frozen) return;
     const local = validateEditorWorkflow(editorRef.current.draft);
     const blocking = local.find(
       (i) =>
@@ -529,35 +565,65 @@ function WorkflowTemplateEditorInner({
       return;
     }
     onLaunch(editorRef.current.draft);
-  }, [dirty, onLaunch, save]);
+  }, [dirty, frozen, onLaunch, save]);
 
-  // Keyboard: Delete selected stage/edge, undo/redo, Esc closes connect (RF handles) / overlay opt-out.
+  // Focus the search field when `/` opens search mode.
+  useEffect(() => {
+    if (stageSearch === null) return;
+    searchInputRef.current?.focus();
+  }, [stageSearch]);
+
+  // Keyboard: `/` stage search, Delete selected stage/edge, undo/redo, Esc.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       const target = e.target;
-      if (
+      const inField =
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      ) {
+        target instanceof HTMLSelectElement;
+
+      // Search mode owns Escape / Enter on the search field (handled by the input).
+      if (stageSearch !== null && inField && target === searchInputRef.current) {
         return;
       }
+
+      if (inField) return;
+
       const mod = e.metaKey || e.ctrlKey;
+
+      // TUI `/` — open stage search (not while frozen).
+      if (!mod && !e.altKey && e.key === '/' && stageSearch === null && !frozen) {
+        e.preventDefault();
+        setStageSearch('');
+        return;
+      }
+
       if (mod && e.key === 'z' && !e.shiftKey) {
+        if (frozen) return;
         e.preventDefault();
         onUndo();
         return;
       }
       if (mod && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        if (frozen) return;
         e.preventDefault();
         onRedo();
         return;
       }
       if (mod && e.key === 's') {
+        if (frozen) return;
         e.preventDefault();
         void save();
         return;
       }
+      // TUI `R` — save & run (Shift+r without command modifier).
+      if (!mod && !e.altKey && e.key === 'R') {
+        if (onLaunch === undefined || frozen) return;
+        e.preventDefault();
+        onLaunchClick();
+        return;
+      }
+      if (frozen) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const selectedEdges = edges.filter((edge) => edge.selected);
         if (selectedEdges.length > 0) {
@@ -583,43 +649,85 @@ function WorkflowTemplateEditorInner({
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [dispatchEdit, edges, onDeleteStage, onRedo, onUndo, save]);
+  }, [
+    dispatchEdit,
+    edges,
+    frozen,
+    onDeleteStage,
+    onLaunch,
+    onLaunchClick,
+    onRedo,
+    onUndo,
+    save,
+    stageSearch,
+  ]);
 
   return (
-    <div className="wfe" role="dialog" aria-modal="true" aria-label="Workflow template editor">
+    <div
+      className={cx('wfe', frozen && 'wfe--frozen')}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Workflow template editor"
+    >
       <header className="wfe-toolbar">
         <div className="wfe-toolbar__brand">
           <span className="wfe-toolbar__mark">murder</span>
           <span className="wfe-toolbar__title">
-            {editor.draft.name || '(unnamed)'}
-            {dirty ? ' ·' : ''}
+            {displayWorkflow.name || '(unnamed)'}
+            {dirty && !frozen ? ' ·' : ''}
           </span>
+          {frozen ? (
+            <span className="wfe-toolbar__status wfe-toolbar__status--run">
+              run · definition snapshot
+            </span>
+          ) : null}
           {status === 'saving' ? <span className="wfe-toolbar__status">saving…</span> : null}
         </div>
         <div className="wfe-toolbar__actions">
           {onOpenLibrary !== undefined ? (
-            <Button size="sm" variant="ghost" onClick={onOpenLibrary}>
+            <Button size="sm" variant="ghost" onClick={onOpenLibrary} disabled={frozen}>
               Library
             </Button>
           ) : null}
-          <Button size="sm" variant="ghost" onClick={onUndo} disabled={editor.undo.length === 0}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onUndo}
+            disabled={frozen || editor.undo.length === 0}
+          >
             Undo
           </Button>
-          <Button size="sm" variant="ghost" onClick={onRedo} disabled={editor.redo.length === 0}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onRedo}
+            disabled={frozen || editor.redo.length === 0}
+          >
             Redo
           </Button>
-          <Button size="sm" variant="secondary" onClick={onAutoLayout}>
+          <Button size="sm" variant="secondary" onClick={onAutoLayout} disabled={frozen}>
             Auto-layout
           </Button>
-          <Button size="sm" variant="ghost" onClick={onAddStage}>
+          <Button size="sm" variant="ghost" onClick={onAddStage} disabled={frozen}>
             + Stage
           </Button>
-          <Button size="sm" variant="primary" onClick={onSave} disabled={status === 'saving'}>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={onSave}
+            disabled={frozen || status === 'saving'}
+          >
             Save
           </Button>
           {onLaunch !== undefined ? (
-            <Button size="sm" variant="brand" onClick={onLaunchClick} disabled={status === 'saving'}>
-              Launch
+            <Button
+              size="sm"
+              variant="brand"
+              onClick={onLaunchClick}
+              disabled={frozen || status === 'saving'}
+              title="Save & run (Shift+R)"
+            >
+              Save & run
             </Button>
           ) : null}
           <Button size="sm" variant="ghost" onClick={onClose}>
@@ -627,6 +735,12 @@ function WorkflowTemplateEditorInner({
           </Button>
         </div>
       </header>
+
+      {frozen ? (
+        <div className="wfe-run-banner" role="status">
+          Active run — graph shows the frozen definition snapshot (edits paused).
+        </div>
+      ) : null}
 
       <div className="wfe-body">
         <div className="wfe-canvas">
@@ -637,9 +751,12 @@ function WorkflowTemplateEditorInner({
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
-              isValidConnection={isValidConnection}
+              isValidConnection={frozen ? () => false : isValidConnection}
               onSelectionChange={onSelectionChange}
               onNodeClick={onNodeClick}
+              nodesDraggable={!frozen}
+              nodesConnectable={!frozen}
+              elementsSelectable={!frozen}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               fitView
@@ -648,7 +765,7 @@ function WorkflowTemplateEditorInner({
               multiSelectionKeyCode="Shift"
               panOnScroll
               panOnDrag={[1, 2]}
-              selectionOnDrag
+              selectionOnDrag={!frozen}
               zoomOnScroll
               minZoom={0.25}
               maxZoom={2}
@@ -677,17 +794,86 @@ function WorkflowTemplateEditorInner({
           )}
         </div>
         <StageInspector
-          draft={editor.draft}
-          selected={editor.selected}
-          issues={issues}
+          draft={frozen ? displayWorkflow : editor.draft}
+          selected={
+            frozen
+              ? (displayWorkflow.stages.find(
+                  (s) =>
+                    s.id ===
+                    editor.draft.stages.find((d) => d.key === editor.selected)?.id,
+                )?.key ??
+                displayWorkflow.stages[0]?.key ??
+                null)
+              : editor.selected
+          }
+          issues={frozen ? [] : issues}
           harnessModels={harnessModels}
           worktrees={worktrees}
-          onWorkflowField={onWorkflowField}
-          onStageField={onStageField}
-          onDeleteStage={onDeleteStage}
-          onAddStage={onAddStage}
+          onWorkflowField={frozen ? () => {} : onWorkflowField}
+          onStageField={frozen ? () => {} : onStageField}
+          onDeleteStage={frozen ? () => {} : onDeleteStage}
+          onAddStage={frozen ? () => {} : onAddStage}
         />
       </div>
+
+      {stageSearch !== null ? (
+        <div className="wfe-search" role="search">
+          <label className="wfe-search__label" htmlFor="wfe-stage-search">
+            search
+          </label>
+          <span className="wfe-search__sep" aria-hidden="true">
+            ▸
+          </span>
+          <input
+            id="wfe-stage-search"
+            ref={searchInputRef}
+            className="wfe-search__input"
+            type="search"
+            value={stageSearch}
+            placeholder="stage id or title"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setStageSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                setStageSearch(null);
+                return;
+              }
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                commitStageSearch();
+              }
+            }}
+          />
+          <span className="wfe-search__count">
+            {stageSearchMatches.length} match{stageSearchMatches.length === 1 ? '' : 'es'}
+          </span>
+          {stageSearchMatches.length > 0 ? (
+            <ul className="wfe-search__hits" aria-label="Matching stages">
+              {stageSearchMatches.slice(0, 8).map((stage) => (
+                <li key={stage.key}>
+                  <button
+                    type="button"
+                    className="wfe-search__hit"
+                    onClick={() => {
+                      focusStage(stage.key);
+                      setStageSearch(null);
+                    }}
+                  >
+                    <span className="wfe-search__hit-id">{stage.id || '(blank)'}</span>
+                    {stage.title ? (
+                      <span className="wfe-search__hit-title">{stage.title}</span>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       <footer className="wfe-footer">
         <span
@@ -696,14 +882,18 @@ function WorkflowTemplateEditorInner({
           }
         >
           {feedback ??
-            (errorCount > 0
-              ? `${errorCount} error${errorCount === 1 ? '' : 's'}${warningCount > 0 ? `, ${warningCount} warning${warningCount === 1 ? '' : 's'}` : ''}`
-              : warningCount > 0
-                ? `${warningCount} warning${warningCount === 1 ? '' : 's'}`
-                : `${editor.draft.stages.length} stage${editor.draft.stages.length === 1 ? '' : 's'}`)}
+            (frozen
+              ? 'viewing run snapshot'
+              : errorCount > 0
+                ? `${errorCount} error${errorCount === 1 ? '' : 's'}${warningCount > 0 ? `, ${warningCount} warning${warningCount === 1 ? '' : 's'}` : ''}`
+                : warningCount > 0
+                  ? `${warningCount} warning${warningCount === 1 ? '' : 's'}`
+                  : `${editor.draft.stages.length} stage${editor.draft.stages.length === 1 ? '' : 's'}`)}
         </span>
         <span className="wfe-footer__hint">
-          drag · connect handles · Del removes · ⌘Z undo · auto-layout reseeds ranks
+          {frozen
+            ? 'run in progress · edits resume when the run ends'
+            : 'drag · connect · / search · Del removes · ⌘Z undo · Shift+R save & run'}
         </span>
       </footer>
     </div>
