@@ -1,5 +1,5 @@
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
-import { createAppStore } from '../../src/store/store.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
 
 const sampleRun = {
   workflow_id: 'run-1',

@@ -11,16 +11,16 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { NEW_TICKET_MODE_ID, newTicketMode } from '../../src/components/NewTicketModal.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
-import { matchKeymap } from '../../src/input/keymap.js';
+import { matchKeymap } from '@murder/ui-core/input/keymap.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import { createDialogActions } from '../../src/store/dialogs/dialogActions.js';
-import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+import { createDialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
+import { selectLiveToasts, toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { makeKey } from '../input/key.js';
 
 const ESC = '\x1b';
@@ -159,7 +159,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
   });
 
   it('preferBuiltinTicket submits via workflow.start with title+prompt args', async () => {
-    const stores = createInputStores(['tickets'], 'tickets');
+    const stores = createInputStores(['workflows'], 'workflows');
     const bus = new FakeApplicationClient();
     bus.stubCommand('workflow.start', {
       ok: true,
@@ -198,7 +198,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
   });
 
   it('Shift+Enter on Instructions inserts newline; keymap lists it before bare Enter', async () => {
-    const stores = createInputStores(['tickets'], 'tickets');
+    const stores = createInputStores(['workflows'], 'workflows');
     const bus = new FakeApplicationClient();
     bus.stubCommand('workflow.start', {
       ok: true,

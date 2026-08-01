@@ -14,15 +14,15 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { NEW_PLAN_MODE_ID, newPlanMode } from '../../src/components/NewPlanModal.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import { createDialogActions } from '../../src/store/dialogs/dialogActions.js';
-import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+import { createDialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
+import { selectLiveToasts, toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 
 const ESC = '\x1b';
 

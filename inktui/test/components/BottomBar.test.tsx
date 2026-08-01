@@ -1,9 +1,9 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { BottomBar, useBottomBarLines } from '../../src/components/BottomBar.js';
-import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import {
@@ -11,9 +11,9 @@ import {
   type BottomBarLineItem,
   bottomBarItemWidth,
   packBottomBarLineItems,
-} from '../../src/selectors/barSelectors.js';
-import { createAppStore } from '../../src/store/store.js';
-import { toastStore } from '../../src/store/toast/toastStore.js';
+} from '@murder/ui-core/selectors/barSelectors.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 
 /**
  * packBottomBarLineItems is the load-bearing piece of the portrait Body-height fix (L4c-fix2): the

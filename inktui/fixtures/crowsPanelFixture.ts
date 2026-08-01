@@ -1,5 +1,5 @@
 import type { CrowsSurfaceRow } from '../src/components/panes/CrowsSurface.js';
-import { classifyCrowHealth } from '../src/selectors/crowHealthSelectors.js';
+import { classifyCrowHealth } from '@murder/ui-core/selectors/crowHealthSelectors.js';
 import type { CrowFixtureRow } from './data/paneFixtureData.js';
 
 /** Map fixture rows into the store-free CrowsSurface row shape. */

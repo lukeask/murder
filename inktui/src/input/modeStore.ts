@@ -57,8 +57,9 @@
 import type { ReactNode } from 'react';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { StdinRoute } from '../terminal/StdinShim.js';
-import type { FocusId, FocusStoreApi } from './focusStore.js';
-import type { PanelKeymap } from './keymap.js';
+import type { FocusId, FocusStoreApi } from '@murder/ui-core/input/focusStore.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
+import type { Key } from '@murder/ui-core/input/keymap.js';
 
 /** How the overlay presents a mode. Data, not a branch the consumer hardcodes: the three surfaces
  * C8/C12/C14 need, each picking one. `modal` = centered box over the panels; `fullscreen` = replaces
@@ -71,6 +72,8 @@ export type ModePresentation = 'modal' | 'fullscreen' | 'inlayout';
  * `onIntent` is exhaustively typed against its own keymap — identical ergonomics to a panel keymap.
  */
 export interface Mode<Intent extends string = string> extends PanelKeymap<Intent> {
+  /** Optional raw-key handler for text-entry modes after declared chords miss. */
+  onUncaptured?: (input: string, key: Key) => boolean;
   /** Stable identity. `exit(id)` targets it; re-`enter` of the same id replaces in place (idempotent
    * for the focus save — see {@link ModeState.enter}). */
   readonly id: string;

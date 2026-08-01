@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
-import type { ApplicationClient } from './application/ApplicationClient.js';
-import { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
-import { FakeApplicationClient } from './application/FakeApplicationClient.js';
+import type { ApplicationClient } from '@murder/ui-core/application/ApplicationClient.js';
+import { createTuiApplicationClient } from './application/createTuiApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
-import type { PanelId } from './input/panels.js';
-import { connectionStore } from './store/connection/connectionStore.js';
+import type { PanelId } from '@murder/ui-core/input/panels.js';
+import { connectionStore } from '@murder/ui-core/store/connection/connectionStore.js';
 import { startKeyUsagePersistence } from './store/keyUsage/keyUsagePersistence.js';
-import { createAppStore } from './store/store.js';
-import { toastStore } from './store/toast/toastStore.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { capsStore } from './terminal/capsStore.js';
 import { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
@@ -399,7 +399,7 @@ function closeIfSupported(bus: ApplicationClient): void {
 
 /** Construct the live bus client from the env-provided socket path. */
 function makeLiveBus(): ApplicationClient {
-  return new ApplicationWebSocketClient(resolveApplicationWebSocketUrl());
+  return createTuiApplicationClient({ url: resolveApplicationWebSocketUrl() });
 }
 
 /**

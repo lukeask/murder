@@ -8,8 +8,8 @@
 import { render } from 'ink-testing-library';
 import { describe, expect, it } from 'vitest';
 import { TextEditorDisplay } from '../../src/components/TextEditorDisplay.js';
-import { layoutEditor } from '../../src/input/textEditor/layout.js';
-import { plainTextProjection } from '../../src/input/textEditor/projection.js';
+import { layoutEditor } from '@murder/ui-core/input/textEditor/layout.js';
+import { plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
 
 function frameLines(frame: string | undefined): string[] {
   return (frame ?? '').replace(/\n+$/, '').split('\n');

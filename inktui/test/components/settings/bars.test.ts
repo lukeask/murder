@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { BAR_ITEMS } from '../../../src/components/settings/items/bars.js';
+import { BAR_ITEMS } from '@murder/ui-core/components/settings/items/bars.js';
 import {
   BAR_WIDGET_DEFINITIONS,
   resolveBarWidgetConfig,
-} from '../../../src/selectors/barWidgetRegistry.js';
+} from '@murder/ui-core/selectors/barWidgetRegistry.js';
 
 describe('bar widget registry', () => {
   it('usage widget defaults to disabled on the top bar', () => {

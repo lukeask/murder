@@ -10,19 +10,19 @@ import { WorkflowsController } from '../components/panes/WorkflowsController.js'
 import { TranscriptController } from '../components/panes/TranscriptController.js';
 import { TreeController } from '../components/panes/TreeController.js';
 import { UsageController } from '../components/panes/UsageController.js';
-import { stageDocFocusId, stageTranscriptFocusId } from '../input/focusIds.js';
-import type { FocusId } from '../input/focusStore.js';
-import { PANELS, type PanelId } from '../input/panels.js';
-import type { AgentIdentity } from '../selectors/agentIdentity.js';
-import { deriveAgentIdentity } from '../selectors/agentIdentity.js';
+import { stageDocFocusId, stageTranscriptFocusId } from '@murder/ui-core/input/focusIds.js';
+import type { FocusId } from '@murder/ui-core/input/focusStore.js';
+import { PANELS, type PanelId } from '@murder/ui-core/input/panels.js';
+import type { AgentIdentity } from '@murder/ui-core/selectors/agentIdentity.js';
+import { deriveAgentIdentity } from '@murder/ui-core/selectors/agentIdentity.js';
 import {
   selectActiveAgentId,
   selectOpenTranscriptPanes,
   selectRecipientTargets,
-} from '../selectors/conversationsSelectors.js';
-import { selectUsageView } from '../selectors/usageSelectors.js';
-import type { AppStore } from '../store/store.js';
-import type { Theme } from '../theme/buildTheme.js';
+} from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { selectUsageView } from '@murder/ui-core/selectors/usageSelectors.js';
+import type { AppStore } from '@murder/ui-core/store/store.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
 import type {
   PaneAllocation,
   PaneId,

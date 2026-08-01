@@ -8,9 +8,9 @@
 
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
-import { claimMouseClick } from '../../input/mouseClick.js';
-import { crowHealthColor, type Health } from '../../selectors/crowHealthSelectors.js';
-import type { Theme } from '../../theme/buildTheme.js';
+import { claimMouseClick } from '@murder/ui-core/input/mouseClick.js';
+import { crowHealthColor, type Health } from '@murder/ui-core/selectors/crowHealthSelectors.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
 import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
 

@@ -1,7 +1,7 @@
-import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
-import type { PendingStatus } from '../../store/conversations/conversationsSlice.js';
-import { type BlockKind, classifyBlocks } from '../../transcript/blocks.js';
-import { wrapTextToRows } from '../../utils/wrapText.js';
+import type { ChatTurn, TurnSpeaker } from '@murder/ui-core/selectors/conversationsSelectors.js';
+import type { PendingStatus } from '@murder/ui-core/store/conversations/conversationsSlice.js';
+import { type BlockKind, classifyBlocks } from '@murder/ui-core/transcript/blocks.js';
+import { wrapTextToRows } from '@murder/ui-core/utils/wrapText.js';
 
 export interface ChatLine {
   readonly speaker: TurnSpeaker;

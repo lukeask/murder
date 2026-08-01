@@ -1,27 +1,27 @@
 import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useApplicationClient } from '../../hooks/useApplicationClient.js';
-import { useAppStore } from '../../hooks/useAppStore.js';
-import { type GotoIntent, useGotoLine } from '../../hooks/useGotoLine.js';
+import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
+import { type GotoIntent, useGotoLine } from '@murder/ui-core/hooks/useGotoLine.js';
 import { useInputStores, usePanelKeymap, usePaneScrollBus } from '../../hooks/useInputStores.js';
-import { stageDocFocusId } from '../../input/focusIds.js';
-import { selectResolvedFocus } from '../../input/focusStore.js';
-import type { PanelKeymap } from '../../input/keymap.js';
+import { stageDocFocusId } from '@murder/ui-core/input/focusIds.js';
+import { selectResolvedFocus } from '@murder/ui-core/input/focusStore.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import {
   type DocumentStyles,
   layoutDocument,
   rowForSourceLine,
 } from '../../render/documentLayout.js';
-import { DOC_DIR } from '../../store/docView/docViewSlice.js';
-import type { AppStore } from '../../store/store.js';
-import { useTheme } from '../../theme/themeStore.js';
-import type { TerminalInputLease } from '../../application/ApplicationClient.js';
+import { DOC_DIR } from '@murder/ui-core/store/docView/docViewSlice.js';
+import type { AppStore } from '@murder/ui-core/store/store.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
+import type { TerminalInputLease } from '@murder/ui-core/application/ApplicationClient.js';
 import { matchReservedPaneNavigation, TerminalInputWriter } from '../../terminal/rawEditorInput.js';
-import { adaptTerminalUpdate } from '../../terminalSurface/protocolAdapter.js';
+import { adaptTerminalUpdate } from '@murder/ui-core/terminalSurface/protocolAdapter.js';
 import {
   FOLLOW_VIEWPORT_TERMINAL_SIZING,
   type TerminalSurfaceUpdate,
-} from '../../terminalSurface/types.js';
+} from '@murder/ui-core/terminalSurface/types.js';
 import {
   DocumentSurface,
   documentContentInnerHeight,

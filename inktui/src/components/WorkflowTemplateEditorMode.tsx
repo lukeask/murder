@@ -2,58 +2,58 @@ import { useBoundingClientRect, useOnClick, useOnWheel } from '@ink-tools/ink-mo
 import type { DOMElement, Key } from 'ink';
 import { Box, Text } from 'ink';
 import { type JSX, useRef } from 'react';
-import type { Keymap } from '../input/keymap.js';
+import type { Keymap } from '@murder/ui-core/input/keymap.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
-import '../input/dispatcher.js';
-import { useAppStore } from '../hooks/useAppStore.js';
+import '@murder/ui-core/input/dispatcher.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import { type CellSurface, createSurface, renderSurface } from '../render/cellSurface.js';
+import { type CellSurface, createSurface, renderSurface } from '@murder/ui-core/render/cellSurface.js';
 import {
   type HarnessModel,
   type HarnessModelsActions,
   modelsFor,
   STATIC_HARNESS_MODELS,
-} from '../store/dialogs/harnessModelsActions.js';
+} from '@murder/ui-core/store/dialogs/harnessModelsActions.js';
 import {
   MAIN_WORKTREE_KEY,
   NEW_WORKTREE_KEY,
   type WorktreeOption,
   type WorktreeOptionsActions,
-} from '../store/dialogs/worktreeOptionsActions.js';
-import type { AppStoreApi } from '../store/store.js';
-import type { WorkflowRun } from '../store/workflowRuns/workflowRunsSlice.js';
-import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
-import { useTheme } from '../theme/themeStore.js';
-import { requiredInputIssues, type WizardField } from '../workflowEditor/compile.js';
-import { type GraphLayout, layoutWorkflow } from '../workflowEditor/layout.js';
+} from '@murder/ui-core/store/dialogs/worktreeOptionsActions.js';
+import type { AppStoreApi } from '@murder/ui-core/store/store.js';
+import type { WorkflowRun } from '@murder/ui-core/store/workflowRuns/workflowRunsSlice.js';
+import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflowsSlice.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
+import { requiredInputIssues, type WizardField } from '@murder/ui-core/workflowEditor/compile.js';
+import { type GraphLayout, layoutWorkflow } from '@murder/ui-core/workflowEditor/layout.js';
 import type {
   EditableField,
   EditorIssue,
   EditorWorkflow,
   StageKey,
   Viewport,
-} from '../workflowEditor/model.js';
-import { workflowEqual } from '../workflowEditor/model.js';
-import { autoPan, nearestNode } from '../workflowEditor/navigation.js';
+} from '@murder/ui-core/workflowEditor/model.js';
+import { workflowEqual } from '@murder/ui-core/workflowEditor/model.js';
+import { autoPan, nearestNode } from '@murder/ui-core/workflowEditor/navigation.js';
 import { paintWorkflow, wrapText } from '../workflowEditor/paint.js';
 import {
   applyWorkflowEdit,
   dependencyLegality,
   type HistoryEntry,
   type WorkflowEdit,
-} from '../workflowEditor/reducer.js';
-import { decodeStaticDagStatuses } from '../workflowEditor/runState.js';
+} from '@murder/ui-core/workflowEditor/reducer.js';
+import { decodeStaticDagStatuses } from '@murder/ui-core/workflowEditor/runState.js';
 import {
   stageStatusColor,
   stageStatusGlyph,
   stageStatusLabel,
-} from '../workflowEditor/statusDisplay.js';
-import { validateEditorWorkflow } from '../workflowEditor/validate.js';
-import { fromWire, toWire } from '../workflowEditor/wire.js';
+} from '@murder/ui-core/workflowEditor/statusDisplay.js';
+import { validateEditorWorkflow } from '@murder/ui-core/workflowEditor/validate.js';
+import { fromWire, toWire } from '@murder/ui-core/workflowEditor/wire.js';
 import { useBottomBarLines } from './BottomBar.js';
 import { TRI_LEFT, TRI_RIGHT } from './glyphs.js';
 import { Pane } from './Pane.js';
-import { HARNESS_ORDER } from './spawnWizardMachine.js';
+import { HARNESS_ORDER } from '@murder/ui-core/components/spawnWizardMachine.js';
 import { TextRuns } from './TextRuns.js';
 import { workflowLaunchReviewMode } from './WorkflowLaunchReviewMode.js';
 

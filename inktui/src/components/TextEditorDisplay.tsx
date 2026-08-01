@@ -1,9 +1,9 @@
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
-import { layoutEditor } from '../input/textEditor/layout.js';
-import { type DisplayProjection, plainTextProjection } from '../input/textEditor/projection.js';
-import type { TextEditorState } from '../input/textEditor/state.js';
-import { useTheme } from '../theme/themeStore.js';
+import { layoutEditor } from '@murder/ui-core/input/textEditor/layout.js';
+import { type DisplayProjection, plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
+import type { TextEditorState } from '@murder/ui-core/input/textEditor/state.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 export interface TextEditorDisplayProps {
   readonly state: TextEditorState;

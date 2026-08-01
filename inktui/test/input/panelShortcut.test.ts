@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { togglePanelFromShortcut } from '../../src/hooks/useRootInput.js';
-import { CHAT_FOCUS, createFocusStore, selectEffectiveFocus } from '../../src/input/focusStore.js';
-import type { Rect } from '../../src/input/geometry.js';
-import { createPanelStore } from '../../src/input/panelStore.js';
+import { CHAT_FOCUS, createFocusStore, selectEffectiveFocus } from '@murder/ui-core/input/focusStore.js';
+import type { Rect } from '@murder/ui-core/input/geometry.js';
+import { createPanelStore } from '@murder/ui-core/input/panelStore.js';
 
 const UNIT_RECT: Rect = { x: 0, y: 0, width: 1, height: 1 };
 

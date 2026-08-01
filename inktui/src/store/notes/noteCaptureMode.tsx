@@ -1,7 +1,7 @@
 /**
  * `noteCaptureMode` — the dispatcher wiring + surface of the note-capture ESC-chord FSM (item 10,
  * salvaging Textual's `NoteCaptureScreen`). It builds a {@link ../../input/modeStore.js Mode} whose
- * `keymap`/`onIntent`/`onUncaptured` route captured keys to the {@link ./noteCaptureStore.js
+ * `keymap`/`onIntent`/`onUncaptured` route captured keys to the {@link @murder/ui-core/store/notes/noteCaptureStore.js
  * noteCaptureStore} FSM, with **no new dispatcher primitive** — the same C12 pattern the spawn wizard
  * and ticket editor use.
  *
@@ -35,23 +35,23 @@ import type { ReactNode } from 'react';
 import { useStore } from 'zustand';
 import { TextEditorDisplay } from '../../components/TextEditorDisplay.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../../input/modeStore.js';
-import { applyEditorKey } from '../../input/textEditor/applyEditorKey.js';
-import type { EditorCommand } from '../../input/textEditor/commands.js';
+import { applyEditorKey } from '@murder/ui-core/input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '@murder/ui-core/input/textEditor/commands.js';
 import {
   multilineEditorPolicy,
   singleLineEditorPolicy,
-} from '../../input/textEditor/keyDecoder.js';
-import { reduceEditor } from '../../input/textEditor/operations.js';
-import { plainTextProjection } from '../../input/textEditor/projection.js';
-import { plainTextTopology } from '../../input/textEditor/topology.js';
-import { useTheme } from '../../theme/themeStore.js';
-import type { NoteCaptureStoreApi } from './noteCaptureStore.js';
+} from '@murder/ui-core/input/textEditor/keyDecoder.js';
+import { reduceEditor } from '@murder/ui-core/input/textEditor/operations.js';
+import { plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
+import { plainTextTopology } from '@murder/ui-core/input/textEditor/topology.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
+import type { NoteCaptureStoreApi } from '@murder/ui-core/store/notes/noteCaptureStore.js';
 
 /** Content width shared by the capture surface and visual-motion geometry. */
 const NOTE_EDITOR_WIDTH = 58;
 
 // Bring the dispatcher's `onUncaptured` augmentation of `Mode` into scope (declared in dispatcher.ts).
-import '../../input/dispatcher.js';
+import '@murder/ui-core/input/dispatcher.js';
 
 /** The note-capture mode's declared-chord intent union. `u`/printable are NOT here — they flow
  * through `onUncaptured` (see the module doc). */

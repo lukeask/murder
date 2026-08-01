@@ -29,7 +29,7 @@ import {
   type DispatchContext,
   dispatchKey,
   type GlobalHandlers,
-} from '../input/dispatcher.js';
+} from '@murder/ui-core/input/dispatcher.js';
 import {
   CHAT_FOCUS,
   type FocusStoreApi,
@@ -37,11 +37,11 @@ import {
   selectEffectiveFocus,
   selectResolvedFocus,
   stageTranscriptFocusId,
-} from '../input/focusStore.js';
+} from '@murder/ui-core/input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
-import type { PanelStoreApi } from '../input/panelStore.js';
-import type { PanelId } from '../input/panels.js';
-import { keyUsageStore } from '../store/keyUsage/keyUsageStore.js';
+import type { PanelStoreApi } from '@murder/ui-core/input/panelStore.js';
+import type { PanelId } from '@murder/ui-core/input/panels.js';
+import { keyUsageStore } from '@murder/ui-core/store/keyUsage/keyUsageStore.js';
 import type { StdinRoute, Wheel } from '../terminal/StdinShim.js';
 import type { Chord } from '../terminal/translate.js';
 import { useInputStores } from './useInputStores.js';

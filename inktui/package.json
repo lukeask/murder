@@ -2,7 +2,7 @@
   "name": "inktui",
   "version": "0.0.0",
   "private": true,
-  "description": "Ink (React-for-terminal) rewrite of the murder TUI; consumes the service over the Unix-socket JSON-RPC bus.",
+  "description": "Ink (React-for-terminal) frontend for murder, using the shared application protocol client.",
   "type": "module",
   "engines": {
     "node": ">=20.18.0"
@@ -11,23 +11,24 @@
     "inktui": "./dist/index.js"
   },
   "scripts": {
-    "dev": "tsx src/index.tsx",
+    "dev": "tsx --tsconfig tsconfig.dev.json src/index.tsx",
     "build": "tsc --build",
-    "bundle": "esbuild src/index.tsx --bundle --platform=node --format=esm --target=node20 --outfile=dist/bundle/index.js --alias:react-devtools-core=./stubs/react-devtools-core.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
+    "bundle": "npm --prefix .. run build -w @murder/ui-core && esbuild src/index.tsx --bundle --platform=node --format=esm --target=node20 --outfile=dist/bundle/index.js --alias:react-devtools-core=./stubs/react-devtools-core.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
     "typecheck": "tsc --build && tsc --noEmit -p tsconfig.test.json",
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
     "format": "biome format --write src test",
     "test": "vitest run",
-    "render-pane-fixture": "tsx fixtures/render-pane-fixture.ts",
-    "fixtures:render": "tsx fixtures/render-pane-fixture.ts --all",
-    "contracts:generate": "cd .. && python tools/generate_application_protocol.py",
-    "contracts:check": "cd .. && python tools/generate_application_protocol.py --check"
+    "render-pane-fixture": "tsx --tsconfig tsconfig.dev.json fixtures/render-pane-fixture.ts",
+    "fixtures:render": "tsx --tsconfig tsconfig.dev.json fixtures/render-pane-fixture.ts --all",
+    "contracts:generate": "npm --prefix .. run protocol:generate",
+    "contracts:check": "npm --prefix .. run protocol:check"
   },
   "dependencies": {
+    "@murder/ui-core": "0.0.0",
     "@ink-tools/ink-mouse": "^2.1.0",
     "ink": "^7.0.5",
-    "react": "^19.2.0",
+    "react": "19.2.7",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "string-width": "^8.2.2",

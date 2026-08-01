@@ -18,11 +18,11 @@
 import { useOnClick } from '@ink-tools/ink-mouse';
 import { Box, type DOMElement, Text } from 'ink';
 import { memo, useMemo, useRef } from 'react';
-import { useAppStore } from '../hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { useInputStores, usePanelStore, useWorkspaceStore } from '../hooks/useInputStores.js';
 import { togglePanelFromShortcut } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import type { PanelId } from '../input/panels.js';
+import type { PanelId } from '@murder/ui-core/input/panels.js';
 import {
   connectionBadgeWidth,
   estimateTopBarLeftWidth,
@@ -32,10 +32,10 @@ import {
   TOP_BAR_PADDING,
   TOP_BAR_RIGHT_CLUSTER_GAP,
   type TopBarWidgetSegment,
-} from '../selectors/barSelectors.js';
-import { type ConnectionStatus, useConnectionStatus } from '../store/connection/connectionStore.js';
-import type { Theme } from '../theme/buildTheme.js';
-import { useTheme } from '../theme/themeStore.js';
+} from '@murder/ui-core/selectors/barSelectors.js';
+import { type ConnectionStatus, useConnectionStatus } from '@murder/ui-core/store/connection/connectionStore.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { TextRuns } from './TextRuns.js';
 
 function TopBarWidgetCluster({

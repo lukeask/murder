@@ -72,7 +72,7 @@
 import { type InkMouseEvent, useOnClick } from '@ink-tools/ink-mouse';
 import { Box, type DOMElement, measureElement } from 'ink';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useTheme } from '../theme/themeStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 /** Context handed to `renderEntry`/`header` so they emit the right number of fields. */
 export interface LedgerEntryContext {

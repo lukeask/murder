@@ -5,8 +5,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildHelpGroups, type HelpGroup, paginateHelp } from '../../src/components/HelpOverlay.js';
-import { resolveBindings } from '../../src/input/bindings.js';
-import { createKeymapRegistry } from '../../src/input/keymapRegistry.js';
+import { resolveBindings } from '@murder/ui-core/input/bindings.js';
+import { createKeymapRegistry } from '@murder/ui-core/input/keymapRegistry.js';
 
 describe('buildHelpGroups', () => {
   it('labels global binds from the resolved bindings (tracks the modifier)', () => {

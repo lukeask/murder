@@ -15,16 +15,16 @@ import { MouseProvider } from '@ink-tools/ink-mouse';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { makeChatInputHandler } from '../../src/components/App.js';
 import { ChatInput } from '../../src/components/ChatInput.js';
-import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
-import type { CommandCtx } from '../../src/input/commandDispatch.js';
+import type { CommandCtx } from '@murder/ui-core/input/commandDispatch.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { createImageDraftStore } from '../../src/store/imageDraft/imageDraftStore.js';
-import { createAppStore } from '../../src/store/store.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
 
 const RETURN = '\r';
 const ALT_S = '\x1bs';
@@ -164,8 +164,8 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     );
     expect(sendCalls.length).toBe(1);
     expect(sendCalls[0]?.params).toMatchObject({
-      kind: 'agent.message',
-      payload: { agent_id: 'collab-1', message: 'hello there' },
+      agent_id: 'collab-1',
+      message: 'hello there',
     });
     // Buffer cleared after send.
     expect(inputStores.chatInput.getState().text).toBe('');
@@ -181,7 +181,7 @@ describe('ChatInput — persistent chat-input send (C11)', () => {
     await tick();
     const interrupts = submitsOfKind(fake, 'agent.interrupt');
     expect(interrupts.length).toBe(1);
-    expect((interrupts[0]?.params as { payload: unknown }).payload).toMatchObject({
+    expect(interrupts[0]?.params).toMatchObject({
       agent_id: 'collab-1',
     });
     expect(submitsOfKind(fake, 'agent.message').length).toBe(0);
@@ -384,7 +384,7 @@ describe('ChatInput — multiple-choice takeover', () => {
     await tick();
 
     const keys = submitsOfKind(fake, 'agent.send_key').map(
-      (c) => (c.params as { payload: { key: string; literal: boolean } }).payload,
+      (c) => c.params,
     );
     expect(keys).toEqual([
       { agent_id: 'collab-1', key: 'Down', literal: false, enter: false },
@@ -423,7 +423,7 @@ describe('ChatInput — multiple-choice takeover', () => {
     stdin.write(RETURN);
     await tick();
     const keys = submitsOfKind(fake, 'agent.send_key').map(
-      (c) => (c.params as { payload: { key: string } }).payload.key,
+      (c) => (c.params as { key: string }).key,
     );
     expect(keys).toEqual(['Enter']);
     expect(submitsOfKind(fake, 'agent.message').length).toBe(0);
@@ -438,7 +438,7 @@ describe('ChatInput — multiple-choice takeover', () => {
     stdin.write(' ');
     await tick();
     const keys = submitsOfKind(fake, 'agent.send_key').map(
-      (c) => (c.params as { payload: { key: string } }).payload.key,
+      (c) => (c.params as { key: string }).key,
     );
     expect(keys).toEqual(['Space']);
     dispose();
@@ -474,7 +474,7 @@ describe('ChatInput — multiple-choice takeover', () => {
     await tick();
 
     const keys = submitsOfKind(fake, 'agent.send_key').map(
-      (c) => (c.params as { payload: { key: string; literal: boolean } }).payload,
+      (c) => c.params,
     );
     // Exactly one send: the full answer + newline, literal. No per-character round-trips.
     expect(keys).toEqual([
@@ -510,7 +510,7 @@ describe('ChatInput — multiple-choice takeover', () => {
     await tick();
     expect(inputStores.chatInput.getState().text).toBe('');
     const keys = submitsOfKind(fake, 'agent.send_key').map(
-      (c) => (c.params as { payload: { key: string } }).payload.key,
+      (c) => (c.params as { key: string }).key,
     );
     expect(keys).toEqual(['Down']);
     dispose();
@@ -525,7 +525,7 @@ describe('ChatInput — multiple-choice takeover', () => {
     await tick();
     expect(inputStores.chatInput.getState().text).toBe('');
     const keys = submitsOfKind(fake, 'agent.send_key').map(
-      (c) => (c.params as { payload: { key: string; literal: boolean } }).payload,
+      (c) => c.params,
     );
     expect(keys).toEqual([{ agent_id: 'collab-1', key: 'x', literal: true, enter: false }]);
     dispose();
@@ -582,7 +582,7 @@ describe('ChatInput — queued-message line', () => {
     await tick();
     const interrupts = submitsOfKind(fake, 'agent.interrupt');
     expect(interrupts.length).toBe(1);
-    expect((interrupts[0]?.params as { payload: unknown }).payload).toMatchObject({
+    expect(interrupts[0]?.params).toMatchObject({
       agent_id: 'collab-1',
     });
     expect(submitsOfKind(fake, 'agent.message').length).toBe(0);

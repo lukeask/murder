@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createSurface, renderSurface } from '../../src/render/cellSurface.js';
-import { layoutWorkflow } from '../../src/workflowEditor/layout.js';
-import type { EditorWorkflow } from '../../src/workflowEditor/model.js';
+import { createSurface, renderSurface } from '@murder/ui-core/render/cellSurface.js';
+import { layoutWorkflow } from '@murder/ui-core/workflowEditor/layout.js';
+import type { EditorWorkflow } from '@murder/ui-core/workflowEditor/model.js';
 import { paintWorkflow } from '../../src/workflowEditor/paint.js';
 
 const stage = (key: string, id: string, dependsOn: readonly string[] = []) => ({

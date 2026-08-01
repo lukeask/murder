@@ -1,5 +1,5 @@
 import { Text } from 'ink';
-import type { TextRun } from '../render/cellSurface.js';
+import type { TextRun } from '@murder/ui-core/render/cellSurface.js';
 
 /** Map {@link TextRun} segments to Ink `<Text>` children with stable keys for duplicate runs. */
 export function TextRuns({ runs }: { readonly runs: readonly TextRun[] }): React.JSX.Element {

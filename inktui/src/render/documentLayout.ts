@@ -13,9 +13,9 @@ import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import stringWidth from 'string-width';
 import { unified } from 'unified';
-import { terminalSafeText } from '../utils/terminalSafeText.js';
-import { wrapTextToRows } from '../utils/wrapText.js';
-import type { CellStyle, TextRun } from './cellSurface.js';
+import { terminalSafeText } from '@murder/ui-core/utils/terminalSafeText.js';
+import { wrapTextToRows } from '@murder/ui-core/utils/wrapText.js';
+import type { CellStyle, TextRun } from '@murder/ui-core/render/cellSurface.js';
 
 export type DocumentRenderMode = 'plain' | 'markdown';
 

@@ -32,7 +32,10 @@ import { Box, Text, useStdout } from 'ink';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useInputStores, useWorkspaceStore } from '../hooks/useInputStores.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import type { WorkspaceDirection, WorkspaceTransition } from '../input/workspaceStore.js';
+import type {
+  WorkspaceDirection,
+  WorkspaceTransition,
+} from '@murder/ui-core/input/workspaceStore.js';
 import { concatFrames, sliceFrameWindow, type TextFrame } from '../render/frameText.js';
 import { forceInkFullRepaint } from '../terminal/forceInkRepaint.js';
 import { easeOut } from './BottomBar.js';

@@ -4,7 +4,7 @@
  */
 
 import { Box, Text } from 'ink';
-import type { Theme } from '../../theme/buildTheme.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
 import type { LedgerEntryContext } from '../Ledger.js';
 import type { ResourceRowFields } from '../ResourceRow.js';
 import { formatDocTreeName } from './docTreeIndent.js';

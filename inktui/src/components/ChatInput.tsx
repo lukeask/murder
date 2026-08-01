@@ -49,7 +49,7 @@ import { useOnClick } from '@ink-tools/ink-mouse';
 import { Box, Text } from 'ink';
 import { memo } from 'react';
 import { shallow } from 'zustand/shallow';
-import { useAppStore } from '../hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import {
   useChatInputStore,
   useChatVimStore,
@@ -59,11 +59,11 @@ import {
   useInputStores,
   useMeasureFocus,
 } from '../hooks/useInputStores.js';
-import { chatProjection } from '../input/chat/chatProjection.js';
-import { SPAN_CLOSE, SPAN_OPEN } from '../input/chat/chatSpans.js';
-import type { BufferState } from '../input/chatBuffer.js';
-import { CHAT_FOCUS } from '../input/focusStore.js';
-import { isDefaultFavorited } from '../selectors/agentIdentity.js';
+import { chatProjection } from '@murder/ui-core/input/chat/chatProjection.js';
+import { SPAN_CLOSE, SPAN_OPEN } from '@murder/ui-core/input/chat/chatSpans.js';
+import type { BufferState } from '@murder/ui-core/input/chatBuffer.js';
+import { CHAT_FOCUS } from '@murder/ui-core/input/focusStore.js';
+import { isDefaultFavorited } from '@murder/ui-core/selectors/agentIdentity.js';
 import {
   isFreeformChoiceLabel,
   isFreeformChoiceSelected,
@@ -72,9 +72,9 @@ import {
   selectConversationMeta,
   selectLiveChoicePrompt,
   useActiveAgent,
-} from '../selectors/conversationsSelectors.js';
-import { isFavorited } from '../selectors/favoritesSelectors.js';
-import { useTheme } from '../theme/themeStore.js';
+} from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { isFavorited } from '@murder/ui-core/selectors/favoritesSelectors.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { useCanvasBackgroundColor } from './canvasBackground.js';
 import { PANE_BORDER_GLYPHS, paneBorderStyle, TRI_LEFT, TRI_RIGHT } from './glyphs.js';
 import { PaneBorderBottom, PaneBorderTop } from './paneBorder.js';

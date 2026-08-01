@@ -1,6 +1,6 @@
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
-import type { TerminalCell, TerminalColor, TerminalGridSnapshot } from './types.js';
+import type { TerminalCell, TerminalColor, TerminalGridSnapshot } from '@murder/ui-core/terminalSurface/types.js';
 
 const ANSI_COLORS = [
   'black',

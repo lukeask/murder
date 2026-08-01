@@ -1,12 +1,12 @@
 import { type JSX, memo, useCallback, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
-import { getPanelCreateActions } from '../../create/panelCreateActions.js';
-import { useAppStore } from '../../hooks/useAppStore.js';
+import { getPanelCreateActions } from '@murder/ui-core/create/panelCreateActions.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { useBindings, usePanelKeymap } from '../../hooks/useInputStores.js';
-import type { PanelKeymap } from '../../input/keymap.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
-import { useReportsView } from '../../selectors/reportsSelectors.js';
-import { useTheme } from '../../theme/themeStore.js';
+import { useReportsView } from '@murder/ui-core/selectors/reportsSelectors.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { useDocView } from './docView.js';
 import { ReportsSurface } from './ReportsSurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';

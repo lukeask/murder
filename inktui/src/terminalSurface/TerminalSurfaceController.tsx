@@ -1,14 +1,14 @@
 import { Text } from 'ink';
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { useTheme } from '../theme/themeStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { TerminalGridView } from './TerminalGridView.js';
-import { TerminalSurfaceStore } from './TerminalSurfaceStore.js';
+import { TerminalSurfaceStore } from '@murder/ui-core/terminalSurface/TerminalSurfaceStore.js';
 import type {
   TerminalSizingPolicy,
   TerminalSurfaceUpdate,
   TerminalViewportCommand,
   TerminalViewportMetrics,
-} from './types.js';
+} from '@murder/ui-core/terminalSurface/types.js';
 
 export interface TerminalSurfaceControllerProps {
   readonly update: TerminalSurfaceUpdate | null;

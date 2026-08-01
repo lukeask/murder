@@ -15,7 +15,7 @@ import {
   keyUsageStore,
   type KeyUsageRecord,
   type KeyUsageStoreApi,
-} from './keyUsageStore.js';
+} from '@murder/ui-core/store/keyUsage/keyUsageStore.js';
 
 const MAX_PERSISTED_ENTRIES = 200;
 const WRITE_DEBOUNCE_MS = 5000;

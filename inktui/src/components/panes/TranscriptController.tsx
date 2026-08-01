@@ -1,32 +1,32 @@
 import { Text } from 'ink';
 import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { META_SEP } from '../../components/glyphs.js';
-import { useApplicationClient } from '../../hooks/useApplicationClient.js';
-import { useAppStore } from '../../hooks/useAppStore.js';
-import { type GotoIntent, useGotoLine } from '../../hooks/useGotoLine.js';
+import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
+import { type GotoIntent, useGotoLine } from '@murder/ui-core/hooks/useGotoLine.js';
 import {
   useEffectiveFocus,
   useInputStores,
   usePanelKeymap,
   usePaneScrollBus,
 } from '../../hooks/useInputStores.js';
-import { stageTranscriptFocusId } from '../../input/focusIds.js';
-import { CHAT_FOCUS, selectResolvedFocus } from '../../input/focusStore.js';
-import type { PanelKeymap } from '../../input/keymap.js';
+import { stageTranscriptFocusId } from '@murder/ui-core/input/focusIds.js';
+import { CHAT_FOCUS, selectResolvedFocus } from '@murder/ui-core/input/focusStore.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
-import type { AgentIdentity } from '../../selectors/agentIdentity.js';
-import { useConversationTurns } from '../../selectors/conversationsSelectors.js';
-import { harnessModelFooter, worktreeLabel } from '../../selectors/harnessDisplay.js';
-import type { AppStore } from '../../store/store.js';
+import type { AgentIdentity } from '@murder/ui-core/selectors/agentIdentity.js';
+import { useConversationTurns } from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { harnessModelFooter, worktreeLabel } from '@murder/ui-core/selectors/harnessDisplay.js';
+import type { AppStore } from '@murder/ui-core/store/store.js';
 import { matchReservedPaneNavigation, TerminalInputWriter } from '../../terminal/rawEditorInput.js';
-import { adaptTerminalUpdate } from '../../terminalSurface/protocolAdapter.js';
+import { adaptTerminalUpdate } from '@murder/ui-core/terminalSurface/protocolAdapter.js';
 import {
   HARNESS_TERMINAL_SIZING,
   type TerminalSurfaceUpdate,
   type TerminalViewportCommand,
   type TerminalViewportMetrics,
-} from '../../terminalSurface/types.js';
-import { useTheme } from '../../theme/themeStore.js';
+} from '@murder/ui-core/terminalSurface/types.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { usePaneGotoLineState } from './shared/usePaneGotoLineState.js';
 import { usePaneScrollState } from './shared/usePaneScrollState.js';

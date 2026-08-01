@@ -15,18 +15,18 @@ import { shallow } from 'zustand/shallow';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { useModalHeight, useModalWidth } from '../hooks/useTerminalSize.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
-import '../input/dispatcher.js';
-import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
-import type { EditorCommand } from '../input/textEditor/commands.js';
-import { multilineEditorPolicy, singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
-import { reduceEditor } from '../input/textEditor/operations.js';
-import { plainTextProjection } from '../input/textEditor/projection.js';
-import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
-import { plainTextTopology } from '../input/textEditor/topology.js';
-import type { AppStore, AppStoreApi } from '../store/store.js';
-import type { PromptTemplateRecord } from '../store/templates/templatesSlice.js';
-import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
-import { useTheme } from '../theme/themeStore.js';
+import '@murder/ui-core/input/dispatcher.js';
+import { applyEditorKey } from '@murder/ui-core/input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '@murder/ui-core/input/textEditor/commands.js';
+import { multilineEditorPolicy, singleLineEditorPolicy } from '@murder/ui-core/input/textEditor/keyDecoder.js';
+import { reduceEditor } from '@murder/ui-core/input/textEditor/operations.js';
+import { plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
+import { editorAtEnd, type TextEditorState } from '@murder/ui-core/input/textEditor/state.js';
+import { plainTextTopology } from '@murder/ui-core/input/textEditor/topology.js';
+import type { AppStore, AppStoreApi } from '@murder/ui-core/store/store.js';
+import type { PromptTemplateRecord } from '@murder/ui-core/store/templates/templatesSlice.js';
+import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflowsSlice.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { Pane } from './Pane.js';
 import {
   collectBodyPlaceholders,
@@ -38,7 +38,7 @@ import {
   previewBodyFlat,
   validatePromptTemplateName,
   type WorkflowTemplateRef,
-} from './promptTemplates/refs.js';
+} from '@murder/ui-core/components/promptTemplates/refs.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 export const PROMPT_TEMPLATE_MANAGER_MODE_ID = 'prompt-template-manager';

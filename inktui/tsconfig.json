@@ -3,6 +3,7 @@
   // (ApplicationClient, wire protocol, discriminated-union agent identity) only pays off if the
   // compiler refuses the unsound shortcuts the old Textual app took. Each non-default flag
   // below is justified in inktui/README.md § "Why these tsconfig flags".
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     // --- Output ---
     "target": "ES2023",
@@ -35,7 +36,8 @@
     "useUnknownInCatchVariables": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {}
   },
   "include": ["src/**/*"]
 }

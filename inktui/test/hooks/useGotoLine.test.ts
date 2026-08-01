@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { gotoKeymap, reduceGoto } from '../../src/hooks/useGotoLine.js';
+import { gotoKeymap, reduceGoto } from '@murder/ui-core/hooks/useGotoLine.js';
 
 describe('gotoKeymap — the entries per capture state', () => {
   it('idle: the visible `g` starter plus the PRE-REGISTERED (hidden, inert) digits', () => {

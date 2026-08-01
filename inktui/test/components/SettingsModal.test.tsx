@@ -26,10 +26,10 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import type { SettingsActions, SettingsPatch } from '../../src/store/settings/settingsActions.js';
+import type { SettingsActions, SettingsPatch } from '@murder/ui-core/store/settings/settingsActions.js';
 import { capsStore } from '../../src/terminal/capsStore.js';
-import { DEFAULT_THEME_ID, type ThemeId } from '../../src/theme/palettes.js';
-import { themeStore } from '../../src/theme/themeStore.js';
+import { DEFAULT_THEME_ID, type ThemeId } from '@murder/ui-core/theme/palettes.js';
+import { themeStore } from '@murder/ui-core/theme/themeStore.js';
 
 const ESC = '\x1b';
 

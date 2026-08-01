@@ -10,7 +10,7 @@ import {
   loadKeyUsage,
   startKeyUsagePersistence,
 } from '../../src/store/keyUsage/keyUsagePersistence.js';
-import { createKeyUsageStore } from '../../src/store/keyUsage/keyUsageStore.js';
+import { createKeyUsageStore } from '@murder/ui-core/store/keyUsage/keyUsageStore.js';
 
 let tempDir: string;
 

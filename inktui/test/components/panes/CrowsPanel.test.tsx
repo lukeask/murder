@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CrowsSurface, type CrowsSurfaceRow } from '../../../src/components/panes/CrowsSurface.js';
-import { getTheme } from '../../../src/theme/themeStore.js';
+import { getTheme } from '@murder/ui-core/theme/themeStore.js';
 import { renderInkFixture, stripAnsiSgr } from '../../fixtures/pane_rendering/renderInkFixture.js';
 import type { PaneFixture } from '../../fixtures/pane_rendering/types.js';
 

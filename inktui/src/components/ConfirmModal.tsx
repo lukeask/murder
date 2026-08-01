@@ -24,7 +24,7 @@
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
-import { useTheme } from '../theme/themeStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 /** The choice a confirm dialog resolves to. */
 export type ConfirmChoice = 'confirm' | 'dismiss';

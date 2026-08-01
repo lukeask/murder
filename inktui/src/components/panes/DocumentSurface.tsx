@@ -12,8 +12,8 @@
 import { Box, Text } from 'ink';
 import { memo } from 'react';
 import type { StyledDocumentRow } from '../../render/documentLayout.js';
-import { useTheme } from '../../theme/themeStore.js';
-import { terminalSafeText } from '../../utils/terminalSafeText.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
+import { terminalSafeText } from '@murder/ui-core/utils/terminalSafeText.js';
 import { Pane } from '../Pane.js';
 import { computeDocumentWindow, computeScrollThumb } from './shared/scrollWindow.js';
 

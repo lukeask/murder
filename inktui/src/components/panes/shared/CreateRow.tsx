@@ -6,7 +6,7 @@
 import { type InkMouseEvent, useOnClick } from '@ink-tools/ink-mouse';
 import { Box, type DOMElement, Text } from 'ink';
 import { memo, useRef } from 'react';
-import { useTheme } from '../../../theme/themeStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 export interface CreateRowProps {
   readonly label: string;

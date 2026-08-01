@@ -1,5 +1,6 @@
-# Application client
+# TUI application factory
 
-`ApplicationClient` is the sole injected client seam for Ink. `ApplicationWebSocketClient`
-speaks the generated, closed application WebSocket protocol; `FakeApplicationClient` is its
-in-memory test double. There is no fallback Unix-socket or generic message transport here.
+The renderer-neutral `ApplicationClient`, `ApplicationWebSocketClient`, and
+`FakeApplicationClient` live in `ui-core/src/application/`. This directory owns only TUI-specific
+construction defaults: URL/configuration, client-ID creation, Node-compatible WebSocket injection,
+and TUI logging. There is no fallback Unix-socket or generic message transport here.

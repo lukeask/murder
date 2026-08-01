@@ -12,11 +12,11 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { render, Text } from 'ink';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FakeApplicationClient } from '../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { App } from '../src/components/App.js';
 import { forceInkFullRepaint, installResizeClear, resolveApplicationWebSocketUrl } from '../src/index.js';
 import { createInputStores } from '../src/input/createInputStores.js';
-import { createAppStore } from '../src/store/store.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
 import { inkInstances } from '../src/terminal/inkInstances.js';
 
 interface TestInkInternals {

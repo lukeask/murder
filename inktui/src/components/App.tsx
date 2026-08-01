@@ -28,10 +28,10 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { ApplicationClient } from '../application/ApplicationClient.js';
-import { setPanelCreateActions } from '../create/panelCreateActions.js';
-import { ApplicationClientProvider, useApplicationClient } from '../hooks/useApplicationClient.js';
-import { AppStoreProvider, useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
+import type { ApplicationClient } from '@murder/ui-core/application/ApplicationClient.js';
+import { setPanelCreateActions } from '@murder/ui-core/create/panelCreateActions.js';
+import { ApplicationClientProvider, useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
+import { AppStoreProvider, useAppStore, useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import {
   type InputStores,
   InputStoresProvider,
@@ -45,32 +45,32 @@ import { useKittyMurderMarker } from '../hooks/useKittyMurderMarker.js';
 import { useOrientation } from '../hooks/useOrientation.js';
 import { type TerminalEvents, useRootInput } from '../hooks/useRootInput.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import type { ActionId } from '../input/bindings.js';
-import { visualDown, visualUp } from '../input/chatBuffer.js';
-import { expandSpans, spanIds } from '../input/chatInputStore.js';
-import { reduceVimNormal } from '../input/chatVimReducer.js';
+import type { ActionId } from '@murder/ui-core/input/bindings.js';
+import { visualDown, visualUp } from '@murder/ui-core/input/chatBuffer.js';
+import { expandSpans, spanIds } from '@murder/ui-core/input/chatInputStore.js';
+import { reduceVimNormal } from '@murder/ui-core/input/chatVimReducer.js';
 import { readClipboardImage } from '../input/clipboardImage.js';
 import {
   BUILTIN_COMMAND_NAMES,
   type CommandCtx,
   dispatchCommand,
-} from '../input/commandDispatch.js';
-import type { ChatInputHandler } from '../input/dispatcher.js';
-import { expandTemplates } from '../input/expandTemplates.js';
-import { parseWorkflowFire } from '../input/fireWorkflow.js';
+} from '@murder/ui-core/input/commandDispatch.js';
+import type { ChatInputHandler } from '@murder/ui-core/input/dispatcher.js';
+import { expandTemplates } from '@murder/ui-core/input/expandTemplates.js';
+import { parseWorkflowFire } from '@murder/ui-core/input/fireWorkflow.js';
 import {
   CHAT_FOCUS,
   type FocusId,
   type FocusTarget,
   selectResolvedFocus,
   stageTranscriptFocusId,
-} from '../input/focusStore.js';
+} from '@murder/ui-core/input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import {
   applyWorkspaceCount,
   switchWorkspace,
   type WorkspaceStores,
-} from '../input/workspaceSwitch.js';
+} from '@murder/ui-core/input/workspaceSwitch.js';
 import {
   buildPaneRequests,
   createChatIdentityMap,
@@ -81,7 +81,7 @@ import {
   deriveAgentIdentity,
   isRogueAgentId,
   planNameFromPlannerAgentId,
-} from '../selectors/agentIdentity.js';
+} from '@murder/ui-core/selectors/agentIdentity.js';
 import {
   isFreeformChoiceSelected,
   isTranscriptPaneOpen,
@@ -92,25 +92,25 @@ import {
   selectOpenTranscriptPanes,
   selectRecipientTargetState,
   selectUserHistory,
-} from '../selectors/conversationsSelectors.js';
-import { submitCommand } from '../store/commandSubmit.js';
-import { canLaunchBuiltinTicket } from '../store/dialogs/canLaunchBuiltinTicket.js';
-import { createDialogActions } from '../store/dialogs/dialogActions.js';
-import { createHarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
-import { createSpawnActions } from '../store/dialogs/spawnActions.js';
-import { createSpawnFavoritesActions } from '../store/dialogs/spawnFavoritesActions.js';
-import { createWorktreeOptionsActions } from '../store/dialogs/worktreeOptionsActions.js';
-import { DOC_DIR } from '../store/docView/docViewSlice.js';
+} from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { submitCommand } from '@murder/ui-core/store/commandSubmit.js';
+import { canLaunchBuiltinTicket } from '@murder/ui-core/store/dialogs/canLaunchBuiltinTicket.js';
+import { createDialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
+import { createHarnessModelsActions } from '@murder/ui-core/store/dialogs/harnessModelsActions.js';
+import { createSpawnActions } from '@murder/ui-core/store/dialogs/spawnActions.js';
+import { createSpawnFavoritesActions } from '@murder/ui-core/store/dialogs/spawnFavoritesActions.js';
+import { createWorktreeOptionsActions } from '@murder/ui-core/store/dialogs/worktreeOptionsActions.js';
+import { DOC_DIR } from '@murder/ui-core/store/docView/docViewSlice.js';
 import {
   createImageDraftStore,
   type ImageDraftStoreApi,
 } from '../store/imageDraft/imageDraftStore.js';
-import { murderConfirmStore } from '../store/murder/murderConfirmStore.js';
+import { murderConfirmStore } from '@murder/ui-core/store/murder/murderConfirmStore.js';
 import { noteCaptureMode } from '../store/notes/noteCaptureMode.js';
-import { noteCaptureStore } from '../store/notes/noteCaptureStore.js';
-import type { SettingsModifier } from '../store/settings/settingsSlice.js';
-import type { AppStoreApi } from '../store/store.js';
-import { toastStore } from '../store/toast/toastStore.js';
+import { noteCaptureStore } from '@murder/ui-core/store/notes/noteCaptureStore.js';
+import type { SettingsModifier } from '@murder/ui-core/store/settings/settingsSlice.js';
+import type { AppStoreApi } from '@murder/ui-core/store/store.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import {
   applyCanvasBackground,
   ensureCanvasBackgroundCleanup,
@@ -119,8 +119,8 @@ import {
 } from '../terminal/canvasBackground.js';
 import { captureCurrentFrame } from '../terminal/captureFrame.js';
 import { forceInkFullRepaint } from '../terminal/forceInkRepaint.js';
-import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '../theme/palettes.js';
-import { setTheme, useTheme } from '../theme/themeStore.js';
+import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@murder/ui-core/theme/palettes.js';
+import { setTheme, useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { BottomBar, useBottomBarLines } from './BottomBar.js';
 import { ChatInput } from './ChatInput.js';
 import { helpMode } from './HelpOverlay.js';

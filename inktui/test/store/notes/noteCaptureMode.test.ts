@@ -13,10 +13,10 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { dispatchKey, type GlobalHandlers } from '../../../src/input/dispatcher.js';
-import { createFocusStore } from '../../../src/input/focusStore.js';
+import { dispatchKey, type GlobalHandlers } from '@murder/ui-core/input/dispatcher.js';
+import { createFocusStore } from '@murder/ui-core/input/focusStore.js';
 import { createModeStore, selectActiveMode } from '../../../src/input/modeStore.js';
-import { createPanelStore } from '../../../src/input/panelStore.js';
+import { createPanelStore } from '@murder/ui-core/input/panelStore.js';
 import {
   type NoteCaptureModeOptions,
   noteCaptureMode,
@@ -24,7 +24,7 @@ import {
 import {
   createNoteCaptureStore,
   type NoteCaptureStoreApi,
-} from '../../../src/store/notes/noteCaptureStore.js';
+} from '@murder/ui-core/store/notes/noteCaptureStore.js';
 import { makeKey } from '../../input/key.js';
 
 /** No-op global handlers — the capture mode captures everything, so these must never be hit. */

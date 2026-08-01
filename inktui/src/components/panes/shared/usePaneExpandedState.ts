@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { useCallback } from 'react';
 import { useInputStores, usePaneUiStore } from '../../../hooks/useInputStores.js';
-import type { PaneUiStoreApi } from '../../../input/paneUiStore.js';
+import type { PaneUiStoreApi } from '@murder/ui-core/input/paneUiStore.js';
 
 /**
  * Store-backed drop-in for `const [expanded, setExpanded] = useState(false)` in a pane — the toggle

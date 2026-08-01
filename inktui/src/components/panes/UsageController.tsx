@@ -1,12 +1,12 @@
 import { memo, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
-import { useAppStore } from '../../hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { useBindings, usePanelKeymap } from '../../hooks/useInputStores.js';
-import type { PanelKeymap } from '../../input/keymap.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
-import { selectUsageView } from '../../selectors/usageSelectors.js';
-import type { UsageState } from '../../store/usage/usageSlice.js';
-import { useTheme } from '../../theme/themeStore.js';
+import { selectUsageView } from '@murder/ui-core/selectors/usageSelectors.js';
+import type { UsageState } from '@murder/ui-core/store/usage/usageSlice.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';
 import { UsageSurface, type UsageSurfaceGroup } from './UsageSurface.js';

@@ -13,10 +13,10 @@ import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import { useRef } from 'react';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
-import '../input/dispatcher.js';
+import '@murder/ui-core/input/dispatcher.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
-import { useTheme } from '../theme/themeStore.js';
+import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflowsSlice.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { Pane } from './Pane.js';
 
 export const WORKFLOW_TEMPLATE_LIBRARY_MODE_ID = 'workflow-template-library';

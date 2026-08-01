@@ -18,33 +18,36 @@
 import type { DOMElement } from 'ink';
 import { createContext, useContext, useEffect, useRef } from 'react';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
-import type { ResolvedBindings } from '../input/bindings.js';
-import type { BindingsState, BindingsStoreApi } from '../input/bindingsStore.js';
-import type { ChatHistoryState, ChatHistoryStoreApi } from '../input/chatHistoryStore.js';
-import type { ChatInputState, ChatInputStoreApi } from '../input/chatInputStore.js';
-import type { ChatVimState, ChatVimStoreApi } from '../input/chatVimStore.js';
+import type { ResolvedBindings } from '@murder/ui-core/input/bindings.js';
+import type { BindingsState, BindingsStoreApi } from '@murder/ui-core/input/bindingsStore.js';
+import type { ChatHistoryState, ChatHistoryStoreApi } from '@murder/ui-core/input/chatHistoryStore.js';
+import type { ChatInputState, ChatInputStoreApi } from '@murder/ui-core/input/chatInputStore.js';
+import type { ChatVimState, ChatVimStoreApi } from '@murder/ui-core/input/chatVimStore.js';
 import {
   buildFocusGraph,
   focusPaneGeometriesFromRects,
   normalizeFocusGraphRecipientTargets,
   resolveEffectiveFocus,
   resolveEffectiveFocusTarget,
-} from '../input/focusGraph.js';
+} from '@murder/ui-core/input/focusGraph.js';
 import {
   CHAT_FOCUS,
   type FocusId,
   type FocusState,
   type FocusStoreApi,
   type FocusTarget,
-} from '../input/focusStore.js';
-import type { Rect } from '../input/geometry.js';
-import type { PanelKeymap } from '../input/keymap.js';
-import type { KeymapRegistryApi, KeymapRegistryState } from '../input/keymapRegistry.js';
+} from '@murder/ui-core/input/focusStore.js';
+import type { Rect } from '@murder/ui-core/input/geometry.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
+import type { KeymapRegistryApi, KeymapRegistryState } from '@murder/ui-core/input/keymapRegistry.js';
 import type { ModeState, ModeStoreApi } from '../input/modeStore.js';
-import type { PanelState, PanelStoreApi } from '../input/panelStore.js';
-import type { PaneScrollBus } from '../input/paneScrollBus.js';
-import type { PaneUiState, PaneUiStoreApi } from '../input/paneUiStore.js';
-import type { WorkspaceStoreApi, WorkspaceStoreState } from '../input/workspaceStore.js';
+import type { PanelState, PanelStoreApi } from '@murder/ui-core/input/panelStore.js';
+import type { PaneScrollBus } from '@murder/ui-core/input/paneScrollBus.js';
+import type { PaneUiState, PaneUiStoreApi } from '@murder/ui-core/input/paneUiStore.js';
+import type {
+  WorkspaceStoreApi,
+  WorkspaceStoreState,
+} from '@murder/ui-core/input/workspaceStore.js';
 import { useTerminalSize } from './useTerminalSize.js';
 
 /** The input stores, carried as one context value so the provider wires them together once. */

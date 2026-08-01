@@ -30,7 +30,7 @@
  * ## Toast wiring (this slice owns it; new vs Textual)
  *
  * On `done`/`failed` we push an ambient toast (info on done, error on failed) to the app-level
- * {@link ../toast/toastStore.js toastStore} singleton. Textual left upload feedback silent (only the
+ * {@link @murder/ui-core/store/toast/toastStore.js toastStore} singleton. Textual left upload feedback silent (only the
  * in-text `[Image upload failed]` marker); the toast is *additive* — we keep the in-text marker too.
  *
  * Framework-agnostic vanilla Zustand (rule 4): no React, no Ink.
@@ -38,9 +38,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { createStore, type StoreApi } from 'zustand/vanilla';
-import { asCommandResult } from '../../application/resultCast.js';
-import type { ApplicationClient } from '../../application/ApplicationClient.js';
-import { type ToastStoreApi, toastStore } from '../toast/toastStore.js';
+import { asCommandResult } from '@murder/ui-core/application/resultCast.js';
+import type { ApplicationClient } from '@murder/ui-core/application/ApplicationClient.js';
+import { type ToastStoreApi, toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 
 
 

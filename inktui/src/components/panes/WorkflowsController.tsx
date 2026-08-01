@@ -1,15 +1,15 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { shallow } from 'zustand/shallow';
-import { getPanelCreateActions } from '../../create/panelCreateActions.js';
-import { useAppStore } from '../../hooks/useAppStore.js';
+import { getPanelCreateActions } from '@murder/ui-core/create/panelCreateActions.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { usePanelKeymap } from '../../hooks/useInputStores.js';
-import type { PanelKeymap } from '../../input/keymap.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import {
   type WorkflowPanelRowView,
   useWorkflowsPanelView,
-} from '../../selectors/workflowsPanelSelectors.js';
-import { useTheme } from '../../theme/themeStore.js';
+} from '@murder/ui-core/selectors/workflowsPanelSelectors.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { useTicketEditor } from '../TicketEditorMode.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import {

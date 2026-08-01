@@ -15,7 +15,7 @@ import {
 } from '../../src/components/WorkflowTemplateLibraryMode.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import type { WorkflowTemplate } from '../../src/store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflowsSlice.js';
 import { makeKey } from '../input/key.js';
 
 function workflow(name: string, overrides: Partial<WorkflowTemplate> = {}): WorkflowTemplate {

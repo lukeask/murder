@@ -2,17 +2,17 @@ import { MouseProvider } from '@ink-tools/ink-mouse';
 import { render } from 'ink-testing-library';
 import { act, type JSX } from 'react';
 import { describe, expect, it } from 'vitest';
-import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { TranscriptController } from '../../../src/components/panes/TranscriptController.js';
-import { ApplicationClientProvider } from '../../../src/hooks/useApplicationClient.js';
-import { AppStoreProvider } from '../../../src/hooks/useAppStore.js';
+import { ApplicationClientProvider } from '@murder/ui-core/hooks/useApplicationClient.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../../src/input/createInputStores.js';
-import { stageTranscriptFocusId } from '../../../src/input/focusIds.js';
+import { stageTranscriptFocusId } from '@murder/ui-core/input/focusIds.js';
 import type { PanePresentation } from '../../../src/layout/paneLayoutTypes.js';
-import type { AgentIdentity } from '../../../src/selectors/agentIdentity.js';
-import type { ConversationBlock } from '../../../src/store/conversations/conversationsSlice.js';
-import { type AppStoreApi, createAppStore } from '../../../src/store/store.js';
+import type { AgentIdentity } from '@murder/ui-core/selectors/agentIdentity.js';
+import type { ConversationBlock } from '@murder/ui-core/store/conversations/conversationsSlice.js';
+import { type AppStoreApi, createAppStore } from '@murder/ui-core/store/store.js';
 
 const presentation: PanePresentation = {
   width: 44,

@@ -2,16 +2,16 @@ import { MouseProvider } from '@ink-tools/ink-mouse';
 import { render } from 'ink-testing-library';
 import { act, type JSX } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { DocumentController } from '../../../src/components/panes/DocumentController.js';
-import { ApplicationClientProvider } from '../../../src/hooks/useApplicationClient.js';
-import { AppStoreProvider } from '../../../src/hooks/useAppStore.js';
+import { ApplicationClientProvider } from '@murder/ui-core/hooks/useApplicationClient.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../../src/input/createInputStores.js';
-import { CHAT_FOCUS, stageDocFocusId } from '../../../src/input/focusIds.js';
+import { CHAT_FOCUS, stageDocFocusId } from '@murder/ui-core/input/focusIds.js';
 import { selectActiveMode } from '../../../src/input/modeStore.js';
 import type { PanePresentation } from '../../../src/layout/paneLayoutTypes.js';
-import { type AppStoreApi, createAppStore } from '../../../src/store/store.js';
+import { type AppStoreApi, createAppStore } from '@murder/ui-core/store/store.js';
 
 const presentation: PanePresentation = {
   width: 42,

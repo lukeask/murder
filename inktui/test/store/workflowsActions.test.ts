@@ -12,11 +12,11 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
-import { createAppStore } from '../../src/store/store.js';
-import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
-import type { WorkflowTemplate } from '../../src/store/workflows/workflowsSlice.js';
-import { selectWorkflowsByName } from '../../src/store/workflows/workflowsSlice.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
+import { selectLiveToasts, toastStore } from '@murder/ui-core/store/toast/toastStore.js';
+import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflowsSlice.js';
+import { selectWorkflowsByName } from '@murder/ui-core/store/workflows/workflowsSlice.js';
 
 /** All live error toasts on the singleton at the current instant. */
 function errorToasts() {

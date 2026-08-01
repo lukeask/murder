@@ -25,15 +25,16 @@ import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
-import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
-import { multilineEditorPolicy, singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
-import { reduceEditor } from '../input/textEditor/operations.js';
-import { plainTextProjection } from '../input/textEditor/projection.js';
-import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
-import { plainTextTopology } from '../input/textEditor/topology.js';
-import type { DialogActions } from '../store/dialogs/dialogActions.js';
-import { toastStore } from '../store/toast/toastStore.js';
-import { useTheme } from '../theme/themeStore.js';
+import { applyEditorKey } from '@murder/ui-core/input/textEditor/applyEditorKey.js';
+import { multilineEditorPolicy, singleLineEditorPolicy } from '@murder/ui-core/input/textEditor/keyDecoder.js';
+import { reduceEditor } from '@murder/ui-core/input/textEditor/operations.js';
+import { plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
+import { editorAtEnd, type TextEditorState } from '@murder/ui-core/input/textEditor/state.js';
+import { plainTextTopology } from '@murder/ui-core/input/textEditor/topology.js';
+import { prepareTicketTitle } from '@murder/ui-core/create/creationPayloads.js';
+import type { DialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 /** Content width shared by the title field renderer and visual-motion geometry. */
@@ -41,7 +42,7 @@ const TITLE_EDITOR_WIDTH = 54;
 const PROMPT_EDITOR_WIDTH = 54;
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
-import '../input/dispatcher.js';
+import '@murder/ui-core/input/dispatcher.js';
 
 /** Intent union for the new-ticket dialog — special key actions only. */
 type NewTicketIntent =
@@ -228,15 +229,16 @@ export function newTicketMode(
           break;
         }
         case 'submit': {
-          if (s.title.text.trim().length === 0) {
-            s.error = 'Ticket title is required.';
+          const preparedTitle = prepareTicketTitle(s.title.text);
+          if (!preparedTitle.ok) {
+            s.error = preparedTitle.error;
             s.focus = 'title';
             refresh();
             break;
           }
           // Exit-then-act: exit (restores focus) before the async RPC.
           modes.getState().exit(id);
-          const title = s.title.text.trim();
+          const title = preparedTitle.value;
           const prompt = s.prompt.text;
           const create = preferBuiltin
             ? actions.startBuiltinTicket({ title, prompt }).then((result) => ({
@@ -303,7 +305,7 @@ export function newTicketMode(
 
 function editTicket(
   state: TextEditorState,
-  command: import('../input/textEditor/commands.js').EditorCommand,
+  command: import('@murder/ui-core/input/textEditor/commands.js').EditorCommand,
   focus: FocusField,
 ): TextEditorState {
   const width = focus === 'title' ? TITLE_EDITOR_WIDTH : PROMPT_EDITOR_WIDTH;

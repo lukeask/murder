@@ -1,8 +1,8 @@
 # inktui — the Ink terminal UI
 
 The Ink (React-for-terminal, TypeScript) rewrite of the murder TUI. Replaces the Textual
-app under `murder/app/tui/`. Talks to the service over the **existing Unix-socket JSON-RPC
-bus** (`murder/bus/`).
+app under `murder/app/tui/` and uses the shared application WebSocket client with TUI-specific
+construction defaults.
 
 **Plan + decision record:** `.murder/plans/newui-inktui.md`. Read it before writing code.
 The agent work plan (carved chunks) lives at the bottom of that file.
@@ -31,6 +31,12 @@ them so the *path of least resistance* is the correct pattern, not the old one.
 5. **Input/focus is data, not gating.** One root `useInput` dispatcher; panels *declare* their
    keymaps; focus is a state machine with a *derived* candidate set. No `check_action`-style
    central gating table, no scattered imperative re-homing.
+
+The renderer-neutral parts of those rules live in the sibling `ui-core/` workspace package:
+application interfaces and transport, generated protocol types, stores, selectors, shared hooks,
+themes, input-domain helpers, and workflow logic. Ink components, terminal input/rendering, CLI
+configuration, and process behavior remain in `inktui/`. Use explicit
+`@murder/ui-core/<module>.js` imports; do not add legacy compatibility import paths.
 
 ## Anti-patterns from the old TUI — do not port
 
@@ -99,12 +105,12 @@ Full strictness is deliberate. The non-default flags, grouped:
 ```
 inktui/
   src/
-    application/ transport seam: ApplicationClient interface, FakeApplicationClient, UdsApplicationClient, protocol.ts
-    store/       Zustand slices + actions (the only view->bus path)
-    selectors/   useMemo view-models (presentation lives here, not the store)
+    application/ TUI-specific client construction and defaults
     components/  Ink components (pure functions of a slice, React.memo + narrow selector)
-    input/       focusStore, panelStore, keymap-as-data, root useInput dispatcher
-    hooks/       reusable hooks binding components to stores/selectors
+    input/       terminal input and renderer-specific dispatch
+  ../ui-core/src/
+    application/, store/, selectors/, hooks/, input/, theme/, workflowEditor/
+                shared application and presentation-model behavior
     index.tsx    process entrypoint (renders the Ink tree)
   test/          Vitest suites (mirror src paths)
   package.json   scripts: dev / build / typecheck / lint / test
@@ -124,7 +130,7 @@ every chunk after C0 inherits.
 
 | Script | Command | Does |
 |--------|---------|------|
-| `npm run dev` | `tsx src/index.tsx` | Renders the Ink app (C0: prints a banner and exits clean). |
+| `npm run dev` | `tsx --tsconfig tsconfig.dev.json src/index.tsx` | Renders the Ink app against workspace source (C0: prints a banner and exits clean). |
 | `npm run build` | `tsc --build` | Emits `dist/` (JS + `.d.ts` + sourcemaps). |
 | `npm run typecheck` | `tsc --build && tsc --noEmit -p tsconfig.test.json` | Typechecks src (build) and tests (no emit). |
 | `npm run lint` | `biome check src test` | Lints + format-checks. `npm run lint:fix` writes fixes. |

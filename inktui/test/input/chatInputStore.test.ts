@@ -19,7 +19,7 @@ import {
   SPAN_OPEN,
   spanIds,
   spanLabels,
-} from '../../src/input/chatInputStore.js';
+} from '@murder/ui-core/input/chatInputStore.js';
 
 describe('chatInputStore — marked image spans', () => {
   it('appendImageSpan wraps the id in PUA delimiters, holding the id not the number', () => {

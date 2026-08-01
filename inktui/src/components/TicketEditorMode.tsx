@@ -56,16 +56,16 @@
 import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import { type JSX, useCallback } from 'react';
-import { useAppStore, useAppStoreApi } from '../hooks/useAppStore.js';
+import { useAppStore, useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import { useInputStores } from '../hooks/useInputStores.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
-import type { AppStoreApi } from '../store/store.js';
-import type { TicketFrontmatter } from '../store/ticketDetail/ticketDetailSlice.js';
-import { useTheme } from '../theme/themeStore.js';
+import type { AppStoreApi } from '@murder/ui-core/store/store.js';
+import type { TicketFrontmatter } from '@murder/ui-core/store/ticketDetail/ticketDetailSlice.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
 // The augmentation is declared in dispatcher.ts; importing it brings the declaration into scope.
-import '../input/dispatcher.js';
+import '@murder/ui-core/input/dispatcher.js';
 
 // ── Mode declaration ────────────────────────────────────────────────────────────────────────────
 

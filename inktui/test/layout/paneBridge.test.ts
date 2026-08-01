@@ -7,7 +7,7 @@ import { workflowsSurfaceRowsFromView } from '../../src/components/panes/Workflo
 import { TranscriptController } from '../../src/components/panes/TranscriptController.js';
 import { treeSurfaceDataFromView } from '../../src/components/panes/TreeController.js';
 import { usageSurfaceGroupsFromState } from '../../src/components/panes/UsageController.js';
-import { CHAT_FOCUS } from '../../src/input/focusStore.js';
+import { CHAT_FOCUS } from '@murder/ui-core/input/focusStore.js';
 import {
   buildPaneRequests,
   renderPaneAllocation,
@@ -16,16 +16,16 @@ import {
 } from '../../src/layout/paneBridge.js';
 import { computePaneLayout } from '../../src/layout/paneLayout.js';
 import type { PaneAllocation, PaneRequest } from '../../src/layout/paneLayoutTypes.js';
-import type { AgentIdentity } from '../../src/selectors/agentIdentity.js';
-import type { CrowsView } from '../../src/selectors/crowsSelectors.js';
-import type { HistoryRowView } from '../../src/selectors/historySelectors.js';
-import type { WorkflowPanelRowView } from '../../src/selectors/workflowsPanelSelectors.js';
-import type { TransitCursor, TransitView } from '../../src/selectors/transitSelectors.js';
-import type { RosterRow } from '../../src/store/roster/rosterSlice.js';
-import { type AppStore, initialAppState } from '../../src/store/store.js';
-import type { UsageRow, UsageState } from '../../src/store/usage/usageSlice.js';
-import { buildTheme } from '../../src/theme/buildTheme.js';
-import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '../../src/theme/palettes.js';
+import type { AgentIdentity } from '@murder/ui-core/selectors/agentIdentity.js';
+import type { CrowsView } from '@murder/ui-core/selectors/crowsSelectors.js';
+import type { HistoryRowView } from '@murder/ui-core/selectors/historySelectors.js';
+import type { WorkflowPanelRowView } from '@murder/ui-core/selectors/workflowsPanelSelectors.js';
+import type { TransitCursor, TransitView } from '@murder/ui-core/selectors/transitSelectors.js';
+import type { RosterRow } from '@murder/ui-core/store/roster/rosterSlice.js';
+import { type AppStore, initialAppState } from '@murder/ui-core/store/store.js';
+import type { UsageRow, UsageState } from '@murder/ui-core/store/usage/usageSlice.js';
+import { buildTheme } from '@murder/ui-core/theme/buildTheme.js';
+import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '@murder/ui-core/theme/palettes.js';
 
 const defaultPalette = getPalette(DEFAULT_THEME_ID);
 if (defaultPalette === undefined) {

@@ -11,9 +11,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FakeApplicationClient } from '../../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { createImageDraftStore } from '../../../src/store/imageDraft/imageDraftStore.js';
-import { createToastStore } from '../../../src/store/toast/toastStore.js';
+import { createToastStore } from '@murder/ui-core/store/toast/toastStore.js';
 
 /** Microtask flush — the FIFO worker awaits the (resolved) RPC, so a couple of ticks settle it. */
 async function flush(): Promise<void> {

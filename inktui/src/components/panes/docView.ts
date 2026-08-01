@@ -1,8 +1,8 @@
 import { useCallback } from 'react';
-import { useAppStore, useAppStoreApi } from '../../hooks/useAppStore.js';
+import { useAppStore, useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import { useInputStores } from '../../hooks/useInputStores.js';
-import type { StagePaneId } from '../../input/focusStore.js';
-import type { DocKind } from '../../store/docView/docViewSlice.js';
+import type { StagePaneId } from '@murder/ui-core/input/focusStore.js';
+import type { DocKind } from '@murder/ui-core/store/docView/docViewSlice.js';
 
 /** The focus id for an open document pane. This is the single adapter-level owner of the
  * `stage:doc:` scheme so panel/list callers do not depend on the legacy DocPane module. */

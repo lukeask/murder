@@ -49,33 +49,33 @@ import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import { useModalWidth } from '../hooks/useTerminalSize.js';
-import type { Modifier } from '../input/bindings.js';
+import type { Modifier } from '@murder/ui-core/input/bindings.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
-import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
-import type { EditorCommand } from '../input/textEditor/commands.js';
-import { singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
-import { reduceEditor } from '../input/textEditor/operations.js';
-import { plainTextProjection } from '../input/textEditor/projection.js';
-import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
-import { plainTextTopology } from '../input/textEditor/topology.js';
-import type { HarnessModel, HarnessModelsActions } from '../store/dialogs/harnessModelsActions.js';
-import { modelsFor, STATIC_HARNESS_MODELS } from '../store/dialogs/harnessModelsActions.js';
-import type { SpawnActions } from '../store/dialogs/spawnActions.js';
+import { applyEditorKey } from '@murder/ui-core/input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '@murder/ui-core/input/textEditor/commands.js';
+import { singleLineEditorPolicy } from '@murder/ui-core/input/textEditor/keyDecoder.js';
+import { reduceEditor } from '@murder/ui-core/input/textEditor/operations.js';
+import { plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
+import { editorAtEnd, type TextEditorState } from '@murder/ui-core/input/textEditor/state.js';
+import { plainTextTopology } from '@murder/ui-core/input/textEditor/topology.js';
+import type { HarnessModel, HarnessModelsActions } from '@murder/ui-core/store/dialogs/harnessModelsActions.js';
+import { modelsFor, STATIC_HARNESS_MODELS } from '@murder/ui-core/store/dialogs/harnessModelsActions.js';
+import type { SpawnActions } from '@murder/ui-core/store/dialogs/spawnActions.js';
 import type {
   SpawnFavorite,
   SpawnFavoritesActions,
-} from '../store/dialogs/spawnFavoritesActions.js';
+} from '@murder/ui-core/store/dialogs/spawnFavoritesActions.js';
 import type {
   WorktreeOption,
   WorktreeOptionsActions,
-} from '../store/dialogs/worktreeOptionsActions.js';
+} from '@murder/ui-core/store/dialogs/worktreeOptionsActions.js';
 import {
   buildWorktreeOptions,
   NEW_WORKTREE_KEY,
   resolveWorktreePayload,
-} from '../store/dialogs/worktreeOptionsActions.js';
-import { toastStore } from '../store/toast/toastStore.js';
-import { useTheme } from '../theme/themeStore.js';
+} from '@murder/ui-core/store/dialogs/worktreeOptionsActions.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import {
   DEFAULT_HARNESS,
   defaultEffortCursor,
@@ -85,11 +85,11 @@ import {
   type StepConditions,
   stepProgress,
   type WizardStep,
-} from './spawnWizardMachine.js';
+} from '@murder/ui-core/components/spawnWizardMachine.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (text/list steps need it).
-import '../input/dispatcher.js';
+import '@murder/ui-core/input/dispatcher.js';
 
 /** Content width shared by text-step/rename renderers and visual-motion geometry. */
 const SPAWN_EDITOR_WIDTH = 58;

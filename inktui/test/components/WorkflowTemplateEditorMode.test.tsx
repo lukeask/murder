@@ -9,23 +9,23 @@ import { MouseProvider } from '@ink-tools/ink-mouse';
 import { Box, render as inkRender } from 'ink';
 import type { JSX } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CommandParams, QueryParams } from '../../src/application/ApplicationClient.js';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import type { CommandParams, QueryParams } from '@murder/ui-core/application/ApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { BottomBar } from '../../src/components/BottomBar.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import { workflowTemplateEditorMode } from '../../src/components/WorkflowTemplateEditorMode.js';
-import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
-import { matchKeymap } from '../../src/input/keymap.js';
+import { matchKeymap } from '@murder/ui-core/input/keymap.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import { createAppStore } from '../../src/store/store.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
 import type {
   WorkflowNodeTemplate,
   WorkflowTemplate,
-} from '../../src/store/workflows/workflowsSlice.js';
-import { compileWorkflowTemplate } from '../../src/workflowEditor/compile.js';
-import { fromWire, toWire } from '../../src/workflowEditor/wire.js';
+} from '@murder/ui-core/store/workflows/workflowsSlice.js';
+import { compileWorkflowTemplate } from '@murder/ui-core/workflowEditor/compile.js';
+import { fromWire, toWire } from '@murder/ui-core/workflowEditor/wire.js';
 import { makeKey } from '../input/key.js';
 
 const tick = async (): Promise<void> => {

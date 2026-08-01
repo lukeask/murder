@@ -11,16 +11,16 @@
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeApplicationClient } from '../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { App, bodyHeightForChrome, deriveSpawnContext } from '../src/components/App.js';
 import { createInputStores } from '../src/input/createInputStores.js';
-import { stageTranscriptFocusId } from '../src/input/focusIds.js';
-import { CHAT_FOCUS, selectEffectiveFocus } from '../src/input/focusStore.js';
-import type { PanelId } from '../src/input/panels.js';
-import type { SettingsWire } from '../src/store/settings/settingsActions.js';
-import { createAppStore } from '../src/store/store.js';
-import { DEFAULT_THEME_ID } from '../src/theme/palettes.js';
-import { themeStore } from '../src/theme/themeStore.js';
+import { stageTranscriptFocusId } from '@murder/ui-core/input/focusIds.js';
+import { CHAT_FOCUS, selectEffectiveFocus } from '@murder/ui-core/input/focusStore.js';
+import type { PanelId } from '@murder/ui-core/input/panels.js';
+import type { SettingsWire } from '@murder/ui-core/store/settings/settingsActions.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
+import { DEFAULT_THEME_ID } from '@murder/ui-core/theme/palettes.js';
+import { themeStore } from '@murder/ui-core/theme/themeStore.js';
 
 /** Let Ink flush a render + the post-layout measure effects. */
 async function tick(): Promise<void> {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SCROLL_THUMB } from '../../../src/components/glyphs.js';
 import { TranscriptPane, tmuxFrameRows } from '../../../src/components/panes/TranscriptPane.js';
-import type { ChatTurn } from '../../../src/selectors/conversationsSelectors.js';
+import type { ChatTurn } from '@murder/ui-core/selectors/conversationsSelectors.js';
 import { renderInkFixture, stripAnsiSgr } from '../../fixtures/pane_rendering/renderInkFixture.js';
 import type { PaneFixture } from '../../fixtures/pane_rendering/types.js';
 

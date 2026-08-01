@@ -1,11 +1,11 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { shallow } from 'zustand/shallow';
-import { useAppStore } from '../../hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { usePanelKeymap } from '../../hooks/useInputStores.js';
-import type { PanelKeymap } from '../../input/keymap.js';
+import type { PanelKeymap } from '@murder/ui-core/input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
-import { type HistoryRowView, useHistoryView } from '../../selectors/historySelectors.js';
-import { useTheme } from '../../theme/themeStore.js';
+import { type HistoryRowView, useHistoryView } from '@murder/ui-core/selectors/historySelectors.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { HistorySurface, type HistorySurfaceRow } from './HistorySurface.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { usePaneUiClampedCursor } from './shared/useClampedCursor.js';

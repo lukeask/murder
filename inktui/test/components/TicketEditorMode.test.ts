@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { ticketEditorMode } from '../../src/components/TicketEditorMode.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import { createAppStore } from '../../src/store/store.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
 import { makeKey } from '../input/key.js';
 
 const disposers: Array<() => void> = [];

@@ -11,13 +11,13 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { chordToKey } from '../../src/hooks/useRootInput.js';
-import { resolveBindings } from '../../src/input/bindings.js';
+import { resolveBindings } from '@murder/ui-core/input/bindings.js';
 import {
   type DispatchContext,
   dispatchKey,
   type GlobalHandlers,
-} from '../../src/input/dispatcher.js';
-import { CHAT_FOCUS } from '../../src/input/focusStore.js';
+} from '@murder/ui-core/input/dispatcher.js';
+import { CHAT_FOCUS } from '@murder/ui-core/input/focusStore.js';
 import { type RealStdin, StdinShim } from '../../src/terminal/StdinShim.js';
 import type { Chord } from '../../src/terminal/translate.js';
 

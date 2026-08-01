@@ -11,7 +11,7 @@
 import { Box } from 'ink';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
-import { useAppStore } from '../hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import {
   useBindings,
   useEffectiveFocus,
@@ -21,7 +21,7 @@ import {
   useWorkspaceStore,
 } from '../hooks/useInputStores.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
-import { CHAT_FOCUS } from '../input/focusStore.js';
+import { CHAT_FOCUS } from '@murder/ui-core/input/focusStore.js';
 import { selectActiveMode } from '../input/modeStore.js';
 import {
   applyOverlays,
@@ -32,7 +32,7 @@ import {
   putText,
   renderSurface,
   type TextRun,
-} from '../render/cellSurface.js';
+} from '@murder/ui-core/render/cellSurface.js';
 import {
   BOTTOM_BAR_ITEM_GAP,
   type BottomBarHint,
@@ -41,8 +41,8 @@ import {
   bottomBarLineWidth,
   packBottomBarLineItems,
   selectBottomBarLineItems,
-} from '../selectors/barSelectors.js';
-import { keyUsageStore } from '../store/keyUsage/keyUsageStore.js';
+} from '@murder/ui-core/selectors/barSelectors.js';
+import { keyUsageStore } from '@murder/ui-core/store/keyUsage/keyUsageStore.js';
 import {
   MAX_VISIBLE_TOASTS,
   selectLiveToasts,
@@ -50,8 +50,8 @@ import {
   type Toast as ToastData,
   type ToastSeverity,
   toastStore,
-} from '../store/toast/toastStore.js';
-import { useTheme } from '../theme/themeStore.js';
+} from '@murder/ui-core/store/toast/toastStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { TextRuns } from './TextRuns.js';
 
 /** `paddingX={1}` each side of the bar. */

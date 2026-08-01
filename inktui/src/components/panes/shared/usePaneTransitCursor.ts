@@ -1,8 +1,8 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { useCallback } from 'react';
 import { useInputStores, usePaneUiStore } from '../../../hooks/useInputStores.js';
-import { DEFAULT_TRANSIT_CURSOR, type PaneUiStoreApi } from '../../../input/paneUiStore.js';
-import type { TransitCursor } from '../../../selectors/transitSelectors.js';
+import { DEFAULT_TRANSIT_CURSOR, type PaneUiStoreApi } from '@murder/ui-core/input/paneUiStore.js';
+import type { TransitCursor } from '@murder/ui-core/selectors/transitSelectors.js';
 
 function clampTransitCursor(cursor: TransitCursor, laneCount: number): TransitCursor {
   if (laneCount <= 0) {

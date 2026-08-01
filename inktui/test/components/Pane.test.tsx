@@ -22,8 +22,8 @@ import {
   paneContentWidthForWidth,
   paneHorizontalPaddingForWidth,
 } from '../../src/components/Pane.js';
-import { buildTheme } from '../../src/theme/buildTheme.js';
-import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '../../src/theme/palettes.js';
+import { buildTheme } from '@murder/ui-core/theme/buildTheme.js';
+import { DEFAULT_THEME_ID, getPalette, getThemeMeta } from '@murder/ui-core/theme/palettes.js';
 
 const defaultPalette = getPalette(DEFAULT_THEME_ID);
 if (defaultPalette === undefined) {

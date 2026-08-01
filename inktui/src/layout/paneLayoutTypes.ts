@@ -1,5 +1,5 @@
 import type { Orientation } from '../hooks/useOrientation.js';
-import type { PanelId } from '../input/panels.js';
+import type { PanelId } from '@murder/ui-core/input/panels.js';
 import type { Rect } from '../terminal/geometry.js';
 
 export type CellSize = {

@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { useCallback, useState } from 'react';
 import { useInputStores, usePaneUiStore } from '../../../hooks/useInputStores.js';
-import type { PaneUiStoreApi } from '../../../input/paneUiStore.js';
+import type { PaneUiStoreApi } from '@murder/ui-core/input/paneUiStore.js';
 
 export interface ClampedCursor {
   readonly cursor: number;

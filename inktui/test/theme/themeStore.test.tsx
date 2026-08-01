@@ -18,8 +18,8 @@ import { Text } from 'ink';
 import { render } from 'ink-testing-library';
 import type React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getPalette } from '../../src/theme/palettes.js';
-import { setTheme, useTheme } from '../../src/theme/themeStore.js';
+import { getPalette } from '@murder/ui-core/theme/palettes.js';
+import { setTheme, useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 /** Truecolor foreground SGR for a `#rrggbb` hex. */
 function fgSgr(hex: string): string {

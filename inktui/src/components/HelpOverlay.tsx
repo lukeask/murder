@@ -23,11 +23,11 @@
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import { useModalWidth } from '../hooks/useTerminalSize.js';
-import { ACTION_IDS, ACTIONS, chordLabel, type ResolvedBindings } from '../input/bindings.js';
-import type { KeymapRegistryApi } from '../input/keymapRegistry.js';
+import { ACTION_IDS, ACTIONS, chordLabel, type ResolvedBindings } from '@murder/ui-core/input/bindings.js';
+import type { KeymapRegistryApi } from '@murder/ui-core/input/keymapRegistry.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
-import { PANELS } from '../input/panels.js';
-import { useTheme } from '../theme/themeStore.js';
+import { PANELS } from '@murder/ui-core/input/panels.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 /** One displayed binding row: the chord label and what it does. */
 export interface HelpEntry {

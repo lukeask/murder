@@ -1,6 +1,6 @@
 /** @deprecated Prefer `TextEditorDisplay` with an owned `TextEditorState`. */
 import type { JSX } from 'react';
-import { editorAtEnd } from '../input/textEditor/state.js';
+import { editorAtEnd } from '@murder/ui-core/input/textEditor/state.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 export interface TextInputProps {

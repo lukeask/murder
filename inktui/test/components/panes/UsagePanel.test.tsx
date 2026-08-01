@@ -3,7 +3,7 @@ import {
   UsageSurface,
   type UsageSurfaceGroup,
 } from '../../../src/components/panes/UsageSurface.js';
-import { getTheme } from '../../../src/theme/themeStore.js';
+import { getTheme } from '@murder/ui-core/theme/themeStore.js';
 import { renderInkFixture, stripAnsiSgr } from '../../fixtures/pane_rendering/renderInkFixture.js';
 import type { PaneFixture } from '../../fixtures/pane_rendering/types.js';
 

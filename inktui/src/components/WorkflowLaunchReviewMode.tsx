@@ -8,15 +8,15 @@ import type { Key } from 'ink';
 import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
-import '../input/dispatcher.js';
-import type { AppStoreApi } from '../store/store.js';
-import type { WorkflowTemplate } from '../store/workflows/workflowsSlice.js';
-import { useTheme } from '../theme/themeStore.js';
+import '@murder/ui-core/input/dispatcher.js';
+import type { AppStoreApi } from '@murder/ui-core/store/store.js';
+import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflowsSlice.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import {
   requiredInputIssues,
   type WizardField,
   wizardFieldsFromCompileResult,
-} from '../workflowEditor/compile.js';
+} from '@murder/ui-core/workflowEditor/compile.js';
 import { Pane } from './Pane.js';
 
 export const WORKFLOW_LAUNCH_REVIEW_MODE_ID = 'workflow-launch-review';

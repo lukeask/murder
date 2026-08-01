@@ -15,16 +15,16 @@ import { render as inkRender } from 'ink';
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { TopBar } from '../../src/components/TopBar.js';
-import { AppStoreProvider } from '../../src/hooks/useAppStore.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import {
   type ConnectionStatus,
   connectionStore,
-} from '../../src/store/connection/connectionStore.js';
-import { createAppStore } from '../../src/store/store.js';
+} from '@murder/ui-core/store/connection/connectionStore.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
 
 const { store } = createAppStore(new FakeApplicationClient());
 

@@ -2,8 +2,8 @@ import { useOnClick } from '@ink-tools/ink-mouse';
 import { Box, type DOMElement } from 'ink';
 import { type JSX, type ReactNode, useRef } from 'react';
 import { useInputStores, usePaneFocusLifecycle } from '../../../hooks/useInputStores.js';
-import type { FocusId } from '../../../input/focusStore.js';
-import { wasMouseClickClaimed } from '../../../input/mouseClick.js';
+import type { FocusId } from '@murder/ui-core/input/focusStore.js';
+import { wasMouseClickClaimed } from '@murder/ui-core/input/mouseClick.js';
 import type { PanePresentation } from '../../../layout/paneLayoutTypes.js';
 
 export interface AllocatedPaneFrameProps {

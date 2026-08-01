@@ -4,18 +4,18 @@
  * bundle through here, so the wiring (focus ← panels) lives in exactly one place.
  */
 
-import { createBindingsStore } from './bindingsStore.js';
-import { createChatHistoryStore } from './chatHistoryStore.js';
-import { createChatInputStore } from './chatInputStore.js';
-import { createChatVimStore } from './chatVimStore.js';
-import { createFocusStore, type FocusId } from './focusStore.js';
-import { createKeymapRegistry } from './keymapRegistry.js';
+import { createBindingsStore } from '@murder/ui-core/input/bindingsStore.js';
+import { createChatHistoryStore } from '@murder/ui-core/input/chatHistoryStore.js';
+import { createChatInputStore } from '@murder/ui-core/input/chatInputStore.js';
+import { createChatVimStore } from '@murder/ui-core/input/chatVimStore.js';
+import { createFocusStore, type FocusId } from '@murder/ui-core/input/focusStore.js';
+import { createKeymapRegistry } from '@murder/ui-core/input/keymapRegistry.js';
 import { createModeStore } from './modeStore.js';
-import { createPanelStore } from './panelStore.js';
-import type { PanelId } from './panels.js';
-import { createPaneScrollBus } from './paneScrollBus.js';
-import { createPaneUiStore } from './paneUiStore.js';
-import { createWorkspaceStore } from './workspaceStore.js';
+import { createPanelStore } from '@murder/ui-core/input/panelStore.js';
+import type { PanelId } from '@murder/ui-core/input/panels.js';
+import { createPaneScrollBus } from '@murder/ui-core/input/paneScrollBus.js';
+import { createPaneUiStore } from '@murder/ui-core/input/paneUiStore.js';
+import { createWorkspaceStore } from '@murder/ui-core/input/workspaceStore.js';
 
 /** The wired input stores. Matches the `InputStores` context value the React provider carries. */
 export interface InputStoreBundle {

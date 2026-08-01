@@ -18,13 +18,13 @@ import {
   formatPromptTemplateMacro,
   formatWorkflowTemplateRef,
   validatePromptTemplateName,
-} from '../../src/components/promptTemplates/refs.js';
+} from '@murder/ui-core/components/promptTemplates/refs.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
-import { matchKeymap } from '../../src/input/keymap.js';
+import { matchKeymap } from '@murder/ui-core/input/keymap.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import type { WorkflowTemplate } from '../../src/store/workflows/workflowsSlice.js';
+import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflowsSlice.js';
 import { makeKey } from '../input/key.js';
 
 const ESC = '\x1b';

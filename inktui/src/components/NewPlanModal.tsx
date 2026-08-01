@@ -32,21 +32,25 @@ import { Box, Text } from 'ink';
 import type { JSX } from 'react';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import type { Mode, ModeHint, ModeStoreApi } from '../input/modeStore.js';
-import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
-import type { EditorCommand } from '../input/textEditor/commands.js';
-import { multilineEditorPolicy, singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
-import { reduceEditor } from '../input/textEditor/operations.js';
-import { plainTextProjection } from '../input/textEditor/projection.js';
-import type { TextEditorState } from '../input/textEditor/state.js';
-import { editorAtEnd } from '../input/textEditor/state.js';
-import { plainTextTopology } from '../input/textEditor/topology.js';
-import type { CreatePlanInput, DialogActions } from '../store/dialogs/dialogActions.js';
-import { toastStore } from '../store/toast/toastStore.js';
-import { useTheme } from '../theme/themeStore.js';
+import { applyEditorKey } from '@murder/ui-core/input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '@murder/ui-core/input/textEditor/commands.js';
+import { multilineEditorPolicy, singleLineEditorPolicy } from '@murder/ui-core/input/textEditor/keyDecoder.js';
+import { reduceEditor } from '@murder/ui-core/input/textEditor/operations.js';
+import { plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
+import type { TextEditorState } from '@murder/ui-core/input/textEditor/state.js';
+import { editorAtEnd } from '@murder/ui-core/input/textEditor/state.js';
+import { plainTextTopology } from '@murder/ui-core/input/textEditor/topology.js';
+import {
+  prepareCreatePlan,
+  type PlanNaming,
+} from '@murder/ui-core/create/creationPayloads.js';
+import type { DialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
-import '../input/dispatcher.js';
+import '@murder/ui-core/input/dispatcher.js';
 
 /** Intent union for the new-plan form — special key actions only. Printable chars go through
  * `onUncaptured`, not the keymap, so they are not listed here. */
@@ -67,7 +71,7 @@ type NewPlanIntent =
   | 'dismiss';
 
 /** The naming choice the radio group offers. */
-type Naming = 'auto' | 'custom';
+type Naming = PlanNaming;
 
 /** Which focus group has the highlight. `body` → naming → (`name` only when custom is chosen). */
 type FocusGroup = 'body' | 'naming' | 'name';
@@ -137,10 +141,13 @@ export function newPlanMode(
     if (s.pending) {
       return;
     }
-    const autoName = s.naming === 'auto';
-    const planName = s.planName.text.trim();
-    if (!autoName && planName.length === 0) {
-      s.error = 'Plan name is required (or pick "auto").';
+    const prepared = prepareCreatePlan({
+      body: s.body.text,
+      naming: s.naming,
+      planName: s.planName.text,
+    });
+    if (!prepared.ok) {
+      s.error = prepared.error;
       s.focus = 'name';
       refresh();
       return;
@@ -148,13 +155,8 @@ export function newPlanMode(
     s.pending = true;
     s.error = null;
     refresh();
-    const body = s.body.text;
-    const message = body.trim().length > 0 ? body : undefined;
-    const input: CreatePlanInput = autoName
-      ? { body, autoName: true, ...(message !== undefined ? { message } : {}) }
-      : { body, autoName: false, planName, ...(message !== undefined ? { message } : {}) };
     void actions
-      .createPlan(input)
+      .createPlan(prepared.value)
       .then((result) => {
         modes.getState().exit(id);
         opts.onSubmit?.(result.plan_name);

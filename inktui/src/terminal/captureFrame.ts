@@ -1,4 +1,4 @@
-import type { CapturedFrame } from '../input/workspaceStore.js';
+import type { CapturedFrame } from '@murder/ui-core/input/workspaceStore.js';
 import { displayWidth } from '../render/frameText.js';
 import { inkInstances } from './inkInstances.js';
 

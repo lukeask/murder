@@ -21,7 +21,7 @@
 import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeApplicationClient } from '../../src/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import {
   SPAWN_WIZARD_MODE_ID,
@@ -33,15 +33,15 @@ import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
 import { createInputStores } from '../../src/input/createInputStores.js';
 import { selectActiveMode } from '../../src/input/modeStore.js';
-import { createHarnessModelsActions } from '../../src/store/dialogs/harnessModelsActions.js';
-import { createSpawnActions } from '../../src/store/dialogs/spawnActions.js';
+import { createHarnessModelsActions } from '@murder/ui-core/store/dialogs/harnessModelsActions.js';
+import { createSpawnActions } from '@murder/ui-core/store/dialogs/spawnActions.js';
 import {
   createSpawnFavoritesActions,
   type SpawnFavorite,
-} from '../../src/store/dialogs/spawnFavoritesActions.js';
-import { createWorktreeOptionsActions } from '../../src/store/dialogs/worktreeOptionsActions.js';
-import { createAppStore } from '../../src/store/store.js';
-import { selectLiveToasts, toastStore } from '../../src/store/toast/toastStore.js';
+} from '@murder/ui-core/store/dialogs/spawnFavoritesActions.js';
+import { createWorktreeOptionsActions } from '@murder/ui-core/store/dialogs/worktreeOptionsActions.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
+import { selectLiveToasts, toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 
 const ESC = '\x1b';
 
@@ -344,7 +344,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     });
   });
 
-  it('codex shows its model list and threads the selected model id', async () => {
+  it('codex skips its empty static model list and submits an empty model id', async () => {
     const { stores, bus, enter } = setup(null);
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     enter();
@@ -352,12 +352,9 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     stdin.write('j'); // codex
     await tick();
     expect(lastFrame()).toContain('› [2] codex');
-    stdin.write('\r'); // confirm harness → model step (codex has a static model list)
+    stdin.write('\r'); // confirm harness → effort (codex has no static model list)
     await tick();
-    expect(lastFrame()).toContain('Select model');
-    expect(lastFrame()).toContain('GPT-5.5'); // first codex model label, cursor at index 0
-    stdin.write('\r'); // select gpt-5.5
-    await tick();
+    expect(lastFrame()).not.toContain('Select model');
     expect(lastFrame()).toContain('Select effort'); // codex has an effort enum
     stdin.write('\r'); // effort medium (default)
     await tick();
@@ -369,7 +366,7 @@ describe('SpawnWizardModal — dependent-field flow', () => {
     await tick();
     expect(spawnSubmitPayload(bus)).toMatchObject({
       harness: 'codex',
-      model: 'gpt-5.5',
+      model: '',
       effort: 'medium',
     });
   });

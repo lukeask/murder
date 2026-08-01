@@ -1,12 +1,12 @@
 /** Shared preview-aware canvas fill for surfaces that write their own terminal cells. */
 
 import { useContext } from 'react';
-import { AppStoreContext } from '../hooks/useAppStore.js';
+import { AppStoreContext } from '@murder/ui-core/hooks/useAppStore.js';
 import {
   resolveBackgroundTransparency,
   useBackgroundTransparencyPreview,
 } from '../terminal/canvasBackground.js';
-import { useTheme } from '../theme/themeStore.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 
 /** The opaque app canvas below 100%; undefined deliberately exposes the terminal at 100%. */
 export function useCanvasBackgroundColor(): string | undefined {

@@ -8,8 +8,8 @@
 
 import { Box, Text } from 'ink';
 import { Fragment, memo, useMemo } from 'react';
-import { USAGE_BAR_WIDTH } from '../../selectors/usageSelectors.js';
-import type { Theme } from '../../theme/buildTheme.js';
+import { USAGE_BAR_WIDTH } from '@murder/ui-core/selectors/usageSelectors.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
 import { COMPACT_PANE_PADDING_CW, Pane } from '../Pane.js';
 
 const PANEL_TITLE = 'Usage';

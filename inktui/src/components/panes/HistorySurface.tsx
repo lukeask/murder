@@ -8,7 +8,7 @@
 
 import { Box, Text } from 'ink';
 import { memo, useMemo } from 'react';
-import type { Theme } from '../../theme/buildTheme.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
 import { computeWindow, Ledger, type LedgerEntryContext } from '../Ledger.js';
 import { Pane, paneContentWidthForWidth, paneHorizontalPaddingForWidth } from '../Pane.js';
 

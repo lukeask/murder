@@ -4,7 +4,7 @@ import {
   wrapChatLines,
   type ChatLine,
 } from '../../../src/components/panes/chatLines.js';
-import type { ChatTurn } from '../../../src/selectors/conversationsSelectors.js';
+import type { ChatTurn } from '@murder/ui-core/selectors/conversationsSelectors.js';
 
 function gutterFlags(lines: readonly ChatLine[]): ('head' | 'cont' | 'none' | 'blank')[] {
   return lines.map((line) => {

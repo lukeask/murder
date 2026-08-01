@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
-import { useAppStore } from '../../hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { usePanelKeymap } from '../../hooks/useInputStores.js';
-import type { KeymapEntry, PanelKeymap } from '../../input/keymap.js';
+import type { KeymapEntry, PanelKeymap } from '@murder/ui-core/input/keymap.js';
 import type { PanePresentation } from '../../layout/paneLayoutTypes.js';
 import {
   parseDuration,
@@ -10,9 +10,9 @@ import {
   type TransitCursor,
   type TransitView,
   useTransitView,
-} from '../../selectors/transitSelectors.js';
-import type { Theme } from '../../theme/buildTheme.js';
-import { useTheme } from '../../theme/themeStore.js';
+} from '@murder/ui-core/selectors/transitSelectors.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { paneContentWidthForWidth } from '../Pane.js';
 import { AllocatedPaneFrame } from './shared/AllocatedPaneFrame.js';
 import { usePaneGBuffer } from './shared/usePaneGBuffer.js';

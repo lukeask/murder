@@ -6,9 +6,9 @@ import {
   putCell,
   putClippedText,
   putText,
-} from '../render/cellSurface.js';
-import type { GraphLayout } from './layout.js';
-import type { EditorIssue, StageKey, Viewport } from './model.js';
+} from '@murder/ui-core/render/cellSurface.js';
+import type { GraphLayout } from '@murder/ui-core/workflowEditor/layout.js';
+import type { EditorIssue, StageKey, Viewport } from '@murder/ui-core/workflowEditor/model.js';
 import {
   type DirectionMask,
   E,
@@ -19,8 +19,8 @@ import {
   S,
   segmentMasks,
   W,
-} from './routing.js';
-import { stageStatusGlyph } from './statusDisplay.js';
+} from '@murder/ui-core/workflowEditor/routing.js';
+import { stageStatusGlyph } from '@murder/ui-core/workflowEditor/statusDisplay.js';
 
 export type ConnectLegality = 'add' | 'remove' | 'cycle' | 'invalid';
 

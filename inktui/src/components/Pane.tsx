@@ -62,8 +62,8 @@
 
 import { Box, type DOMElement } from 'ink';
 import { forwardRef, memo } from 'react';
-import type { Theme } from '../theme/buildTheme.js';
-import { useTheme } from '../theme/themeStore.js';
+import type { Theme } from '@murder/ui-core/theme/buildTheme.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
 import { useCanvasBackgroundColor } from './canvasBackground.js';
 import {
   PANE_BORDER_GLYPHS,

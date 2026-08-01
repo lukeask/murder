@@ -51,23 +51,23 @@ import type { JSX } from 'react';
 import { useContext, useEffect } from 'react';
 import { shallow } from 'zustand/shallow';
 import { useStoreWithEqualityFn } from 'zustand/traditional';
-import { AppStoreContext } from '../hooks/useAppStore.js';
+import { AppStoreContext } from '@murder/ui-core/hooks/useAppStore.js';
 import { useModalHeight, useModalWidth, useTerminalSize } from '../hooks/useTerminalSize.js';
-import { ACTIONS, type ActionId, type Modifier, resolveBindings } from '../input/bindings.js';
+import { ACTIONS, type ActionId, type Modifier, resolveBindings } from '@murder/ui-core/input/bindings.js';
 import type { Mode, ModeStoreApi } from '../input/modeStore.js';
-import { applyEditorKey } from '../input/textEditor/applyEditorKey.js';
-import type { EditorCommand } from '../input/textEditor/commands.js';
-import { singleLineEditorPolicy } from '../input/textEditor/keyDecoder.js';
-import { reduceEditor } from '../input/textEditor/operations.js';
-import { plainTextProjection } from '../input/textEditor/projection.js';
-import { editorAtEnd, type TextEditorState } from '../input/textEditor/state.js';
-import { plainTextTopology } from '../input/textEditor/topology.js';
+import { applyEditorKey } from '@murder/ui-core/input/textEditor/applyEditorKey.js';
+import type { EditorCommand } from '@murder/ui-core/input/textEditor/commands.js';
+import { singleLineEditorPolicy } from '@murder/ui-core/input/textEditor/keyDecoder.js';
+import { reduceEditor } from '@murder/ui-core/input/textEditor/operations.js';
+import { plainTextProjection } from '@murder/ui-core/input/textEditor/projection.js';
+import { editorAtEnd, type TextEditorState } from '@murder/ui-core/input/textEditor/state.js';
+import { plainTextTopology } from '@murder/ui-core/input/textEditor/topology.js';
 import {
   type BarWidgetId,
   type BarWidgetsConfig,
   resolveBarWidgetConfig,
-} from '../selectors/barWidgetRegistry.js';
-import { harnessLabel, harnessShortLabel } from '../selectors/harnessDisplay.js';
+} from '@murder/ui-core/selectors/barWidgetRegistry.js';
+import { harnessLabel, harnessShortLabel } from '@murder/ui-core/selectors/harnessDisplay.js';
 import type {
   LlmEnvWire,
   LlmModelOverrideWire,
@@ -76,25 +76,25 @@ import type {
   SettingsActions,
   StartupRogueModelWire,
   StartupRogueWire,
-} from '../store/settings/settingsActions.js';
+} from '@murder/ui-core/store/settings/settingsActions.js';
 import type {
   ClaudeControlBackend,
   CodexControlBackend,
   CursorControlBackend,
   DefaultChatViewMode,
   DocumentDisplayMode,
-} from '../store/settings/settingsSlice.js';
-import type { AppStore } from '../store/store.js';
-import type { ThemeRecord } from '../store/themes/themesSlice.js';
+} from '@murder/ui-core/store/settings/settingsSlice.js';
+import type { AppStore } from '@murder/ui-core/store/store.js';
+import type { ThemeRecord } from '@murder/ui-core/store/themes/themesSlice.js';
 import { setBackgroundTransparencyPreview } from '../terminal/canvasBackground.js';
 import { capsStore, type KittySupport, useKittySupport } from '../terminal/capsStore.js';
-import { DEFAULT_THEME_ID, listThemeRecords, type ThemeId } from '../theme/palettes.js';
-import { setTheme, useTheme } from '../theme/themeStore.js';
+import { DEFAULT_THEME_ID, listThemeRecords, type ThemeId } from '@murder/ui-core/theme/palettes.js';
+import { setTheme, useTheme } from '@murder/ui-core/theme/themeStore.js';
 import {
   buildCategoryRows,
   categoryIndexById,
   SETTINGS_CATEGORIES,
-} from './settings/categories.js';
+} from '@murder/ui-core/components/settings/categories.js';
 import {
   crowControlBackendDetailRows,
   defaultEffortFor,
@@ -102,10 +102,10 @@ import {
   HARNESSES,
   startupRogueDetailRows,
   startupRogueEffortsFor,
-} from './settings/items/harnesses.js';
-import { REBINDABLE, RESERVED_KEYS } from './settings/items/keybindings.js';
-import { ENV_PROVIDERS, mergedTiers, tierNames } from './settings/items/llm.js';
-import type { SettingsCategoryId, SettingsRow } from './settings/types.js';
+} from '@murder/ui-core/components/settings/items/harnesses.js';
+import { REBINDABLE, RESERVED_KEYS } from '@murder/ui-core/components/settings/items/keybindings.js';
+import { ENV_PROVIDERS, mergedTiers, tierNames } from '@murder/ui-core/components/settings/items/llm.js';
+import type { SettingsCategoryId, SettingsRow } from '@murder/ui-core/components/settings/types.js';
 import { TextEditorDisplay } from './TextEditorDisplay.js';
 
 /** Content widths must match the corresponding `TextEditorDisplay` allocations below. */
@@ -118,7 +118,7 @@ const SETTINGS_CATEGORY_RAIL_WIDTH = 24;
 const SETTINGS_MODAL_MIN_PREFERRED_WIDTH = 100;
 
 // Bring the dispatcher's `onUncaptured` augmentation into scope (the printable/capture router needs it).
-import '../input/dispatcher.js';
+import '@murder/ui-core/input/dispatcher.js';
 
 /** Intent union — structural-key actions only. Printable chars (j/k + the captured rebind key) ride
  * `onUncaptured`, not the keymap. */

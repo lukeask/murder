@@ -7,7 +7,7 @@
 
 import { Box, Text } from 'ink';
 import { memo, useEffect, useMemo } from 'react';
-import type { ChatTurn, TurnSpeaker } from '../../selectors/conversationsSelectors.js';
+import type { ChatTurn, TurnSpeaker } from '@murder/ui-core/selectors/conversationsSelectors.js';
 import { TerminalSurfaceController } from '../../terminalSurface/TerminalSurfaceController.js';
 import {
   FOLLOW_VIEWPORT_TERMINAL_SIZING,
@@ -15,10 +15,10 @@ import {
   type TerminalSurfaceUpdate,
   type TerminalViewportCommand,
   type TerminalViewportMetrics,
-} from '../../terminalSurface/types.js';
-import { useTheme } from '../../theme/themeStore.js';
-import { terminalSafeText } from '../../utils/terminalSafeText.js';
-import { truncateToWidth, wrapTextToRows } from '../../utils/wrapText.js';
+} from '@murder/ui-core/terminalSurface/types.js';
+import { useTheme } from '@murder/ui-core/theme/themeStore.js';
+import { terminalSafeText } from '@murder/ui-core/utils/terminalSafeText.js';
+import { truncateToWidth, wrapTextToRows } from '@murder/ui-core/utils/wrapText.js';
 import { Pane } from '../Pane.js';
 import { type ChatLine, flattenTurns, wrapChatLines } from './chatLines.js';
 import { computeScrollThumb, computeTranscriptWindow } from './shared/scrollWindow.js';

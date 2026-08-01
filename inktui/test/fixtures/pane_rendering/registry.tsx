@@ -12,7 +12,7 @@ import {
 } from '../../../src/components/ResourceRow.js';
 import { TextInput } from '../../../src/components/TextInput.js';
 import { TranscriptPane } from '../../../src/components/panes/TranscriptPane.js';
-import { getTheme } from '../../../src/theme/themeStore.js';
+import { getTheme } from '@murder/ui-core/theme/themeStore.js';
 import {
   type BarFixtureData,
   barData,
@@ -492,16 +492,18 @@ function DocFixture({
 function ChatInputFixture({
   data,
   focused,
+  width,
 }: {
   readonly data: ChatInputFixtureData;
   readonly focused: boolean;
+  readonly width: number;
 }): React.JSX.Element {
   const theme = getTheme();
   const style = paneBorderStyle(focused);
   const glyphs = PANE_BORDER_GLYPHS[style];
   const borderColor = focused ? theme.active : theme.inactive;
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width={width}>
       {data.queued !== undefined ? (
         <Box paddingX={1}>
           <Text color={theme.warning} wrap="truncate">
@@ -517,7 +519,12 @@ function ChatInputFixture({
         bold={focused}
       />
       <Box borderStyle={style} borderTop={false} borderColor={borderColor} paddingX={1}>
-        <TextInput value={data.value} placeholder={data.placeholder} focused={focused} />
+        <TextInput
+          value={data.value}
+          placeholder={data.placeholder}
+          focused={focused}
+          width={Math.max(1, width - 4)}
+        />
       </Box>
       <PaneBorderBottom
         borderColor={borderColor}
@@ -801,8 +808,8 @@ export const paneFixtures: readonly PaneFixture[] = [
     description: 'Store-free ChatInput chrome wrapper with wrapped draft and queued state.',
     sizes: PANE_SIZES,
     data: chatInputData,
-    render: ({ data, focused }) => (
-      <ChatInputFixture data={data as ChatInputFixtureData} focused={focused} />
+    render: ({ data, focused, width }) => (
+      <ChatInputFixture data={data as ChatInputFixtureData} focused={focused} width={width} />
     ),
   },
   {
