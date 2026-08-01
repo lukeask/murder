@@ -3,9 +3,13 @@
  * shared composer. Open panes come from favorites + paneOverrides (TUI parity); roster click
  * opens/focuses; each pane can close (button / Ctrl+W). Tickets default to a side column
  * (like docs); expand to full-stage takeover when requested.
+ *
+ * Per-pane view mode cycles verbose → condensed → tmux (TUIchat-3 / cyclePaneViewMode).
+ * `paneViewModes[agent]=tmux` renders the terminal surface in that pane.
  */
 
 import { selectActiveAgentId } from '@murder/ui-core/selectors/conversationsSelectors.js';
+import type { ChatViewMode } from '@murder/ui-core/store/conversations/conversationsSlice.js';
 import type { DefaultChatViewMode } from '@murder/ui-core/store/settings/settingsSlice.js';
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
@@ -27,13 +31,21 @@ import { useMediaQuery, MOBILE_QUERY } from '../../useMediaQuery.js';
 
 type StageTab = 'chat' | 'terminal';
 
+/** Landscape + both doc/ticket open → two side columns; narrow → tabbed/stacked side slot. */
+export function shouldDualSideColumns(bothSidesOpen: boolean, isNarrow: boolean): boolean {
+  return bothSidesOpen && !isNarrow;
+}
+
 function paneViewMode(
   agentId: string,
   paneViewModes: Readonly<Record<string, string>>,
   defaultChatViewMode: DefaultChatViewMode,
-): DefaultChatViewMode {
+): ChatViewMode {
   const stored = paneViewModes[agentId] ?? defaultChatViewMode;
-  return stored === 'tmux' ? 'verbose' : (stored as DefaultChatViewMode);
+  if (stored === 'verbose' || stored === 'condensed' || stored === 'tmux') {
+    return stored;
+  }
+  return defaultChatViewMode;
 }
 
 function TranscriptPaneChrome({
@@ -47,10 +59,10 @@ function TranscriptPaneChrome({
 }: {
   readonly pane: StageTranscriptPane;
   readonly focused: boolean;
-  readonly chatViewMode: DefaultChatViewMode;
+  readonly chatViewMode: ChatViewMode;
   readonly onFocus: () => void;
   readonly onClose: () => void;
-  readonly onViewMode: (mode: DefaultChatViewMode) => void;
+  readonly onViewMode: (mode: ChatViewMode) => void;
   readonly children: ReactNode;
 }): React.JSX.Element {
   return (
@@ -58,6 +70,7 @@ function TranscriptPaneChrome({
       className={`mds-stage-pane${focused ? ' mds-stage-pane--focused' : ''}`}
       data-agent-id={pane.identity.agentId}
       data-focused={focused ? 'true' : 'false'}
+      data-view-mode={chatViewMode}
       onClick={onFocus}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -80,9 +93,10 @@ function TranscriptPaneChrome({
           tabs={[
             { id: 'verbose', label: 'Verbose' },
             { id: 'condensed', label: 'Condensed' },
+            { id: 'tmux', label: 'Tmux' },
           ]}
           value={chatViewMode}
-          onChange={(id) => onViewMode(id as DefaultChatViewMode)}
+          onChange={(id) => onViewMode(id as ChatViewMode)}
           aria-label={`Chat view mode for ${pane.identity.agentId}`}
         />
         <IconButton
@@ -116,10 +130,17 @@ export function Stage(): React.JSX.Element {
   const [tab, setTab] = useState<StageTab>('chat');
   /** Full-stage ticket takeover; default false = column beside transcripts (doc-column parity). */
   const [ticketExpanded, setTicketExpanded] = useState(false);
+  /** Narrow dual-side: which surface fills the stacked side slot. */
+  const [sideTab, setSideTab] = useState<'doc' | 'ticket'>('doc');
 
   useEffect(() => {
     if (!ticketOpen) setTicketExpanded(false);
   }, [ticketOpen]);
+
+  useEffect(() => {
+    if (docOpen) setSideTab('doc');
+    else if (ticketOpen) setSideTab('ticket');
+  }, [docOpen, ticketOpen]);
 
   const activeAgentId = selectActiveAgentId(conversations, roster, favorites);
   const openPanes = selectStageTranscriptPanes(conversations, roster, favorites);
@@ -133,10 +154,14 @@ export function Stage(): React.JSX.Element {
     orientation,
   );
 
+  const sessionIdFor = useCallback(
+    (agentId: string): string | null =>
+      roster.rows.find((row) => row.agentId === agentId)?.sessionId ?? null,
+    [roster.rows],
+  );
+
   const terminalSessionId =
-    activeAgentId === null
-      ? null
-      : (roster.rows.find((row) => row.agentId === activeAgentId)?.sessionId ?? null);
+    activeAgentId === null ? null : sessionIdFor(activeAgentId);
 
   const closePane = useCallback(
     (agentId: string): void => {
@@ -171,6 +196,27 @@ export function Stage(): React.JSX.Element {
   }
 
   const emptyStage = visible.length === 0 && !docOpen && !ticketOpen;
+  const sideOpen = docOpen || (ticketOpen && !ticketExpanded);
+  const bothSides = docOpen && ticketOpen && !ticketExpanded;
+  const dualSide = shouldDualSideColumns(bothSides, isNarrow);
+  const sideStacked = bothSides && isNarrow;
+
+  const ticketBeside = (
+    <div className="mds-stage__doc-col mds-stage__doc-col--ticket">
+      <TicketDetail
+        layoutActions={
+          <IconButton
+            size="sm"
+            label="Expand ticket to full stage"
+            title="Expand"
+            onClick={() => setTicketExpanded(true)}
+          >
+            <Icon name="plus" size={14} />
+          </IconButton>
+        }
+      />
+    </div>
+  );
 
   return (
     <div className="stage mds-stage">
@@ -232,25 +278,50 @@ export function Stage(): React.JSX.Element {
             }
             data-columns={layout.columns}
             data-pane-count={visible.length}
+            data-dual-side={dualSide ? 'true' : 'false'}
           >
-            {docOpen ? (
-              <div className="mds-stage__doc-col">
-                <DocViewer />
-              </div>
-            ) : ticketOpen ? (
-              <div className="mds-stage__doc-col mds-stage__doc-col--ticket">
-                <TicketDetail
-                  layoutActions={
-                    <IconButton
-                      size="sm"
-                      label="Expand ticket to full stage"
-                      title="Expand"
-                      onClick={() => setTicketExpanded(true)}
-                    >
-                      <Icon name="plus" size={14} />
-                    </IconButton>
-                  }
-                />
+            {sideOpen ? (
+              <div
+                className={`mds-stage__side${
+                  sideStacked
+                    ? ' mds-stage__side--stacked'
+                    : dualSide
+                      ? ' mds-stage__side--dual'
+                      : ''
+                }`}
+                data-side={sideStacked ? 'stacked' : dualSide ? 'dual' : 'single'}
+              >
+                {sideStacked ? (
+                  <>
+                    <div className="mds-stage__side-tabs">
+                      <Tabs
+                        tabs={[
+                          { id: 'doc', label: 'Doc' },
+                          { id: 'ticket', label: 'Ticket' },
+                        ]}
+                        value={sideTab}
+                        onChange={(id) => setSideTab(id as 'doc' | 'ticket')}
+                        aria-label="Side panel"
+                      />
+                    </div>
+                    {sideTab === 'doc' ? (
+                      <div className="mds-stage__doc-col">
+                        <DocViewer />
+                      </div>
+                    ) : (
+                      ticketBeside
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {docOpen ? (
+                      <div className="mds-stage__doc-col">
+                        <DocViewer />
+                      </div>
+                    ) : null}
+                    {ticketOpen && !ticketExpanded ? ticketBeside : null}
+                  </>
+                )}
               </div>
             ) : null}
             {visible.length > 0 ? (
@@ -276,7 +347,11 @@ export function Stage(): React.JSX.Element {
                       onClose={() => closePane(agentId)}
                       onViewMode={(m) => setPaneViewMode(agentId, m)}
                     >
-                      <ChatTranscript agentId={agentId} />
+                      {mode === 'tmux' ? (
+                        <TmuxFrameView sessionId={sessionIdFor(agentId)} />
+                      ) : (
+                        <ChatTranscript agentId={agentId} focused={focused} />
+                      )}
                     </TranscriptPaneChrome>
                   );
                 })}

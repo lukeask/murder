@@ -3,9 +3,9 @@
  * Condensed folds tool_call runs; Stage toggle writes setPaneViewMode.
  */
 
-import { cleanup, screen } from '@testing-library/react';
+import { cleanup, fireEvent, screen } from '@testing-library/react';
 import { act } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatTranscript } from '../src/components/stage/ChatTranscript.js';
 import { Stage } from '../src/components/stage/Stage.js';
 import { makeStore, renderWithStore, seedSlice } from './helpers.js';
@@ -136,6 +136,26 @@ describe('ChatTranscript (DS reskin)', () => {
     // One collapsed activity line rather than two tool bubbles.
     expect(bubbles.length).toBeLessThanOrEqual(1);
   });
+
+  it('j/k steps turn scroll when focused and not in composer', () => {
+    const { store } = makeStore();
+    seedBlocks(store, [
+      { id: '1', type: 'user', raw: { text: 'one' } },
+      { id: '2', type: 'assistant', raw: { text: 'two' } },
+      { id: '3', type: 'user', raw: { text: 'three' } },
+    ]);
+    renderWithStore(<ChatTranscript agentId={AID} focused />, { store });
+    const turns = document.querySelectorAll('[data-turn-line]');
+    expect(turns).toHaveLength(3);
+    const scrollIntoView = vi.fn();
+    turns.forEach((el) => {
+      (el as HTMLElement).scrollIntoView = scrollIntoView;
+    });
+    act(() => {
+      fireEvent.keyDown(window, { key: 'j' });
+    });
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
 });
 
 describe('Stage view mode toggle', () => {
@@ -182,5 +202,14 @@ describe('Stage view mode toggle', () => {
       verbose.click();
     });
     expect(store.getState().conversations.paneViewModes[AID]).toBe('verbose');
+
+    const tmux = screen.getByRole('tab', { name: 'Tmux' });
+    act(() => {
+      tmux.click();
+    });
+    expect(store.getState().conversations.paneViewModes[AID]).toBe('tmux');
+    expect(document.querySelector(`[data-agent-id="${AID}"]`)?.getAttribute('data-view-mode')).toBe(
+      'tmux',
+    );
   });
 });

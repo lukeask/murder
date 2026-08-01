@@ -509,115 +509,124 @@ export function ChatInput(): React.JSX.Element {
           }}
         />
       ) : null}
-      {imageChips.length > 0 ? (
-        <ul className="mds-composer__drafts" aria-label="attached images">
-          {imageChips.map(({ id, label }) => {
-            const draft = drafts[id];
-            const status = draft?.status ?? 'uploading';
-            const thumb = thumbUrls[id];
-            return (
-              <li key={id} className="mds-composer__draft" data-status={status}>
-                {thumb !== undefined ? (
-                  <img className="mds-composer__draft-thumb" src={thumb} alt="" />
-                ) : (
-                  <span className="mds-composer__draft-ph" aria-hidden />
-                )}
-                <span className="mds-composer__draft-label">{label}</span>
-                <span className="mds-composer__draft-status">{status}</span>
-                <button
-                  type="button"
-                  className="mds-composer__draft-x"
-                  aria-label={`remove ${label}`}
-                  onClick={() => removeImageChip(id)}
-                >
-                  ×
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
       {showComposerField ? (
-        <Input
-          multiline
-          size="lg"
-          id={CHAT_INPUT_ID}
-          ref={fieldRef}
-          placeholder={
-            isFreeform
-              ? 'type something…'
-              : agentId === null
-                ? 'select a crow to chat…'
-                : `message ${agentId}…`
-          }
-          value={displayText}
-          disabled={agentId === null}
-          readOnly={vimMode && vimSubmode === 'normal'}
-          className={vimMode && vimSubmode === 'normal' ? 'mds-input--vim-normal' : undefined}
-          autoFocus={isFreeform ? true : undefined}
-          onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
-            if (vimMode && vimSubmode === 'normal') return;
-            syncFromField(e.target);
-          }}
-          onPaste={onPaste}
-          onSelect={(e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-            const el = e.currentTarget;
-            const sel = el.selectionStart;
-            if (sel === null) return;
-            const labels = spanLabels(chatInput.getState().text);
-            let prefixLen = 0;
-            for (const { id } of labels) {
-              prefixLen += id.length + 2; // U+E000 + id + U+E001
+        <div
+          className={`mds-composer__field${imageChips.length > 0 ? ' mds-composer__field--spans' : ''}`}
+        >
+          {imageChips.length > 0 ? (
+            <ul className="mds-composer__spans" aria-label="attached images">
+              {imageChips.map(({ id, label }) => {
+                const draft = drafts[id];
+                const status = draft?.status ?? 'uploading';
+                const thumb = thumbUrls[id];
+                const showStatus = status !== 'done';
+                return (
+                  <li key={id} className="mds-composer__span" data-status={status}>
+                    {thumb !== undefined ? (
+                      <img className="mds-composer__span-thumb" src={thumb} alt="" />
+                    ) : (
+                      <span className="mds-composer__span-ph" aria-hidden />
+                    )}
+                    <span className="mds-composer__span-label">{label}</span>
+                    {showStatus ? (
+                      <span className="mds-composer__span-status">{status}</span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="mds-composer__span-x"
+                      aria-label={`remove ${label}`}
+                      onClick={() => removeImageChip(id)}
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          <Input
+            multiline
+            size="lg"
+            id={CHAT_INPUT_ID}
+            ref={fieldRef}
+            placeholder={
+              isFreeform
+                ? 'type something…'
+                : agentId === null
+                  ? 'select a crow to chat…'
+                  : imageChips.length > 0
+                    ? 'add a caption…'
+                    : `message ${agentId}…`
             }
-            const storeCursor = prefixLen + sel;
-            if (storeCursor !== chatInput.getState().cursor) {
-              chatInput.getState().setBuffer({
-                text: chatInput.getState().text,
-                cursor: storeCursor,
-                desiredVisualColumn: null,
-              });
+            value={displayText}
+            disabled={agentId === null}
+            readOnly={vimMode && vimSubmode === 'normal'}
+            className={vimMode && vimSubmode === 'normal' ? 'mds-input--vim-normal' : undefined}
+            autoFocus={isFreeform ? true : undefined}
+            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+              if (vimMode && vimSubmode === 'normal') return;
+              syncFromField(e.target);
+            }}
+            onPaste={onPaste}
+            onSelect={(e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+              const el = e.currentTarget;
+              const sel = el.selectionStart;
+              if (sel === null) return;
+              const labels = spanLabels(chatInput.getState().text);
+              let prefixLen = 0;
+              for (const { id } of labels) {
+                prefixLen += id.length + 2; // U+E000 + id + U+E001
+              }
+              const storeCursor = prefixLen + sel;
+              if (storeCursor !== chatInput.getState().cursor) {
+                chatInput.getState().setBuffer({
+                  text: chatInput.getState().text,
+                  cursor: storeCursor,
+                  desiredVisualColumn: null,
+                });
+              }
+            }}
+            onKeyDown={onKeyDown}
+            trailing={
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="mds-composer__file"
+                  tabIndex={-1}
+                  aria-hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file !== undefined) void attachImageFile(file);
+                  }}
+                />
+                <IconButton
+                  label="attach image"
+                  size="md"
+                  disabled={agentId === null}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Icon name="plus" />
+                </IconButton>
+                <IconButton
+                  label="send"
+                  size="md"
+                  disabled={!canSend}
+                  onClick={submit}
+                  style={
+                    canSend
+                      ? { background: 'var(--accent)', color: 'var(--text-on-accent)' }
+                      : undefined
+                  }
+                >
+                  <Icon name="send" />
+                </IconButton>
+              </>
             }
-          }}
-          onKeyDown={onKeyDown}
-          trailing={
-            <>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="mds-composer__file"
-                tabIndex={-1}
-                aria-hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file !== undefined) void attachImageFile(file);
-                }}
-              />
-              <IconButton
-                label="attach image"
-                size="md"
-                disabled={agentId === null}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Icon name="plus" />
-              </IconButton>
-              <IconButton
-                label="send"
-                size="md"
-                disabled={!canSend}
-                onClick={submit}
-                style={
-                  canSend
-                    ? { background: 'var(--accent)', color: 'var(--text-on-accent)' }
-                    : undefined
-                }
-              >
-                <Icon name="send" />
-              </IconButton>
-            </>
-          }
-        />
+          />
+        </div>
       ) : (
         <Input
           size="lg"

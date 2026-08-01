@@ -1,10 +1,13 @@
 /** DocViewer — open plan/note/report from docView; Panel chrome shared with TicketDetail. */
 
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
+import { stageDocFocusId } from '@murder/ui-core/input/focusIds.js';
 import { shallow } from 'zustand/shallow';
-import { Panel, Tag, IconButton, Icon, Button } from '../ds/index.js';
+import { usePaneScrollState } from '../../composer/usePaneScrollState.js';
+import { scrollEdgesClassName, useScrollEdges } from '../../useScrollEdges.js';
+import { Panel, Tag, IconButton, Icon, Button, cx } from '../ds/index.js';
 import { SimpleMarkdown } from './SimpleMarkdown.js';
 import { TmuxFrameView } from './TmuxFrameView.js';
 import { GotoLineOverlay } from './GotoLineOverlay.js';
@@ -78,6 +81,8 @@ export function DocViewer(): React.JSX.Element | null {
   const open = docView.open;
   const kind = open?.kind ?? 'note';
   const name = open?.name ?? '';
+  const scrollPaneId = open !== null ? stageDocFocusId(open.name) : 'stage:doc:';
+  const [storedScroll, setStoredScroll] = usePaneScrollState(scrollPaneId);
 
   useEffect(() => {
     const el = surfaceRef.current;
@@ -128,12 +133,30 @@ export function DocViewer(): React.JSX.Element | null {
       const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
       const ratio = (target - 1) / Math.max(1, lineCount - 1);
       el.scrollTop = ratio * maxScroll;
+      setStoredScroll(el.scrollTop);
     },
-    [docView.body],
+    [docView.body, setStoredScroll],
   );
 
   const editing = editor.status === 'active' || editor.status === 'starting';
   const goto = useWebGotoLine(jump, open !== null && !editing);
+  const scrollEdges = useScrollEdges(scrollRef, docView.body?.length ?? 0);
+
+  // Re-apply snapshotted scrollTop after remount / workspace hydrate / body load.
+  useLayoutEffect(() => {
+    if (open === null || editing || docView.status !== 'ready') return;
+    const el = scrollRef.current;
+    if (el === null) return;
+    if (Math.abs(el.scrollTop - storedScroll) > 1) {
+      el.scrollTop = storedScroll;
+    }
+  }, [docView.status, editing, open, storedScroll, docView.body]);
+
+  const onDocScroll = useCallback((): void => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    setStoredScroll(el.scrollTop);
+  }, [setStoredScroll]);
 
   useEffect(() => {
     if (open === null || editing) return;
@@ -141,6 +164,31 @@ export function DocViewer(): React.JSX.Element | null {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       if (isEditableTarget(event.target)) return;
       if (goto.pending !== null) return;
+      const el = scrollRef.current;
+      if (event.key === 'j' || event.key === 'ArrowDown') {
+        if (el === null) return;
+        event.preventDefault();
+        el.scrollBy({ top: CHAR_H });
+        return;
+      }
+      if (event.key === 'k' || event.key === 'ArrowUp') {
+        if (el === null) return;
+        event.preventDefault();
+        el.scrollBy({ top: -CHAR_H });
+        return;
+      }
+      if (event.key === ' ' || event.key === 'PageDown') {
+        if (el === null) return;
+        event.preventDefault();
+        el.scrollBy({ top: el.clientHeight });
+        return;
+      }
+      if (event.key === 'b' || event.key === 'PageUp') {
+        if (el === null) return;
+        event.preventDefault();
+        el.scrollBy({ top: -el.clientHeight });
+        return;
+      }
       if (event.key === 'i') {
         event.preventDefault();
         start();
@@ -216,7 +264,11 @@ export function DocViewer(): React.JSX.Element | null {
       ) : null}
       <div className="mds-doc__surface" ref={surfaceRef}>
         {showDoc ? (
-          <div className="mds-doc__scroll" ref={scrollRef}>
+          <div
+            className={cx('mds-doc__scroll', scrollEdgesClassName(scrollEdges))}
+            ref={scrollRef}
+            onScroll={onDocScroll}
+          >
             {displayMode === 'markdown' ? (
               <div className="mds-doc__body mds-doc__body--md">
                 <SimpleMarkdown source={body} />

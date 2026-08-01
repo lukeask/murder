@@ -324,3 +324,23 @@ describe('ChatInput choice UI', () => {
     expect(checks[1]?.getAttribute('data-checked')).toBe('false');
   });
 });
+
+describe('ChatInput span projection', () => {
+  it('projects image spans as chips inside the composer field shell', () => {
+    const { store } = makeStore();
+    seedActiveAgent(store);
+    const composer = createComposerStores();
+    composer.chatInput.getState().setBuffer({
+      text: '\u{E000}img-abc\u{E001}caption',
+      cursor: '\u{E000}img-abc\u{E001}'.length + 7,
+      desiredVisualColumn: null,
+    });
+    renderWithStore(<ChatInput />, { store, composer });
+
+    expect(document.querySelector('.mds-composer__field--spans')).toBeTruthy();
+    expect(screen.getByLabelText('attached images')).toBeTruthy();
+    expect(screen.getByText('[Image 1]')).toBeTruthy();
+    const field = screen.getByPlaceholderText('add a caption…') as HTMLTextAreaElement;
+    expect(field.value).toBe('caption');
+  });
+});

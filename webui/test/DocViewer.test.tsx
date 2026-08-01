@@ -134,6 +134,45 @@ describe('DocViewer (DS reskin)', () => {
     expect(document.querySelector('.mds-tmux__frame')?.textContent).toContain('editor frame');
   });
 
+  it('reloads the doc body when leaving the editor session', async () => {
+    const bus = new FakeApplicationClient();
+    const SESSION = '00000000-0000-0000-0000-000000000456';
+    bus.stubCommand('document.editor.start', {
+      status: 'active',
+      document_path: '/repo/.murder/plans/alpha.md',
+      terminal_session_id: SESSION,
+      reused: false,
+    });
+    bus.stubCommand('document.editor.resize', { handled: true });
+    bus.stubCommand('document.editor.status', {
+      status: 'active',
+      document_path: '/repo/.murder/plans/alpha.md',
+      terminal_session_id: SESSION,
+    });
+    bus.stubQuery('plan.get', { name: 'alpha', markdown: '# After edit' });
+    const { store } = makeStore();
+    const open = vi.spyOn(store.getState().actions.docView, 'open');
+    seedSlice(store, 'docView', {
+      open: { kind: 'plan', name: 'alpha' },
+      body: 'hello',
+      status: 'ready',
+      error: null,
+    });
+    renderWithStore(<DocViewer />, { store, bus });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flush();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    });
+    expect(open).toHaveBeenCalledWith('plan', 'alpha');
+  });
+
   it('spawns a planner from the plan action', async () => {
     const { store, bus } = makeStore();
     const spawn = vi.spyOn(store.getState().actions.plans, 'spawnPlanner').mockResolvedValue();
@@ -167,6 +206,45 @@ describe('DocViewer (DS reskin)', () => {
       fireEvent.keyDown(window, { key: '2' });
     });
     expect(document.querySelector('.mds-goto__digits')?.textContent).toBe('2');
+  });
+
+  it('j/k and page chords scroll the doc body when not editing', () => {
+    const { store } = makeStore();
+    seedSlice(store, 'docView', {
+      open: { kind: 'note', name: 'scroll-me' },
+      body: Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n'),
+      status: 'ready',
+      error: null,
+    });
+    renderWithStore(<DocViewer />, { store });
+    const scroll = document.querySelector('.mds-doc__scroll') as HTMLDivElement;
+    expect(scroll).toBeTruthy();
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 100 });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 800 });
+    scroll.scrollTop = 0;
+    const calls: number[] = [];
+    scroll.scrollBy = ((opts: ScrollToOptions | number) => {
+      const top = typeof opts === 'number' ? opts : (opts.top ?? 0);
+      calls.push(top);
+      scroll.scrollTop += top;
+    }) as typeof scroll.scrollBy;
+
+    act(() => {
+      fireEvent.keyDown(window, { key: 'j' });
+    });
+    expect(calls).toContain(16);
+    act(() => {
+      fireEvent.keyDown(window, { key: 'k' });
+    });
+    expect(calls).toContain(-16);
+    act(() => {
+      fireEvent.keyDown(window, { key: 'PageDown' });
+    });
+    expect(calls).toContain(100);
+    act(() => {
+      fireEvent.keyDown(window, { key: 'b' });
+    });
+    expect(calls).toContain(-100);
   });
 });
 

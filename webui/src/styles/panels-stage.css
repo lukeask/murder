@@ -118,6 +118,36 @@
   flex-direction: column;
 }
 
+/* Side region (doc and/or ticket) — shares docWeight with the transcript region. */
+.mds-stage__side {
+  flex: var(--stage-doc-weight, 1) 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  gap: 1px;
+  background: var(--border-subtle);
+}
+
+.mds-stage__side--dual {
+  flex-direction: row;
+}
+
+.mds-stage__side--stacked {
+  flex-direction: column;
+}
+
+.mds-stage__side-tabs {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mds-stage__side .mds-stage__doc-col {
+  flex: 1 1 0;
+}
+
 .mds-stage__doc-col {
   flex: var(--stage-doc-weight, 1) 1 0;
   min-width: 0;
@@ -538,7 +568,84 @@
   color: var(--text-muted);
 }
 
-/* Image draft chips (paste / file attach) */
+/* Image / span projection chips — sit inside the composer field shell, not a detached strip. */
+.mds-composer__field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mds-composer__field--spans .mds-input {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.mds-composer__spans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  border: 1px solid var(--border-default);
+  border-bottom: 0;
+  background: color-mix(in srgb, var(--surface-raised, var(--surface-panel)) 88%, var(--accent) 12%);
+}
+
+.mds-composer__span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-1) 2px 2px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs, 10px);
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.mds-composer__span-thumb,
+.mds-composer__span-ph {
+  width: 22px;
+  height: 22px;
+  object-fit: cover;
+  flex: none;
+  background: var(--border-subtle);
+}
+
+.mds-composer__span-label {
+  color: var(--text-primary);
+}
+
+.mds-composer__span-status {
+  color: var(--text-muted);
+  text-transform: lowercase;
+}
+
+.mds-composer__span[data-status='failed'] .mds-composer__span-status {
+  color: var(--danger, #c44);
+}
+
+.mds-composer__span[data-status='uploading'] {
+  border-style: dashed;
+}
+
+.mds-composer__span-x {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  line-height: 1;
+  font-size: 0.95rem;
+}
+
+.mds-composer__span-x:hover {
+  color: var(--text-primary);
+}
+
+/* Legacy draft chip aliases (kept for any external refs during transition). */
 .mds-composer__drafts {
   display: flex;
   flex-wrap: wrap;

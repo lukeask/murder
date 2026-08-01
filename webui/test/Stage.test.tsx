@@ -4,12 +4,30 @@
 
 import { cleanup, fireEvent, screen } from '@testing-library/react';
 import { act } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { Stage } from '../src/components/stage/Stage.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Stage, shouldDualSideColumns } from '../src/components/stage/Stage.js';
 import { makeStore, renderWithStore, seedSlice } from './helpers.js';
 import type { RosterRow } from '@murder/ui-core/store/roster/rosterSlice.js';
+import { MOBILE_QUERY } from '../src/useMediaQuery.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+function stubMatchMedia(isMobile: boolean): void {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query === MOBILE_QUERY ? isMobile : false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    onchange: null,
+    dispatchEvent: () => false,
+  }));
+}
+
 
 const AID_A = 'crow-a';
 const AID_B = 'crow-b';
@@ -54,6 +72,12 @@ function seedTwoOpenPanes(store: ReturnType<typeof makeStore>['store']): void {
 }
 
 describe('Stage multi-pane', () => {
+  it('shouldDualSideColumns is true only when both sides open and not narrow', () => {
+    expect(shouldDualSideColumns(true, false)).toBe(true);
+    expect(shouldDualSideColumns(true, true)).toBe(false);
+    expect(shouldDualSideColumns(false, false)).toBe(false);
+  });
+
   it('renders two open transcript panes side by side', () => {
     const { store } = makeStore();
     seedTwoOpenPanes(store);
@@ -110,6 +134,79 @@ describe('Stage multi-pane', () => {
     expect(document.querySelector('.mds-stage--overlay')).toBeNull();
   });
 
+  it('tiles an open ticket beside transcripts (not full takeover)', () => {
+    const { store } = makeStore();
+    seedTwoOpenPanes(store);
+    seedSlice(store, 'ticketDetail', {
+      ticketId: 't001',
+      frontmatter: {
+        title: 'split',
+        status: 'ready',
+        deps: '',
+        harness: null,
+        model: null,
+        worktree: null,
+        scheduleAt: null,
+      },
+      savedBody: 'body',
+      editedBody: null,
+      scheduleInput: '',
+      scheduleValid: false,
+      status: 'ready',
+      error: null,
+    });
+    renderWithStore(<Stage />, { store });
+
+    expect(document.querySelector('.mds-stage__doc-col--ticket')).toBeTruthy();
+    expect(document.querySelector('.mds-ticket')).toBeTruthy();
+    expect(document.querySelectorAll('.mds-stage-pane').length).toBe(2);
+    expect(document.querySelector('.mds-stage--overlay')).toBeNull();
+    expect(screen.getByLabelText('Expand ticket to full stage')).toBeTruthy();
+  });
+
+  it('shows doc and ticket as dual side columns when both are open', () => {
+    stubMatchMedia(false);
+    const { store } = makeStore();
+    seedTwoOpenPanes(store);
+    seedSlice(store, 'docView', {
+      open: { kind: 'plan', name: 'plan.md' },
+      status: 'ready',
+      body: '# Plan body',
+      error: null,
+    } as never);
+    seedSlice(store, 'ticketDetail', {
+      ticketId: 't001',
+      frontmatter: {
+        title: 'split',
+        status: 'ready',
+        deps: '',
+        harness: null,
+        model: null,
+        worktree: null,
+        scheduleAt: null,
+      },
+      savedBody: 'body',
+      editedBody: null,
+      scheduleInput: '',
+      scheduleValid: false,
+      status: 'ready',
+      error: null,
+    });
+    renderWithStore(<Stage />, { store });
+
+    expect(document.querySelector('.mds-stage__side--dual')).toBeTruthy();
+    expect(document.querySelector('.mds-stage__doc-col')).toBeTruthy();
+    expect(document.querySelector('.mds-stage__doc-col--ticket')).toBeTruthy();
+    expect(document.querySelectorAll('.mds-stage-pane').length).toBe(2);
+    expect(document.querySelector('.mds-stage__grid')?.getAttribute('data-dual-side')).toBe(
+      'true',
+    );
+    // Transcript tiling still uses side-column weights (hasDoc=true).
+    expect(document.querySelector('.mds-stage__transcripts')?.getAttribute('style') ?? '').toMatch(
+      /--stage-cols:\s*1/,
+    );
+  });
+
   it('writes paneViewModes via the per-pane Verbose/Condensed control', () => {
     const { store } = makeStore();
     seedTwoOpenPanes(store);
@@ -122,5 +219,41 @@ describe('Stage multi-pane', () => {
       condensed.click();
     });
     expect(store.getState().conversations.paneViewModes[AID_A]).toBe('condensed');
+  });
+
+  it('honors paneViewModes tmux as an in-pane terminal surface', () => {
+    const { store } = makeStore();
+    seedTwoOpenPanes(store);
+    store.getState().actions.conversations.setTranscriptPaneOpen(AID_B, false);
+    store.getState().actions.conversations.setPaneViewMode(AID_A, 'tmux');
+    renderWithStore(<Stage />, { store });
+
+    const pane = document.querySelector(`[data-agent-id="${AID_A}"]`);
+    expect(pane?.getAttribute('data-view-mode')).toBe('tmux');
+    expect(document.querySelector('.mds-tmux, .mds-tmux__empty')).toBeTruthy();
+    expect(screen.queryByText('hello-a')).toBeNull();
+
+    const tmuxTab = screen.getByRole('tab', { name: 'Tmux' });
+    expect(tmuxTab.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('cycles verbose → condensed → tmux via setPaneViewMode cycle action', () => {
+    const { store } = makeStore();
+    seedTwoOpenPanes(store);
+    store.getState().actions.conversations.setTranscriptPaneOpen(AID_B, false);
+    expect(store.getState().conversations.paneViewModes[AID_A]).toBeUndefined();
+
+    act(() => {
+      store.getState().actions.conversations.cyclePaneViewMode(AID_A);
+    });
+    expect(store.getState().conversations.paneViewModes[AID_A]).toBe('condensed');
+    act(() => {
+      store.getState().actions.conversations.cyclePaneViewMode(AID_A);
+    });
+    expect(store.getState().conversations.paneViewModes[AID_A]).toBe('tmux');
+    act(() => {
+      store.getState().actions.conversations.cyclePaneViewMode(AID_A);
+    });
+    expect(store.getState().conversations.paneViewModes[AID_A]).toBe('verbose');
   });
 });
