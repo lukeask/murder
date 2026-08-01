@@ -3,25 +3,28 @@
  * Exercises ui-core `switchWorkspace` / `applyWorkspaceCount` through web helpers.
  */
 
-import { describe, expect, it } from 'vitest';
-import { applyWorkspaceCount } from '@murder/ui-core/input/workspaceSwitch.js';
+import { describe, expect, it, afterEach } from 'vitest';
 import { createAppStore } from '@murder/ui-core/store/store.js';
 import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { cleanup, fireEvent, screen } from '@testing-library/react';
-import { afterEach } from 'vitest';
 import {
   createComposerStores,
   toWorkspaceStores,
 } from '../src/composer/createComposerStores.js';
 import {
+  applyWorkspaceCount,
   workspaceJump,
   workspaceNext,
   workspacePrev,
 } from '../src/composer/workspaceActions.js';
 import { WorkspaceStrip } from '../src/components/WorkspaceStrip.js';
+import { panelFocusStore } from '../src/panelFocus.js';
 import { renderWithStore } from './helpers.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  panelFocusStore.getState().clear();
+});
 
 function makeBundle() {
   const bus = new FakeApplicationClient();
@@ -81,6 +84,55 @@ describe('workspace switch (web helpers)', () => {
     workspacePrev(stores);
     expect(app.getState().conversations.activePaneAgentId).toBe('agent-a');
     expect(composer.workspace.getState().activeIndex).toBe(0);
+  });
+
+  it('restores list cursor across A→B→A', () => {
+    const { composer, stores } = makeBundle();
+    applyWorkspaceCount(stores, 2);
+
+    composer.paneUi.getState().setCursor('crows', 4);
+    composer.paneUi.getState().setExpanded('crows', false);
+    workspaceNext(stores);
+    expect(composer.paneUi.getState().cursors['crows'] ?? 0).toBe(0);
+    expect(composer.paneUi.getState().expandeds['crows'] ?? false).toBe(false);
+
+    composer.paneUi.getState().setCursor('crows', 1);
+    workspacePrev(stores);
+    expect(composer.workspace.getState().activeIndex).toBe(0);
+    expect(composer.paneUi.getState().cursors['crows']).toBe(4);
+    expect(composer.paneUi.getState().expandeds['crows']).toBe(false);
+  });
+
+  it('restores panelFocus from snapshotted focus intended id across A→B→A', () => {
+    const { composer, stores } = makeBundle();
+    applyWorkspaceCount(stores, 2);
+
+    panelFocusStore.getState().focus('history');
+    workspaceNext(stores);
+    // Fresh slot → chat → rail focus cleared.
+    expect(panelFocusStore.getState().focusedId).toBeNull();
+    expect(composer.focus.getState().intendedId).toBe('chat');
+
+    panelFocusStore.getState().focus('usage');
+    workspacePrev(stores);
+    expect(composer.workspace.getState().activeIndex).toBe(0);
+    expect(panelFocusStore.getState().focusedId).toBe('history');
+    expect(composer.focus.getState().intendedId).toBe('history');
+  });
+
+  it('restores doc/transcript scroll offsets across A→B→A', () => {
+    const { composer, stores } = makeBundle();
+    applyWorkspaceCount(stores, 2);
+
+    composer.paneUi.getState().setScroll('stage:doc:plan-a', 120);
+    composer.paneUi.getState().setScroll('stage:transcript:agent-1', 48);
+    workspaceNext(stores);
+    expect(composer.paneUi.getState().scrolls['stage:doc:plan-a'] ?? 0).toBe(0);
+    expect(composer.paneUi.getState().scrolls['stage:transcript:agent-1'] ?? 0).toBe(0);
+
+    workspacePrev(stores);
+    expect(composer.paneUi.getState().scrolls['stage:doc:plan-a']).toBe(120);
+    expect(composer.paneUi.getState().scrolls['stage:transcript:agent-1']).toBe(48);
   });
 });
 

@@ -7,6 +7,7 @@ import { createPanelStore } from '@murder/ui-core/input/panelStore.js';
 import { PANEL_IDS } from '@murder/ui-core/input/panels.js';
 import { togglePanelVisibility } from '../src/panelVisibility.js';
 import { createComposerStores } from '../src/composer/createComposerStores.js';
+import { panelFocusStore } from '../src/panelFocus.js';
 
 describe('panel visibility', () => {
   it('createComposerStores seeds every rail panel visible', () => {
@@ -23,5 +24,14 @@ describe('panel visibility', () => {
     expect(panels.getState().visible.has('plans')).toBe(false);
     togglePanelVisibility(panels, 'plans');
     expect(panels.getState().visible.has('plans')).toBe(true);
+  });
+
+  it('showing a panel focuses it for keyboard nav', () => {
+    const panels = createPanelStore(PANEL_IDS);
+    panels.getState().hide('history');
+    togglePanelVisibility(panels, 'history');
+    expect(panelFocusStore.getState().focusedId).toBe('history');
+    togglePanelVisibility(panels, 'history');
+    expect(panelFocusStore.getState().focusedId).toBeNull();
   });
 });
