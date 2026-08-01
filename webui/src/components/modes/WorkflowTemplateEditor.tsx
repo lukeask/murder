@@ -223,6 +223,25 @@ function WorkflowTemplateEditorInner({
       activeRun.definition_name === originalName)
       ? activeRun
       : null;
+  /** TUI parity: while a matching run is live, paint the immutable definition_snapshot, not the editable draft. */
+  const runSnapshot = useMemo((): EditorWorkflow | null => {
+    if (matchingRun === null) return null;
+    const snap = matchingRun.definition_snapshot;
+    if (
+      typeof snap !== 'object' ||
+      snap === null ||
+      typeof (snap as { readonly name?: unknown }).name !== 'string'
+    ) {
+      return null;
+    }
+    try {
+      return fromWire(snap as WorkflowTemplate);
+    } catch {
+      return null;
+    }
+  }, [matchingRun]);
+  const frozen = runSnapshot !== null;
+  const displayWorkflow = runSnapshot ?? editor.draft;
   const stageStatuses = useMemo(
     () => (matchingRun === null ? undefined : decodeStaticDagStatuses(matchingRun.state)),
     [matchingRun],
@@ -230,12 +249,20 @@ function WorkflowTemplateEditorInner({
 
   const flow = useMemo(
     () =>
-      workflowToFlow(editor.draft, positions, {
-        selected: editor.selected,
-        extraIssues: serverIssues,
+      workflowToFlow(displayWorkflow, positions, {
+        selected: frozen
+          ? (displayWorkflow.stages.find(
+              (s) =>
+                s.id ===
+                editor.draft.stages.find((d) => d.key === editor.selected)?.id,
+            )?.key ??
+            displayWorkflow.stages[0]?.key ??
+            null)
+          : editor.selected,
+        extraIssues: frozen ? [] : serverIssues,
         ...(stageStatuses === undefined ? {} : { stageStatuses }),
       }),
-    [editor.draft, editor.selected, positions, serverIssues, stageStatuses],
+    [displayWorkflow, editor.draft.stages, editor.selected, frozen, positions, serverIssues, stageStatuses],
   );
 
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<StageFlowNode>([]);
@@ -277,6 +304,7 @@ function WorkflowTemplateEditorInner({
 
   const onNodesChange: OnNodesChange<StageFlowNode> = useCallback(
     (changes) => {
+      if (frozen) return;
       onNodesChangeBase(changes);
       // Persist drag positions into local map (structure stays in EditorWorkflow).
       let moved = false;
@@ -289,11 +317,12 @@ function WorkflowTemplateEditorInner({
       }
       if (moved) setPositions(next);
     },
-    [onNodesChangeBase],
+    [frozen, onNodesChangeBase],
   );
 
   const onEdgesChange: OnEdgesChange<DependencyFlowEdge> = useCallback(
     (changes) => {
+      if (frozen) return;
       const removals = changes.filter((c) => c.type === 'remove');
       const rest = changes.filter((c) => c.type !== 'remove');
       if (rest.length > 0) onEdgesChangeBase(rest);
@@ -311,7 +340,7 @@ function WorkflowTemplateEditorInner({
         }
       }
     },
-    [dispatchEdit, onEdgesChangeBase],
+    [dispatchEdit, frozen, onEdgesChangeBase],
   );
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
