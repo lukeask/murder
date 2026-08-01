@@ -3,8 +3,8 @@
  * and meter fill width/`isHigh` map straight from the view; visuals in `panels-usage.css`.
  */
 
-import { selectUsageView } from '@core/selectors/usageSelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { selectUsageView } from '@murder/ui-core/selectors/usageSelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { Panel, Select, cx } from '../ds/index.js';
 import { SliceHint } from '../SliceHint.js';

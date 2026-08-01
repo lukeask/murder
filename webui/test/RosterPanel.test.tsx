@@ -5,7 +5,7 @@
  * exemplar smoke test (C2).
  */
 
-import type { RosterRow } from '@core/store/roster/rosterSlice.js';
+import type { RosterRow } from '@murder/ui-core/store/roster/rosterSlice.js';
 import { cleanup, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RosterPanel } from '../src/components/panels/RosterPanel.js';

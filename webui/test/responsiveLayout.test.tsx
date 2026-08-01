@@ -5,14 +5,14 @@
  * a FakeApplicationClient; the App's onConnect re-prime is exercised through a minimal fake.
  */
 
-import { AppStoreProvider } from '@core/hooks/useAppStore.js';
-import { createAppStore } from '@core/store/store.js';
-import { FakeApplicationClient } from '@core/application/FakeApplicationClient.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App.js';
-import { ApplicationClientProvider } from '../src/application/ApplicationClientContext.js';
-import type { ApplicationWebSocketClient } from '../src/application/ApplicationWebSocketClient.js';
+import { ApplicationClientProvider } from '@murder/ui-core/hooks/useApplicationClient.js';
+import type { ApplicationConnectionClient } from '@murder/ui-core/application/ApplicationClient.js';
 import { MOBILE_QUERY } from '../src/useMediaQuery.js';
 
 function stubMatchMedia(isMobile: boolean): void {
@@ -29,12 +29,12 @@ function stubMatchMedia(isMobile: boolean): void {
 }
 
 /** A FakeApplicationClient extended with the connection-status callbacks the App's header needs (no-ops). */
-function fakeBus(): ApplicationWebSocketClient {
+function fakeBus(): ApplicationConnectionClient {
   const bus = new FakeApplicationClient() as unknown as Record<string, unknown>;
   bus['onConnect'] = () => () => {};
   bus['onDisconnect'] = () => () => {};
   bus['onPermanentError'] = () => () => {};
-  return bus as unknown as ApplicationWebSocketClient;
+  return bus as unknown as ApplicationConnectionClient;
 }
 
 function renderApp(): HTMLElement {

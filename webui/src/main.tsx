@@ -1,12 +1,12 @@
 /** Web entrypoint: WebSocket bus, shared store, providers, connect, render {@link App}. */
 
-import { AppStoreProvider } from '@core/hooks/useAppStore.js';
-import { createAppStore } from '@core/store/store.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
-import { ApplicationClientProvider } from './application/ApplicationClientContext.js';
-import { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
+import { ApplicationClientProvider } from '@murder/ui-core/hooks/useApplicationClient.js';
+import { createBrowserApplicationClient } from './application/createBrowserApplicationClient.js';
 import './styles/theme.css';
 // Design-system token foundation: imported AFTER theme.css (so DS values win on overlapping names
 // like --space-*/--radius/--font-mono) and BEFORE app.css (so the existing app chrome still reads
@@ -32,7 +32,7 @@ import './styles/panels-transit.css';
 import './styles/panels-settings.css';
 import './styles/panels-stage.css';
 
-const bus = new ApplicationWebSocketClient({ logger: console });
+const bus = createBrowserApplicationClient();
 const { store } = createAppStore(bus);
 
 // Kick the connection. Requests/streams also lazily connect, but starting here means the header shows

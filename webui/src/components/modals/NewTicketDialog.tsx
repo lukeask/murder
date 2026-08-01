@@ -1,9 +1,10 @@
 /** NewTicketDialog — web counterpart of inktui's NewTicketModal (`ctrl+t`). */
 
-import { createDialogActions } from '@core/store/dialogs/dialogActions.js';
-import { toastStore } from '@core/store/toast/toastStore.js';
+import { createDialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
+import { prepareTicketTitle } from '@murder/ui-core/create/creationPayloads.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { useState } from 'react';
-import { useApplicationClient } from '../../application/ApplicationClientContext.js';
+import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
 import { Input } from '../ds/index.js';
 import { CreationDialog } from './CreationDialog.js';
 
@@ -20,9 +21,9 @@ export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.
   const [pending, setPending] = useState(false);
 
   const submit = (): void => {
-    const trimmed = title.trim();
-    if (trimmed.length === 0) {
-      setError('Ticket title is required.');
+    const preparedTitle = prepareTicketTitle(title);
+    if (!preparedTitle.ok) {
+      setError(preparedTitle.error);
       return;
     }
     if (pending) return;
@@ -30,7 +31,7 @@ export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.
     setError(null);
     const actions = createDialogActions(bus);
     void actions
-      .quickCreateTicket(trimmed)
+      .quickCreateTicket(preparedTitle.value)
       .then((result) => {
         onClose();
         toastStore.getState().push(`ticket "${result.title}" created`, { ttlMs: 6000 });

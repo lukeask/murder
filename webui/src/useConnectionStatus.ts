@@ -7,11 +7,11 @@
  */
 
 import { useEffect, useState } from 'react';
-import type { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
+import type { ApplicationConnectionClient } from '@murder/ui-core/application/ApplicationClient.js';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'error';
 
-export function useConnectionStatus(bus: ApplicationWebSocketClient): ConnectionStatus {
+export function useConnectionStatus(bus: ApplicationConnectionClient): ConnectionStatus {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   useEffect(() => {
     const offConnect = bus.onConnect(() => setStatus('connected'));

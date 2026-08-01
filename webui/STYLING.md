@@ -16,7 +16,8 @@ documented with fallback values in **`src/styles/theme.css`**.
 - Components/CSS reference them only as `var(--color-…)`. **Never hard-code a hex in a component or
   in app.css.**
 - To **re-theme** (change the palette): switch the theme in the Settings panel, or call
-  `setTheme(id)` from `@core/theme/themeStore`. New palettes are added in `@core/theme/palettes.ts`
+  `setTheme(id)` from `@murder/ui-core/theme/themeStore.js`. New palettes are added in
+  `@murder/ui-core/theme/palettes.js`
   (shared with the Ink TUI) — add a role there and one mapping line is enough; the bridge is
   mechanical.
 - The available roles: `brand text muted focus border-blurred title-blurred row-selected-bg
@@ -51,7 +52,7 @@ the app's rhythm globally without touching any component:
 ## Where to change common things
 
 - **A color** → `src/styles/theme.css` (a theme role fallback) or the palette in
-  `@core/theme/palettes.ts` (the real source for all themes).
+  `@murder/ui-core/theme/palettes.js` (the real source for all themes).
 - **Spacing / radius / fonts** → the layout tokens in `src/styles/theme.css`.
 - **One panel's look** (e.g. the usage gauges, the chat bubbles) → its section in `app.css`
   (sections are labelled with `── name ──` banners).

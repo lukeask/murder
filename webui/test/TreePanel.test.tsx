@@ -6,7 +6,7 @@
  * is kept byte-for-byte from the original; this exercises the reskinned DOM.
  */
 
-import type { TransitLane } from '@core/store/transit/transitSlice.js';
+import type { TransitLane } from '@murder/ui-core/store/transit/transitSlice.js';
 import { cleanup, fireEvent, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { TreePanel } from '../src/components/panels/TreePanel.js';

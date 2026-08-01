@@ -4,9 +4,9 @@
  * crows can be reset.
  */
 
-import { selectCrowsView } from '@core/selectors/crowsSelectors.js';
-import type { Health } from '@core/selectors/crowHealthSelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { selectCrowsView } from '@murder/ui-core/selectors/crowsSelectors.js';
+import type { Health } from '@murder/ui-core/selectors/crowHealthSelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useCreationDialogs } from '../../creationDialogs.js';
 import {

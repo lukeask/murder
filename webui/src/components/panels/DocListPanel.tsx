@@ -3,8 +3,8 @@
  * (open via `docView.open`, ★ via `favorites.toggle`); plans add depth indent + optional `rowExtra`.
  */
 
-import type { DocKind } from '@core/store/docView/docViewSlice.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import type { DocKind } from '@murder/ui-core/store/docView/docViewSlice.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { Panel, ListRow } from '../ds/index.js';
 import { SliceHint } from '../SliceHint.js';
 import type { SliceLike } from '../SliceHint.js';

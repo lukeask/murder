@@ -3,8 +3,8 @@
  * Adds a per-plan "spawn planner" affordance; thin DocListPanel wrapper.
  */
 
-import { selectPlansView } from '@core/selectors/plansSelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { selectPlansView } from '@murder/ui-core/selectors/plansSelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useCreationDialogs } from '../../creationDialogs.js';
 import { Button, IconButton, Icon } from '../ds/index.js';

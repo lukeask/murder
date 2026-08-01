@@ -1,7 +1,7 @@
 /** Stage — center column: chat/terminal tabs, or doc/ticket overlay when open. */
 
-import { selectActiveAgentId } from '@core/selectors/conversationsSelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { selectActiveAgentId } from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useState } from 'react';
 import { Tabs } from '../ds/index.js';

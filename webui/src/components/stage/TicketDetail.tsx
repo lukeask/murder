@@ -1,6 +1,6 @@
 /** TicketDetail — open ticket frontmatter + body editor + schedule; uses StageOverlayPanel. */
 
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { Tag, Input, Button } from '../ds/index.js';
 import { StageOverlayPanel } from './DocViewer.js';

@@ -1,33 +1,33 @@
 /** SpawnRogueDialog — web counterpart of inktui's SpawnWizardModal (`ctrl+s`). */
 
-import { useAppStore, useAppStoreApi } from '@core/hooks/useAppStore.js';
+import { useAppStore, useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import {
   DEFAULT_HARNESS,
   HARNESS_ORDER,
   defaultEffortCursor,
   effortMatrixFor,
-} from '@core/components/spawnWizardMachine.js';
+} from '@murder/ui-core/components/spawnWizardMachine.js';
 import {
   modelsFor,
   STATIC_HARNESS_MODELS,
   createHarnessModelsActions,
   type HarnessModel,
-} from '@core/store/dialogs/harnessModelsActions.js';
-import { createSpawnActions } from '@core/store/dialogs/spawnActions.js';
+} from '@murder/ui-core/store/dialogs/harnessModelsActions.js';
+import { createSpawnActions } from '@murder/ui-core/store/dialogs/spawnActions.js';
 import {
   createSpawnFavoritesActions,
   type SpawnFavorite,
-} from '@core/store/dialogs/spawnFavoritesActions.js';
+} from '@murder/ui-core/store/dialogs/spawnFavoritesActions.js';
 import {
   NEW_WORKTREE_KEY,
   buildWorktreeOptions,
   createWorktreeOptionsActions,
   resolveWorktreePayload,
   type WorktreeOption,
-} from '@core/store/dialogs/worktreeOptionsActions.js';
-import { toastStore } from '@core/store/toast/toastStore.js';
+} from '@murder/ui-core/store/dialogs/worktreeOptionsActions.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { useEffect, useMemo, useState } from 'react';
-import { useApplicationClient } from '../../application/ApplicationClientContext.js';
+import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
 import { Input, Select } from '../ds/index.js';
 import { CreationDialog } from './CreationDialog.js';
 

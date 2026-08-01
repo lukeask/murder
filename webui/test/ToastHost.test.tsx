@@ -3,7 +3,7 @@
  * The toast singleton is shared global state — clear between cases (toastStore's own idiom).
  */
 
-import { toastStore } from '@core/store/toast/toastStore.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { act, cleanup, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ToastHost } from '../src/components/ToastHost.js';

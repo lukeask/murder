@@ -1,10 +1,10 @@
 /** Desktop keyboard shortcuts for the web cockpit (focus chat, scroll panels, cycle target, open creation dialogs). */
 
-import { useAppStoreApi } from '@core/hooks/useAppStore.js';
-import { panelForDigit } from '@core/input/panels.js';
-import type { PanelId } from '@core/input/panels.js';
-import { selectCycledRecipientTarget } from '@core/selectors/conversationsSelectors.js';
-import type { SettingsModifier } from '@core/store/settings/settingsSlice.js';
+import { useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
+import { panelForDigit } from '@murder/ui-core/input/panels.js';
+import type { PanelId } from '@murder/ui-core/input/panels.js';
+import { selectCycledRecipientTarget } from '@murder/ui-core/selectors/conversationsSelectors.js';
+import type { SettingsModifier } from '@murder/ui-core/store/settings/settingsSlice.js';
 import { useEffect } from 'react';
 import type { CreationDialogsApi } from './creationDialogs.js';
 

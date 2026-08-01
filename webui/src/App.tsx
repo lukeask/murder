@@ -1,13 +1,13 @@
 /** App — web/mobile shell on design-system primitives (desktop cockpit + mobile tabs). */
 
-import { useAppStoreApi } from '@core/hooks/useAppStore.js';
-import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@core/theme/palettes.js';
-import { setTheme } from '@core/theme/themeStore.js';
+import { useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
+import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@murder/ui-core/theme/palettes.js';
+import { setTheme } from '@murder/ui-core/theme/themeStore.js';
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
-import type { ApplicationWebSocketClient } from './application/ApplicationWebSocketClient.js';
 import { CreationDialogsProvider } from './creationDialogs.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
 import { type ConnectionStatus, useConnectionStatus } from './useConnectionStatus.js';
+import type { ApplicationConnectionClient } from '@murder/ui-core/application/ApplicationClient.js';
 import { MOBILE_QUERY, useMediaQuery } from './useMediaQuery.js';
 import { PlansPanel } from './components/panels/PlansPanel.js';
 import { NotesPanel } from './components/panels/NotesPanel.js';
@@ -68,7 +68,7 @@ const REFRESH_ON_CONNECT = [
 ] as const;
 const LOAD_ON_CONNECT = ['favorites', 'themes', 'settings'] as const;
 
-export function App({ bus }: { readonly bus: ApplicationWebSocketClient }): React.JSX.Element {
+export function App({ bus }: { readonly bus: ApplicationConnectionClient }): React.JSX.Element {
   useThemeCssVars();
   const status = useConnectionStatus(bus);
   const isMobile = useMediaQuery(MOBILE_QUERY);

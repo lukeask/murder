@@ -1,9 +1,8 @@
 # webui — web/mobile frontend for murder
 
-A Vite + React 19 + TypeScript app that ports the Ink TUI to the browser. It **reuses the
-framework-agnostic core** of `inktui/` (store, selectors, theme, wire protocol) verbatim and only
-reimplements the parts that are terminal-specific: the transport (WebSocket instead of a Unix
-socket) and the renderer (DOM instead of Ink).
+A Vite + React 19 + TypeScript app that shares its renderer-neutral application surface with the
+Ink UI through the root `@murder/ui-core` workspace package. The browser app owns DOM components,
+CSS, browser defaults, and browser-specific lifecycle only.
 
 The UI is a **cockpit**: header, stage (chat + terminal), and side panels (roster, tickets, docs,
 settings, and related views) wired to the same application protocol the Ink client uses.
@@ -11,12 +10,12 @@ settings, and related views) wired to the same application protocol the Ink clie
 ## Commands
 
 ```sh
-npm install          # from webui/
-npm run dev          # Vite dev server; proxies /api/ws → live service (see env below)
-npm run build        # tsc --noEmit + vite build → webui/dist (index.html + hashed assets)
-npm run preview      # serve the production build locally
-npm run test         # vitest (ApplicationWebSocketClient + cssVars + component tests)
-npm run typecheck    # tsc --noEmit across webui + the aliased @core tree
+npm ci                              # once, from the repository root
+npm run dev -w webui                # Vite dev server; proxies /api/ws → live service
+npm run build -w webui              # typecheck + Vite build → webui/dist
+npm run preview -w webui            # serve the production build locally
+npm run test -w webui               # browser component and factory tests
+npm run typecheck -w webui
 ```
 
 ### Dev against a live service
@@ -34,7 +33,7 @@ BASE="$(murder web up)"   # e.g. http://127.0.0.1:NNNN
 export VITE_APPLICATION_WS_URL="${BASE/http/ws}/api/ws"
 # or explicitly: export VITE_APPLICATION_WS_PROXY=ws://127.0.0.1:NNNN
 
-cd webui && npm run dev
+npm run dev -w webui
 ```
 
 Env resolution (first match wins):
@@ -49,40 +48,20 @@ If none are set, the `/api/ws` proxy is omitted. `npm run build` emits **`webui/
 Python service ships as `murder/_webui/` and serves; in that context `/api/ws` is same-origin so no
 proxy is involved.
 
-## Reuse strategy — the `@core` alias
+## Shared UI boundary
 
-`vite.config.ts` and `tsconfig.json` both alias **`@core/*` → `../inktui/src/*`**. The web app
-imports the portable core straight off the inktui tree — there is no copy, no fork:
+`ui-core/` owns application interfaces and transport, generated protocol types, Zustand state,
+selectors, renderer-neutral React hooks, themes, input-domain helpers, and workflow logic. Import
+them by explicit subpath, for example
+`@murder/ui-core/store/store.js`; the package deliberately has no giant root barrel.
 
-| Imported from `@core` (aliased, reused as-is) | Why it is portable |
-| --- | --- |
-| `@core/store/store` (`createAppStore`) + every slice | zustand-vanilla only; no ink, no node |
-| `@core/hooks/useAppStore` (provider + hook) | react + `zustand/traditional` only |
-| `@core/generated/applicationProtocol`, `@core/application/*` | generated public wire + client seam |
-| `@core/selectors/*` | pure derived/formatting |
-| `@core/theme/buildTheme`, `@core/theme/palettes`, `@core/theme/themeStore` | pure + zustand |
+`webui/src/` must retain DOM components, CSS variables and styles, browser URL/client-ID defaults,
+focus and scroll behavior, and browser composition. `inktui/` retains Ink components, terminal
+rendering and input, CLI/process behavior, and its TUI client defaults. Neither application imports
+source from the other.
 
-**Reimplemented in `webui/src` (the non-portable parts):**
-
-- `src/application/ApplicationWebSocketClient.ts` — browser `WebSocket` transport for the closed
-  application protocol. Owns request correlation, projection subscriptions, terminal attach/detach,
-  reconnect/backoff, and status hooks. Mirrors `inktui`'s client; talks to the service's `/api/ws`.
-- `src/theme/cssVars.ts` + `src/theme/useThemeCssVars.ts` — project the semantic `Theme` onto CSS
-  custom properties (the Ink UI paints `<Text color=…>`; the web UI paints via CSS vars).
-- `src/App.tsx`, `src/main.tsx` — DOM renderer + entrypoint (mirror of inktui's `index.tsx`).
-
-A core module that transitively imports `ink` or `node:*` is **not** aliased; none of the modules
-the web app uses do (verified: `store.ts`'s transitive closure is zustand + protocol + slices only;
-`useAppStore.ts` is react + zustand only).
-
-### React dedupe
-
-Both `package.json` files pin `react`/`react-dom` to `^19.2` (same major, single instance
-requirement). Because `@core` resolves out-of-root, Vite could otherwise pull a second React copy
-and break hooks; `vite.config.ts` sets `resolve.dedupe: ['react','react-dom']` so the single copy in
-`webui/node_modules` is always used. `server.fs.allow: ['..']` lets Vite read+transpile the sibling
-inktui TS sources, and `tsconfig` uses `moduleResolution: bundler` so the core's `.js` import
-specifiers resolve back onto the `.ts` sources.
+Vite aliases `@murder/ui-core` to `ui-core/src` for fast workspace development and bundles it with
+the web app. The workspace lockfile hoists one pinned React runtime shared by both frontends.
 
 ## ApplicationWebSocketClient — the service contract
 

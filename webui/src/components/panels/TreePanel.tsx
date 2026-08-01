@@ -3,7 +3,7 @@
  * subject/body detail. Web list (not the Ink ASCII railway); lane color cycles `--crow-1..6`.
  */
 
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useState } from 'react';
 import { Panel } from '../ds/index.js';

@@ -4,8 +4,8 @@ import {
   selectMergedConversationTurns,
   type ChatTurn,
   type TurnSpeaker,
-} from '@core/selectors/conversationsSelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+} from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { useEffect, useRef } from 'react';
 import { Avatar, StatusDot } from '../ds/index.js';
 

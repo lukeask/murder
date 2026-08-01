@@ -4,11 +4,11 @@
  * `settings.update` with snake_case wire keys (planner / crow / control backends).
  */
 
-import { buildTheme } from '@core/theme/buildTheme.js';
-import { getPalette } from '@core/theme/palettes.js';
-import { setTheme } from '@core/theme/themeStore.js';
-import type { FakeApplicationClient } from '@core/application/FakeApplicationClient.js';
-import type { AppStoreApi } from '@core/store/store.js';
+import { buildTheme } from '@murder/ui-core/theme/buildTheme.js';
+import { getPalette } from '@murder/ui-core/theme/palettes.js';
+import { setTheme } from '@murder/ui-core/theme/themeStore.js';
+import type { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
+import type { AppStoreApi } from '@murder/ui-core/store/store.js';
 import { fireEvent, screen, cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SettingsPanel } from '../src/components/panels/SettingsPanel.js';

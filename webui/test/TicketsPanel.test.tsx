@@ -4,7 +4,7 @@
  * Badge, and the empty hint. This is the C1 exemplar smoke test the C2 panel reskins mirror.
  */
 
-import type { TicketRow } from '@core/store/tickets/ticketsSlice.js';
+import type { TicketRow } from '@murder/ui-core/store/tickets/ticketsSlice.js';
 import { cleanup, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { TicketsPanel } from '../src/components/panels/TicketsPanel.js';

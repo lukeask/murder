@@ -1,7 +1,7 @@
 /** DocViewer — open plan/note/report from docView; Panel chrome shared with TicketDetail. */
 
 import type { ReactNode } from 'react';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { Panel, Tag, IconButton, Icon } from '../ds/index.js';
 

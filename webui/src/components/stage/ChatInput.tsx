@@ -3,8 +3,8 @@
 import {
   selectActiveAgentId,
   selectLiveChoicePrompt,
-} from '@core/selectors/conversationsSelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+} from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useState } from 'react';
 import { Input, IconButton, KeyHint, Icon } from '../ds/index.js';

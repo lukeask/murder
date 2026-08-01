@@ -3,31 +3,31 @@
  * control backends. Persists via `settings.update`; theme also calls `setTheme` for instant repaint.
  */
 
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { useEffect } from 'react';
 import { shallow } from 'zustand/shallow';
-import { getPalette, getThemeMeta, listThemeIds } from '@core/theme/palettes.js';
-import type { ThemeId } from '@core/theme/palettes.js';
-import { setTheme, useThemeId } from '@core/theme/themeStore.js';
+import { getPalette, getThemeMeta, listThemeIds } from '@murder/ui-core/theme/palettes.js';
+import type { ThemeId } from '@murder/ui-core/theme/palettes.js';
+import { setTheme, useThemeId } from '@murder/ui-core/theme/themeStore.js';
 import {
   defaultEffortFor,
   defaultModelFor,
   HARNESSES,
   startupRogueEffortsFor,
   startupRogueModelsFor,
-} from '@core/components/settings/items/harnesses.js';
+} from '@murder/ui-core/components/settings/items/harnesses.js';
 import type {
   ClaudeControlBackend,
   CodexControlBackend,
   CursorControlBackend,
-} from '@core/store/settings/settingsSlice.js';
+} from '@murder/ui-core/store/settings/settingsSlice.js';
 import { Panel, Input, Select, Radio, Switch, Checkbox, cx } from '../ds/index.js';
 
 const FALLBACK_THEME_IDS = listThemeIds();
 
 const MODIFIER_OPTIONS = ['alt', 'ctrl', 'both'];
 
-/** Mirrored from `@core/.../harnesses` (not exported there). */
+/** Mirrored from the shared harness settings model (not exported there). */
 const CODEX_CONTROL_BACKENDS: readonly CodexControlBackend[] = ['harness_parse', 'app_server'];
 const CURSOR_CONTROL_BACKENDS: readonly CursorControlBackend[] = ['harness_parse', 'acp'];
 const CLAUDE_CONTROL_BACKENDS: readonly ClaudeControlBackend[] = ['harness_parse', 'agent_sdk'];

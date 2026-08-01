@@ -6,9 +6,9 @@
  * TicketsPanel exemplar smoke test.
  */
 
-import type { PlanRow } from '@core/store/plans/plansSlice.js';
-import type { NoteRow } from '@core/store/notes/notesSlice.js';
-import type { ReportRow } from '@core/store/reports/reportsSlice.js';
+import type { PlanRow } from '@murder/ui-core/store/plans/plansSlice.js';
+import type { NoteRow } from '@murder/ui-core/store/notes/notesSlice.js';
+import type { ReportRow } from '@murder/ui-core/store/reports/reportsSlice.js';
 import { cleanup, fireEvent, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PlansPanel } from '../src/components/panels/PlansPanel.js';

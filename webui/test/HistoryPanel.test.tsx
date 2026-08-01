@@ -5,7 +5,7 @@
  * smoke test (C2).
  */
 
-import type { HistoryRow } from '@core/store/history/historySlice.js';
+import type { HistoryRow } from '@murder/ui-core/store/history/historySlice.js';
 import { cleanup, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { HistoryPanel } from '../src/components/panels/HistoryPanel.js';

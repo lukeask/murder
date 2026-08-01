@@ -3,12 +3,12 @@
  * Differ only by slice selector, title, kind, and empty copy.
  */
 
-import { selectNotesView } from '@core/selectors/notesSelectors.js';
-import { selectReportsView } from '@core/selectors/reportsSelectors.js';
-import type { FavoritesState } from '@core/store/favorites/favoritesSlice.js';
-import type { DocKind } from '@core/store/docView/docViewSlice.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
-import type { AppStore } from '@core/store/store.js';
+import { selectNotesView } from '@murder/ui-core/selectors/notesSelectors.js';
+import { selectReportsView } from '@murder/ui-core/selectors/reportsSelectors.js';
+import type { FavoritesState } from '@murder/ui-core/store/favorites/favoritesSlice.js';
+import type { DocKind } from '@murder/ui-core/store/docView/docViewSlice.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
+import type { AppStore } from '@murder/ui-core/store/store.js';
 import { shallow } from 'zustand/shallow';
 import { DocListPanel } from './DocListPanel.js';
 import type { DocListRow } from './DocListPanel.js';

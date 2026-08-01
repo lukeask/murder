@@ -3,9 +3,9 @@
  * filters rows; dismiss and resume actions wire through `history.dismiss` / `history.resumeConversation`.
  */
 
-import { selectHistoryView } from '@core/selectors/historySelectors.js';
-import type { HistoryMode } from '@core/selectors/historySelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { selectHistoryView } from '@murder/ui-core/selectors/historySelectors.js';
+import type { HistoryMode } from '@murder/ui-core/selectors/historySelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useState } from 'react';
 import { Panel, ListRow, Tag, Tabs, Button, IconButton, Icon } from '../ds/index.js';

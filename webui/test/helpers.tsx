@@ -5,14 +5,14 @@
  * is what these component tests exercise, not the RPC plumbing (that's covered by the core slices).
  */
 
-import { AppStoreProvider } from '@core/hooks/useAppStore.js';
-import { createAppStore } from '@core/store/store.js';
-import type { AppStore, AppStoreApi } from '@core/store/store.js';
-import { FakeApplicationClient } from '@core/application/FakeApplicationClient.js';
+import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
+import { createAppStore } from '@murder/ui-core/store/store.js';
+import type { AppStore, AppStoreApi } from '@murder/ui-core/store/store.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { render } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { ApplicationClientProvider } from '../src/application/ApplicationClientContext.js';
-import type { ApplicationWebSocketClient } from '../src/application/ApplicationWebSocketClient.js';
+import { ApplicationClientProvider } from '@murder/ui-core/hooks/useApplicationClient.js';
+import type { ApplicationClient } from '@murder/ui-core/application/ApplicationClient.js';
 import { CreationDialogsProvider, type CreationDialogsApi } from '../src/creationDialogs.js';
 
 const noopCreationDialogs: CreationDialogsApi = {
@@ -27,7 +27,7 @@ export function makeStore(): { store: AppStoreApi; bus: FakeApplicationClient } 
   return { store, bus };
 }
 
-/** Render `ui` inside the store + bus providers. The FakeApplicationClient is cast to the ApplicationWebSocketClient shape
+/** Render `ui` inside the store + bus providers. The FakeApplicationClient is cast to the ApplicationClient shape
  * the ApplicationClientProvider expects — components that subscribe via `useApplicationClient` use only the base `subscribe`. */
 export function renderWithStore(
   ui: ReactNode,
@@ -41,7 +41,7 @@ export function renderWithStore(
   const store = opts?.store ?? createAppStore(bus).store;
   render(
     <AppStoreProvider value={store}>
-      <ApplicationClientProvider value={bus as unknown as ApplicationWebSocketClient}>
+      <ApplicationClientProvider value={bus as unknown as ApplicationClient}>
         <CreationDialogsProvider value={opts?.creationDialogs ?? noopCreationDialogs}>
           {ui}
         </CreationDialogsProvider>

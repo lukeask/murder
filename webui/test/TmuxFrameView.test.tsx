@@ -4,7 +4,7 @@
  * colored markup (a <span style> with a color) and that the empty state shows before any frame.
  */
 
-import { FakeApplicationClient } from '@core/application/FakeApplicationClient.js';
+import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { screen, cleanup } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -46,7 +46,7 @@ describe('TmuxFrameView', () => {
     act(() => {
       bus.emitTerminal('0198b156-2dd3-70a9-bc79-fca001dc8802', 'other');
     });
-    // Still waiting — the terminal attachment is scoped to SESSION.
+    // Still waiting ï¿½ the terminal attachment is scoped to SESSION.
     expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
   });
 });

@@ -21,7 +21,7 @@
    — the attribute wins on specificity (0,1,1) > media (0,0,1). A
    `[data-theme="dark"]` block pins dark over an OS light pref.
    useThemeCssVars sets `document.documentElement.dataset.theme`
-   from the active @core scheme, so DS components key off it.
+   from the active shared-theme scheme, so DS components key off it.
 
    Do not edit piecemeal — this mirrors the bundle. If the bundle
    tokens change, re-port the whole file.

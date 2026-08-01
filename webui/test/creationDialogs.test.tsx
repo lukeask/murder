@@ -1,6 +1,6 @@
 /**
  * Creation dialogs — open + submit happy paths for New Ticket, New Plan, and Spawn Rogue.
- * Asserts each dialog fires the shared `@core` dialog/spawn action command on the FakeApplicationClient.
+ * Asserts each dialog fires the shared dialog/spawn action command on the FakeApplicationClient.
  */
 
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';

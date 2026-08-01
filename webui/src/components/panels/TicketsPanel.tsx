@@ -3,8 +3,8 @@
  * via `ticketDetail.open`; status Badge tone comes from the selector's `statusTone`.
  */
 
-import { selectTicketsView } from '@core/selectors/ticketsSelectors.js';
-import { useAppStore } from '@core/hooks/useAppStore.js';
+import { selectTicketsView } from '@murder/ui-core/selectors/ticketsSelectors.js';
+import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
 import { useCreationDialogs } from '../../creationDialogs.js';
 import { Panel, ListRow, Badge, Tag, IconButton, Icon } from '../ds/index.js';

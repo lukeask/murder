@@ -4,7 +4,7 @@ import {
   MAX_VISIBLE_TOASTS,
   selectLiveToasts,
   toastStore,
-} from '@core/store/toast/toastStore.js';
+} from '@murder/ui-core/store/toast/toastStore.js';
 import { useStore } from 'zustand';
 import { Toast } from './ds/Toast.js';
 

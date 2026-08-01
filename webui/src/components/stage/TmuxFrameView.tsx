@@ -4,7 +4,7 @@
 
 import Convert from 'ansi-to-html';
 import { useEffect, useMemo, useState } from 'react';
-import { useApplicationClient } from '../../application/ApplicationClientContext.js';
+import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
 
 export function TmuxFrameView({
   sessionId,

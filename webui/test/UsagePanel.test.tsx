@@ -5,7 +5,7 @@
  * grouping) is exercised by core; this checks the DS composition renders.
  */
 
-import type { UsageRow } from '@core/store/usage/usageSlice.js';
+import type { UsageRow } from '@murder/ui-core/store/usage/usageSlice.js';
 import { cleanup, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { UsagePanel } from '../src/components/panels/UsagePanel.js';

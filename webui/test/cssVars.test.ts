@@ -3,9 +3,9 @@
  * DOM write. This is the styling contract the whole web UI depends on, so it is pinned here.
  */
 
-import { buildTheme } from '@core/theme/buildTheme.js';
-import { DEFAULT_THEME_ID, getPalette } from '@core/theme/palettes.js';
-import { setTheme } from '@core/theme/themeStore.js';
+import { buildTheme } from '@murder/ui-core/theme/buildTheme.js';
+import { DEFAULT_THEME_ID, getPalette } from '@murder/ui-core/theme/palettes.js';
+import { setTheme } from '@murder/ui-core/theme/themeStore.js';
 import { renderHook, cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyThemeCssVars, themeToCssVars } from '../src/theme/cssVars.js';
@@ -57,7 +57,7 @@ describe('useThemeCssVars data-theme pin', () => {
     setTheme('everforest-dark'); // reset the process-global scheme between cases
   });
 
-  it('reflects the active @core scheme onto <html data-theme> (dark default, light on switch)', () => {
+  it('reflects the active shared scheme onto <html data-theme> (dark default, light on switch)', () => {
     const { rerender } = renderHook(() => useThemeCssVars());
     // Default scheme is everforest-dark → data-theme="dark".
     expect(document.documentElement.dataset['theme']).toBe('dark');

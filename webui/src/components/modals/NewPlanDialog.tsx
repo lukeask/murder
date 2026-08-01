@@ -1,10 +1,11 @@
 /** NewPlanDialog — web counterpart of inktui's NewPlanModal (`ctrl+p` / command+p). */
 
-import { createDialogActions, type CreatePlanInput } from '@core/store/dialogs/dialogActions.js';
-import { toastStore } from '@core/store/toast/toastStore.js';
-import { useAppStoreApi } from '@core/hooks/useAppStore.js';
+import { prepareCreatePlan, type PlanNaming } from '@murder/ui-core/create/creationPayloads.js';
+import { createDialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
+import { useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import { useId, useState } from 'react';
-import { useApplicationClient } from '../../application/ApplicationClientContext.js';
+import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
 import { Input, Radio } from '../ds/index.js';
 import { CreationDialog } from './CreationDialog.js';
 
@@ -14,7 +15,7 @@ export interface NewPlanDialogProps {
   readonly onClose: () => void;
 }
 
-type Naming = 'auto' | 'custom';
+type Naming = PlanNaming;
 
 export function NewPlanDialog({ open, onClose }: NewPlanDialogProps): React.JSX.Element {
   const bus = useApplicationClient();
@@ -28,25 +29,16 @@ export function NewPlanDialog({ open, onClose }: NewPlanDialogProps): React.JSX.
 
   const submit = (): void => {
     if (pending) return;
-    const autoName = naming === 'auto';
-    const trimmedName = planName.trim();
-    if (!autoName && trimmedName.length === 0) {
-      setError('Plan name is required (or pick "auto").');
+    const prepared = prepareCreatePlan({ body: message, naming, planName });
+    if (!prepared.ok) {
+      setError(prepared.error);
       return;
     }
     setPending(true);
     setError(null);
-    const body = message;
-    const msg = body.trim().length > 0 ? body : undefined;
-    const input: CreatePlanInput = {
-      body,
-      autoName,
-      ...(!autoName ? { planName: trimmedName } : {}),
-      ...(msg !== undefined ? { message: msg } : {}),
-    };
     const actions = createDialogActions(bus);
     void actions
-      .createPlan(input)
+      .createPlan(prepared.value)
       .then((result) => {
         onClose();
         toastStore.getState().push(`plan "${result.plan_name}" created`, { ttlMs: 6000 });
