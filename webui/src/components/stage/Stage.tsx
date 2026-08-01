@@ -1,14 +1,15 @@
 /**
- * Stage — center column: multi-pane transcript grid (+ optional doc column), ticket overlay,
+ * Stage — center column: multi-pane transcript grid (+ optional doc/ticket column),
  * shared composer. Open panes come from favorites + paneOverrides (TUI parity); roster click
- * opens/focuses; each pane can close (button / Ctrl+W).
+ * opens/focuses; each pane can close (button / Ctrl+W). Tickets default to a side column
+ * (like docs); expand to full-stage takeover when requested.
  */
 
 import { selectActiveAgentId } from '@murder/ui-core/selectors/conversationsSelectors.js';
 import type { DefaultChatViewMode } from '@murder/ui-core/store/settings/settingsSlice.js';
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
 import { shallow } from 'zustand/shallow';
-import { useCallback, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon, IconButton, Tabs } from '../ds/index.js';
 import { ChatTranscript } from './ChatTranscript.js';
 import { ChatInput } from './ChatInput.js';

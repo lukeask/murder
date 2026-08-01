@@ -2,12 +2,12 @@
  * RosterPanel (DS reskin) renders rows off a seeded `roster` slice. We write a ready roster directly
  * to the store and assert the DS composition: the DS Panel, a ListRow per crow (with its Avatar +
  * name), the health StatusDot, the favorite star toggle, and the empty hint. Mirrors the TicketsPanel
- * exemplar smoke test (C2).
+ * exemplar smoke test (C2). Reset for ticket-bound crows goes through a confirm dialog.
  */
 
 import type { RosterRow } from '@murder/ui-core/store/roster/rosterSlice.js';
-import { cleanup, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RosterPanel } from '../src/components/panels/RosterPanel.js';
 import { makeStore, renderWithStore, seedSlice } from './helpers.js';
 
@@ -58,5 +58,35 @@ describe('RosterPanel (DS reskin)', () => {
     seedSlice(store, 'roster', { rows: [], status: 'ready', error: null });
     renderWithStore(<RosterPanel />, { store });
     expect(screen.getByText('No agents.')).toBeTruthy();
+  });
+
+  it('confirms before resetting a ticket-bound crow', async () => {
+    const { store, bus } = makeStore();
+    const reset = vi.fn(() => ({ ok: true }));
+    bus.stubCommand('crow.reset', reset);
+    seedSlice(store, 'roster', {
+      rows: [
+        row({
+          agentId: 't1',
+          role: 'crow',
+          ticketId: 'ticket-9',
+          status: 'running',
+          session: 's1',
+        }),
+      ],
+      status: 'ready',
+      error: null,
+    });
+    renderWithStore(<RosterPanel />, { store, bus });
+
+    fireEvent.click(screen.getByLabelText('Reset s1'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(reset).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+    await waitFor(() => expect(reset).toHaveBeenCalled());
+    expect(bus.commandCalls).toEqual([
+      { name: 'crow.reset', params: { ticket_id: 'ticket-9' } },
+    ]);
   });
 });

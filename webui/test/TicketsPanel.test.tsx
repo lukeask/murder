@@ -1,7 +1,7 @@
 /**
- * TicketsPanel (reskinned, DS exemplar) renders rows off a seeded `tickets` slice. We write a ready
+ * TicketsPanel (DS exemplar) renders rows off a seeded `tickets` slice. We write a ready
  * tickets slice directly to the store and assert: the DS Panel title, the title cell, the status
- * Badge, and the empty hint. This is the C1 exemplar smoke test the C2 panel reskins mirror.
+ * Badge, and the empty hint. Prefer WorkflowsPanel for the main rail (run-first tree).
  */
 
 import type { TicketRow } from '@murder/ui-core/store/tickets/ticketsSlice.js';
@@ -38,7 +38,7 @@ describe('TicketsPanel (DS reskin)', () => {
 
     // DS Panel container + title.
     expect(document.querySelector('.mds-panel')).toBeTruthy();
-    expect(screen.getByText('workflows')).toBeTruthy();
+    expect(screen.getByText('tickets')).toBeTruthy();
     // The title cell renders inside a DS ListRow.
     expect(document.querySelector('.mds-row')).toBeTruthy();
     expect(screen.getByText(/split orchestrator/)).toBeTruthy();

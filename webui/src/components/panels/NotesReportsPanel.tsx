@@ -1,50 +1,54 @@
 /**
  * NotesPanel / ReportsPanel — thin DocListPanel wrappers over notes/reports + favorites.
- * Differ only by slice selector, title, kind, and empty copy.
+ * Differ only by slice selector, title, kind, empty copy, and create-dialog opener.
  */
 
 import { selectNotesView } from '@murder/ui-core/selectors/notesSelectors.js';
 import { selectReportsView } from '@murder/ui-core/selectors/reportsSelectors.js';
-import type { FavoritesState } from '@murder/ui-core/store/favorites/favoritesSlice.js';
-import type { DocKind } from '@murder/ui-core/store/docView/docViewSlice.js';
 import { useAppStore } from '@murder/ui-core/hooks/useAppStore.js';
-import type { AppStore } from '@murder/ui-core/store/store.js';
 import { shallow } from 'zustand/shallow';
+import { useCreationDialogs } from '../../creationDialogs.js';
+import { IconButton, Icon } from '../ds/index.js';
 import { DocListPanel } from './DocListPanel.js';
-import type { DocListRow } from './DocListPanel.js';
-import type { SliceLike } from '../SliceHint.js';
 
-function makeDocSlicePanel<TSlice>(opts: {
-  readonly title: string;
-  readonly kind: Extract<DocKind, 'note' | 'report'>;
-  readonly empty: string;
-  readonly selectSlice: (s: AppStore) => TSlice;
-  readonly selectView: (
-    slice: TSlice,
-    favorites: FavoritesState,
-  ) => SliceLike & { readonly rows: readonly DocListRow[] };
-}): () => React.JSX.Element {
-  const { title, kind, empty, selectSlice, selectView } = opts;
-  return function DocSlicePanel(): React.JSX.Element {
-    const slice = useAppStore(selectSlice, shallow);
-    const favorites = useAppStore((s) => s.favorites, shallow);
-    const view = selectView(slice, favorites);
-    return <DocListPanel title={title} kind={kind} view={view} empty={empty} rows={view.rows} />;
-  };
+export function NotesPanel(): React.JSX.Element {
+  const notes = useAppStore((s) => s.notes, shallow);
+  const favorites = useAppStore((s) => s.favorites, shallow);
+  const view = selectNotesView(notes, favorites);
+  const { openNoteCapture } = useCreationDialogs();
+  return (
+    <DocListPanel
+      title="notes"
+      kind="note"
+      view={view}
+      empty="No notes."
+      rows={view.rows}
+      actions={
+        <IconButton label="New note" onClick={openNoteCapture}>
+          <Icon name="plus" size={14} />
+        </IconButton>
+      }
+    />
+  );
 }
 
-export const NotesPanel = makeDocSlicePanel({
-  title: 'notes',
-  kind: 'note',
-  empty: 'No notes.',
-  selectSlice: (s) => s.notes,
-  selectView: selectNotesView,
-});
-
-export const ReportsPanel = makeDocSlicePanel({
-  title: 'reports',
-  kind: 'report',
-  empty: 'No reports.',
-  selectSlice: (s) => s.reports,
-  selectView: selectReportsView,
-});
+export function ReportsPanel(): React.JSX.Element {
+  const reports = useAppStore((s) => s.reports, shallow);
+  const favorites = useAppStore((s) => s.favorites, shallow);
+  const view = selectReportsView(reports, favorites);
+  const { openReport } = useCreationDialogs();
+  return (
+    <DocListPanel
+      title="reports"
+      kind="report"
+      view={view}
+      empty="No reports."
+      rows={view.rows}
+      actions={
+        <IconButton label="New report" onClick={openReport}>
+          <Icon name="plus" size={14} />
+        </IconButton>
+      }
+    />
+  );
+}

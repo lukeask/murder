@@ -1,18 +1,36 @@
-/** Desktop keyboard shortcuts for the web cockpit (focus chat, scroll panels, cycle target, open creation dialogs). */
+/** Desktop keyboard shortcuts for the web cockpit (panels, chat, creation dialogs, stage chords). */
 
 import { useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import { panelForDigit } from '@murder/ui-core/input/panels.js';
 import type { PanelId } from '@murder/ui-core/input/panels.js';
-import { selectCycledRecipientTarget } from '@murder/ui-core/selectors/conversationsSelectors.js';
+import { deriveAgentIdentity } from '@murder/ui-core/selectors/agentIdentity.js';
+import {
+  selectActiveAgentId,
+  selectCycledRecipientTarget,
+} from '@murder/ui-core/selectors/conversationsSelectors.js';
 import type { SettingsModifier } from '@murder/ui-core/store/settings/settingsSlice.js';
+import { murderConfirmStore } from '@murder/ui-core/store/murder/murderConfirmStore.js';
+import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { useEffect } from 'react';
+import { useComposerStores } from './composer/ComposerStoresProvider.js';
+import { toWorkspaceStores } from './composer/createComposerStores.js';
+import {
+  workspaceJump,
+  workspaceNext,
+  workspacePrev,
+} from './composer/workspaceActions.js';
 import type { CreationDialogsApi } from './creationDialogs.js';
+import { closeOrToggleActiveTranscriptPane } from './components/stage/stagePanes.js';
+import { togglePanelVisibility } from './panelVisibility.js';
 
 const CHAT_INPUT_ID = 'chat-composer-input';
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
+  }
+  if (target.closest('[data-terminal-input="true"]') !== null) {
+    return true;
   }
   const tag = target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
@@ -36,15 +54,26 @@ function scrollPanelIntoView(panelId: PanelId | 'settings'): void {
 
 function focusChatInput(): void {
   const input = document.getElementById(CHAT_INPUT_ID);
-  if (input instanceof HTMLInputElement) {
+  if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
     input.focus();
     input.select();
   }
 }
 
 /** Wire global desktop chords on `document` while the desktop shell is mounted. */
-export function useDesktopKeybinds(enabled: boolean, { openSpawn, openTicket, openPlan }: CreationDialogsApi): void {
+export function useDesktopKeybinds(
+  enabled: boolean,
+  {
+    openSpawn,
+    openPlan,
+    openHelp,
+    openNoteCapture,
+    openWorkflowLibrary,
+  }: CreationDialogsApi,
+): void {
   const storeApi = useAppStoreApi();
+  const composer = useComposerStores();
+  const { panels } = composer;
 
   useEffect(() => {
     if (!enabled) {
@@ -52,7 +81,56 @@ export function useDesktopKeybinds(enabled: boolean, { openSpawn, openTicket, op
     }
 
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.repeat || isTypingTarget(e.target)) {
+      if (e.repeat) {
+        return;
+      }
+
+      // Plain ctrl+n → quick note (before typing-target bail so it works while composing).
+      if (
+        e.key.toLowerCase() === 'n' &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
+        e.preventDefault();
+        openNoteCapture();
+        return;
+      }
+
+      // Plain ctrl+m → arm murder confirm for the active crow (browser delivers ctrl+m cleanly).
+      if (
+        e.key.toLowerCase() === 'm' &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
+        const typing = isTypingTarget(e.target);
+        const inComposer =
+          e.target instanceof HTMLElement && e.target.id === CHAT_INPUT_ID;
+        if (typing && !inComposer) {
+          return;
+        }
+        e.preventDefault();
+        const state = storeApi.getState();
+        const agentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
+        if (agentId === null) {
+          toastStore.getState().push('no crow to murder', { ttlMs: 4000 });
+          return;
+        }
+        const row = state.roster.rows.find((r) => r.agentId === agentId);
+        const identity = row === undefined ? null : deriveAgentIdentity(row);
+        murderConfirmStore.getState().arm({ agentId, name: identity?.label ?? agentId });
+        return;
+      }
+
+      if (isTypingTarget(e.target)) {
+        return;
+      }
+
+      // Bare `?` opens help (TUI `global.keyHelp`) — not modifier-gated, suppressed while typing.
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        openHelp();
         return;
       }
 
@@ -64,12 +142,28 @@ export function useDesktopKeybinds(enabled: boolean, { openSpawn, openTicket, op
 
       const key = e.key.toLowerCase();
 
-      // Modifier + digit → scroll the bound panel into view (ctrl/alt+1–0).
+      // `<Cmd>+Shift+J/K` — workspace next/prev (bindings.ts workspace.next / workspace.prev).
+      if (e.shiftKey && (key === 'j' || key === 'k')) {
+        e.preventDefault();
+        const wsStores = toWorkspaceStores(composer, storeApi);
+        if (key === 'j') workspaceNext(wsStores);
+        else workspacePrev(wsStores);
+        return;
+      }
+
+      // `<Cmd>+Shift+1–9` — jump to workspace N (bindings.ts workspace.jump.N).
+      if (e.shiftKey && key.length === 1 && key >= '1' && key <= '9') {
+        e.preventDefault();
+        workspaceJump(toWorkspaceStores(composer, storeApi), Number(key) - 1);
+        return;
+      }
+
+      // Modifier + digit → toggle panel visibility (ctrl/alt+1–0).
       if (key.length === 1 && key >= '0' && key <= '9' && !e.shiftKey) {
         const panelId = panelForDigit(key);
         if (panelId !== null) {
           e.preventDefault();
-          scrollPanelIntoView(panelId);
+          togglePanelVisibility(panels, panelId);
         }
         return;
       }
@@ -86,15 +180,51 @@ export function useDesktopKeybinds(enabled: boolean, { openSpawn, openTicket, op
         return;
       }
 
-      const openers = { s: openSpawn, t: openTicket, p: openPlan } as const;
-      if (key === 's' || key === 't' || key === 'p') {
+      if (key === 's') {
         e.preventDefault();
-        openers[key]();
+        openSpawn();
+        return;
+      }
+
+      if (key === 'p') {
+        e.preventDefault();
+        openPlan();
+        return;
+      }
+
+      // Alt+t → cycle chat view (TUIchat-3; ticket is `:ticket` only).
+      if (key === 't') {
+        e.preventDefault();
+        const agentId = selectActiveAgentId(conversations, roster, favorites);
+        if (agentId === null) {
+          toastStore.getState().push('no transcript pane to cycle', { ttlMs: 4000 });
+          return;
+        }
+        actions.conversations.cyclePaneViewMode(agentId);
+        return;
+      }
+
+      // Alt+g → workflow library (TUI wires `global.workflowEditor` to the library open).
+      if (key === 'g') {
+        e.preventDefault();
+        openWorkflowLibrary();
+        return;
+      }
+
+      // Modifier+w → toggle transcript pane (TUI global.toggleTargetPane); closes doc when no target.
+      if (key === 'w') {
+        e.preventDefault();
+        closeOrToggleActiveTranscriptPane(storeApi);
         return;
       }
 
       if (key === 'h' || key === 'l') {
-        const result = selectCycledRecipientTarget(conversations, roster, favorites, key === 'h' ? -1 : 1);
+        const result = selectCycledRecipientTarget(
+          conversations,
+          roster,
+          favorites,
+          key === 'h' ? -1 : 1,
+        );
         if (result !== null) {
           e.preventDefault();
           actions.conversations.setActivePaneAgentId(result.agentId);
@@ -104,7 +234,17 @@ export function useDesktopKeybinds(enabled: boolean, { openSpawn, openTicket, op
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [enabled, storeApi, openSpawn, openTicket, openPlan]);
+  }, [
+    enabled,
+    storeApi,
+    panels,
+    composer,
+    openSpawn,
+    openPlan,
+    openHelp,
+    openNoteCapture,
+    openWorkflowLibrary,
+  ]);
 }
 
 export { CHAT_INPUT_ID };

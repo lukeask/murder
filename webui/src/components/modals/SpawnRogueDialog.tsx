@@ -25,10 +25,11 @@ import {
   resolveWorktreePayload,
   type WorktreeOption,
 } from '@murder/ui-core/store/dialogs/worktreeOptionsActions.js';
+import { DOC_DIR } from '@murder/ui-core/store/docView/docViewSlice.js';
 import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { useEffect, useMemo, useState } from 'react';
 import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
-import { Input, Select } from '../ds/index.js';
+import { Button, Checkbox, Input, Select } from '../ds/index.js';
 import { CreationDialog } from './CreationDialog.js';
 
 export interface SpawnRogueDialogProps {
@@ -37,12 +38,38 @@ export interface SpawnRogueDialogProps {
   readonly onClose: () => void;
 }
 
+/** Doc reference-by-path for the optional kickoff step (TUI {@link deriveSpawnContext}). */
+export interface SpawnContext {
+  readonly title: string;
+  readonly path: string;
+}
+
 const EMPTY_WORKTREES = buildWorktreeOptions([]);
+const MAX_FAVORITES = 10;
+
+/**
+ * Web spawn context: include the open doc when `docView` has one (no TUI focus gate — the stage
+ * doc is the focused surface).
+ */
+export function deriveWebSpawnContext(
+  open: { readonly kind: keyof typeof DOC_DIR; readonly name: string } | null,
+): SpawnContext | null {
+  if (open === null) return null;
+  const dir = DOC_DIR[open.kind];
+  return { title: open.name, path: `.murder/${dir}/${open.name}.md` };
+}
+
+function toastError(err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  toastStore.getState().push(message, { severity: 'error', ttlMs: 12000 });
+}
 
 export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): React.JSX.Element {
   const bus = useApplicationClient();
   const storeApi = useAppStoreApi();
   const enabledHarnesses = useAppStore((s) => s.settings.effectiveCrowHarnesses);
+  const openDoc = useAppStore((s) => s.docView.open);
+  const spawnContext = useMemo(() => deriveWebSpawnContext(openDoc), [openDoc]);
 
   const harnessOptions = useMemo(() => {
     const list =
@@ -58,7 +85,11 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
   const [worktreeOptions, setWorktreeOptions] =
     useState<readonly WorktreeOption[]>(EMPTY_WORKTREES);
   const [favorites, setFavorites] = useState<readonly SpawnFavorite[]>([]);
+  const [favoritesReady, setFavoritesReady] = useState(false);
   const [favoriteKey, setFavoriteKey] = useState('');
+  const [favoriteNameDraft, setFavoriteNameDraft] = useState('');
+  const [favoriteMode, setFavoriteMode] = useState<'idle' | 'rename' | 'confirmDelete'>('idle');
+  const [includeDoc, setIncludeDoc] = useState(true);
 
   const [harness, setHarness] = useState(initialHarness);
   const [model, setModel] = useState('');
@@ -68,6 +99,8 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  const favoriteActions = useMemo(() => createSpawnFavoritesActions(bus), [bus]);
 
   // Fetch live models / worktrees / favorites; ignore late replies after unmount.
   useEffect(() => {
@@ -85,15 +118,21 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
           setWorktreeKey(opts[0]?.key ?? '');
         }
       });
-    void createSpawnFavoritesActions(bus)
-      .load()
-      .then((f) => {
-        if (!cancelled) setFavorites(f);
-      });
+    void favoriteActions.load().then((f) => {
+      if (!cancelled) {
+        setFavorites(f);
+        setFavoritesReady(true);
+      }
+    });
     return () => {
       cancelled = true;
     };
-  }, [bus]);
+  }, [bus, favoriteActions]);
+
+  // Default include-doc on when a doc is open at dialog mount / when it appears.
+  useEffect(() => {
+    setIncludeDoc(spawnContext !== null);
+  }, [spawnContext]);
 
   const modelList = useMemo(() => modelsFor(harness, modelMap), [harness, modelMap]);
   const effortSpec = useMemo(() => effortMatrixFor(harness, model), [harness, model]);
@@ -113,6 +152,76 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
     }
   }, [harness, modelList, model]);
 
+  const selectedFavoriteIndex =
+    favoriteKey === '' ? -1 : Number.parseInt(favoriteKey, 10);
+  const selectedFavorite =
+    selectedFavoriteIndex >= 0 ? (favorites[selectedFavoriteIndex] ?? null) : null;
+
+  const persistFavorites = (next: readonly SpawnFavorite[]): void => {
+    void favoriteActions
+      .save(next)
+      .then((saved) => {
+        setFavorites(saved);
+        setFavoriteMode('idle');
+        setFavoriteNameDraft('');
+      })
+      .catch((err: unknown) => {
+        toastError(err);
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  };
+
+  const saveCurrentAsFavorite = (): void => {
+    const trimmed = favoriteNameDraft.trim();
+    if (trimmed.length === 0) {
+      setError('Favorite name is required.');
+      return;
+    }
+    if (favorites.length >= MAX_FAVORITES) {
+      setError(`At most ${MAX_FAVORITES} favorites.`);
+      return;
+    }
+    setError(null);
+    persistFavorites([
+      ...favorites,
+      { name: trimmed, harness, model, effort },
+    ]);
+    setFavoriteNameDraft('');
+  };
+
+  const commitRename = (): void => {
+    if (selectedFavorite === null || selectedFavoriteIndex < 0) return;
+    const trimmed = favoriteNameDraft.trim();
+    if (trimmed.length === 0) {
+      setError('Favorite name is required.');
+      return;
+    }
+    setError(null);
+    const next = favorites.map((f, i) =>
+      i === selectedFavoriteIndex ? { ...f, name: trimmed } : f,
+    );
+    persistFavorites(next);
+  };
+
+  const commitDelete = (): void => {
+    if (selectedFavoriteIndex < 0) return;
+    const next = favorites.filter((_, i) => i !== selectedFavoriteIndex);
+    setFavoriteKey('');
+    persistFavorites(next);
+  };
+
+  const applyFavorite = (idxStr: string): void => {
+    setFavoriteKey(idxStr);
+    setFavoriteMode('idle');
+    setFavoriteNameDraft('');
+    if (idxStr === '') return;
+    const f = favorites[Number(idxStr)];
+    if (f === undefined) return;
+    setHarness(f.harness);
+    setModel(f.model);
+    setEffort(f.effort);
+  };
+
   const submit = (): void => {
     if (pending) return;
     if (worktreeKey === NEW_WORKTREE_KEY && branch.trim().length === 0) {
@@ -123,6 +232,10 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
     setError(null);
     const wt = resolveWorktreePayload(worktreeKey, branch);
     const trimmedName = name.trim();
+    const kickoffMessage =
+      spawnContext !== null && includeDoc
+        ? `Please read ${spawnContext.path} before starting.`
+        : null;
     const actions = createSpawnActions(bus, storeApi);
     void actions
       .spawnRogue({
@@ -131,6 +244,7 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
         ...(effort !== '' ? { effort } : {}),
         ...(trimmedName !== '' ? { name: trimmedName } : {}),
         ...wt,
+        kickoffMessage,
       })
       .then(() => {
         onClose();
@@ -144,6 +258,8 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
       });
   };
 
+  const canCreate = favoritesReady && favorites.length < MAX_FAVORITES;
+
   return (
     <CreationDialog
       open={open ?? true}
@@ -155,27 +271,112 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
       onSubmit={submit}
       error={error}
     >
-      {favorites.length > 0 ? (
+      <div className="creation-form__favorites">
         <Select
           label="Favorite"
           value={favoriteKey}
-          disabled={pending}
-          onChange={(e) => {
-            const idxStr = e.target.value;
-            setFavoriteKey(idxStr);
-            if (idxStr === '') return;
-            const f = favorites[Number(idxStr)];
-            if (f === undefined) return;
-            setHarness(f.harness);
-            setModel(f.model);
-            setEffort(f.effort);
-          }}
+          disabled={pending || !favoritesReady}
+          onChange={(e) => applyFavorite(e.target.value)}
           options={[
-            { value: '', label: '— none —' },
+            { value: '', label: favoritesReady ? '— none —' : 'loading…' },
             ...favorites.map((f, i) => ({ value: String(i), label: f.name })),
           ]}
         />
-      ) : null}
+
+        {selectedFavorite !== null && favoriteMode === 'idle' ? (
+          <div className="creation-form__row">
+            <Button
+              size="sm"
+              disabled={pending}
+              onClick={() => {
+                setFavoriteMode('rename');
+                setFavoriteNameDraft(selectedFavorite.name);
+                setError(null);
+              }}
+            >
+              Rename
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={pending}
+              onClick={() => {
+                setFavoriteMode('confirmDelete');
+                setError(null);
+              }}
+            >
+              Delete
+            </Button>
+          </div>
+        ) : null}
+
+        {favoriteMode === 'rename' && selectedFavorite !== null ? (
+          <div className="creation-form__row creation-form__row--stack">
+            <Input
+              label="Rename favorite"
+              value={favoriteNameDraft}
+              disabled={pending}
+              onChange={(e) => {
+                setFavoriteNameDraft(e.target.value);
+                setError(null);
+              }}
+            />
+            <div className="creation-form__row">
+              <Button size="sm" variant="primary" disabled={pending} onClick={commitRename}>
+                Save name
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={pending}
+                onClick={() => {
+                  setFavoriteMode('idle');
+                  setFavoriteNameDraft('');
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        {favoriteMode === 'confirmDelete' && selectedFavorite !== null ? (
+          <div className="creation-form__row">
+            <span className="creation-form__confirm">
+              Delete “{selectedFavorite.name}”?
+            </span>
+            <Button size="sm" variant="danger" disabled={pending} onClick={commitDelete}>
+              Delete
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => setFavoriteMode('idle')}
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : null}
+
+        {canCreate && favoriteMode === 'idle' ? (
+          <div className="creation-form__row creation-form__row--stack">
+            <Input
+              label="Save current as favorite"
+              value={favoriteNameDraft}
+              placeholder="e.g. OpusMed"
+              disabled={pending}
+              onChange={(e) => {
+                setFavoriteNameDraft(e.target.value);
+                setError(null);
+              }}
+            />
+            <Button size="sm" disabled={pending} onClick={saveCurrentAsFavorite}>
+              Save favorite
+            </Button>
+          </div>
+        ) : null}
+      </div>
 
       <Select
         label="Harness"
@@ -245,6 +446,15 @@ export function SpawnRogueDialog({ open, onClose }: SpawnRogueDialogProps): Reac
         disabled={pending}
         onChange={(e) => setName(e.target.value)}
       />
+
+      {spawnContext !== null ? (
+        <Checkbox
+          checked={includeDoc}
+          disabled={pending}
+          onChange={(e) => setIncludeDoc(e.target.checked)}
+          label={`Read “${spawnContext.title}” before starting (${spawnContext.path})`}
+        />
+      ) : null}
     </CreationDialog>
   );
 }

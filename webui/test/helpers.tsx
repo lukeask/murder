@@ -13,12 +13,21 @@ import { render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { ApplicationClientProvider } from '@murder/ui-core/hooks/useApplicationClient.js';
 import type { ApplicationClient } from '@murder/ui-core/application/ApplicationClient.js';
+import { ComposerStoresProvider } from '../src/composer/ComposerStoresProvider.js';
+import { createComposerStores, type ComposerStores } from '../src/composer/createComposerStores.js';
 import { CreationDialogsProvider, type CreationDialogsApi } from '../src/creationDialogs.js';
 
 const noopCreationDialogs: CreationDialogsApi = {
   openSpawn: () => {},
   openTicket: () => {},
   openPlan: () => {},
+  openReport: () => {},
+  openNoteCapture: () => {},
+  openPromptTemplates: () => {},
+  openHelp: () => {},
+  openWorkflowLibrary: () => {},
+  openWorkflowLaunch: () => {},
+  openWorkflowEditor: () => {},
 };
 
 export function makeStore(): { store: AppStoreApi; bus: FakeApplicationClient } {
@@ -35,20 +44,27 @@ export function renderWithStore(
     store?: AppStoreApi;
     bus?: FakeApplicationClient;
     creationDialogs?: CreationDialogsApi;
+    composer?: ComposerStores;
   },
-): { store: AppStoreApi; bus: FakeApplicationClient } {
+): {
+  store: AppStoreApi;
+  bus: FakeApplicationClient;
+  composer: ComposerStores;
+  unmount: () => void;
+} {
   const bus = opts?.bus ?? new FakeApplicationClient();
   const store = opts?.store ?? createAppStore(bus).store;
-  render(
+  const composer = opts?.composer ?? createComposerStores();
+  const view = render(
     <AppStoreProvider value={store}>
       <ApplicationClientProvider value={bus as unknown as ApplicationClient}>
         <CreationDialogsProvider value={opts?.creationDialogs ?? noopCreationDialogs}>
-          {ui}
+          <ComposerStoresProvider stores={composer}>{ui}</ComposerStoresProvider>
         </CreationDialogsProvider>
       </ApplicationClientProvider>
     </AppStoreProvider>,
   );
-  return { store, bus };
+  return { store, bus, composer, unmount: view.unmount };
 }
 
 /** Overwrite one slice's state for rendering (a ready list with rows). */
