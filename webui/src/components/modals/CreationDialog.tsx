@@ -1,7 +1,8 @@
-/** Thin shell: Dialog + Cancel/Submit footer + creation-form + optional error. */
+/** Thin shell: Dialog (desktop) / Sheet (mobile) + Cancel/Submit footer + creation-form + error. */
 
 import type { ReactNode } from 'react';
-import { Button, Dialog } from '../ds/index.js';
+import { Button, Dialog, Sheet } from '../ds/index.js';
+import { MOBILE_QUERY, useMediaQuery } from '../../useMediaQuery.js';
 
 export interface CreationDialogProps {
   readonly title: string;
@@ -27,8 +28,10 @@ export function CreationDialog({
   children,
   open = true,
 }: CreationDialogProps): React.JSX.Element {
+  const isMobile = useMediaQuery(MOBILE_QUERY);
+  const Surface = isMobile ? Sheet : Dialog;
   return (
-    <Dialog
+    <Surface
       open={open}
       title={title}
       onClose={onClose}
@@ -53,6 +56,6 @@ export function CreationDialog({
         {children}
         {error !== null ? <p className="mds-field__hint mds-field__hint--error">{error}</p> : null}
       </form>
-    </Dialog>
+    </Surface>
   );
 }
