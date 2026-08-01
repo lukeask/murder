@@ -24,7 +24,7 @@
 }
 .mds-row--selected {
   background: var(--surface-hover);
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--brand);
 }
 .mds-row:focus-visible {
   outline: 2px solid var(--border-focus);
@@ -240,8 +240,8 @@ button.mds-row__star:focus-visible {
   color: var(--text-secondary);
   background: var(--surface-raised);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-pill);
-  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
   line-height: 1;
   white-space: nowrap;
 }

@@ -2,12 +2,12 @@
 .mds-nav {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 20px;
   height: var(--header-h);
   padding: 0 16px;
-  background: var(--surface-panel);
-  border-bottom: 1px solid var(--border-subtle);
-  font-family: var(--font-mono);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-strong);
+  font-family: var(--font-sans);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -15,11 +15,13 @@
   display: none;
 }
 .mds-nav__brand {
-  font-size: var(--text-md);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
   font-weight: var(--weight-bold);
   color: var(--text-brand);
+  letter-spacing: var(--tracking-tight);
   flex: none;
-  margin-right: 6px;
+  margin-right: 8px;
 }
 .mds-nav__items {
   display: flex;
@@ -36,8 +38,9 @@
   border: 0;
   cursor: pointer;
   padding: 4px 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   color: var(--text-muted);
   transition: color var(--dur-fast) var(--ease-out);
 }
@@ -63,8 +66,8 @@
   right: 0;
   bottom: -1px;
   height: 2px;
-  background: var(--accent);
-  border-radius: 2px;
+  background: var(--brand);
+  border-radius: 0;
 }
 .mds-nav__spacer {
   flex: 1;
@@ -80,13 +83,26 @@
 .mds-keybar {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
   flex-wrap: wrap;
-  padding: 10px 16px;
-  min-height: 40px;
-  background: var(--surface-panel);
-  border-top: 1px solid var(--border-subtle);
+  padding: 6px 16px;
+  min-height: 36px;
+  background: var(--surface-raised);
+  border-top: 1px solid var(--border-strong);
   font-family: var(--font-mono);
+  box-shadow: none;
+}
+.mds-keybar__leading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding-right: 10px;
+  border-right: var(--border-hair, 1px) solid var(--border-subtle, var(--border-default));
+  margin-right: 2px;
+}
+.mds-keybar__leading:empty {
+  display: none;
 }
 .mds-keybar__hint {
   display: inline-flex;
@@ -95,7 +111,7 @@
   font-size: var(--text-xs);
 }
 .mds-keybar__chord {
-  color: var(--accent);
+  color: var(--brand);
   font-weight: var(--weight-semibold);
 }
 .mds-keybar__desc {

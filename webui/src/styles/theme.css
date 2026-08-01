@@ -57,10 +57,11 @@
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
-  --radius: 6px;
-  --radius-sm: 3px;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 2px;
+  --radius-sm: 2px;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: "Instrument Sans", "Segoe UI", sans-serif;
+  --font-display: "Bricolage Grotesque", "Instrument Sans", sans-serif;
 
   /* Layout dimensions */
   --rail-width: 320px;          /* desktop left/right rail column width */
@@ -102,9 +103,9 @@ body {
 }
 
 body {
-  background: var(--color-panel-header-bg);
+  background: var(--surface-app, var(--color-panel-header-bg));
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.4;
+  line-height: 1.45;
 }

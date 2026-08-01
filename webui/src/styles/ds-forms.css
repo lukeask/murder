@@ -115,6 +115,25 @@
 .mds-input--lg {
   height: var(--control-lg);
 }
+.mds-input--multiline {
+  height: auto;
+  min-height: var(--control-lg);
+  align-items: flex-end;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.mds-input--multiline.mds-input--lg {
+  height: auto;
+}
+.mds-input--multiline .mds-input__el {
+  resize: none;
+  line-height: 1.4;
+  padding: 2px 0;
+  min-height: 1.4em;
+  field-sizing: content;
+  max-height: 8em;
+  overflow-y: auto;
+}
 .mds-field__hint {
   font-size: var(--text-xs);
   color: var(--text-faint);

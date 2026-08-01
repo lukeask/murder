@@ -1,12 +1,19 @@
 /**
- * Input — single-line mono text field with optional leading/trailing slots.
+ * Input — mono text field with optional leading/trailing slots.
  * Visuals in ds-forms.css. `size` is the design variant ('md' | 'lg'), not the DOM attr.
+ * When `multiline`, renders a textarea (composer: Enter=submit, Shift+Enter=newline at the call site).
  */
 
-import { forwardRef, useId, type InputHTMLAttributes, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useId,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { cx } from './cx.js';
 
-export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
+type SharedProps = {
   /** Field label rendered above the control. */
   label?: string;
   /** Leading slot — a line icon. */
@@ -20,11 +27,32 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   disabled?: boolean;
   /** @default "md" */
   size?: 'md' | 'lg';
-}
+};
 
-/** murder Input — single-line mono text field; border greens on focus. */
-export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { label, leading, trailing, hint, invalid = false, disabled = false, size = 'md', id, className, ...rest },
+export type InputProps = SharedProps &
+  (
+    | ({ multiline?: false } & Omit<InputHTMLAttributes<HTMLInputElement>, 'size'>)
+    | ({ multiline: true; rows?: number } & Omit<
+        TextareaHTMLAttributes<HTMLTextAreaElement>,
+        'size'
+      >)
+  );
+
+/** murder Input — mono text field; border greens on focus. Multline uses a textarea. */
+export const Input = forwardRef<HTMLInputElement | HTMLTextAreaElement, InputProps>(function Input(
+  {
+    label,
+    leading,
+    trailing,
+    hint,
+    invalid = false,
+    disabled = false,
+    size = 'md',
+    id,
+    className,
+    multiline = false,
+    ...rest
+  },
   ref,
 ) {
   const autoId = useId();
@@ -40,6 +68,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         className={cx(
           'mds-input',
           size === 'lg' && 'mds-input--lg',
+          multiline && 'mds-input--multiline',
           invalid && 'mds-input--invalid',
           disabled && 'mds-input--disabled',
           className,
@@ -48,14 +77,26 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         {leading !== undefined && leading !== null ? (
           <span className="mds-input__glyph">{leading}</span>
         ) : null}
-        <input
-          ref={ref}
-          id={fieldId}
-          className="mds-input__el"
-          disabled={disabled}
-          aria-invalid={invalid ? true : undefined}
-          {...rest}
-        />
+        {multiline ? (
+          <textarea
+            ref={ref as React.Ref<HTMLTextAreaElement>}
+            id={fieldId}
+            className="mds-input__el"
+            disabled={disabled}
+            aria-invalid={invalid ? true : undefined}
+            {...(rest as TextareaHTMLAttributes<HTMLTextAreaElement>)}
+            rows={(rest as TextareaHTMLAttributes<HTMLTextAreaElement>).rows ?? 2}
+          />
+        ) : (
+          <input
+            ref={ref as React.Ref<HTMLInputElement>}
+            id={fieldId}
+            className="mds-input__el"
+            disabled={disabled}
+            aria-invalid={invalid ? true : undefined}
+            {...(rest as InputHTMLAttributes<HTMLInputElement>)}
+          />
+        )}
         {trailing}
       </div>
       {hint !== undefined ? (

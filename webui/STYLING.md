@@ -31,8 +31,9 @@ the app's rhythm globally without touching any component:
 | Token | Controls |
 | --- | --- |
 | `--space-1 … --space-5` | the spacing scale (padding/gaps everywhere) |
-| `--radius`, `--radius-sm` | corner rounding |
-| `--font-mono`, `--font-sans` | typefaces |
+| `--radius`, `--radius-sm` | corner rounding (tight masonry; DS also defines `--radius-xs`…`--radius-lg`) |
+| `--font-mono`, `--font-sans`, `--font-display` | typefaces — mono for terminal/ids/keybinds; Instrument Sans for chrome; Bricolage Grotesque for brand/titles |
+| `--surface-*` | DS material planes (app / panel / raised / terminal). Warm stone chrome; `--surface-terminal` is the deep working mass. Not the same as runtime `--color-*`. |
 | `--rail-width` | desktop left/right rail column width |
 | `--header-height`, `--tabbar-height` | chrome heights |
 | `--tap-min` | minimum touch-target size (mobile thumb-friendliness) |
@@ -44,18 +45,25 @@ the app's rhythm globally without touching any component:
 
 - **`src/styles/theme.css`** — the variable contract: `--color-*` fallbacks + all layout tokens +
   the base reset (`box-sizing`, body font/colors). Start here for global changes.
-- **`src/styles/app.css`** — all structural + per-component styling, organised top-to-bottom:
-  shell → connection pill → rails/stage → Panel chrome → list rows → per-domain panel styles
-  (roster, tickets, docs, history, usage, transit, settings) → Stage (chat/tmux/doc/ticket) →
-  mobile tab bar → responsive `@media`. Every rule references the variables above.
+- **`src/styles/tokens.css`** — DS material vocabulary (`--surface-*`, `--ef-*`, fonts, radii, type
+  roles). Imported after theme.css; overrides overlapping layout tokens. Dark default; light via
+  `[data-theme=light]` / prefers-color-scheme.
+- **`src/styles/cockpit.css`** — desktop/mobile shell silhouette (nav beam, recessed rails, stage
+  mass, keybind ledger). Prefer editing here for macro composition.
+- **`src/styles/app.css`** — legacy structural + per-component styling (still referenced where
+  panels have not fully migrated to `.mds-*`). Organised top-to-bottom with `── name ──` banners.
+- **`src/styles/ds*.css` / `panels*.css`** — design-system primitives and panel-specific glue.
 
 ## Where to change common things
 
 - **A color** → `src/styles/theme.css` (a theme role fallback) or the palette in
-  `@murder/ui-core/theme/palettes.js` (the real source for all themes).
-- **Spacing / radius / fonts** → the layout tokens in `src/styles/theme.css`.
-- **One panel's look** (e.g. the usage gauges, the chat bubbles) → its section in `app.css`
-  (sections are labelled with `── name ──` banners).
+  `@murder/ui-core/theme/palettes.js` (the real source for all themes). For DS chrome material
+  (warm stone grounds), prefer `tokens.css` `--ef-*` / `--surface-*` so shared TUI palettes stay
+  untouched.
+- **Spacing / radius / fonts** → layout tokens in `theme.css` / `tokens.css` (DS wins on overlap).
+- **Macro layout silhouette** → `cockpit.css`.
+- **One panel's look** (e.g. the usage gauges, the chat bubbles) → its section in `app.css` or the
+  matching `panels-*.css` file.
 - **The breakpoint** → it lives in TWO places that must agree: the `@media (max-width: 768px)` query
   at the bottom of `app.css` AND `MOBILE_QUERY` in `src/useMediaQuery.ts` (CSS media queries can't
   read a CSS var, so the literal is duplicated; `--bp-mobile` documents it).
@@ -72,8 +80,10 @@ the app's rhythm globally without touching any component:
 
 ## The tmux terminal view
 
-`TmuxFrameView` renders raw ANSI snapshots from the application protocol's terminal stream via the lightweight
-`ansi-to-html` converter into a `<pre class="tmux__frame">` (styled with the mono font on a black
-ground). We chose `ansi-to-html` over `xterm.js` because the frames are full-screen *snapshot*
-strings (`tmux capture-pane -e`), not an incremental PTY byte stream — xterm wants a live stream and
-explicit geometry, and is ~10× heavier for no gain here.
+`TmuxFrameView` ingests the application protocol terminal stream through ui-core's
+`TerminalSurfaceStore` + `adaptTerminalUpdate` (keyframes, VT chunks, and reset/delta frames), then
+renders the grid snapshot as escaped HTML (`<span style>` + `<br>`) inside
+`<pre class="mds-tmux__frame">`. Attach uses the default raw mode (not legacy replace-only).
+While the Terminal tab is mounted it acquires a writer lease (`openTerminalInput` / renew / release),
+forwards keydown bytes from the focusable `.mds-tmux` surface, and falls back to a muted
+`.mds-tmux__hint` read-only line if the lease fails — no glass overlays on the black mass.

@@ -44,4 +44,11 @@ describe('ds/Input', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'hi' } });
     expect(onChange).toHaveBeenCalledOnce();
   });
+
+  it('multiline renders a textarea with the multiline modifier', () => {
+    const { container } = render(<Input multiline placeholder="compose" />);
+    const el = screen.getByPlaceholderText('compose');
+    expect(el.tagName).toBe('TEXTAREA');
+    expect(container.querySelector('.mds-input--multiline')).not.toBeNull();
+  });
 });

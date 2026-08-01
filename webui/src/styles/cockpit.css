@@ -6,38 +6,45 @@
  * the cockpit analog of the old `.app`/`.rail`/`.tabbar` rules in app.css — those still exist there
  * for not-yet-migrated chrome, but the NEW shell DOM (`.cockpit*`, `.mw-*`) is styled here.
  *
- * STYLING CONTRACT (unchanged): colors via `--color-*` runtime theme vars; spacing/radius/dimension
- * via the layout tokens in theme.css / tokens.css. No hard-coded hex.
+ * Aesthetic: stable 3-region silhouette — recessed rails, dominant stage mass, header as one
+ * horizontal beam, keybind bar as integrated footer ledger. One earned grid violation: the stage
+ * column runs edge-to-edge (no outer gutter) while rails keep inset masonry padding.
  *
- * Import order (main.tsx): AFTER the ds-*.css component sheets (so `.mds-*` rules are defined) and
- * after app.css (so these shell rules win where the old `.app*` selectors would otherwise apply to
- * the same elements — though we use new class names, the later import keeps cascade intent explicit).
+ * STYLING CONTRACT (unchanged): colors via `--color-*` runtime theme vars + DS `--surface-*`;
+ * spacing/radius/dimension via layout tokens. No hard-coded thematic hex in components.
+ *
+ * Import order (main.tsx): AFTER the ds-*.css component sheets and after app.css.
  */
 
 /* ── Cockpit frame (desktop) ───────────────────────────────────────────────────────────────── */
 .cockpit {
   display: grid;
-  /* nav | body | keybind bar. The body row takes all remaining height; the bar sizes to content. */
+  /* nav beam | body | keybind ledger. Body takes remaining height. */
   grid-template-rows: auto 1fr auto;
   height: 100%;
   overflow: hidden;
-  /* Never let wide content (long ANSI tmux lines) scroll the whole page sideways. */
   overflow-x: hidden;
+  background: var(--surface-app);
+  /* Wave C2: settings.background_transparency → --chrome-opacity (1 = solid). */
+  --chrome-opacity: 1;
 }
 
-/* The DS NavBar (`.mds-nav`) is the top row; reserve the notch safe-area above it. */
+/* Header as one horizontal beam — full-bleed, stronger edge, quieter than stage. */
 .cockpit > .mds-nav {
   padding-top: var(--safe-top);
-  padding-left: calc(var(--space-4) + var(--safe-left));
-  padding-right: calc(var(--space-4) + var(--safe-right));
+  padding-left: calc(var(--space-5) + var(--safe-left));
+  padding-right: calc(var(--space-5) + var(--safe-right));
   flex-shrink: 0;
+  background: color-mix(in srgb, var(--surface-raised) calc(var(--chrome-opacity) * 100%), transparent);
+  border-bottom: var(--border-hair) solid var(--border-strong);
+  box-shadow: none;
 }
 
 /* The connection indicator that lives in the NavBar trailing slot. */
 .cockpit__conn {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   white-space: nowrap;
@@ -47,21 +54,95 @@
 .cockpit__conn--reconnecting .cockpit__conn-label { color: var(--color-warning); }
 .cockpit__conn--error .cockpit__conn-label { color: var(--color-error); }
 
+/* Workspace digit strip — carved into the nav beam / header, not floating pills. */
+.workspace-strip {
+  display: inline-flex;
+  align-items: stretch;
+  height: 1.5rem;
+  border: var(--border-hair) solid var(--border-default);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  flex: none;
+}
+.workspace-strip__cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  padding: 0 var(--space-1);
+  margin: 0;
+  border: 0;
+  border-right: var(--border-hair) solid var(--border-subtle);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+.workspace-strip__cell:last-child {
+  border-right: 0;
+}
+.workspace-strip__cell:hover {
+  color: var(--color-fg);
+  background: color-mix(in srgb, var(--surface-panel) 70%, transparent);
+}
+.workspace-strip__cell--active {
+  color: var(--surface-app);
+  background: var(--color-focus);
+  font-weight: var(--weight-semibold);
+}
+.workspace-strip__cell--active:hover {
+  color: var(--surface-app);
+  background: var(--color-focus);
+}
+
+/* Usage reset timer — ledger snippet in nav trail / keybind bar. */
+.cockpit__usage-seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  white-space: nowrap;
+  color: var(--color-fg);
+  flex: none;
+}
+.cockpit__usage-seg__run--muted {
+  color: var(--color-muted);
+}
+
+/* Brief stage flash on workspace switch (CSS only — no TUI slide frames). */
+.cockpit__stage--workspace-flash {
+  animation: cockpit-workspace-flash 180ms var(--ease-out);
+}
+@keyframes cockpit-workspace-flash {
+  0% { opacity: 0.72; }
+  100% { opacity: 1; }
+}
+
 /* ── Body: 3-rail grid ─────────────────────────────────────────────────────────────────────── */
 .cockpit__cols {
   display: grid;
-  /* left rail | Stage (grows) | right rail. Rails are token-width but allowed to shrink. */
+  /* left rail | Stage (grows) | right rail.
+   * Grid violation: zero outer padding; stage owns the center mass flush to nav/ledger.
+   * Rails carry their own inset so they read as recessed masonry beside the stage. */
   grid-template-columns:
-    minmax(280px, var(--rail-width))
+    minmax(260px, var(--rail-width))
     minmax(0, 1fr)
-    minmax(280px, var(--rail-width));
-  gap: var(--space-3);
-  padding: var(--space-3);
+    minmax(260px, var(--rail-width));
+  gap: 0;
+  padding: 0;
   min-height: 0;
   overflow: hidden;
+  background: var(--surface-app);
 }
 
-/* Rails: independently-scrolling columns of panels. */
+/* Rails: recessed stone columns — quieter than the stage plane. */
 .cockpit__rail {
   display: flex;
   flex-direction: column;
@@ -69,12 +150,31 @@
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  padding: var(--space-4) var(--space-3);
+  background: color-mix(in srgb, var(--surface-app) calc(var(--chrome-opacity) * 100%), transparent);
 }
-/* Rail panels: never shrink to header-only; cap body scroll so several panels fit in the column. */
+.cockpit__rail:first-child {
+  border-right: var(--border-hair) solid var(--border-subtle);
+}
+.cockpit__rail:last-child {
+  border-left: var(--border-hair) solid var(--border-subtle);
+}
+
+/* Rail panels: stacked masonry, not identical floating cards. */
 .cockpit__rail > .mds-panel {
   flex-shrink: 0;
   max-height: 60vh;
   min-height: 0;
+  border-radius: 0;
+  border: none;
+  border-top: var(--border-hair) solid var(--border-default);
+  background: var(--surface-panel);
+  box-shadow: none;
+}
+.cockpit__rail > .mds-panel.mds-panel--active {
+  border: none;
+  border-top: var(--border-thick) solid var(--border-accent);
+  border-left: var(--border-thick) solid var(--border-accent);
 }
 .cockpit__rail > .mds-panel .mds-panel__body {
   flex: 1 1 auto;
@@ -82,33 +182,60 @@
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
+.cockpit__rail > .mds-panel .mds-panel__head {
+  border-bottom-color: var(--border-subtle);
+  padding-block: var(--space-3);
+}
 
-/* Stage cell: the center column grows and scrolls inside its own pane. */
+/* Stage cell: dominant center mass — deeper plane, flush to columns. */
 .cockpit__stage {
   display: flex;
   min-width: 0;
   min-height: 0;
+  background: var(--surface-panel);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+.cockpit__stage > .mds-stage,
+.cockpit__stage > .mds-panel,
+.cockpit__stage > .stage {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 0;
+  border: none;
+}
+
+/* Keybind bar as footer ledger — integrated with the frame, not a floating strip. */
+.cockpit > .mds-keybar {
+  flex-shrink: 0;
+  padding: var(--space-3) calc(var(--space-5) + var(--safe-right))
+    calc(var(--space-3) + var(--safe-bottom)) calc(var(--space-5) + var(--safe-left));
+  min-height: 0;
+  background: var(--surface-raised);
+  border-top: var(--border-hair) solid var(--border-strong);
+  gap: var(--space-5);
 }
 
 /* ── Mobile shell ──────────────────────────────────────────────────────────────────────────── */
 .mw-app {
   display: grid;
-  /* header | pane (grows) | pill tab bar. */
+  /* header beam | pane | tab ledger */
   grid-template-rows: auto 1fr auto;
   height: 100%;
   overflow: hidden;
   overflow-x: hidden;
+  background: var(--surface-app);
 }
 
 .mw-header {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   height: calc(var(--header-height) + var(--safe-top));
-  padding: var(--safe-top) calc(var(--space-3) + var(--safe-right)) 0
-    calc(var(--space-3) + var(--safe-left));
-  border-bottom: 1px solid var(--color-border-blurred);
-  background: var(--color-panel-selected-bg);
+  padding: var(--safe-top) calc(var(--space-4) + var(--safe-right)) 0
+    calc(var(--space-4) + var(--safe-left));
+  border-bottom: var(--border-hair) solid var(--border-strong);
+  background: var(--surface-raised);
   flex-shrink: 0;
 }
 /* Current-view label after the brand: lowercase, mono, quiet. */
@@ -116,6 +243,8 @@
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--color-muted);
+  letter-spacing: var(--tracking-wide);
+  text-transform: lowercase;
 }
 .mw-spacer { flex: 1; }
 
@@ -123,12 +252,13 @@
   min-height: 0;
   overflow: hidden;
   display: flex;
-  padding: var(--space-2);
+  padding: 0;
+  background: var(--surface-panel);
 }
-/* The single mobile pane fills the column. */
+/* The single mobile pane fills the column — no inset card frame. */
 .mw-main > .mds-panel,
 .mw-main > .panel,
-.mw-main > .stage { flex: 1; min-height: 0; max-height: none; }
+.mw-main > .stage { flex: 1; min-height: 0; max-height: none; border-radius: 0; border: none; }
 .mw-main > .mds-panel {
   display: flex;
   flex-direction: column;
@@ -140,14 +270,14 @@
   -webkit-overflow-scrolling: touch;
 }
 
-/* Bottom pill tab bar. The DS Tabs (`variant=pill full`) sits in this padded, safe-area-aware nav. */
+/* Bottom tab ledger (not a floating pill strip). */
 .mw-tabbar {
   flex-shrink: 0;
   position: relative;
   padding: var(--space-2) calc(var(--space-2) + var(--safe-right))
     calc(var(--space-2) + var(--safe-bottom)) calc(var(--space-2) + var(--safe-left));
-  border-top: 1px solid var(--color-border-blurred);
-  background: var(--color-panel-selected-bg);
+  border-top: var(--border-hair) solid var(--border-strong);
+  background: var(--surface-raised);
 }
 /* Scroll affordance: tabs overflow horizontally; edge fades hint that more tabs are off-screen. */
 .mw-tabbar::before,
@@ -168,11 +298,11 @@
 }
 .mw-tabbar::before {
   left: calc(var(--space-2) + var(--safe-left));
-  background: linear-gradient(to right, var(--color-panel-selected-bg) 35%, transparent);
+  background: linear-gradient(to right, var(--surface-raised) 35%, transparent);
 }
 .mw-tabbar::after {
   right: calc(var(--space-2) + var(--safe-right));
-  background: linear-gradient(to left, var(--color-panel-selected-bg) 35%, transparent);
+  background: linear-gradient(to left, var(--surface-raised) 35%, transparent);
 }
 /* Stacked icon+label tabs: fixed width (not flex-grow) so 10 tabs scroll instead of squashing. */
 .mw-tabbar .mds-tabs--full {
@@ -206,14 +336,16 @@
 /* ── The masthead wordmark treatment. ───────────────────── */
 .cockpit > .mds-nav .mds-nav__brand,
 .mw-brand {
-  font: var(--type-display);
+  font-family: var(--font-display);
   font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
   line-height: 1;
   color: var(--color-brand);
-  letter-spacing: 0;
+  letter-spacing: var(--tracking-tight);
 }
 /* The mono `_` wink in the lockup — kept mono on purpose. */
 .cockpit-brand__wink {
   font-family: var(--font-mono);
   color: var(--color-muted);
+  font-weight: var(--weight-regular);
 }

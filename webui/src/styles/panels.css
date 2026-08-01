@@ -40,3 +40,32 @@
   font-size: var(--text-2xs);
   color: var(--color-muted);
 }
+
+/* ── Workflows (run → node hierarchy) ────────────────────────────────────────────────────────── */
+.workflow-row__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.workflow-row__chevron {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  transition: transform var(--dur, 120ms) var(--ease-out, ease);
+}
+.workflow-row__chevron--collapsed {
+  transform: rotate(-90deg);
+}
+.workflow-row__chevron-spacer {
+  display: inline-block;
+  width: 14px;
+  flex-shrink: 0;
+}
+.workflow-row__title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workflow-row--child .mds-row__title {
+  color: var(--color-text-secondary, var(--color-muted));
+}

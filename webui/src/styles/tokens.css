@@ -1,64 +1,55 @@
 /* ============================================================
-   murder — Design-System token foundation (ported)
+   murder — Design-System token foundation (ported + aesthetic pass)
    ------------------------------------------------------------
-   Faithful port of murder-design-system/project/tokens/*.css
-   (fonts + colors + typography + spacing + the non-conflicting
-   base bits). Imported from main.tsx AFTER theme.css and BEFORE
-   app.css, so the DS `--surface-*`/`--text-*`/`--ef-*`/`--space-*`
-   /`--type-*`/`--radius*`/`--control-*` vocabulary is present
-   app-wide WITHOUT disturbing the runtime `--color-*` injection.
+   DS `--surface-*`/`--text-*`/`--ef-*`/`--space-*`/`--type-*`/
+   `--radius*`/`--control-*` vocabulary. Warm stone chrome +
+   Instrument Sans / Bricolage Grotesque / JetBrains Mono.
+   Runtime `--color-*` injection (theme.css / useThemeCssVars) is
+   undisturbed — shared palettes stay TUI-safe.
 
-   This file is ADDITIVE. The existing app.css depends on the
-   `--color-*` vars (still written at runtime by useThemeCssVars)
-   and on a handful of layout tokens declared in theme.css. Where
-   DS names overlap theme.css (`--space-1..5`, `--radius`,
-   `--radius-sm`, `--font-mono`, `--font-sans`), the DS values
-   declared here OVERRIDE theme.css because tokens.css is imported
-   AFTER it — see the reconciliation note in the Phase-A report.
-
-   LIGHT/DARK: `:root` = dark (default). Light comes via BOTH
+   LIGHT/DARK: `:root` = dark (default). Light via BOTH
    `@media (prefers-color-scheme: light)` and `[data-theme="light"]`
-   — the attribute wins on specificity (0,1,1) > media (0,0,1). A
-   `[data-theme="dark"]` block pins dark over an OS light pref.
-   useThemeCssVars sets `document.documentElement.dataset.theme`
-   from the active shared-theme scheme, so DS components key off it.
-
-   Do not edit piecemeal — this mirrors the bundle. If the bundle
-   tokens change, re-port the whole file.
+   — the attribute wins on specificity. `[data-theme="dark"]` pins
+   dark over an OS light pref.
    ============================================================ */
 
-/* ── Fonts (tokens/fonts.css) ─────────────────────────────────
-   JetBrains Mono = the working mono voice and display face. */
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap");
+/* ── Fonts ────────────────────────────────────────────────────
+   Chrome: Instrument Sans (UI) + Bricolage Grotesque (display/brand).
+   Working surfaces: JetBrains Mono (terminal, ids, keybinds). */
+@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap");
 
-/* ── Colors (tokens/colors.css) — Everforest Dark (hard) ────── */
+/* ── Colors — warm stone / earth grounds (Everforest accents kept) ─
+   Macro chrome reads as masonry + stone, not cool terminal-green SaaS.
+   Brand/error coral and vegetation accents stay decisive and sparse.
+   Runtime `--color-*` still comes from shared palettes; these `--ef-*`
+   / `--surface-*` tokens reshape DS material only. */
 :root {
   color-scheme: dark;
 
-  /* Background ramp (app backdrop -> raised surfaces) */
-  --ef-bg-dim:  #1b2024;
-  --ef-bg-0:    #21282d;
-  --ef-bg-1:    #272e33;
-  --ef-bg-2:    #2e383c;
-  --ef-bg-3:    #374145;
-  --ef-bg-4:    #414b50;
-  --ef-bg-5:    #4f5b58;
+  /* Background ramp — warm umber-stone (app → raised) */
+  --ef-bg-dim:  #161412;
+  --ef-bg-0:    #1e1b18;
+  --ef-bg-1:    #26221e;
+  --ef-bg-2:    #302b26;
+  --ef-bg-3:    #3a342e;
+  --ef-bg-4:    #463f37;
+  --ef-bg-5:    #564d43;
 
   /* Tinted background washes (status surfaces) */
-  --ef-bg-red:    #4c3a3f;
-  --ef-bg-green:  #3a4a3e;
-  --ef-bg-yellow: #45443c;
-  --ef-bg-blue:   #384b55;
-  --ef-bg-aqua:   #3a4a44;
-  --ef-bg-visual: #4c3743;
+  --ef-bg-red:    #4a3534;
+  --ef-bg-green:  #354036;
+  --ef-bg-yellow: #403c32;
+  --ef-bg-blue:   #334048;
+  --ef-bg-aqua:   #34403a;
+  --ef-bg-visual: #4a353c;
 
-  /* Foreground / greys */
-  --ef-fg:     #d3c6aa;
-  --ef-grey-2: #9da9a0;
-  --ef-grey-1: #859289;
-  --ef-grey-0: #7a8478;
+  /* Foreground / greys — warm parchment / stone */
+  --ef-fg:     #e0d4c0;
+  --ef-grey-2: #a89f90;
+  --ef-grey-1: #8a8174;
+  --ef-grey-0: #6e675c;
 
-  /* Accents (Everforest) */
+  /* Accents — coral brand + sparse vegetation (Everforest-aligned) */
   --ef-red:    #e67e80;
   --ef-orange: #e69875;
   --ef-yellow: #dbbc7f;
@@ -68,21 +59,23 @@
   --ef-purple: #d699b6;
 
   /* Dimmed accents (fills behind text / chips) */
-  --ef-red-dim:    #543a40;
-  --ef-green-dim:  #44503b;
-  --ef-yellow-dim: #4d4a3a;
-  --ef-aqua-dim:   #3d4d44;
-  --ef-blue-dim:   #3a4f53;
+  --ef-red-dim:    #4f3538;
+  --ef-green-dim:  #3d4636;
+  --ef-yellow-dim: #464033;
+  --ef-aqua-dim:   #37463e;
+  --ef-blue-dim:   #36464a;
 
   /* ── Semantic aliases — consume THESE in components ─────────── */
 
-  /* Surfaces */
+  /* Surfaces — stage mass vs recessed rails keyed off these */
   --surface-app:     var(--ef-bg-dim);
   --surface-panel:   var(--ef-bg-0);
   --surface-raised:  var(--ef-bg-1);
   --surface-hover:   var(--ef-bg-2);
   --surface-active:  var(--ef-bg-3);
-  --surface-overlay: #181d20;
+  --surface-overlay: #100e0c;
+  /* Deep working plane (tmux / terminal mass) — colder than chrome stone */
+  --surface-terminal: #0a0908;
 
   /* Borders */
   --border-subtle:  var(--ef-bg-2);
@@ -97,7 +90,7 @@
   --text-muted:     var(--ef-grey-1);
   --text-faint:     var(--ef-grey-0);
   --text-disabled:  var(--ef-grey-0);
-  --text-on-accent: #1b2024;
+  --text-on-accent: #161412;
 
   /* Brand + intent text */
   --text-brand:    var(--ef-red);
@@ -141,14 +134,14 @@
   --crow-6: var(--ef-purple);
 }
 
-/* ── Typography (tokens/typography.css) ─────────────────────── */
+/* ── Typography ─────────────────────────────────────────────── */
 :root {
-  /* Families — one mono for the whole system. */
+  /* Families — sans for chrome, display for brand/titles, mono for work. */
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular",
                "Menlo", "Consolas", monospace;
-  --font-sans: var(--font-mono); /* alias: there is no sans. stay mono. */
-
-  --font-accent: var(--font-mono);
+  --font-sans: "Instrument Sans", "Segoe UI", sans-serif;
+  --font-display: "Bricolage Grotesque", "Instrument Sans", sans-serif;
+  --font-accent: var(--font-display);
 
   /* Type scale (px) */
   --text-2xs:  11px;
@@ -171,23 +164,23 @@
   /* Line heights */
   --leading-tight:   1.15;
   --leading-snug:    1.35;
-  --leading-normal:  1.55;
+  --leading-normal:  1.5;
   --leading-relaxed: 1.7;
 
   /* Letter spacing */
-  --tracking-tight:  -0.01em;
+  --tracking-tight:  -0.02em;
   --tracking-normal: 0;
   --tracking-wide:   0.04em;
-  --tracking-wider:  0.12em;
+  --tracking-wider:  0.1em;
 
   /* Semantic type roles (shorthands) */
-  --type-display:  var(--weight-bold)     var(--text-4xl)/var(--leading-tight)  var(--font-accent);
-  --type-h1:       var(--weight-semibold) var(--text-2xl)/var(--leading-tight)  var(--font-mono);
-  --type-h2:       var(--weight-semibold) var(--text-xl)/var(--leading-snug)    var(--font-mono);
-  --type-title:    var(--weight-semibold) var(--text-lg)/var(--leading-snug)    var(--font-mono);
-  --type-body:     var(--weight-regular)  var(--text-sm)/var(--leading-normal)  var(--font-mono);
-  --type-body-lg:  var(--weight-regular)  var(--text-md)/var(--leading-normal)  var(--font-mono);
-  --type-meta:     var(--weight-regular)  var(--text-xs)/var(--leading-snug)    var(--font-mono);
+  --type-display:  var(--weight-bold)     var(--text-4xl)/var(--leading-tight)  var(--font-display);
+  --type-h1:       var(--weight-semibold) var(--text-2xl)/var(--leading-tight)  var(--font-display);
+  --type-h2:       var(--weight-semibold) var(--text-xl)/var(--leading-snug)    var(--font-sans);
+  --type-title:    var(--weight-semibold) var(--text-lg)/var(--leading-snug)    var(--font-sans);
+  --type-body:     var(--weight-regular)  var(--text-sm)/var(--leading-normal)  var(--font-sans);
+  --type-body-lg:  var(--weight-regular)  var(--text-md)/var(--leading-normal)  var(--font-sans);
+  --type-meta:     var(--weight-regular)  var(--text-xs)/var(--leading-snug)    var(--font-sans);
   --type-mono-sm:  var(--weight-regular)  var(--text-2xs)/var(--leading-snug)   var(--font-mono);
 }
 
@@ -225,24 +218,24 @@
   --control-md:   38px;
   --control-lg:   46px;
 
-  /* Radii (modest — a small corner reads precise) */
-  --radius-xs:  3px;
-  --radius-sm:  5px;
-  --radius:     7px;
-  --radius-md:  9px;
-  --radius-lg:  12px;
+  /* Radii — tight masonry; avoid identical soft card-stack rounding */
+  --radius-xs:  1px;
+  --radius-sm:  2px;
+  --radius:     2px;
+  --radius-md:  3px;
+  --radius-lg:  4px;
   --radius-pill: 999px;
 
   /* Border widths */
   --border-hair:  1px;
   --border-thick: 2px;
 
-  /* Elevation */
+  /* Elevation — sparse; chrome prefers edges over multi-shadow */
   --shadow-none: none;
-  --shadow-sm:   0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow:      0 4px 14px rgba(0, 0, 0, 0.35);
-  --shadow-lg:   0 12px 34px rgba(0, 0, 0, 0.45);
-  --shadow-focus: 0 0 0 2px var(--surface-app), 0 0 0 4px var(--border-focus);
+  --shadow-sm:   0 1px 0 rgba(0, 0, 0, 0.35);
+  --shadow:      0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg:   0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-focus: 0 0 0 2px var(--surface-app), 0 0 0 3px var(--border-focus);
 
   /* Z-index */
   --z-base:    0;
@@ -277,71 +270,73 @@
   :root {
     color-scheme: light;
 
-    --ef-bg-dim:  #f2efdf;
-    --ef-bg-0:    #fffbef;
-    --ef-bg-1:    #f8f5e4;
-    --ef-bg-2:    #ece8d6;
-    --ef-bg-3:    #e0dcc6;
-    --ef-bg-4:    #cfcab0;
-    --ef-bg-5:    #bec5b2;
+    /* Cool limestone paper — avoid cream + terracotta cliché */
+    --ef-bg-dim:  #e6e2da;
+    --ef-bg-0:    #f0ece4;
+    --ef-bg-1:    #e8e3da;
+    --ef-bg-2:    #ddd7cd;
+    --ef-bg-3:    #d0c9bd;
+    --ef-bg-4:    #bdb5a8;
+    --ef-bg-5:    #a39b8e;
 
-    --ef-bg-red:    #ffe0d3;
-    --ef-bg-green:  #e9eecb;
-    --ef-bg-yellow: #fbe6c3;
-    --ef-bg-blue:   #e0ecef;
-    --ef-bg-aqua:   #dbeee0;
-    --ef-bg-visual: #f0e9c8;
+    --ef-bg-red:    #edd8d2;
+    --ef-bg-green:  #dce3d2;
+    --ef-bg-yellow: #ebe0cc;
+    --ef-bg-blue:   #d6e0e4;
+    --ef-bg-aqua:   #d5e4da;
+    --ef-bg-visual: #e6ddd0;
 
-    --ef-fg:     #2b3339;
-    --ef-grey-2: #4a5258;
-    --ef-grey-1: #5c6a72;
-    --ef-grey-0: #8a948c;
+    --ef-fg:     #2a2622;
+    --ef-grey-2: #4a4540;
+    --ef-grey-1: #5e5850;
+    --ef-grey-0: #8a8378;
 
-    --ef-red:    #f85552;
-    --ef-orange: #f57d26;
-    --ef-yellow: #dfa000;
-    --ef-green:  #8da101;
-    --ef-aqua:   #35a77c;
-    --ef-blue:   #3a94c5;
-    --ef-purple: #df69ba;
+    --ef-red:    #c45c5e;
+    --ef-orange: #c46e3a;
+    --ef-yellow: #b08a20;
+    --ef-green:  #6a7d3e;
+    --ef-aqua:   #2f8a68;
+    --ef-blue:   #3a7a9a;
+    --ef-purple: #a85a8e;
 
-    --ef-red-dim:    #fbe3da;
-    --ef-green-dim:  #eef0cf;
-    --ef-yellow-dim: #faedbf;
-    --ef-aqua-dim:   #dff0e3;
-    --ef-blue-dim:   #ddeaf0;
+    --ef-red-dim:    #f0ddd6;
+    --ef-green-dim:  #e2e8d6;
+    --ef-yellow-dim: #efe6d0;
+    --ef-aqua-dim:   #dceee4;
+    --ef-blue-dim:   #d8e6ec;
 
-    --surface-overlay: #2b3339;
-    --text-on-accent:  #fffbef;
-    --accent-hover:    #9bb000;
-    --accent-press:    #788a00;
-    --brand-hover:     #fa6764;
-    --brand-press:     #e44340;
+    --surface-overlay: #2a2622;
+    --surface-terminal: #1a1816;
+    --text-on-accent:  #f0ece4;
+    --accent-hover:    #7a8f4a;
+    --accent-press:    #5a6d32;
+    --brand-hover:     #d46a6c;
+    --brand-press:     #b04a4c;
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --ef-bg-dim:  #1b2024;
-  --ef-bg-0:    #21282d;
-  --ef-bg-1:    #272e33;
-  --ef-bg-2:    #2e383c;
-  --ef-bg-3:    #374145;
-  --ef-bg-4:    #414b50;
-  --ef-bg-5:    #4f5b58;
+  --ef-bg-dim:  #161412;
+  --ef-bg-0:    #1e1b18;
+  --ef-bg-1:    #26221e;
+  --ef-bg-2:    #302b26;
+  --ef-bg-3:    #3a342e;
+  --ef-bg-4:    #463f37;
+  --ef-bg-5:    #564d43;
 
-  --ef-bg-red:    #4c3a3f;
-  --ef-bg-green:  #3a4a3e;
-  --ef-bg-yellow: #45443c;
-  --ef-bg-blue:   #384b55;
-  --ef-bg-aqua:   #3a4a44;
-  --ef-bg-visual: #4c3743;
+  --ef-bg-red:    #4a3534;
+  --ef-bg-green:  #354036;
+  --ef-bg-yellow: #403c32;
+  --ef-bg-blue:   #334048;
+  --ef-bg-aqua:   #34403a;
+  --ef-bg-visual: #4a353c;
 
-  --ef-fg:     #d3c6aa;
-  --ef-grey-2: #9da9a0;
-  --ef-grey-1: #859289;
-  --ef-grey-0: #7a8478;
+  --ef-fg:     #e0d4c0;
+  --ef-grey-2: #a89f90;
+  --ef-grey-1: #8a8174;
+  --ef-grey-0: #6e675c;
 
   --ef-red:    #e67e80;
   --ef-orange: #e69875;
@@ -351,14 +346,15 @@
   --ef-blue:   #7fbbb3;
   --ef-purple: #d699b6;
 
-  --ef-red-dim:    #543a40;
-  --ef-green-dim:  #44503b;
-  --ef-yellow-dim: #4d4a3a;
-  --ef-aqua-dim:   #3d4d44;
-  --ef-blue-dim:   #3a4f53;
+  --ef-red-dim:    #4f3538;
+  --ef-green-dim:  #3d4636;
+  --ef-yellow-dim: #464033;
+  --ef-aqua-dim:   #37463e;
+  --ef-blue-dim:   #36464a;
 
-  --surface-overlay: #181d20;
-  --text-on-accent:  #1b2024;
+  --surface-overlay: #100e0c;
+  --surface-terminal: #0a0908;
+  --text-on-accent:  #161412;
   --accent-hover:    #b4ca91;
   --accent-press:    #97b06f;
   --brand-hover:     #ec9092;
@@ -368,46 +364,47 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --ef-bg-dim:  #f2efdf;
-  --ef-bg-0:    #fffbef;
-  --ef-bg-1:    #f8f5e4;
-  --ef-bg-2:    #ece8d6;
-  --ef-bg-3:    #e0dcc6;
-  --ef-bg-4:    #cfcab0;
-  --ef-bg-5:    #bec5b2;
+  --ef-bg-dim:  #e6e2da;
+  --ef-bg-0:    #f0ece4;
+  --ef-bg-1:    #e8e3da;
+  --ef-bg-2:    #ddd7cd;
+  --ef-bg-3:    #d0c9bd;
+  --ef-bg-4:    #bdb5a8;
+  --ef-bg-5:    #a39b8e;
 
-  --ef-bg-red:    #ffe0d3;
-  --ef-bg-green:  #e9eecb;
-  --ef-bg-yellow: #fbe6c3;
-  --ef-bg-blue:   #e0ecef;
-  --ef-bg-aqua:   #dbeee0;
-  --ef-bg-visual: #f0e9c8;
+  --ef-bg-red:    #edd8d2;
+  --ef-bg-green:  #dce3d2;
+  --ef-bg-yellow: #ebe0cc;
+  --ef-bg-blue:   #d6e0e4;
+  --ef-bg-aqua:   #d5e4da;
+  --ef-bg-visual: #e6ddd0;
 
-  --ef-fg:     #2b3339;
-  --ef-grey-2: #4a5258;
-  --ef-grey-1: #5c6a72;
-  --ef-grey-0: #8a948c;
+  --ef-fg:     #2a2622;
+  --ef-grey-2: #4a4540;
+  --ef-grey-1: #5e5850;
+  --ef-grey-0: #8a8378;
 
-  --ef-red:    #f85552;
-  --ef-orange: #f57d26;
-  --ef-yellow: #dfa000;
-  --ef-green:  #8da101;
-  --ef-aqua:   #35a77c;
-  --ef-blue:   #3a94c5;
-  --ef-purple: #df69ba;
+  --ef-red:    #c45c5e;
+  --ef-orange: #c46e3a;
+  --ef-yellow: #b08a20;
+  --ef-green:  #6a7d3e;
+  --ef-aqua:   #2f8a68;
+  --ef-blue:   #3a7a9a;
+  --ef-purple: #a85a8e;
 
-  --ef-red-dim:    #fbe3da;
-  --ef-green-dim:  #eef0cf;
-  --ef-yellow-dim: #faedbf;
-  --ef-aqua-dim:   #dff0e3;
-  --ef-blue-dim:   #ddeaf0;
+  --ef-red-dim:    #f0ddd6;
+  --ef-green-dim:  #e2e8d6;
+  --ef-yellow-dim: #efe6d0;
+  --ef-aqua-dim:   #dceee4;
+  --ef-blue-dim:   #d8e6ec;
 
-  --surface-overlay: #2b3339;
-  --text-on-accent:  #fffbef;
-  --accent-hover:    #9bb000;
-  --accent-press:    #788a00;
-  --brand-hover:     #fa6764;
-  --brand-press:     #e44340;
+  --surface-overlay: #2a2622;
+  --surface-terminal: #1a1816;
+  --text-on-accent:  #f0ece4;
+  --accent-hover:    #7a8f4a;
+  --accent-press:    #5a6d32;
+  --brand-hover:     #d46a6c;
+  --brand-press:     #b04a4c;
 }
 
 /* ── Base reset bits (tokens/base.css, non-conflicting only) ───
