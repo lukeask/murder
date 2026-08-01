@@ -3,7 +3,7 @@
  * Visuals in ds.css.
  */
 
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, MouseEvent, ReactNode } from 'react';
 import { cx } from './cx.js';
 
 export interface PanelProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
@@ -17,6 +17,8 @@ export interface PanelProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
   flush?: boolean;
   /** Header action nodes (IconButtons) on the right. */
   actions?: ReactNode;
+  /** Click the header chrome (not actions) to claim rail keyboard focus. */
+  onHeaderClick?: (e: MouseEvent<HTMLElement>) => void;
   children?: ReactNode;
 }
 
@@ -27,6 +29,7 @@ export function Panel({
   active = false,
   flush = false,
   actions,
+  onHeaderClick,
   className,
   children,
   ...rest
@@ -39,16 +42,28 @@ export function Panel({
         flush && 'mds-panel--flush',
         className,
       )}
+      data-focused={active ? 'true' : undefined}
       {...rest}
     >
       {title !== undefined ? (
-        <header className="mds-panel__head">
+        <header
+          className={cx('mds-panel__head', onHeaderClick !== undefined && 'mds-panel__head--focusable')}
+          onClick={onHeaderClick}
+        >
           <span className="mds-panel__title">{title}</span>
           {count !== undefined && count !== null ? (
             <span className="mds-panel__count">{count}</span>
           ) : null}
           <span className="mds-panel__spacer" />
-          {actions !== undefined ? <span className="mds-panel__actions">{actions}</span> : null}
+          {actions !== undefined ? (
+            <span
+              className="mds-panel__actions"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {actions}
+            </span>
+          ) : null}
         </header>
       ) : null}
       <div className="mds-panel__body">{children}</div>
