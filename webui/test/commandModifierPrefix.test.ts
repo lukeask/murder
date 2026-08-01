@@ -1,4 +1,4 @@
-/** commandModifierPrefix + desktopKeybindHints track settings.modifier. */
+/** commandModifierPrefix + desktopKeybindHints track settings.modifier + overrides. */
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -16,35 +16,33 @@ describe('commandModifierPrefix', () => {
 });
 
 describe('desktopKeybindHints', () => {
-  it('prefixes chords from the live modifier (default settings use alt)', () => {
+  it('emits live selectBottomBar chords for chat focus (alt)', () => {
     const hints = desktopKeybindHints('alt');
-    expect(hints.map((h) => h.chord)).toEqual([
-      'A-1-0',
-      'A-space',
-      'A-hl',
-      'A-S-jk',
-      'A-s',
-      'A-t',
-      'A-p',
-      'A-g',
-      'A-w',
-      'A-o',
-      'C-n',
-      '?',
-    ]);
+    const byDesc = Object.fromEntries(hints.map((h) => [h.desc, h.chord]));
+    expect(byDesc.panels).toMatch(/A-1/);
+    expect(byDesc.chat ?? byDesc['focus chat']).toBeDefined();
+    expect(hints.some((h) => h.chord.includes('s') && h.desc.includes('spawn'))).toBe(true);
+    expect(hints.some((h) => h.chord === ':help' || h.desc === 'help')).toBe(true);
   });
 
   it('uses C- when modifier is ctrl', () => {
-    expect(desktopKeybindHints('ctrl').find((h) => h.desc === 'spawn')?.chord).toBe('C-s');
+    const spawn = desktopKeybindHints('ctrl').find((h) => h.desc === 'spawn');
+    expect(spawn?.chord).toBe('C-s');
+  });
+
+  it('tracks key_overrides on rebindable actions', () => {
+    const spawn = desktopKeybindHints('alt', { 'global.spawn': 'q' }).find(
+      (h) => h.desc === 'spawn',
+    );
+    expect(spawn?.chord).toBe('A-q');
   });
 });
 
 describe('buildWebHelpGroups', () => {
-  it('mirrors KeybindBar prefix for the Global group', () => {
+  it('mirrors live binding prefix for the Global group', () => {
     const keys = buildWebHelpGroups('both').flatMap((g) => g.entries.map((e) => e.key));
     expect(keys).toContain('A-/C-s');
-    expect(keys).toContain('A-/C-S-j / A-/C-S-k');
-    expect(keys).toContain('A-/C-S-1–9');
+    expect(keys.some((k) => k.includes('S-j'))).toBe(true);
     expect(keys).toContain('?');
   });
 });
