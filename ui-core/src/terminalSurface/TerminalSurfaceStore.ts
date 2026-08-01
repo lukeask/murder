@@ -278,7 +278,8 @@ export class TerminalSurfaceStore {
       this.active = this.primary;
       this.modes = { ...DEFAULT_MODES };
       this.attrs = defaultAttrs();
-      const lines = terminalSafeText(frame.data).split('\n');
+      // Keep SGR so the VT consume path can paint colors; strip only C0/C1 that aren't ESC.
+      const lines = terminalSafeText(frame.data, { stripAnsi: false }).split('\n');
       for (let y = 0; y < Math.min(lines.length, this.rows); y += 1) {
         this.active.cursor = { ...this.active.cursor, x: 0, y };
         this.consume(lines[y] ?? '');

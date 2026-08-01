@@ -1,10 +1,15 @@
 /**
- * TmuxFrameView — ANSI snapshot frames via ansi-to-html (not xterm). Attach needs a real session UUID.
+ * TmuxFrameView — live terminal via ui-core TerminalSurfaceStore (keyframes, chunks, reset/delta frames)
+ * plus an interactive writer lease while the Stage Terminal tab is mounted.
  */
 
-import Convert from 'ansi-to-html';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useApplicationClient } from '@murder/ui-core/hooks/useApplicationClient.js';
+import { adaptTerminalUpdate } from '@murder/ui-core/terminalSurface/protocolAdapter.js';
+import { TerminalSurfaceStore } from '@murder/ui-core/terminalSurface/TerminalSurfaceStore.js';
+import { encodeTerminalKey } from './encodeTerminalKey.js';
+import { terminalSnapshotToHtml } from './terminalSnapshotHtml.js';
+import { useTerminalInputLease } from './useTerminalInputLease.js';
 
 export function TmuxFrameView({
   sessionId,
@@ -12,35 +17,76 @@ export function TmuxFrameView({
   readonly sessionId: string | null;
 }): React.JSX.Element {
   const bus = useApplicationClient();
-  const [frame, setFrame] = useState<string>('');
-
-  const convert = useMemo(() => new Convert({ escapeXML: true, newline: false }), []);
+  const [store, setStore] = useState(() => new TerminalSurfaceStore());
+  const [ready, setReady] = useState(false);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const { status: inputStatus, error: inputError, writerRef } = useTerminalInputLease(bus, sessionId);
 
   useEffect(() => {
-    setFrame('');
+    setReady(false);
     if (sessionId === null) return;
-    const off = bus.attachTerminal(sessionId, (terminalFrame) => {
-      if (terminalFrame.type === 'terminal.frame' && terminalFrame.reset) {
-        setFrame(terminalFrame.data);
-      }
-    }, 'replace');
+    const surface = new TerminalSurfaceStore();
+    setStore(surface);
+    const off = bus.attachTerminal(sessionId, (update) => {
+      surface.ingest(adaptTerminalUpdate(update));
+      setReady(true);
+    });
     return off;
   }, [bus, sessionId]);
+
+  // Focus the black mass once interactive so keydown reaches the surface without an extra click.
+  useEffect(() => {
+    if (inputStatus !== 'interactive') return;
+    surfaceRef.current?.focus({ preventScroll: true });
+  }, [inputStatus]);
+
+  const snapshot = useSyncExternalStore(store.subscribe.bind(store), store.getSnapshot, store.getSnapshot);
+  const html = useMemo(() => (ready ? terminalSnapshotToHtml(snapshot) : ''), [ready, snapshot]);
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (inputStatus !== 'interactive' || writerRef.current === null) return;
+    const bytes = encodeTerminalKey(event.nativeEvent);
+    if (bytes === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    writerRef.current.enqueue(bytes);
+  };
 
   if (sessionId === null) {
     return <div className="mds-tmux__empty">No terminal session for this crow.</div>;
   }
 
-  if (frame === '') {
+  if (!ready) {
     return <div className="mds-tmux__empty">Waiting for the agent's terminal…</div>;
   }
 
+  const readOnly =
+    inputStatus === 'read_only' || (inputStatus !== 'interactive' && inputStatus !== 'acquiring');
+  const hint =
+    inputError !== null
+      ? `read-only: ${inputError}`
+      : inputStatus === 'acquiring'
+        ? 'acquiring input…'
+        : inputStatus === 'read_only'
+          ? 'read-only'
+          : null;
+
   return (
-    <div className="mds-tmux">
+    <div
+      ref={surfaceRef}
+      className="mds-tmux"
+      tabIndex={inputStatus === 'interactive' ? 0 : -1}
+      role="application"
+      aria-label="Agent terminal"
+      aria-readonly={readOnly || undefined}
+      data-terminal-input={inputStatus === 'interactive' ? 'true' : undefined}
+      onKeyDown={onKeyDown}
+    >
+      {hint !== null ? <div className="mds-tmux__hint">{hint}</div> : null}
       <pre
         className="mds-tmux__frame"
-        // ansi-to-html output is sanitized (escapeXML) and only emits <span style> + <br>.
-        dangerouslySetInnerHTML={{ __html: convert.toHtml(frame) }}
+        // Snapshot HTML escapes text and only emits <span style> + <br>.
+        dangerouslySetInnerHTML={{ __html: html }}
       />
     </div>
   );
