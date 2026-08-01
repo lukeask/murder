@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import sqlite3
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +16,7 @@ from uuid import UUID
 
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.vt import VtEmulator, VtSnapshot
+from murder.state.persistence.connection import RepoDb
 
 LOGGER = logging.getLogger(__name__)
 _KEYFRAME_INTERVAL_S = 2.0
@@ -40,7 +40,7 @@ class TmuxTerminalOutput:
     ``tmux -C attach-session -r`` is deliberately a read-only, ignore-size
     client.  It neither sends keys nor changes the detached harness's 220x50
     geometry, unlike attaching an ordinary terminal client.  tmux control mode
-    emits `%output` records in pane order; their escaped payload is decoded
+    emits `%output` records in pane order. Their escaped payload is decoded
     back to the exact bytes before it reaches the emulator or wire stream.
     """
 
@@ -210,7 +210,7 @@ class TmuxTerminalOutput:
 class TerminalOutputRegistry:
     """Service-owned shared sources keyed by persisted session UUID."""
 
-    def __init__(self, db: sqlite3.Connection) -> None:
+    def __init__(self, db: RepoDb) -> None:
         self._db = db
         self._outputs: dict[UUID, TmuxTerminalOutput] = {}
         self._lock = asyncio.Lock()
@@ -220,9 +220,9 @@ class TerminalOutputRegistry:
             existing = self._outputs.get(session_id)
             if existing is not None and not existing.closed:
                 return existing
-            row = self._db.execute(
-                "SELECT transport, transport_ref FROM harness_sessions WHERE session_id = ?",
-                (str(session_id),),
+            row = self._db.conn.execute(
+                "SELECT transport, transport_ref FROM harness_sessions WHERE repository_id = ? AND session_id = ?",
+                (self._db.repository_id, str(session_id)),
             ).fetchone()
             if row is None:
                 raise ValueError(f"persisted session {session_id} does not exist")
@@ -274,7 +274,7 @@ def _control_output_bytes(line: bytes) -> bytes:
 
 
 def _feed_capture(emulator: VtEmulator, captured: str) -> None:
-    """Place capture rows explicitly; capture-pane newlines are not VT CRLF."""
+    """Place capture rows explicitly. capture-pane newlines are not VT CRLF."""
 
     for row, line in enumerate(captured.splitlines()):
         if row >= emulator.rows:

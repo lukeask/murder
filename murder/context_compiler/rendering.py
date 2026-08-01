@@ -43,8 +43,8 @@ def render_source_segment(segment: EvidenceSegment) -> str:
     """Render one ``EvidenceSegment`` as numbered exact-source text."""
     if segment.payload_kind is not PayloadKind.SOURCE:
         raise RenderError(
-            f"source renderer does not support payload kind {segment.payload_kind!r}; "
-            "use render_evidence_segment for DIFF"
+            f"source renderer does not support payload kind {segment.payload_kind!r}. "
+            "Use render_evidence_segment for DIFF"
         )
     header = f"{segment.path}:{segment.start_line}-{segment.end_line}"
     lines = segment.payload_text.splitlines()
@@ -52,7 +52,7 @@ def render_source_segment(segment: EvidenceSegment) -> str:
     if len(lines) != expected:
         raise RenderError(
             f"payload for {segment.path}:{segment.start_line}-{segment.end_line} "
-            f"has {len(lines)} lines; expected {expected}"
+            f"has {len(lines)} lines. Expected {expected}"
         )
     numbered = [f"{segment.start_line + offset} {line}" for offset, line in enumerate(lines)]
     return header + "\n" + "\n".join(numbered) + "\n"

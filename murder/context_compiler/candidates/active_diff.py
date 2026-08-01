@@ -1,6 +1,6 @@
 """Active dirty-worktree diff candidate provider (Part 9).
 
-Inspects the live worktree; does not persist diff bodies in the index.
+Inspects the live worktree. It does not persist diff bodies in the index.
 """
 
 from __future__ import annotations

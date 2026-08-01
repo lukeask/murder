@@ -224,8 +224,8 @@ class HarnessController:
                 else "preempted_by_user_interrupt"
             ),
             (
-                f"preempted by semantic operation {preempted_by} after an action; "
-                "terminal acceptance did not establish semantic acknowledgment"
+                f"preempted by semantic operation {preempted_by} after an action. "
+                "Terminal acceptance did not establish semantic acknowledgment"
                 if unsafe_ambiguity
                 else f"preempted by semantic operation {preempted_by}"
             ),

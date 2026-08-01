@@ -52,7 +52,7 @@ class UsageProbeWorker(Worker):
                 name=WorkerName.USAGE_PROBE,
                 accepts=self.COMMAND_KINDS,
                 process_model="subprocess",
-                # Usage sampling is disposable; a hung sample must never delay
+                # Usage sampling is disposable. A hung sample must never delay
                 # supervisor shutdown (which holds the repo flock). Fall through
                 # to terminate/kill quickly instead of waiting the 2s default.
                 shutdown_grace_s=0.2,
@@ -97,7 +97,7 @@ class UsageProbeWorker(Worker):
         modes = _modes_from_payload(command.payload)
         sampled_kinds = self._kinds_provider(ctx, modes=modes)
         stored, failures = await self._sampler(ctx, modes=modes)
-        # Usage rows feed the schedule projection; append durable inputs instead
+        # Usage rows feed the schedule projection. Append durable inputs instead
         # of publishing a generic runtime notification.
         if stored > 0 and ctx.db is not None:
             for kind in sampled_kinds:

@@ -1180,7 +1180,7 @@ def _lower_model_selection(
     choices = config.value.available
     current = next((index for index, choice in enumerate(choices) if choice.highlighted), None)
     if current is None:
-        raise ValueError("Antigravity picker cursor is not visible; navigation would be ambiguous")
+        raise ValueError("Antigravity picker cursor is not visible. Navigation would be ambiguous")
     target_index = choices.index(target)
     key = "Down" if target_index > current else "Up"
     return tuple(

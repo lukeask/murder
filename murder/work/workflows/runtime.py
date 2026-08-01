@@ -72,7 +72,7 @@ class WorkflowRunRecord(WorkflowContract):
     terminal_reason: str | None = None
 
     # Static ticket-DAG compatibility metadata.  These fields locate the
-    # materialized view; they are never consulted to derive run truth.
+    # materialized view. They are never consulted to derive run truth.
     parent_ticket_id: str | None = None
     definition_snapshot: dict[str, JsonValue] | None = None
     stage_map: dict[str, str] = Field(default_factory=dict)

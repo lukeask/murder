@@ -1,8 +1,8 @@
 """Service-owned application protocol.
 
 The protocol in this package is the only public client surface. Clients use
-the websocket request, subscription, and terminal contracts defined here;
-service implementation details are not client APIs.
+the websocket request, subscription, and terminal contracts defined here.
+Service implementation details are not client APIs.
 """
 
 from murder.app.protocol.wire import (

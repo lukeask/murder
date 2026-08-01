@@ -10,9 +10,8 @@ from typing import TYPE_CHECKING, Any
 from murder.runtime.agents.types import AgentRole, AgentStatus
 
 if TYPE_CHECKING:
-    import sqlite3
-
     from murder.runtime.agents.base import LifecycleParticipant
+    from murder.state.persistence.connection import RepoDb
 
 
 # Signature of the optional lifecycle hook Runtime wires onto the registry so
@@ -22,13 +21,13 @@ LifecycleHook = Callable[..., None]
 
 
 class AgentRegistry:
-    """Owns live agent instances; Runtime delegates registration and lookup."""
+    """Owns live agent instances. Runtime delegates registration and lookup."""
 
     def __init__(self) -> None:
         self._agents: dict[str, LifecycleParticipant] = {}
         self._crows: dict[str, LifecycleParticipant] = {}
         self._crow_handlers: dict[str, LifecycleParticipant] = {}
-        # Set by Runtime.start when the flight recorder is on; the registry has
+        # Set by Runtime.start when the flight recorder is on. The registry has
         # no bus handle of its own, so it calls back through this (no-op when
         # unset, e.g. in tests or below the `advanced` rung).
         self.on_lifecycle: LifecycleHook | None = None
@@ -37,8 +36,13 @@ class AgentRegistry:
         if self.on_lifecycle is not None:
             self.on_lifecycle(op=op, agent_id=agent_id, details=details)
 
-    def register(self, agent: LifecycleParticipant, *, persist: Callable[[LifecycleParticipant], None] | None = None) -> None:
-        """Track one agent; optional ``persist`` is ``Runtime.sync_agent``."""
+    def register(
+        self,
+        agent: LifecycleParticipant,
+        *,
+        persist: Callable[[LifecycleParticipant], None] | None = None,
+    ) -> None:
+        """Track one agent. Optional ``persist`` is ``Runtime.sync_agent``."""
         self._agents[agent.id] = agent
         if agent.ticket_id is not None:
             if agent.role == AgentRole.CROW:
@@ -95,10 +99,10 @@ class AgentRegistry:
         agent_id: str,
         *,
         tasks: dict[str, asyncio.Task[None]],
-        db: sqlite3.Connection | None,
-        set_dead: Callable[[sqlite3.Connection, str, str], None] | None = None,
+        db: RepoDb | None,
+        set_dead: Callable[[RepoDb, str, str], None] | None = None,
     ) -> None:
-        """Stop and drop one agent; cancel its supervise task if present."""
+        """Stop and drop one agent. Cancel its supervise task if present."""
         agent = self._agents.pop(agent_id, None)
         if agent is None:
             return
@@ -106,7 +110,7 @@ class AgentRegistry:
         # and reap is already recorded by the private orchestration lifecycle path.
         # Gilding it would only risk mid-teardown over-reaction (plan §2.5.A).
         if agent.ticket_id is not None:
-            # Only evict the index slot matching THIS agent's role; a crow and
+            # Only evict the index slot matching THIS agent's role. A crow and
             # its handler share a ticket_id, so reaping one half must not blow
             # away the other half's still-live index entry.
             if agent.role == AgentRole.CROW:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
@@ -15,6 +14,7 @@ from murder.llm.harnesses import REGISTRY
 from murder.llm.harnesses import get as get_harness
 from murder.llm.harnesses.base import HarnessAdapter
 from murder.llm.harnesses.models import HarnessUsageFreshness, HarnessUsageStatus
+from murder.state.persistence.connection import RepoDb
 
 _log = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class UsageSamplingContext:
 
     config: Config
     repo_root: Path
-    db: sqlite3.Connection | None
+    db: RepoDb | None
 
 
 def harness_kinds_with_usage_collection(crow_cfg: HarnessRoleConfig) -> list[str]:
@@ -104,7 +104,7 @@ def harness_kinds_to_sample(
     ]
 
 
-def insert_harness_usage_snapshot(db: sqlite3.Connection, status: HarnessUsageStatus) -> None:
+def insert_harness_usage_snapshot(db: RepoDb, status: HarnessUsageStatus) -> None:
     freshness = getattr(status.freshness, "value", status.freshness)
     if freshness != HarnessUsageFreshness.CURRENT.value:
         # A diagnostic stale sample is useful to the live controller, but a
@@ -112,13 +112,14 @@ def insert_harness_usage_snapshot(db: sqlite3.Connection, status: HarnessUsageSt
         # Do not silently promote it by persisting it in that table.
         return
     payload = asdict(status) if is_dataclass(status) else status
-    db.execute(
+    db.conn.execute(
         """
         INSERT INTO harness_usage_snapshots
-            (harness, source, fetched_at, status_json)
-        VALUES (?, ?, ?, ?)
+            (repository_id, harness, source, fetched_at, status_json)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
+            db.repository_id,
             status.harness,
             status.source,
             status.fetched_at,
@@ -164,7 +165,7 @@ async def sample_harness_usages(
     return stored, failures
 
 
-async def sample_live_session_usage(
+async def sample_live_session_usage(  # noqa: PLR0911 - outcome-specific returns keep control flow clear
     agent: _LiveUsageAgent,
     ctx: UsageSamplingContext,
     trigger: str,

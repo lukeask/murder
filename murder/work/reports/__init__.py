@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 from pathlib import Path
 from typing import Any
 
 from murder.state.persistence import reports as reports_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import report_md, reports_dir
 
@@ -20,9 +20,9 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _record_revision(conn: sqlite3.Connection, name: str, body: str, *, source: str) -> None:
+def _record_revision(db: RepoDb, name: str, body: str, *, source: str) -> None:
     reports_db.insert_report_revision(
-        conn,
+        db,
         name,
         source=source,
         body=body,
@@ -31,7 +31,7 @@ def _record_revision(conn: sqlite3.Connection, name: str, body: str, *, source: 
 
 
 def ensure_report(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     name: str,
     *,
@@ -45,7 +45,7 @@ def ensure_report(
     if not safe or Path(safe).name != safe or "\\" in safe or safe in {".", ".."}:
         raise ValueError("report name must be a single safe path component")
     reports_dir(repo_root).mkdir(parents=True, exist_ok=True)
-    row = reports_db.get_report(conn, safe)
+    row = reports_db.get_report(db, safe)
     rel = _rel_path(repo_root, safe)
     path = repo_root / rel
     if row is not None:
@@ -54,14 +54,14 @@ def ensure_report(
         return row
     if path.exists():
         existing_body = path.read_text(encoding="utf-8")
-        reports_db.upsert_report(conn, safe, body=existing_body, materialized_path=rel)
-        _record_revision(conn, safe, existing_body, source="bootstrap")
+        reports_db.upsert_report(db, safe, body=existing_body, materialized_path=rel)
+        _record_revision(db, safe, existing_body, source="bootstrap")
     else:
         text = body if body.endswith("\n") or body == "" else body + "\n"
-        reports_db.upsert_report(conn, safe, body=text, materialized_path=rel)
+        reports_db.upsert_report(db, safe, body=text, materialized_path=rel)
         atomic_write_text(path, text)
-        _record_revision(conn, safe, text, source="bootstrap")
-    return reports_db.get_report(conn, safe) or {
+        _record_revision(db, safe, text, source="bootstrap")
+    return reports_db.get_report(db, safe) or {
         "name": safe,
         "body": body,
         "materialized_path": rel,

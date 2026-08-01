@@ -99,7 +99,7 @@ def _parse_reset_from_match(match: re.Match, now: datetime | None) -> str | None
 
 def _parse_reset_at(text: str, now: datetime | None = None) -> str | None:
     # Take the last match so stale /usage scrollback above the current overlay
-    # doesn't win over the fresh reset time at the bottom of the pane.
+    # does not win over the fresh reset time at the bottom of the pane.
     matches = list(_RESET_RE.finditer(text))
     if not matches:
         return None
@@ -134,7 +134,7 @@ def _week_anchor(text: str) -> int:
     Max plans render up to three bars: session, "Current week (all models)", and
     "Current week (Sonnet only)". Both weekly bars start with "Current week", so a
     naive rfind lands on the Sonnet-only sub-bar. Prefer the explicit aggregate
-    label, then fall back to the latest "Current week" line that isn't model-scoped.
+    label, then fall back to the latest "Current week" line that is not model-scoped.
     """
     lower = text.lower()
     idx = lower.rfind("current week (all models)")
@@ -436,7 +436,7 @@ def parse_codex_status_pane(
 # more precise percent when both are present. `reset_at` is now + the
 # "Refreshes in" delta. For the old layout, effort variants of the same base
 # model with identical (percent, reset) collapse into one window named by the
-# base model so the usage panel doesn't gain a row per effort level.
+# base model so the usage panel does not gain a row per effort level.
 _AGY_MODEL_LINE_RE = re.compile(
     r"^\s{0,8}(?P<label>[A-Za-z][\w.\- ]{1,50}\((?:Low|Medium|High|Thinking)\))\s*$",
 )

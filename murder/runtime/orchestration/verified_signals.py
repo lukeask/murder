@@ -8,7 +8,7 @@ from typing import Any
 
 _ASK = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>|\Z)", re.DOTALL)
 # A live block may still grow.  An ASK at its end is therefore incomplete
-# until the block seals; during streaming only a following marker closes it.
+# until the block seals. During streaming only a following marker closes it.
 _ASK_BOUNDED = re.compile(r">>>\s*ASK:\s*(?P<body>.+?)(?=\n>>>)", re.DOTALL)
 _ANSWER = re.compile(
     r">>>\s*ANSWER\[(?P<ticket>[^\]]+)\]:\s*(?P<body>.+?)(?=\n>>>|\Z)",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from contextlib import closing
 from datetime import datetime
 
 from murder.app.protocol.read_models import (
@@ -28,65 +27,69 @@ class RuntimeReadModel(ReadModelBase):
 
     def get_schedule_snapshot(self) -> ScheduleSnapshot:
         as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            return build_schedule_snapshot(
-                conn,
-                as_of=as_of,
-                invalidation_key=self.keys.current_key(InvalidationKeys.schedule),
-            )
+        return build_schedule_snapshot(
+            self.db,
+            as_of=as_of,
+            invalidation_key=self.keys.current_key(InvalidationKeys.schedule),
+        )
 
     def get_conversations_snapshot(self) -> ConversationsSnapshot:
         """Return active conversation histories for a newly connected TUI."""
         as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            conv_rows = conn.execute(
+        conn = self.db.conn
+        conv_rows = conn.execute(
                 """
                 SELECT conversation_id, agent_id, harness, model, harness_session_id,
                        live_state, queued_message, status
                   FROM conversations
-                 WHERE status = 'in_progress'
+                 WHERE repository_id = ? AND status = 'in_progress'
                  ORDER BY updated_at DESC, conversation_id
-                """
-            ).fetchall()
-            block_rows = conn.execute(
+                """,
+                (self.db.repository_id,),
+        ).fetchall()
+        block_rows = conn.execute(
                 """
                 SELECT conversation_id, id, ordinal, kind, payload_json, sealed,
                        service_received_at
                   FROM conversation_blocks
-                 WHERE conversation_id IN (
+                 WHERE repository_id = ? AND conversation_id IN (
                        SELECT conversation_id
                          FROM conversations
-                        WHERE status = 'in_progress'
+                        WHERE repository_id = ? AND status = 'in_progress'
                   )
                  ORDER BY conversation_id, ordinal
-                """
-            ).fetchall()
-            summary_rows = conn.execute(
+                """,
+                (self.db.repository_id, self.db.repository_id),
+        ).fetchall()
+        summary_rows = conn.execute(
                 """
                 SELECT conversation_id, summary_id, chunk_idx, summary
                   FROM conversation_chunk_summaries
-                 WHERE conversation_id IN (
+                 WHERE repository_id = ? AND conversation_id IN (
                        SELECT conversation_id
                          FROM conversations
-                        WHERE status = 'in_progress'
+                        WHERE repository_id = ? AND status = 'in_progress'
                   )
                  ORDER BY conversation_id, chunk_idx
-                """
-            ).fetchall()
-            summary_block_rows = conn.execute(
+                """,
+                (self.db.repository_id, self.db.repository_id),
+        ).fetchall()
+        summary_block_rows = conn.execute(
                 """
                 SELECT csb.summary_id AS summary_id, csb.block_id AS block_id
                   FROM chunk_summary_blocks csb
                   JOIN conversation_chunk_summaries ccs
-                    ON ccs.summary_id = csb.summary_id
-                 WHERE ccs.conversation_id IN (
+                    ON ccs.repository_id = csb.repository_id
+                   AND ccs.summary_id = csb.summary_id
+                 WHERE csb.repository_id = ? AND ccs.conversation_id IN (
                        SELECT conversation_id
                          FROM conversations
-                        WHERE status = 'in_progress'
+                        WHERE repository_id = ? AND status = 'in_progress'
                   )
                  ORDER BY csb.summary_id, csb.block_id
-                """
-            ).fetchall()
+                """,
+                (self.db.repository_id, self.db.repository_id),
+        ).fetchall()
         block_ids_by_summary: dict[int, list[int]] = defaultdict(list)
         for row in summary_block_rows:
             block_ids_by_summary[int(row["summary_id"])].append(int(row["block_id"]))

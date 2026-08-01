@@ -102,10 +102,10 @@ def parse_ticket(md_text: str, *, default_title: str | None = None) -> ParsedTic
         model = _optional_string_field(known.get("model"), "model", errors)
         worktree = _optional_string_field(known.get("worktree"), "worktree", errors)
         # `parent` is the parent ticket id (a single scalar like `t003`), coerced
-        # exactly like the other optional scalars; blank/absent collapses to None.
+        # exactly like the other optional scalars. Blank/absent collapses to None.
         parent = _optional_string_field(known.get("parent"), "parent", errors)
         # harness/model are only *required* when the author chose to write a
-        # frontmatter block. A frontmatter-less planner file leaves them null;
+        # frontmatter block. A frontmatter-less planner file leaves them null.
         # they are supplied later by the carve form (apply_carve_ready).
         if harness is None and frontmatter_required:
             errors.append("ticket frontmatter requires a non-empty harness")
@@ -122,7 +122,7 @@ def parse_ticket(md_text: str, *, default_title: str | None = None) -> ParsedTic
             body=body,
             checklist=_parse_checklist(body),
             extras=extras,
-            parse_error="; ".join(errors) or None,
+            parse_error=". ".join(errors) or None,
         )
     except Exception as exc:  # pragma: no cover - defensive contract guard.
         return ParsedTicket(parse_error=f"unexpected ticket parse error: {exc}")

@@ -6,7 +6,7 @@ request, then invokes an application port without knowing about transports,
 brokers, worker targets, or feature implementation details.
 
 High-risk capabilities validate params (and results) against typed protocol
-contracts. Legacy callers may still pass plain dictionaries; the gateway
+contracts. Legacy callers may still pass plain dictionaries. The gateway
 adapts them at this boundary.
 """
 

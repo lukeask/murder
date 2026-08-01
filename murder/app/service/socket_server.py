@@ -37,7 +37,6 @@ from murder.app.protocol.terminal import (
     TerminalModes,
     TerminalRendition,
     TerminalStreamGap,
-    TerminalTarget,
 )
 from murder.app.protocol.wire import (
     APPLICATION_WIRE_ADAPTER,
@@ -50,17 +49,17 @@ from murder.app.protocol.wire import (
     SubscribeMessage,
     SubscriptionEventMessage,
     SubscriptionReadyMessage,
-    TerminalAttachMessage,
     TerminalAttachedMessage,
+    TerminalAttachMessage,
     TerminalChunkMessage,
     TerminalDetachMessage,
     TerminalFrameMessage,
-    TerminalKeyframeMessage,
     TerminalInputAckMessage,
     TerminalInputDetachMessage,
     TerminalInputMessage,
-    TerminalResyncMessage,
+    TerminalKeyframeMessage,
     TerminalResyncedMessage,
+    TerminalResyncMessage,
     TerminalStreamGapMessage,
     UnsubscribeMessage,
 )
@@ -249,7 +248,7 @@ class TerminalInputCoordinator:
                 state.queued_bytes,
                 len(data),
             )
-            raise RuntimeError("terminal input queue is full; input is temporarily suspended")
+            raise RuntimeError("terminal input queue is full. Input is temporarily suspended.")
         state.queue.put_nowait((message.input_sequence, message.lease_id, message.fence, data))
         state.queued_bytes += len(data)
         state.next_sequence += 1
@@ -452,7 +451,7 @@ class TerminalStreamCoordinator:
             if output.bootstrap_may_have_gap:
                 # The initial capture-pane bootstrap and read-only control
                 # attach have no common tmux ordering barrier. Explicitly
-                # declare that absence of raw history; the keyframe below is
+                # declare that absence of raw history. The keyframe below is
                 # authoritative recovery state.
                 await connection.send(
                     TerminalStreamGapMessage(

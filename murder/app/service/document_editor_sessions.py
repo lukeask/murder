@@ -70,13 +70,13 @@ class DocumentEditorSessions:
         visual = os.environ.get("VISUAL")
         configured = visual if visual is not None and visual.strip() else os.environ.get("EDITOR")
         if configured is None or not configured.strip():
-            raise RuntimeError("no editor configured; set $VISUAL or $EDITOR")
+            raise RuntimeError("no editor configured. Set $VISUAL or $EDITOR.")
         try:
             editor_argv = shlex.split(configured)
         except ValueError as exc:
             raise RuntimeError(f"invalid editor configuration: {exc}") from exc
         if not editor_argv:
-            raise RuntimeError("no editor configured; set $VISUAL or $EDITOR")
+            raise RuntimeError("no editor configured. Set $VISUAL or $EDITOR.")
 
         executable = editor_argv[0]
         if "/" in executable:
@@ -87,7 +87,7 @@ class DocumentEditorSessions:
         else:
             launchable = shutil.which(executable) is not None
         if not launchable:
-            raise RuntimeError(f"configured editor executable was not found: {executable}")
+            raise RuntimeError(f"configured editor executable not found: {executable}")
         return editor_argv
 
     async def start(

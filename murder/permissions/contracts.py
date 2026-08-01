@@ -23,7 +23,7 @@ from pydantic import (
 
 from murder.contracts.common import Principal
 
-# Permissions historically named this type; it is the shared Principal.
+# Permissions historically named this type. It is the shared Principal.
 PermissionPrincipal = Principal
 
 
@@ -455,7 +455,7 @@ OperationAuthorization = AuthorizationProof
 
 
 class PermissionOutcome(str, Enum):
-    """Compatibility enum; policy records use the closed variants above."""
+    """Compatibility enum. Policy records use the closed variants above."""
 
     ALLOW = "allow"
     DENY = "deny"

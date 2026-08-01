@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from murder.user_config import config_dir
+
 MURDER_DIR_NAME = ".murder"
 
 
@@ -25,8 +27,22 @@ def logs_dir(repo_root: Path) -> Path:
     return agents_dir(repo_root) / "logs"
 
 
-def db_path(repo_root: Path) -> Path:
+def db_path(repo_root: Path | None = None) -> Path:
+    """Return the single per-user murder state database.
+
+    ``repo_root`` remains accepted while callers migrate to the shared path. It
+    deliberately has no effect; repository isolation is a database concern.
+    """
+    return config_dir() / "murder.db"
+
+
+def legacy_db_path(repo_root: Path) -> Path:
+    """Return the pre-consolidation, per-repository database path."""
     return agents_dir(repo_root) / "murder.db"
+
+
+def repository_id_path(repo_root: Path) -> Path:
+    return agents_dir(repo_root) / "repo_id"
 
 
 def context_index_db_path(repo_root: Path) -> Path:

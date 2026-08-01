@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from murder.app.service.runtime_scope import OrchestratorHost
-from murder.work.tickets.status import TicketStatus
 from murder.state.persistence.tickets import (
     apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
 )
@@ -23,6 +22,7 @@ from murder.state.persistence.tickets import (
 from murder.state.storage.paths import ticket_md, tickets_dir
 from murder.state.storage.worktrees import prune_terminal_crow_worktree
 from murder.work.tickets import carve, lifecycle
+from murder.work.tickets.status import TicketStatus
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,10 +55,12 @@ class TicketOps:
         window.
         """
         assert self.rt.db is not None
-        conn = self.rt.db
+        db = self.rt.db
         repo_root = self.rt.repo_root
         max_n = 0
-        for row in conn.execute("SELECT id FROM tickets WHERE id LIKE 't%'").fetchall():
+        for row in db.conn.execute(
+            "SELECT id FROM tickets WHERE repository_id = ? AND id LIKE 't%'", (db.repository_id,)
+        ).fetchall():
             m = _TNUM_RE.match(str(row["id"]))
             if m:
                 max_n = max(max_n, int(m.group(1)))
@@ -76,8 +78,8 @@ class TicketOps:
         handle = handle.strip()
         if not handle:
             return False
-        row = self.rt.db.execute(
-            "SELECT 1 FROM tickets WHERE id = ?", (handle,)
+        row = self.rt.db.conn.execute(
+            "SELECT 1 FROM tickets WHERE repository_id = ? AND id = ?", (self.rt.db.repository_id, handle)
         ).fetchone()
         if row is not None:
             return True
@@ -90,7 +92,7 @@ class TicketOps:
         TUI's old direct ``.md`` write bypassed (V1).
         """
         assert self.rt.db is not None
-        conn = self.rt.db
+        db = self.rt.db
         repo_root = self.rt.repo_root
         ticket_id = self.next_ticket_id()
 
@@ -118,11 +120,11 @@ class TicketOps:
         from murder.work.tickets.schema import Ticket
         from murder.work.tickets.status import TicketStatus
 
-        # Naive UTC (no tzinfo) to match the rest of the ticket timestamps;
+        # Naive UTC (no tzinfo) to match the rest of the ticket timestamps.
         # utcnow() is deprecated since 3.12, so derive from an aware clock.
         now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
-        row_existing = conn.execute(
-            "SELECT id FROM tickets WHERE id = ?", (ticket_id,)
+        row_existing = db.conn.execute(
+            "SELECT id FROM tickets WHERE repository_id = ? AND id = ?", (db.repository_id, ticket_id)
         ).fetchone()
         if row_existing is None:
             ticket = Ticket(
@@ -133,15 +135,15 @@ class TicketOps:
                 updated_at=now,
             )
             try:
-                _db_insert_ticket(conn, ticket)
+                _db_insert_ticket(db, ticket)
             except Exception as exc:
                 # Distinguish a benign race (TicketSync inserted the same row
                 # between our SELECT and INSERT) from a genuine failure (schema
-                # error, locked DB). If the row now exists the race self-healed;
+                # error, locked DB). If the row now exists the race self-healed.
                 # otherwise the insert really failed and we must not lie with
                 # handled: True. The .md is already on disk for sync to retry.
-                row_after = conn.execute(
-                    "SELECT id FROM tickets WHERE id = ?", (ticket_id,)
+                row_after = db.conn.execute(
+                    "SELECT id FROM tickets WHERE repository_id = ? AND id = ?", (db.repository_id, ticket_id)
                 ).fetchone()
                 if row_after is None:
                     LOGGER.warning(
@@ -190,8 +192,8 @@ class TicketOps:
         from murder.state.persistence.agents import clear_agent_session
 
         for agent_id in (f"crow-{ticket_id}", f"crow_handler-{ticket_id}"):
-            srow = self.rt.db.execute(
-                "SELECT session FROM agents WHERE agent_id = ?", (agent_id,)
+            srow = self.rt.db.conn.execute(
+                "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self.rt.db.repository_id, agent_id)
             ).fetchone()
             if srow is not None and srow["session"]:
                 with contextlib.suppress(Exception):
@@ -258,10 +260,10 @@ class TicketOps:
                 return {"ok": False, "error": f"ticket not found: {ticket_id}"}
             deps = [
                 str(r["depends_on_id"])
-                for r in self.rt.db.execute(
-                    "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ? "
+                for r in self.rt.db.conn.execute(
+                    "SELECT depends_on_id FROM ticket_deps WHERE repository_id = ? AND ticket_id = ? "
                     "ORDER BY depends_on_id",
-                    (ticket_id,),
+                    (self.rt.db.repository_id, ticket_id),
                 ).fetchall()
             ]
             frontmatter = render_ticket_frontmatter(
@@ -275,7 +277,7 @@ class TicketOps:
             )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(frontmatter + body.rstrip("\n") + "\n", encoding="utf-8")
-        reconcile_ticket_md(conn=self.rt.db, repo_root=self.rt.repo_root, ticket_id=ticket_id)
+        reconcile_ticket_md(db=self.rt.db, repo_root=self.rt.repo_root, ticket_id=ticket_id)
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
     async def schedule_ticket(self, ticket_id: str, duration: str) -> dict[str, Any]:
@@ -325,9 +327,9 @@ class TicketOps:
         deps = [str(d) for d in (payload.get("deps") or [])]
         checklist = [str(c) for c in (payload.get("checklist") or [])]
         with self.rt.db:
-            self.rt.db.execute(
-                "UPDATE tickets SET schedule_at=? WHERE id=?",
-                (schedule_at, ticket_id),
+            self.rt.db.conn.execute(
+                "UPDATE tickets SET schedule_at=? WHERE repository_id = ? AND id=?",
+                (schedule_at, self.rt.db.repository_id, ticket_id),
             )
             _db_apply_ticket_carve_payload(
                 self.rt.db,
@@ -392,7 +394,7 @@ class TicketOps:
         except carve.CarveError as exc:
             return {"ok": False, "error": str(exc)}
         # Idempotency: a duplicate carve form (same pane scanned twice) leaves
-        # prev == READY; the row is already ready, so suppress the no-op
+        # prev == READY. The row is already ready, so suppress the no-op
         # status-change emit and report it handled.
         if prev == TicketStatus.READY:
             return {"handled": True, "ok": True, "ticket_id": ticket_id, "idempotent": True}

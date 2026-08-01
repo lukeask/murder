@@ -21,7 +21,7 @@ class ProjectionInvalidation(ApplicationModel):
 
 
 # Projection implementations are migrating from compatibility snapshots.  The
-# registry makes every topic explicit now; replace JsonObject entries with the
+# registry makes every topic explicit now. Replace JsonObject entries with the
 # feature's named snapshot DTO as it moves.  No transport code has to change.
 PROJECTION_SNAPSHOT_MODELS: dict[ProjectionTopic, object] = {
     topic: JsonObject for topic in ProjectionTopic

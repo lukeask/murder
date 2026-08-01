@@ -40,7 +40,7 @@ class NoteOps:
         )
         result = await notes_mod.submit_capture(
             repo_root=self.rt.repo_root,
-            conn=self.rt.db,
+            db=self.rt.db,
             raw=raw.strip(),
             client=client,
             config=notetaker_cfg,

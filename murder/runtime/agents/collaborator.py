@@ -58,7 +58,7 @@ class CollaboratorAgent(HarnessBackedAgent):
         # alternating user/assistant chat turns.
         self.harness.system_prompt = brief
         # Fresh startup attempt means fresh transcript, even if the harness
-        # fails before it can accept the prompt; the failure notice belongs to
+        # fails before it can accept the prompt. The failure notice belongs to
         # this attempt, not a prior successful conversation.
         self.start_conversation()
         start_result = await self.harness_session.start(
@@ -84,7 +84,7 @@ class CollaboratorAgent(HarnessBackedAgent):
             message = send_result.message or "collaborator startup prompt failed"
             await self._fail_startup(message)
             raise RuntimeError(message)
-        # The verified controller waits for an observed actionable composer;
+        # The verified controller waits for an observed actionable composer.
         # there is no procedural first-send gate to re-arm after the brief.
         # If the harness binary launched but then exited (e.g. an unanswered
         # interactive prompt, a crash, or a missing/broken install), the tmux

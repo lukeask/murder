@@ -35,7 +35,7 @@ def get_agent(agent_id: str) -> AcpAgentProfile:
         return _REGISTRY[agent_id]
     except KeyError as exc:
         known = ", ".join(sorted(_REGISTRY)) or "(none)"
-        raise KeyError(f"unknown ACP agent {agent_id!r}; known: {known}") from exc
+        raise KeyError(f"unknown ACP agent {agent_id!r}. Known: {known}") from exc
 
 
 def get_agent_for_harness(harness_kind: str) -> AcpAgentProfile | None:

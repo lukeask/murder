@@ -53,11 +53,11 @@ AdmissionDecision = Annotated[Admitted | Deferred | Rejected, Field(discriminato
 
 
 def decide_admission(context: AdmissionContext) -> AdmissionDecision:  # noqa: PLR0911
-    """Decide when routed work may run; never select where it runs."""
+    """Decide when routed work may run. Never select where it runs."""
 
     route = context.activity.route
     if route is None:
-        return Rejected(reasons=("activity is not routed",))
+        return Rejected(reasons=("activity has no route",))
     if context.running_total >= context.max_running:
         return Deferred(reasons=("global concurrency limit",))
     harness = route.assignments[0].harness

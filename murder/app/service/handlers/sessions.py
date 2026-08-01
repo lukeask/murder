@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
@@ -31,6 +30,7 @@ from murder.runtime.sessions.registry import (
     SessionBackendRequiredError,
     SessionControllerRegistry,
 )
+from murder.state.persistence.connection import RepoDb
 
 if TYPE_CHECKING:
     from murder.runtime.sessions.controller import SessionController
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 class SessionEffects(Protocol):
     """Runtime capabilities required by the session application feature."""
 
-    db: sqlite3.Connection | None
+    db: RepoDb | None
     session_controllers: SessionControllerRegistry | None
 
 
@@ -58,7 +58,7 @@ def _reply_json(reply: WriterLeaseReply) -> dict[str, object]:
     return reply.model_dump(mode="json")
 
 
-def register(
+def register(  # noqa: PLR0915
     app: ApplicationRegistrar,
     projections: ProjectionProviderRegistry,
     effects: SessionEffects,
@@ -91,9 +91,7 @@ def register(
         except SessionNotFoundError:
             raise
         except SessionBackendRequiredError as exc:
-            raise RuntimeError(
-                f"session {session_id} has no live controller"
-            ) from exc
+            raise RuntimeError(f"session {session_id} has no live controller") from exc
 
     def _get(body: dict[str, object]) -> dict[str, object]:
         params = GetWriterLeaseParams.model_validate(body)

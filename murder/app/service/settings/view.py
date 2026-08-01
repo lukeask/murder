@@ -17,7 +17,7 @@ from murder.user_config import BUILTIN_EXECUTION_POLICIES, UserConfig, UserOracl
 def deep_merge_settings(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge *over* into *base*, returning a new dict.
 
-    Nested dicts merge key-by-key; everything else (scalars, lists) is replaced.
+    Nested dicts merge key-by-key. Everything else (scalars, lists) is replaced.
     """
     out = dict(base)
     for key, value in over.items():

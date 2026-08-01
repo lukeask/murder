@@ -189,7 +189,7 @@ class AutoFreeClient(APIClient):
             ra = retry_after_seconds(exc)
             cool = ra if ra is not None else max(entry.spec.min_interval, 60.0)
             entry.cooldown_until = time.monotonic() + cool
-            LOGGER.warning("free-pool %s rate-limited; cooling %.1fs", entry.spec.model, cool)
+            LOGGER.warning("free-pool %s rate-limited. Cooling %.1fs", entry.spec.model, cool)
             return True
         if is_retryable_exc(exc):  # transient transport / 5xx
             entry.cooldown_until = time.monotonic() + _TRANSIENT_COOLDOWN

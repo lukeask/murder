@@ -9,12 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from typing import TYPE_CHECKING
+from pathlib import Path
 
-if TYPE_CHECKING:
-    import sqlite3
-    from pathlib import Path
-
+from murder.state.persistence.connection import RepoDb
 
 log = logging.getLogger(__name__)
 
@@ -51,9 +48,9 @@ def harness_usage_sample_payload(
 
 
 async def submit_harness_usage_sample_inprocess(
-    db: sqlite3.Connection,
+    db: RepoDb,
     *,
-    repo_root: "Path",
+    repo_root: Path,
     trigger: str,
     modes: set[str] | None = None,
 ) -> dict[str, object] | None:
@@ -69,8 +66,8 @@ async def submit_harness_usage_sample_inprocess(
 
 
 async def run_service_usage_poll_loop(
-    repo_root: "Path",
-    db: sqlite3.Connection,
+    repo_root: Path,
+    db: RepoDb,
 ) -> None:
     """Sample http-mode harnesses immediately, then on a jittered interval until cancelled."""
 

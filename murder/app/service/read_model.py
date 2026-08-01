@@ -26,6 +26,7 @@ from murder.app.service.read_models.history import HistoryReadModel
 from murder.app.service.read_models.runtime import RuntimeReadModel
 from murder.app.service.read_models.transit import TransitReadModel
 from murder.app.service.read_models.work import WorkReadModel
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.git_transit import TransitSnapshot
 
 
@@ -33,10 +34,10 @@ class ServiceReadModel:
     """Build immutable service snapshots from the SQLite persistence layer.
 
     Thin facade over per-domain builders (see ``read_models/``). Each public
-    method delegates to its builder; a shared ``GenerationKeys`` provider keeps
+    method delegates to its builder. A shared ``GenerationKeys`` provider keeps
     the invalidation generations in sync across all builders and the facade.
 
-    Responsibility: own NO SQL. This class is a delegating face; every query,
+    Responsibility: own NO SQL. This class is a delegating face. Every query,
     schema-compat guard, and DTO mapping lives in a builder.
 
     Adding a snapshot/display — DO NOT add inline SQL here. The "one read model
@@ -49,19 +50,20 @@ class ServiceReadModel:
         helpers in ``read_models/_common.py``.
       • Add a one-line delegate here mirroring the others.
       • A genuinely new domain → a new ``read_models/<domain>.py`` builder,
-        constructed in ``__init__`` with ``(self.db_path, self._keys)``.
+      constructed in ``__init__`` with ``(self.db, self.repo_root, self._keys)``.
     Ousterhout: builders are deep modules (SQL + guards + mapping hidden behind a
-    ``get_X_snapshot()`` call); the facade stays a thin, uniform interface.
+    ``get_X_snapshot()`` call). The facade stays a thin, uniform interface.
     """
 
-    def __init__(self, db_path: Path) -> None:
-        self.db_path = Path(db_path)
+    def __init__(self, db: RepoDb, repo_root: Path) -> None:
+        self.db = db
+        self.repo_root = Path(repo_root)
         self._keys = GenerationKeys()
-        self._work = WorkReadModel(self.db_path, self._keys)
-        self._runtime = RuntimeReadModel(self.db_path, self._keys)
-        self._history = HistoryReadModel(self.db_path, self._keys)
-        self._transit = TransitReadModel(self.db_path, self._keys)
-        self._harness = HarnessReadModel(self.db_path, self._keys)
+        self._work = WorkReadModel(db, self.repo_root, self._keys)
+        self._runtime = RuntimeReadModel(db, self.repo_root, self._keys)
+        self._history = HistoryReadModel(db, self.repo_root, self._keys)
+        self._transit = TransitReadModel(db, self.repo_root, self._keys)
+        self._harness = HarnessReadModel(db, self.repo_root, self._keys)
 
     def get_plans_snapshot(self) -> PlansSnapshot:
         return self._work.get_plans_snapshot()

@@ -91,7 +91,7 @@ def _find_file_version(
 
 
 def _read_source(worktree_root: Path, relative_path: str) -> tuple[bytes, str, int] | None:
-    """Read bytes from disk; return ``(raw, text_or_empty, line_count)`` or None."""
+    """Read bytes from disk. Return ``(raw, text_or_empty, line_count)`` or None."""
     path = worktree_root / relative_path
     try:
         raw = path.read_bytes()

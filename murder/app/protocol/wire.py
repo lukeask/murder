@@ -125,7 +125,7 @@ class TerminalInputMessage(ApplicationModel):
 
     ``data`` is deliberately base64 rather than a JSON string: editor input
     includes controls and arbitrary UTF-8 sequences, neither of which should
-    acquire accidental text-normalisation semantics at the wire boundary.
+    acquire accidental text-normalization semantics at the wire boundary.
     """
 
     op: Literal["terminal.input"] = "terminal.input"

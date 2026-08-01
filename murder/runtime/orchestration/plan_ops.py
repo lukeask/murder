@@ -270,11 +270,11 @@ class PlanOps:
                     return slug
             except asyncio.TimeoutError:
                 LOGGER.warning(
-                    "plan auto-name timed out after %.1fs; falling back to timestamp slug",
+                    "plan auto-name timed out after %.1fs. Falling back to timestamp slug",
                     _PLAN_AUTO_NAME_TIMEOUT_S,
                 )
             except Exception:
-                LOGGER.exception("plan auto-name failed; falling back to timestamp slug")
+                LOGGER.exception("plan auto-name failed. Falling back to timestamp slug")
         return f"plan-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
     async def create_plan(
@@ -289,9 +289,8 @@ class PlanOps:
 
         Thin composition of existing machinery: ``scaffold_plan`` writes the
         plan row + materialized markdown (and emits the plan snapshot). An
-        initial planner message is scheduled by the application boundary only
-        after this coroutine returns, so external planner startup can never
-        hold the create RPC open.
+        initial planner message is delivered through the existing orchestration
+        boundary after the durable scaffold exists.
 
         ``body`` seeds the plan's markdown body (defaulting to the legacy
         ``"# Plan Name\\n"`` stub). ``auto_name`` derives the plan name from
@@ -315,7 +314,7 @@ class PlanOps:
         # exact agreement at INSERT time. Mirrors notes' status-aware guard.
         if _db_live_plan_name_exists(self.rt.db, plan_name):
             raise FileExistsError(
-                f"a plan named {plan_name!r} already exists; "
+                f"a plan named {plan_name!r} already exists. "
                 "choose a different name or rename the existing plan"
             )
         existing = _db_get_plan_row(self.rt.db, plan_name)
@@ -328,6 +327,8 @@ class PlanOps:
         scaffolded = await self.scaffold_plan(plan_name, seed_body)
         name = str(scaffolded.get("name") or plan_name)
         agent_id = f"planner-{name}" if (message or "").strip() else None
+        if agent_id is not None:
+            await self._send_agent_message(agent_id, message.strip(), None)
         return {"handled": True, "ok": True, "plan_name": name, "agent_id": agent_id}
 
 

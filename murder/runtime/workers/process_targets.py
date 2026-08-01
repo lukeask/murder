@@ -14,8 +14,7 @@ from murder.llm.harnesses.usage_sampling import (
 from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.workers.base import WorkerCommand, WorkerCtx
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
-from murder.state.persistence.schema import get_db
-from murder.state.storage.paths import db_path
+from murder.state.persistence.connection import open_repo_db
 
 
 def usage_probe_process_target(
@@ -34,8 +33,8 @@ async def _run_usage_probe_process(
 
     repo_root = Path(repo_root_raw)
     cfg = Config.load(repo_root)
-    conn = get_db(db_path(repo_root))
-    sampling = UsageSamplingContext(config=cfg, repo_root=repo_root, db=conn)
+    db = open_repo_db(repo_root)
+    sampling = UsageSamplingContext(config=cfg, repo_root=repo_root, db=db)
 
     async def _sample(
         _ctx: WorkerCtx,
@@ -55,8 +54,8 @@ async def _run_usage_probe_process(
     # Private orchestration signals deliberately do not cross process
     # boundaries.  The application socket serves a fresh projection from the
     # authoritative usage tables, so this worker needs no bus instance.
-    ctx = WorkerCtx(repo_root=repo_root, db=conn, run_id=run_id)
-    dispatcher = CommandDispatcher(conn=conn, repo_root=repo_root)
+    ctx = WorkerCtx(repo_root=repo_root, db=db, run_id=run_id)
+    dispatcher = CommandDispatcher(db=db, repo_root=repo_root)
     try:
         while not stop_event.is_set():
             try:
@@ -94,4 +93,4 @@ async def _run_usage_probe_process(
                 result=result,
             )
     finally:
-        conn.close()
+        db.close()

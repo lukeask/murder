@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import closing
 from datetime import datetime, timedelta
 
 from murder.app.protocol.read_models import (
@@ -33,14 +32,14 @@ class HistoryReadModel(ReadModelBase):
         (written at the send boundary). Each row is joined against its
         conversation (for harness/session/status) and the ``history_status``
         overlay, then a zero-LLM status is derived per row. The view filters
-        (loose-threads vs all) and orders client-side; this returns the full,
+        (loose-threads vs all) and orders client-side. This returns the full,
         noise-filtered feed in newest-first order with derived state.
         """
         as_of = datetime.utcnow()
         stale_before = as_of - timedelta(hours=STALE_AFTER_HOURS)
-        with closing(self._connect()) as conn:
-            overlay = history_store.get_status_map(conn)
-            rows = conn.execute(
+        conn = self.db.conn
+        overlay = history_store.get_status_map(self.db)
+        rows = conn.execute(
                 """
                 SELECT b.conversation_id, b.ordinal, b.payload_json,
                        b.service_received_at,
@@ -48,11 +47,13 @@ class HistoryReadModel(ReadModelBase):
                        c.status AS conversation_status
                   FROM conversation_blocks b
                   JOIN conversations c
-                    ON c.conversation_id = b.conversation_id
-                 WHERE b.kind = 'user'
+                    ON c.repository_id = b.repository_id
+                   AND c.conversation_id = b.conversation_id
+                 WHERE b.repository_id = ? AND b.kind = 'user'
                  ORDER BY b.service_received_at DESC, b.conversation_id, b.ordinal DESC
-                """
-            ).fetchall()
+                """,
+                (self.db.repository_id,),
+        ).fetchall()
         items: list[HistoryItemSummary] = []
         for row in rows:
             text = _extract_user_text(row["payload_json"])

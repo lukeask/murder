@@ -1,16 +1,16 @@
 """Restart recovery classification for persisted semantic harness operations.
 
 This module deliberately has no controller, actuator, or tmux dependency.  A
-restart first obtains a new observation, then hands the classified candidate to
-the capability reconciler; it never resumes a Python stack or replays effects.
+restart first gets a new observation, then hands the classified candidate to
+the capability reconciler. It never resumes a Python stack or replays effects.
 """
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.harness_control import RecoveryCandidate, load_recovery_candidates
 
 from .operation_codec import OperationDecodeError, decode_operation_value, decode_semantic_operation
@@ -40,24 +40,24 @@ def classify_recovery_candidate(candidate: RecoveryCandidate) -> RecoveryPlan:
         return RecoveryPlan(
             candidate,
             RecoveryDisposition.AMBIGUOUS_UNSAFE_EFFECT,
-            "unsafe terminal effect was emitted or failed; "
-            "require fresh evidence before reconciliation",
+            "unsafe terminal effect was emitted or failed. "
+            "Require fresh evidence before reconciliation",
         )
     return RecoveryPlan(
         candidate,
         RecoveryDisposition.REQUIRE_FRESH_OBSERVATION,
-        "operation has no unsafe emitted effect; require a new observation before reconciliation",
+        "operation has no unsafe emitted effect. Require a new observation before reconciliation",
     )
 
 
 def load_recovery_plans(
-    conn: sqlite3.Connection, *, harness_id: str, session_id: str | None = None
+    db: RepoDb, *, harness_id: str, session_id: str | None = None
 ) -> tuple[RecoveryPlan, ...]:
-    """Load persisted candidates and classify them; this function performs no effects."""
+    """Load persisted candidates and classify them. This function runs no effects."""
     return tuple(
         classify_recovery_candidate(candidate)
         for candidate in load_recovery_candidates(
-            conn, harness_id=harness_id, session_id=session_id
+            db, harness_id=harness_id, session_id=session_id
         )
     )
 
@@ -67,7 +67,7 @@ def reconstruct_persisted_operation(
 ) -> object:
     """Reconstruct and cross-check one persisted semantic operation snapshot.
 
-    Reconstruction is deliberately inert.  The caller must first obtain a
+    Reconstruction is deliberately inert. The caller must first get a
     current observation, then pass this value to its capability reconciler.
     """
     state = decode_semantic_operation(operation.operation_state)

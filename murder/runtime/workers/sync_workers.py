@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import sqlite3
 from pathlib import Path
 
+from murder.runtime.orchestration.worker_names import WorkerName
+from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.state.persistence.connection import RepoDb
 from murder.work.notes.sync import NoteSync
 from murder.work.plans.sync import PlanSync
-from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
-from murder.runtime.orchestration.worker_names import WorkerName
 
 
 class PlanSyncWorker(Worker):
     def __init__(
         self,
         repo_root: Path,
-        db: sqlite3.Connection,
+        db: RepoDb,
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
@@ -46,7 +46,7 @@ class NoteSyncWorker(Worker):
     def __init__(
         self,
         repo_root: Path,
-        db: sqlite3.Connection,
+        db: RepoDb,
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,

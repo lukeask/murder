@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import sqlite3
-from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
-from murder.state.persistence.schema import get_db
+from murder.state.persistence.connection import RepoDb
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,49 +21,47 @@ class EscalationRecord:
     source_event_id: int | None
 
 
-def get_active_escalations(db_path: Path) -> tuple[EscalationRecord, ...]:
+def get_active_escalations(db: RepoDb) -> tuple[EscalationRecord, ...]:
     """Return unresolved escalations (``resolved_at IS NULL``), newest first."""
-    with closing(get_db(Path(db_path))) as conn:
-        rows = conn.execute(
+    rows = db.conn.execute(
             """
             SELECT id, ts, ticket_id, severity, reason, to_recipient,
                    body_path, resolved_at, source_event_id
               FROM escalations
-             WHERE resolved_at IS NULL
+             WHERE repository_id = ? AND resolved_at IS NULL
              ORDER BY ts DESC, id DESC
-            """
+            """,
+            (db.repository_id,),
         ).fetchall()
     return tuple(_record_from_row(row) for row in rows)
 
 
 def get_escalation_history(
-    db_path: Path,
+    db: RepoDb,
     limit: int = 100,
 ) -> tuple[EscalationRecord, ...]:
     """Return recent escalations (all rows), newest ``ts`` first."""
-    with closing(get_db(Path(db_path))) as conn:
-        rows = conn.execute(
+    rows = db.conn.execute(
             """
             SELECT id, ts, ticket_id, severity, reason, to_recipient,
                    body_path, resolved_at, source_event_id
-              FROM escalations
+              FROM escalations WHERE repository_id = ?
              ORDER BY ts DESC, id DESC
              LIMIT ?
             """,
-            (max(0, int(limit)),),
+            (db.repository_id, max(0, int(limit))),
         ).fetchall()
     return tuple(_record_from_row(row) for row in rows)
 
 
-def ack_escalation_db(escalation_id: int, db_path: Path) -> None:
+def ack_escalation_db(escalation_id: int, db: RepoDb) -> None:
     """Mark an escalation resolved by setting ``resolved_at`` to now."""
     from murder.state.persistence.escalations import resolve_escalation
 
-    with closing(get_db(Path(db_path))) as conn:
-        resolve_escalation(conn, int(escalation_id))
+    resolve_escalation(db, int(escalation_id))
 
 
-def _record_from_row(row: sqlite3.Row) -> EscalationRecord:
+def _record_from_row(row: object) -> EscalationRecord:
     return EscalationRecord(
         id=int(row["id"]),
         created_at=_parse_datetime(row["ts"]) or datetime.utcnow(),

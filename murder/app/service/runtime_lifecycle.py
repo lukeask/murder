@@ -17,12 +17,12 @@ async def shutdown_live_agents(
     *,
     graceful: bool,
 ) -> None:
-    """Stop all in-process agents; preserve tmux on graceful TUI quit.
+    """Stop all in-process agents. Preserve tmux on graceful TUI quit.
 
     Each ``agent.stop`` makes several serial ``tmux`` round-trips, so stopping
     agents one at a time made shutdown latency scale with the number of crows
     (and held the repo flock the whole time, racing the next ``murder``). Stop
-    them concurrently instead; per-agent failures are swallowed individually.
+    them concurrently instead. Per-agent failures are swallowed individually.
     """
     terminal_statuses = {AgentStatus.DONE, AgentStatus.FAILED, AgentStatus.DEAD}
 
@@ -41,7 +41,7 @@ async def kill_project_tmux_sessions(scope: object) -> list[str]:
     """Kill every tmux session owned by this murder project.
 
     This is the authoritative service-stop sweep. Registered agents are stopped
-    first; this catches any project-scoped sessions that are no longer in the
+    first. This catches any project-scoped sessions that are no longer in the
     in-memory registry.
     """
     prefix = project_session_prefix(scope)  # type: ignore[arg-type]

@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import shlex
-import sqlite3
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from murder.work import notes as notes_mod
-from murder.state.persistence import notes as notes_db
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.plans import get_plan_row as _db_get_plan_row
-from murder.work.plans.sync import choose_editor, open_editor
 from murder.state.storage.paths import note_md, report_md, reports_dir
+from murder.work import notes as notes_mod
+from murder.work.plans.sync import choose_editor, open_editor
 
 if TYPE_CHECKING:
     from murder.work.notes.sync import NoteSync
@@ -25,7 +24,7 @@ class DocumentAccess:
     """Filesystem paths and blocking editor for plans and notes."""
 
     repo_root: Path
-    db: sqlite3.Connection | None = None
+    db: RepoDb | None = None
     plan_sync: PlanSync | None = None
     note_sync: NoteSync | None = None
 

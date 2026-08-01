@@ -2,7 +2,7 @@
 
 Parses compact duration strings made of ``d`` (days), ``h`` (hours) and
 ``m`` (minutes) components into a :class:`datetime.timedelta`. Callers add the
-result to ``now()`` to produce a ``schedule_at`` timestamp; this util is pure
+result to ``now()`` to produce a ``schedule_at`` timestamp. This util is pure
 and does no clock work itself.
 
 Accepted forms (units must appear at most once, in ``d h m`` order):

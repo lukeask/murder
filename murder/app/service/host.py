@@ -24,7 +24,6 @@ from murder.app.service.supervisor import Supervisor
 from murder.config import Config
 from murder.facts.log import FactLog, ProjectionInputLog
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from murder.state.storage.paths import db_path
 from murder.state.storage.service_registry import (
     remove_service_session,
     write_service_session,
@@ -39,7 +38,7 @@ class ServiceHost:
 
     Responsibility (keep it this narrow): the process COMPOSITION ROOT and
     lifecycle owner. ``start``/``stop`` wire the collaborators and own the
-    background tasks; ``register_application_handlers`` just delegates to the
+    background tasks. ``register_application_handlers`` just delegates to the
     ``handlers/`` package. This class deliberately holds NO request logic.
 
     Extending the application surface — DO NOT add a handler closure here. Inline
@@ -152,7 +151,7 @@ class ServiceHost:
                 or self.runtime.run_id is None
             ):
                 raise RuntimeError("runtime failed to initialize db/events/run_id")
-            self.read_model = ServiceReadModel(db_path(self.repo_root))
+            self.read_model = ServiceReadModel(self.runtime.db, self.repo_root)
 
             await self._start_inner()
         except BaseException:
@@ -242,7 +241,7 @@ class ServiceHost:
 
     async def run_until_signal(self) -> None:
         if self.runtime is None:
-            raise RuntimeError("ServiceHost.start() must be called first")
+            raise RuntimeError("call ServiceHost.start() first")
         await self.runtime.run_until_signal()
 
     async def stop(self) -> None:

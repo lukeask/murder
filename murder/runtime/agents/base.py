@@ -111,7 +111,7 @@ class HarnessBackedAgent(LifecycleParticipant):
     # The last (live_state, queued_message) pair pushed over the bus, so the
     # projection tick only publishes on change (not 2.5Hz).
     _last_pushed_conv_state: Any = None
-    # Set by live-session usage sampling while a slash-command overlay is open;
+    # Set by live-session usage sampling while a slash-command overlay is open.
     # projection ticks skip pane capture until the overlay is dismissed.
     usage_capture_in_progress: bool = False
     # The verified control runtime is initialized only after tmux startup, when
@@ -119,15 +119,15 @@ class HarnessBackedAgent(LifecycleParticipant):
     # real pane.  It replaces procedural prompt delivery during migration.
     verified_harness_control: Any | None = None
     # Exact frame+snapshot pair most recently persisted by the verified
-    # observer.  Orchestration companions consume this shared provenance; they
+    # observer. Orchestration companions consume this shared provenance. They
     # never open a second pane-capture path.
     latest_ingested_frame: Any | None = None
     # Live Codex app-server JSON-RPC connection when control backend is
-    # ``app_server``. Owned by the agent for shutdown; verified session also
+    # ``app_server``. The agent owns it for shutdown. The verified session also
     # retains a reference.
     app_server_connection: Any | None = None
     # Live Cursor ACP JSON-RPC connection when control backend is ``acp``.
-    # Owned by the agent for shutdown; verified session also retains a reference.
+    # The agent owns it for shutdown. The verified session also retains a reference.
     acp_connection: Any | None = None
     # Live Claude Agent SDK connection when control backend is ``agent_sdk``.
     agent_sdk_connection: Any | None = None
@@ -176,7 +176,7 @@ class HarnessBackedAgent(LifecycleParticipant):
                 app_server=connection,
                 harness_kind=self.harness.kind,
                 terminal_session=self.session,
-                connection=runtime.db,
+                db=runtime.db,
                 persistence_session_id=self.id,
                 **options,
             )
@@ -204,7 +204,7 @@ class HarnessBackedAgent(LifecycleParticipant):
                 acp=connection,
                 harness_kind=self.harness.kind,
                 terminal_session=self.session,
-                connection=runtime.db,
+                db=runtime.db,
                 persistence_session_id=self.id,
                 **options,
             )
@@ -233,7 +233,7 @@ class HarnessBackedAgent(LifecycleParticipant):
                 agent_sdk=connection,
                 harness_kind=self.harness.kind,
                 terminal_session=self.session,
-                connection=runtime.db,
+                db=runtime.db,
                 persistence_session_id=self.id,
                 **options,
             )
@@ -241,13 +241,12 @@ class HarnessBackedAgent(LifecycleParticipant):
             self.verified_harness_control = VerifiedHarnessControlSession.from_tmux(
                 harness_kind=self.harness.kind,
                 terminal_session=self.session,
-                connection=runtime.db,
+                db=runtime.db,
                 persistence_session_id=self.id,
                 **options,
             )
-        repository_root = getattr(runtime, "repo_root", getattr(self, "repo_root", None))
         await self.verified_harness_control.ensure_session_controller(
-            repository_key=str(repository_root) if repository_root is not None else None,
+            repository_id=runtime.db.repository_id,
             agent_key=self.id,
             registry=getattr(runtime, "session_controllers", None),
             recover=True,
@@ -414,7 +413,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         """Bridge pre-existing typed reducers into the Phase 2 mailbox."""
 
         if self.verified_harness_control is None:
-            raise RuntimeError("verified harness control has not been initialized")
+            raise RuntimeError("verified harness control is not initialized")
         from murder.runtime.sessions.contracts import PrincipalKind, PrincipalRef
 
         controller = await self.verified_harness_control.ensure_session_controller()
@@ -544,7 +543,7 @@ class HarnessBackedAgent(LifecycleParticipant):
 
             # A message may be accepted while this agent is still completing
             # startup. AgentOps prepares a clean conversation and queues that
-            # message before the producer exists; preserve those authoritative
+            # message before the producer exists. Preserve those authoritative
             # user rows and queued_message when startup reaches this boundary.
             if self._queued_message is None:
                 conversation.clear(runtime.db, self.id)
@@ -596,7 +595,7 @@ class HarnessBackedAgent(LifecycleParticipant):
             None,
         )
         if transcript is None:
-            raise RuntimeError("verified harness evidence omitted its transcript document")
+            raise RuntimeError("verified harness evidence omitted the transcript document")
         projection = await self._producer.poll_document(transcript)
         await self._emit_plan_resort_if_planner(projection.changed)
         await self._route_projected_orchestration_signals(projection.changes)
@@ -888,7 +887,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         # Do not send a legacy `/exit` command here.  It was an independent
         # terminal writer outside the actuator and only inferred success from a
         # later pane scrape.  Resume identifiers remain harness evidence from
-        # normal observations; teardown itself is an explicit session lifecycle
+        # normal observations. Teardown itself is an explicit session lifecycle
         # operation, not semantic harness input.
         session_id: str | None = None
         from murder.state.persistence import conversation
@@ -939,6 +938,6 @@ class Daemon(LifecycleParticipant):
             self.runtime.sync_agent(self)
 
     async def send(self, msg: str) -> None:
-        # Daemons do not own a conversation pane; user/crow chat goes to the
+        # Daemons do not own a conversation pane. User and crow chat goes to the
         # paired HarnessBackedAgent, not its handler.
         del msg

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -30,6 +29,7 @@ from murder.state.persistence.activities import (
     renew_activity_claim,
     start_activity,
 )
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.harness_models import get_all_harness_models
 from murder.work.activities.runtime import (
     ActivityClaim,
@@ -76,7 +76,7 @@ class ActivityDispatcher:
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         *,
         router: ActivityRouter,
         admission: ActivityAdmissionProvider,
@@ -85,7 +85,7 @@ class ActivityDispatcher:
         lease_for: timedelta = timedelta(minutes=2),
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
-        self._connection = connection
+        self._db = db
         self._router = router
         self._admission = admission
         self._executor = executor
@@ -97,8 +97,8 @@ class ActivityDispatcher:
         if limit < 1:
             raise ValueError("limit must be positive")
         now = self._clock()
-        reaped_claims = reap_expired_claims(self._connection, now=now)
-        reaped_reservations = reap_expired_reservations(self._connection, now=now)
+        reaped_claims = reap_expired_claims(self._db, now=now)
+        reaped_reservations = reap_expired_reservations(self._db, now=now)
         routed = admitted = completed = deferred = 0
         runnable: list[ActivityRecord] = []
         for status in (
@@ -106,7 +106,7 @@ class ActivityDispatcher:
             ActivityStatus.ROUTING,
             ActivityStatus.WAITING_ADMISSION,
         ):
-            runnable.extend(list_activities(self._connection, status=status))
+            runnable.extend(list_activities(self._db, status=status))
         runnable.sort(key=lambda item: (-item.priority, item.created_at, str(item.activity_id)))
         for candidate in runnable[:limit]:
             try:
@@ -117,7 +117,7 @@ class ActivityDispatcher:
                         deferred += 1
                         continue
                     activity = persist_route(
-                        self._connection,
+                        self._db,
                         activity.activity_id,
                         route,
                         now=now,
@@ -125,7 +125,7 @@ class ActivityDispatcher:
                     routed += 1
                 decision = self._admission(activity)
                 activity = persist_admission(
-                    self._connection,
+                    self._db,
                     activity.activity_id,
                     decision,
                     now=now,
@@ -141,19 +141,19 @@ class ActivityDispatcher:
                 admitted += 1
                 assert activity.route is not None
                 claim = claim_activity(
-                    self._connection,
+                    self._db,
                     activity.activity_id,
                     owner=self._worker_id,
                     lease_for=self._lease_for,
                     capability_revision=activity.route.capability_revision,
                     now=now,
                 )
-                activity = start_activity(self._connection, claim, now=now)
+                activity = start_activity(self._db, claim, now=now)
 
                 def renew() -> ActivityClaim:
                     nonlocal claim
                     claim = renew_activity_claim(
-                        self._connection,
+                        self._db,
                         claim,
                         lease_for=self._lease_for,
                         now=self._clock(),
@@ -181,7 +181,7 @@ class ActivityDispatcher:
                     except asyncio.CancelledError:
                         pass
                 complete_activity(
-                    self._connection,
+                    self._db,
                     claim,
                     outcome,
                     now=self._clock(),
@@ -192,14 +192,14 @@ class ActivityDispatcher:
                     deferred += 1
                     continue
                 LOGGER.warning(
-                    "activity %s lifecycle error during tick; deferring",
+                    "activity %s lifecycle error during tick. Deferring",
                     candidate.activity_id,
                     exc_info=True,
                 )
                 deferred += 1
             except Exception:
                 LOGGER.warning(
-                    "activity %s unexpected error during tick; deferring",
+                    "activity %s unexpected error during tick. Deferring",
                     candidate.activity_id,
                     exc_info=True,
                 )
@@ -215,7 +215,7 @@ class ActivityDispatcher:
 
 
 def build_default_activity_dispatcher(
-    connection: sqlite3.Connection,
+    db: RepoDb,
     *,
     worker_id: str = "activity-dispatcher",
     max_running: int = 8,
@@ -226,11 +226,11 @@ def build_default_activity_dispatcher(
         build_session_bound_executor,
     )
 
-    sessions = SessionStore(connection)
+    sessions = SessionStore(db)
     clock = lambda: datetime.now(timezone.utc)
 
     def router(activity: ActivityRecord) -> ExecutionRoute | None:
-        candidates = _route_candidates(connection, sessions, activity)
+        candidates = _route_candidates(db, sessions, activity)
         decision = decide_route(
             RoutingContext(
                 activity_id=activity.activity_id,
@@ -242,8 +242,8 @@ def build_default_activity_dispatcher(
 
     def admission(activity: ActivityRecord) -> AdmissionDecision:
         now = clock()
-        running = list_activities(connection, status=ActivityStatus.RUNNING)
-        claimed = list_activities(connection, status=ActivityStatus.CLAIMED)
+        running = list_activities(db, status=ActivityStatus.RUNNING)
+        claimed = list_activities(db, status=ActivityStatus.CLAIMED)
         live = (*running, *claimed)
         running_by_harness: dict[str, int] = {}
         for item in live:
@@ -288,17 +288,17 @@ def build_default_activity_dispatcher(
         )
 
     return ActivityDispatcher(
-        connection,
+        db,
         router=router,
         admission=admission,
-        executor=build_session_bound_executor(connection),
+        executor=build_session_bound_executor(db),
         worker_id=worker_id,
         clock=clock,
     )
 
 
 def _route_candidates(
-    connection: sqlite3.Connection,
+    db: RepoDb,
     sessions: SessionStore,
     activity: ActivityRecord,
 ) -> tuple[RouteCandidate, ...]:
@@ -311,7 +311,7 @@ def _route_candidates(
         }:
             continue
         reusable.setdefault(session.harness, []).append(session.session_id)
-    rows = get_all_harness_models(connection)
+    rows = get_all_harness_models(db)
     if not rows:
         # Fresh databases may not have discovered models yet. Prefer declared
         # harnesses from the activity so routing can still hold or select.

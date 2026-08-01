@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -11,6 +10,7 @@ from typing import Any, Literal
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.worker_names import WorkerName
+from murder.state.persistence.connection import RepoDb
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class WorkerCommand:
 @dataclass
 class WorkerCtx:
     repo_root: Path
-    db: sqlite3.Connection | None = None
+    db: RepoDb | None = None
     run_id: str | None = None
     shutdown: asyncio.Event | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

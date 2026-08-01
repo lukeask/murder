@@ -198,7 +198,7 @@ class JsonObject(RootModel[dict[str, JsonValue]]):
 class RosterGetParams(EmptyParams):
     """``roster.get`` is deliberately argument-free.
 
-    The roster implementation remains a read-model adapter for now; this DTO
+    The roster implementation remains a read-model adapter for now. This DTO
     is the seam that lets its implementation move without widening the public
     request contract.
     """
@@ -213,7 +213,7 @@ class Operation(Generic[Name, Params, Result]):
 
 
 # Typed contracts.  A newly added enum member must land here with a named DTO
-# or in the matching LEGACY_* set below; silent JsonObject fallback is forbidden.
+# or in the matching LEGACY_* set below. Silent JsonObject fallback is forbidden.
 _QUERY_MODELS: dict[QueryName, tuple[type[BaseModel], type[BaseModel], bool]] = {
     QueryName.HEALTH_GET: (EmptyParams, HealthGetResult, False),
     QueryName.COMMAND_GET: (CommandGetParams, CommandGetResult, False),
@@ -354,7 +354,7 @@ _COMMAND_MODELS: dict[CommandName, tuple[type[BaseModel], type[BaseModel], bool]
 }
 
 # Explicitly opaque operations.  Membership here is the only way an enum name
-# may use JsonObject; missing coverage fails import via the assertions below.
+# may use JsonObject. Missing coverage fails import via the assertions below.
 LEGACY_QUERY_OPERATIONS: frozenset[QueryName] = frozenset()
 LEGACY_COMMAND_OPERATIONS: frozenset[CommandName] = frozenset()
 

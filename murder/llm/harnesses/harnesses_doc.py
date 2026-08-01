@@ -3,7 +3,7 @@
 A planner about to carve/write a ticket needs to know which harnesses are
 available, what models each one offers, and which effort levels it supports.
 That information is discovered dynamically at startup (see ``model_cache``) and
-changes when the user edits settings, so it can't live in a static prompt.
+changes when the user edits settings, so it cannot live in a static prompt.
 
 :func:`render_harnesses_doc` is a **pure** function: ``(enabled, models)`` in,
 markdown string out. Effort levels are read from each adapter's
@@ -41,8 +41,8 @@ def _enabled_harnesses(repo_root: Path) -> list[str]:
     Mirrors the "ENABLED CROW HARNESSES" set the settings screen edits: the
     ``default_crow`` role's ``harnesses`` pool (falling back to its single
     ``harness``). A disabled harness is omitted from the doc so the planner
-    can't assign a ticket to a harness the project isn't set up for. Falls back
-    to every registered harness only if config can't be loaded.
+    cannot assign a ticket to a harness the project is not set up for. Falls back
+    to every registered harness only if config cannot be loaded.
     """
     try:
         config = Config.load(repo_root)

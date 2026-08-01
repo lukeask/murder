@@ -5,19 +5,30 @@ All other persistence modules import ``get_db`` and ``init_db`` from here.
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 from murder.permissions.persistence import ensure_permission_schema
 from murder.runtime.sessions.persistence import ensure_session_schema
-
+from murder.state.persistence.connection import (
+    Connection,
+    connect,
+    database_schema_lock,
+    execute_script,
+)
 from murder.state.storage.paths import MURDER_DIR_NAME
 
 # fmt: off
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS repositories (
+    repository_id  TEXT PRIMARY KEY,
+    root_path      TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    last_seen_at   TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS runs (
     run_id            TEXT PRIMARY KEY,
@@ -28,7 +39,8 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 
 CREATE TABLE IF NOT EXISTS tickets (
-    id            TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    id            TEXT NOT NULL,
     title         TEXT NOT NULL,
     status        TEXT NOT NULL CHECK (status IN
                   ('draft','planned','ready','in_progress','blocked','done','failed','archived')),
@@ -47,34 +59,68 @@ CREATE TABLE IF NOT EXISTS tickets (
     attempts      INTEGER NOT NULL DEFAULT 0,
     last_error    TEXT,
     created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (repository_id, id),
+    FOREIGN KEY (repository_id, parent_ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 
 CREATE TABLE IF NOT EXISTS ticket_deps (
-    ticket_id      TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    depends_on_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    PRIMARY KEY (ticket_id, depends_on_id),
+    repository_id  TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    ticket_id      TEXT NOT NULL,
+    depends_on_id  TEXT NOT NULL,
+    PRIMARY KEY (repository_id, ticket_id, depends_on_id),
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (repository_id, depends_on_id)
+        REFERENCES tickets(repository_id, id) ON DELETE CASCADE,
     CHECK (ticket_id != depends_on_id)
 );
 
 CREATE TABLE IF NOT EXISTS checklist (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    ticket_id  TEXT NOT NULL,
     ord        INTEGER NOT NULL,
     text       TEXT NOT NULL,
     done       INTEGER NOT NULL DEFAULT 0,
-    done_at    TEXT
+    done_at    TEXT,
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_checklist_ticket ON checklist(ticket_id);
 
+CREATE TABLE IF NOT EXISTS check_results (
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    ticket_id     TEXT NOT NULL,
+    check_name    TEXT NOT NULL,
+    timestamp     TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('pass', 'fail')),
+    data_json     TEXT,
+    PRIMARY KEY (repository_id, ticket_id, check_name, timestamp),
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS completion_attempts (
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    ticket_id     TEXT NOT NULL,
+    check_name    TEXT NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repository_id, ticket_id, check_name),
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS agents (
-    agent_id          TEXT PRIMARY KEY,
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    agent_id          TEXT NOT NULL,
     role              TEXT NOT NULL CHECK (role IN
                       ('collaborator','notetaker','crow_handler','crow','planner','planning_handler')),
-    ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+    ticket_id         TEXT,
     session           TEXT,
     harness           TEXT,
     model             TEXT,
@@ -84,7 +130,10 @@ CREATE TABLE IF NOT EXISTS agents (
     start_commit      TEXT,
     started_at        TEXT NOT NULL,
     last_heartbeat_at TEXT,
-    pid               INTEGER
+    pid               INTEGER,
+    PRIMARY KEY (repository_id, agent_id),
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE SET NULL
 );
 
 -- Verified harness decisions are durable control records, not generic bus
@@ -166,6 +215,7 @@ END;
 
 CREATE TABLE IF NOT EXISTS commands (
     id               TEXT PRIMARY KEY,
+    repository_id    TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL,
     run_id           TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
@@ -192,15 +242,17 @@ CREATE INDEX IF NOT EXISTS idx_commands_worker_status
 CREATE INDEX IF NOT EXISTS idx_commands_lease
     ON commands(status, lease_expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_idempotency
-    ON commands(idempotency_key);
+    ON commands(repository_id, idempotency_key);
 
 CREATE TABLE IF NOT EXISTS worker_heartbeats (
-    worker_id        TEXT PRIMARY KEY,
+    repository_id    TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    worker_id        TEXT NOT NULL,
     run_id           TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
     role             TEXT,
     ticket_id        TEXT,
     last_heartbeat_at TEXT NOT NULL,
-    payload_json     TEXT NOT NULL DEFAULT '{}'
+    payload_json     TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (repository_id, worker_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_run
@@ -208,19 +260,23 @@ CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_run
 
 CREATE TABLE IF NOT EXISTS escalations (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     ts                TEXT NOT NULL,
-    ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+    ticket_id         TEXT,
     severity          INTEGER NOT NULL CHECK (severity BETWEEN 1 AND 3),
     reason            TEXT NOT NULL,
     to_recipient      TEXT NOT NULL CHECK (to_recipient IN ('user','collaborator')),
     resolved          INTEGER NOT NULL DEFAULT 0,
     resolved_at       TEXT,
-    source_event_id   INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    body_path         TEXT
+    source_event_id   INTEGER,
+    body_path         TEXT,
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS plans (
-    name              TEXT PRIMARY KEY,
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    name              TEXT NOT NULL,
     status            TEXT NOT NULL CHECK (status IN ('draft','accepted','superseded')),
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
@@ -232,50 +288,64 @@ CREATE TABLE IF NOT EXISTS plans (
     revision_count    INTEGER NOT NULL DEFAULT 0,
     sync_state        TEXT NOT NULL DEFAULT 'synced'
                       CHECK (sync_state IN ('synced','parse_error')),
-    parse_error       TEXT
+    parse_error       TEXT,
+    PRIMARY KEY (repository_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
 
 CREATE TABLE IF NOT EXISTS plan_revisions (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    plan_name        TEXT NOT NULL REFERENCES plans(name) ON DELETE CASCADE,
+    repository_id    TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    plan_name        TEXT NOT NULL,
     created_at       TEXT NOT NULL,
     source           TEXT NOT NULL CHECK (source IN ('file','db','import')),
     status           TEXT NOT NULL,
     body             TEXT NOT NULL,
     frontmatter_json TEXT NOT NULL DEFAULT '{}',
-    content_hash     TEXT NOT NULL
+    content_hash     TEXT NOT NULL,
+    FOREIGN KEY (repository_id, plan_name)
+        REFERENCES plans(repository_id, name) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_plan_revisions_plan ON plan_revisions(plan_name, id);
 
 CREATE TABLE IF NOT EXISTS plan_related_tickets (
-    plan_name TEXT NOT NULL REFERENCES plans(name) ON DELETE CASCADE,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    plan_name TEXT NOT NULL,
     ticket_id TEXT NOT NULL,
-    PRIMARY KEY (plan_name, ticket_id)
+    PRIMARY KEY (repository_id, plan_name, ticket_id),
+    FOREIGN KEY (repository_id, plan_name)
+        REFERENCES plans(repository_id, name) ON DELETE CASCADE,
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS notes (
     id                TEXT PRIMARY KEY,
-    name              TEXT NOT NULL UNIQUE,
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    name              TEXT NOT NULL,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
     retired_at        TEXT,
     body              TEXT NOT NULL DEFAULT '',
-    materialized_path TEXT NOT NULL
+    materialized_path TEXT NOT NULL,
+    UNIQUE (repository_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
 
 CREATE TABLE IF NOT EXISTS note_revisions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    note_name    TEXT NOT NULL REFERENCES notes(name) ON DELETE CASCADE,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    note_name    TEXT NOT NULL,
     created_at   TEXT NOT NULL,
     source       TEXT NOT NULL CHECK (source IN ('agent','file_import','bootstrap')),
     body         TEXT NOT NULL,
-    content_hash TEXT NOT NULL
+    content_hash TEXT NOT NULL,
+    FOREIGN KEY (repository_id, note_name)
+        REFERENCES notes(repository_id, name) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_note_revisions_note
@@ -283,31 +353,36 @@ CREATE INDEX IF NOT EXISTS idx_note_revisions_note
 
 CREATE TABLE IF NOT EXISTS reports (
     id                TEXT PRIMARY KEY,
-    name              TEXT NOT NULL UNIQUE,
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    name              TEXT NOT NULL,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
     retired_at        TEXT,
     body              TEXT NOT NULL DEFAULT '',
-    materialized_path TEXT NOT NULL
+    materialized_path TEXT NOT NULL,
+    UNIQUE (repository_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_reports_updated ON reports(updated_at);
 
 CREATE TABLE IF NOT EXISTS report_revisions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    report_name   TEXT NOT NULL REFERENCES reports(name) ON DELETE CASCADE,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    report_name   TEXT NOT NULL,
     created_at    TEXT NOT NULL,
     source        TEXT NOT NULL CHECK (source IN ('agent','file_import','bootstrap')),
     body          TEXT NOT NULL,
-    content_hash  TEXT NOT NULL
+    content_hash  TEXT NOT NULL,
+    FOREIGN KEY (repository_id, report_name)
+        REFERENCES reports(repository_id, name) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_report_revisions_report
     ON report_revisions(report_name, id);
 
 CREATE TABLE IF NOT EXISTS notetaker_context (
-    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    repository_id     TEXT NOT NULL PRIMARY KEY DEFAULT '00000000-0000-0000-0000-000000000000',
     body              TEXT NOT NULL DEFAULT '',
     updated_at        TEXT NOT NULL,
     materialized_path TEXT NOT NULL
@@ -324,12 +399,13 @@ CREATE TABLE IF NOT EXISTS notes_entries (
 CREATE INDEX IF NOT EXISTS idx_notes_entries_ts ON notes_entries(ts);
 
 CREATE TABLE IF NOT EXISTS agent_messages (
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     agent_id    TEXT NOT NULL,
     ordinal     INTEGER NOT NULL,
     role        TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
     body        TEXT NOT NULL,
     captured_at TEXT NOT NULL,
-    PRIMARY KEY (agent_id, ordinal)
+    PRIMARY KEY (repository_id, agent_id, ordinal)
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_agent ON agent_messages(agent_id);
@@ -355,7 +431,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_agent ON agent_messages(agent_id);
 --                 leaves in_progress rows with no live pane — we need a third state
 --                 distinct from "in_progress" (no pane) and "complete" (graceful).
 CREATE TABLE IF NOT EXISTS conversations (
-    conversation_id    TEXT PRIMARY KEY,
+    repository_id      TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    conversation_id    TEXT NOT NULL,
     agent_id           TEXT NOT NULL,
     harness            TEXT,
     model              TEXT,
@@ -365,7 +442,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     status             TEXT NOT NULL DEFAULT 'in_progress'
                        CHECK (status IN ('in_progress','complete','stale')),
     created_at         TEXT NOT NULL,
-    updated_at         TEXT NOT NULL
+    updated_at         TEXT NOT NULL,
+    PRIMARY KEY (repository_id, conversation_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversations_agent ON conversations(agent_id);
@@ -382,8 +460,8 @@ CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
 -- ordinal: 0-based append order within the conversation.
 CREATE TABLE IF NOT EXISTS conversation_blocks (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id     TEXT NOT NULL REFERENCES conversations(conversation_id)
-                        ON DELETE CASCADE,
+    repository_id       TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    conversation_id     TEXT NOT NULL,
     ordinal             INTEGER NOT NULL,
     kind                TEXT NOT NULL CHECK (kind IN (
                             'user',
@@ -398,7 +476,9 @@ CREATE TABLE IF NOT EXISTS conversation_blocks (
     payload_json        TEXT NOT NULL,
     sealed              INTEGER NOT NULL DEFAULT 0,
     service_received_at TEXT NOT NULL,
-    UNIQUE (conversation_id, ordinal)
+    UNIQUE (repository_id, conversation_id, ordinal),
+    FOREIGN KEY (repository_id, conversation_id)
+        REFERENCES conversations(repository_id, conversation_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversation_blocks_conv
@@ -412,12 +492,14 @@ CREATE INDEX IF NOT EXISTS idx_conversation_blocks_conv
 --   chunks that produced no usable summary are simply not written).
 CREATE TABLE IF NOT EXISTS conversation_chunk_summaries (
     summary_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id)
-                    ON DELETE CASCADE,
+    repository_id   TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    conversation_id TEXT NOT NULL,
     chunk_idx       INTEGER NOT NULL,
     summary         TEXT NOT NULL,
     created_at      TEXT NOT NULL,
-    UNIQUE (conversation_id, chunk_idx)
+    UNIQUE (repository_id, conversation_id, chunk_idx),
+    FOREIGN KEY (repository_id, conversation_id)
+        REFERENCES conversations(repository_id, conversation_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunk_summaries_conv
@@ -491,6 +573,7 @@ CREATE INDEX IF NOT EXISTS idx_harness_control_evidence_harness
     ON harness_control_evidence(harness_id, captured_at, evidence_type);
 
 CREATE TABLE IF NOT EXISTS harness_control_observations (
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     harness_id         TEXT NOT NULL,
     session_id         TEXT,
     pane_epoch         INTEGER NOT NULL CHECK (pane_epoch >= 0),
@@ -500,7 +583,9 @@ CREATE TABLE IF NOT EXISTS harness_control_observations (
     snapshot_json      TEXT NOT NULL,
     evidence_refs_json TEXT NOT NULL,
     stored_at          TEXT NOT NULL,
-    PRIMARY KEY (harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence)
+    PRIMARY KEY (
+        repository_id, harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_harness_control_observations_latest
@@ -605,14 +690,17 @@ CREATE INDEX IF NOT EXISTS idx_harness_control_decisions_operation
     ON harness_control_decisions(operation_id, id);
 
 CREATE TABLE IF NOT EXISTS harness_usage_probe_sessions (
-    harness    TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    harness    TEXT NOT NULL,
     session_id TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (repository_id, harness)
 );
 
 CREATE TABLE IF NOT EXISTS schedule_queue (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticket_id             TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+    repository_id         TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    ticket_id             TEXT,
     title                 TEXT NOT NULL,
     harness               TEXT,
     desired_start_at      TEXT,
@@ -621,20 +709,23 @@ CREATE TABLE IF NOT EXISTS schedule_queue (
                           ('pending','scheduled','running','done','blocked','cancelled')),
     created_at            TEXT NOT NULL,
     updated_at            TEXT NOT NULL,
-    notes                 TEXT
+    notes                 TEXT,
+    FOREIGN KEY (repository_id, ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_schedule_queue_status
     ON schedule_queue(status, desired_start_at);
 
 CREATE TABLE IF NOT EXISTS scheduler_state (
-    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    repository_id TEXT NOT NULL PRIMARY KEY DEFAULT '00000000-0000-0000-0000-000000000000',
     mode       TEXT NOT NULL DEFAULT 'manual'
                CHECK (mode IN ('manual','autorun_ready','crow_magic')),
     updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS scheduler_params (
+    repository_id       TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     harness              TEXT NOT NULL,
     window_key           TEXT NOT NULL,
     c_changeoff          REAL NOT NULL DEFAULT 0.7,
@@ -643,16 +734,19 @@ CREATE TABLE IF NOT EXISTS scheduler_params (
     intensity            REAL NOT NULL DEFAULT 1.0,
     multiharness_cutoff  REAL,
     updated_at           TEXT NOT NULL,
-    PRIMARY KEY (harness, window_key)
+    PRIMARY KEY (repository_id, harness, window_key)
 );
 
 CREATE TABLE IF NOT EXISTS scheduler_steering (
-    harness    TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    harness    TEXT NOT NULL,
     steering   TEXT NOT NULL CHECK(steering IN ('auto','pause','prefer')),
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (repository_id, harness)
 );
 
 CREATE TABLE IF NOT EXISTS scheduler_decision_cache (
+    repository_id       TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     harness              TEXT NOT NULL,
     window_key           TEXT NOT NULL,
     mode                 TEXT NOT NULL,
@@ -664,7 +758,7 @@ CREATE TABLE IF NOT EXISTS scheduler_decision_cache (
     rationale            TEXT NOT NULL,
     kicked_ticket_id     TEXT,
     updated_at           TEXT NOT NULL,
-    PRIMARY KEY (harness, window_key)
+    PRIMARY KEY (repository_id, harness, window_key)
 );
 
 -- Persisted model discovery results (one row per harness kind).
@@ -672,10 +766,12 @@ CREATE TABLE IF NOT EXISTS scheduler_decision_cache (
 -- discovery_error: non-null when the last probe failed (null on success).
 -- fetched_at: ISO8601 UTC timestamp of the last discovery attempt.
 CREATE TABLE IF NOT EXISTS harness_models (
-    harness         TEXT PRIMARY KEY,
+    repository_id   TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    harness         TEXT NOT NULL,
     fetched_at      TEXT NOT NULL,
     models_json     TEXT NOT NULL,
-    discovery_error TEXT
+    discovery_error TEXT,
+    PRIMARY KEY (repository_id, harness)
 );
 
 -- Codebase-map summaries, snapshotted per build keyed by commit SHA (t060).
@@ -683,6 +779,7 @@ CREATE TABLE IF NOT EXISTS harness_models (
 -- path: repo-relative source path, or the dir path / 'ROOT' sentinel.
 -- source_hash: sha256 of the source file (NULL for dir/root rollups).
 CREATE TABLE IF NOT EXISTS map_summaries (
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     path        TEXT NOT NULL,
     commit_sha  TEXT NOT NULL,
     kind        TEXT NOT NULL CHECK (kind IN ('file','dir','root')),
@@ -691,7 +788,7 @@ CREATE TABLE IF NOT EXISTS map_summaries (
     source_tokens  INTEGER,
     summary_tokens INTEGER,
     generated_at   TEXT NOT NULL,
-    PRIMARY KEY (path, commit_sha)
+    PRIMARY KEY (repository_id, path, commit_sha)
 );
 
 CREATE INDEX IF NOT EXISTS idx_map_summaries_commit ON map_summaries(commit_sha);
@@ -702,10 +799,12 @@ CREATE INDEX IF NOT EXISTS idx_map_summaries_commit ON map_summaries(commit_sha)
 -- ever writes 'dismissed'; the later LLM resolver writes richer statuses into
 -- the same table without a schema change. Keyed by "<conversation_id>:<ordinal>".
 CREATE TABLE IF NOT EXISTS history_status (
-    item_id     TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    item_id     TEXT NOT NULL,
     status      TEXT NOT NULL,
     status_note TEXT,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (repository_id, item_id)
 );
 
 -- Authoritative current workflow state.  parent_ticket_id, definition_json,
@@ -713,6 +812,7 @@ CREATE TABLE IF NOT EXISTS history_status (
 -- compatibility view; ticket statuses are not workflow run truth.
 CREATE TABLE IF NOT EXISTS workflow_runs (
     workflow_id       TEXT PRIMARY KEY,
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     definition_name   TEXT NOT NULL,
     definition_version INTEGER NOT NULL CHECK (definition_version >= 1),
     status            TEXT NOT NULL CHECK (status IN
@@ -724,9 +824,12 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     started_by_json   TEXT NOT NULL,
     correlation_json  TEXT NOT NULL,
     terminal_reason   TEXT,
-    parent_ticket_id  TEXT UNIQUE REFERENCES tickets(id) ON DELETE SET NULL,
+    parent_ticket_id  TEXT,
     definition_json   TEXT,
-    stage_map_json    TEXT NOT NULL DEFAULT '{}'
+    stage_map_json    TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (repository_id, parent_ticket_id),
+    FOREIGN KEY (repository_id, parent_ticket_id)
+        REFERENCES tickets(repository_id, id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
@@ -781,6 +884,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_waits_current
 
 CREATE TABLE IF NOT EXISTS activities (
     activity_id       TEXT PRIMARY KEY,
+    repository_id     TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     workflow_id       TEXT NOT NULL REFERENCES workflow_runs(workflow_id) ON DELETE CASCADE,
     workflow_revision INTEGER NOT NULL CHECK (workflow_revision >= 1),
     ordinal           INTEGER NOT NULL CHECK (ordinal >= 0),
@@ -790,7 +894,7 @@ CREATE TABLE IF NOT EXISTS activities (
                        'succeeded','failed','cancelled')),
     payload_json      TEXT NOT NULL,
     requirements_json TEXT NOT NULL,
-    idempotency_key   TEXT NOT NULL UNIQUE,
+    idempotency_key   TEXT NOT NULL,
     priority          INTEGER NOT NULL,
     retry_policy      TEXT NOT NULL,
     max_attempts      INTEGER NOT NULL CHECK (max_attempts >= 1),
@@ -803,7 +907,8 @@ CREATE TABLE IF NOT EXISTS activities (
     claim_expires_at  TEXT,
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
-    UNIQUE (workflow_id, workflow_revision, ordinal)
+    UNIQUE (workflow_id, workflow_revision, ordinal),
+    UNIQUE (repository_id, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_activities_queue
     ON activities(status, priority DESC, created_at);
@@ -818,9 +923,11 @@ CREATE TABLE IF NOT EXISTS activity_reservations (
 );
 
 CREATE TABLE IF NOT EXISTS activity_reservation_locks (
-    resource_key TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    resource_key TEXT NOT NULL,
     activity_id  TEXT NOT NULL REFERENCES activities(activity_id) ON DELETE CASCADE,
-    expires_at   TEXT NOT NULL
+    expires_at   TEXT NOT NULL,
+    PRIMARY KEY (repository_id, resource_key)
 );
 
 CREATE TABLE IF NOT EXISTS activity_results (
@@ -878,39 +985,32 @@ CREATE TABLE IF NOT EXISTS workflow_transition_outbox (
     created_at         TEXT NOT NULL,
     UNIQUE (workflow_id, workflow_revision, kind, ordinal)
 );
-"""
+""".replace(" DEFAULT '00000000-0000-0000-0000-000000000000'", "")
 # fmt: on
 
 NOTETAKER_CONTEXT_MATERIALIZED_REL = f"{MURDER_DIR_NAME}/notetakercontext.md"
+MURDER_SCHEMA_VERSION = 2
 
 
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
-def get_db(db_path: Path) -> sqlite3.Connection:
-    """Open a SQLite connection in WAL mode with sane pragmas."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(
-        str(db_path),
-        isolation_level=None,
-        check_same_thread=False,
-        timeout=10.0,
-    )
-    conn.row_factory = sqlite3.Row
-    conn.executescript(
-        """
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        PRAGMA foreign_keys = ON;
-        PRAGMA busy_timeout = 5000;
-        """
-    )
-    return conn
+def get_db(db_path: Path) -> Connection:
+    """Backward-compatible raw pyturso connection helper.
+
+    Runtime code should prefer :func:`open_repo_db`, which cannot omit the
+    repository partition. This raw helper remains for migrations and tests.
+    """
+    return connect(db_path)
 
 
-def init_db(conn: sqlite3.Connection) -> None:
-    """Apply SCHEMA_SQL idempotently."""
+def _init_db(conn: Connection, *, repository_id: str | None = None) -> None:
+    """Apply SCHEMA_SQL and the repository-partition upgrade idempotently.
+
+    ``repository_id`` is supplied by shared-database startup during a legacy
+    import.  It is optional only while callers are being converted to ``RepoDb``.
+    """
     from murder.state.persistence.migrations import (
         _migrate_agents_failed_status,
         _migrate_agents_harness,
@@ -919,8 +1019,8 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_agents_worktree_path,
         _migrate_completion_tables,
         _migrate_conversation_chunk_summaries,
-        _migrate_conversation_store,
         _migrate_conversation_queued_message,
+        _migrate_conversation_store,
         _migrate_drop_legacy_events,
         _migrate_drop_sentinel,
         _migrate_drop_ticket_write_set,
@@ -928,28 +1028,37 @@ def init_db(conn: sqlite3.Connection) -> None:
         _migrate_history_status,
         _migrate_map_summaries,
         _migrate_notes_identity_status,
+        _migrate_partition_local_deterministic_ids,
         _migrate_plans_single_master,
         _migrate_repair_plans_dangling_fk,
+        _migrate_repository_partition,
         _migrate_role_names,
         _migrate_runs_advanced_log_path,
         _migrate_scheduler_steering,
         _migrate_ticket_archived_status,
         _migrate_ticket_draft_status,
-        _migrate_ticket_drop_skills,
         _migrate_ticket_drop_legacy_order,
+        _migrate_ticket_drop_skills,
         _migrate_ticket_last_error,
         _migrate_ticket_metadata_columns,
         _migrate_ticket_parent,
         _migrate_ticket_worktree,
         _migrate_workflow_runs,
     )
-    from murder.state.persistence.notetaker import ensure_notetaker_context_row
 
     # workflow_runs used to have a ticket id primary key and none of the
     # authoritative state columns.  Upgrade it before SCHEMA_SQL attempts to
     # create indexes and child tables that reference the new shape.
     _migrate_workflow_runs(conn)
-    conn.executescript(SCHEMA_SQL)
+    execute_script(conn, SCHEMA_SQL)
+    # Register feature-owned tables before rebuilding old human-key schemas.
+    # Mixed old/new FKs (for example agents -> legacy tickets(id)) are invalid
+    # under Turso as soon as a DML statement is prepared, so partitioning must
+    # precede every data migration below.
+    ensure_session_schema(conn)
+    ensure_permission_schema(conn)
+    _migrate_repository_partition(conn, repository_id)
+    _migrate_partition_local_deterministic_ids(conn)
     _migrate_drop_legacy_events(conn)
     _migrate_fact_log(conn)
     _migrate_ticket_metadata_columns(conn)
@@ -984,11 +1093,20 @@ def init_db(conn: sqlite3.Connection) -> None:
     # rules cannot drift from a second schema copy. This idempotent call is the
     # central fresh-database and existing-database registration point.
     ensure_session_schema(conn)
-    # Permission/approval tables are feature-owned; register them on every
+    # Permission/approval tables are feature-owned. Register them on every
     # init so fresh and upgraded databases share the same authoritative DDL.
     ensure_permission_schema(conn)
-    ensure_notetaker_context_row(conn)
 
 
-def db_path_for(repo_root: Path) -> Path:
-    return repo_root / ".murder" / "murder.db"
+def init_db(conn: Connection, *, repository_id: str | None = None) -> None:
+    """Serialize and apply the complete idempotent schema migration chain."""
+    with database_schema_lock(conn):
+        # A Turso connection opened before another process finishes migration
+        # can retain a stale read snapshot even in autocommit mode. Roll it back
+        # after acquiring the cross-process lock so schema preparation refreshes.
+        conn.rollback()
+        version_row = conn.execute("PRAGMA user_version").fetchone()
+        if version_row is not None and int(version_row[0]) == MURDER_SCHEMA_VERSION:
+            return
+        _init_db(conn, repository_id=repository_id)
+        conn.execute(f"PRAGMA user_version = {MURDER_SCHEMA_VERSION}")

@@ -57,7 +57,7 @@ _CC_RUNNING_SUMMARY_RE = re.compile(
 # ``[A-Z][\w-]+`` match, leaking dozens of near-identical animation frames as
 # phantom assistant prose. Allow the phrase to span words, and require ≥1 leading
 # glyph (every real spinner frame has one — incl. the dim ``·`` frame) so a plain
-# assistant sentence ending in ``…`` can't be mistaken for chrome. The gerund
+# assistant sentence ending in ``…`` cannot be mistaken for chrome. The gerund
 # class also allows an apostrophe: CC's whimsical word list includes elided forms
 # (``Beboppin'``, ``Jivin'``) whose ``'`` is outside ``\w`` — without it every
 # animation frame of those words leaked as a phantom assistant turn.
@@ -68,7 +68,7 @@ _CC_SPINNER_RE = re.compile(
 _CC_SHELL_PROMPT_RE = re.compile(r"^\w+@\w[-\w.]*:[~\w/]*\s*\$\s")
 # The background-agent spinner (`✻ Waiting for 1 background agent to finish`).
 # Anchored to the `N background agent(s)` shape so a real continuation line
-# like "Waiting for your reply…" isn't eaten as chrome.
+# like "Waiting for your reply…" is not eaten as chrome.
 _CC_WAITING_AGENTS_RE = re.compile(
     r"^\s*[·*✻✶✳✽✢⠁-⣿◐◓◑◒]?\s*Waiting for\s+\d+\s+background\s+agents?\b"
 )
@@ -215,7 +215,7 @@ def _cc_clip_preamble(lines: list[str]) -> tuple[list[str], int]:
     and, because scrollback only ever grows, persists at the top of the captured
     pane for the session's life. Anything *above* it is pre-conversation noise:
     a shell prompt and the (often line-wrapped) launch command when claude
-    wasn't the pane's initial command, a resize redraw, an MOTD. Those un-indented
+    was not the pane initial command, a resize redraw, an MOTD. Those un-indented
     lines would otherwise be swept up by the bare-prose branch as a phantom
     assistant turn. Clip to just after the banner so the conversation region is
     clean. If no banner is present (we attached mid-session, or it never rendered),

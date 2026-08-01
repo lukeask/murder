@@ -64,7 +64,7 @@ class PlannerSessionSweeperWorker(Worker):
                     )
                 except Exception:
                     LOGGER.warning(
-                        "failed to kill orphaned planner session %s for agent %s; "
+                        "failed to kill orphaned planner session %s for agent %s. "
                         "leaving DB row for retry",
                         session,
                         agent_id,

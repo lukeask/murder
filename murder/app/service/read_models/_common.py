@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from murder.app.protocol.read_models import CrowSessionSummary
-from murder.state.persistence.schema import get_db
+from murder.state.persistence.connection import RepoDb
 
 LOGGER = logging.getLogger(__name__)
 
-# Ticket states that indicate the work item is closed; a failed agent on such a
+# Ticket states that indicate the work item is closed. A failed agent on such a
 # ticket is droppable once its heartbeat goes stale.
 TERMINAL_TICKET_STATUSES = frozenset({"done", "failed"})
 
@@ -48,21 +47,19 @@ class GenerationKeys:
 class ReadModelBase:
     """Base class for per-domain snapshot builders."""
 
-    def __init__(self, db_path: Path, keys: GenerationKeys) -> None:
-        self.db_path = Path(db_path)
+    def __init__(self, db: RepoDb, repo_root: Path, keys: GenerationKeys) -> None:
+        self.db = db
+        self.repo_root = Path(repo_root)
         self.keys = keys
-
-    def _connect(self) -> sqlite3.Connection:
-        return get_db(self.db_path)
 
 
 def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
     """Whether a failed agent should remain on the wire roster.
 
     Roster predicate: keep failed agents whose ticket is still active, or
-    whose heartbeat is recent; drop the rest. ``now`` and the
+    whose heartbeat is recent. Drop the rest. ``now`` and the
     session timestamps are all naive UTC (see ``datetime.utcnow``), so they are
-    compared directly without tz normalisation.
+    compared directly without tz normalization.
     """
     if session.status != "failed":
         return True
@@ -78,7 +75,7 @@ def _keep_failed_session(session: CrowSessionSummary, *, now: datetime) -> bool:
 def _plan_parent_from_frontmatter(frontmatter_json: object) -> str | None:
     """Extract a plan's parent-plan name from its persisted frontmatter.
 
-    The plans table holds no dedicated parent column; the only non-derived parent
+    The plans table holds no dedicated parent column. The only non-derived parent
     metadata is a `parent` key in the plan's frontmatter (C11 expects the parent
     plan's NAME or null). Returns None when absent, blank, or non-string.
     """

@@ -82,7 +82,7 @@ class SubprocessWorkerRunner:
         # buffered in the feeder thread when the process was killed,
         # join_thread() can block forever — which would wedge supervisor
         # shutdown (it holds the repo flock). cancel_join_thread() detaches the
-        # feeder so close() never blocks; abandoning unflushed items is safe
+        # feeder so close() never blocks. Abandoning unflushed items is safe
         # since the consumer is gone. Suppress broadly: a hang here is worse
         # than a stray queue error during teardown.
         with suppress(Exception):

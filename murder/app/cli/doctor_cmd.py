@@ -1,7 +1,7 @@
 """Doctor command: environment + config preflight checks.
 
 Prints a ✓/✗ line per check and exits 0 if all pass, 1 if any fail. Matches the
-plain-text output style of the rest of the CLI (no rich tables); typer is only
+plain-text output style of the rest of the CLI (no rich tables). typer is only
 used for the exit code.
 """
 
@@ -19,9 +19,9 @@ from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
 from murder.config import Config, HarnessRoleConfig
 from murder.llm.harnesses import REGISTRY
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import open_repo_db
 from murder.state.storage.filesystem import read_lock_pid
-from murder.state.storage.paths import agents_dir, db_path, lock_path
+from murder.state.storage.paths import agents_dir, lock_path
 
 # Provider env vars that count as "an LLM key is configured" (Groq/Cerebras first).
 _LLM_KEY_ENV_VARS = (
@@ -160,14 +160,13 @@ def _check_api_keys() -> None:
 
 
 def _check_db(repo: Path, failures: list[str]) -> None:
-    path = db_path(repo)
-    if not path.exists():
+    if not agents_dir(repo).exists():
         _warn("no murder.db yet (run `murder init`)")
         return
     try:
-        conn = get_db(path)
+        conn = open_repo_db(repo)
         try:
-            init_db(conn)
+            pass
         finally:
             conn.close()
     except Exception as e:

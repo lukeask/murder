@@ -20,7 +20,7 @@ class PythonAstExtractor:
             tree = ast.parse(src)
         except SyntaxError:
             # We have an extractor for .py — the file just didn't parse.
-            # Return [] (not None); the LLM can still read the raw source.
+            # Return [] (not None). The LLM can still read the raw source.
             return []
 
         symbols: list[Symbol] = []
@@ -92,7 +92,7 @@ def _annassign_constant(node: ast.AnnAssign) -> Symbol | None:
     if not isinstance(node.target, ast.Name):
         return None
     name = node.target.id
-    # Annotated module-level names count as constants; skip `_`-prefixed ones.
+    # Annotated module-level names count as constants. Skip `_`-prefixed ones.
     if name.startswith("_"):
         return None
     annotation = _unparse(node.annotation)
@@ -168,7 +168,7 @@ def _render_arg(arg: ast.arg, *, has_default: bool) -> str:
         if annotation:
             rendered += f": {annotation}"
     if has_default:
-        # Do not source-render default values; presence only.
+        # Do not source-render default values. Record presence only.
         rendered += "=..." if arg.annotation is None else " = ..."
     return rendered
 
@@ -188,5 +188,5 @@ def _unparse(node: ast.AST | None) -> str:
         return ""
     try:
         return ast.unparse(node)
-    except Exception:  # pragma: no cover - defensive; ast.unparse is stdlib
+    except Exception:  # pragma: no cover - defensive. ast.unparse is stdlib
         return ""

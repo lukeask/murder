@@ -459,7 +459,7 @@ class SessionController:
         await self._validate_writer(record, item.command, item.principal)
         # Proof validation is deliberately the final guard before backend I/O.
         # Capability, revision, status, and lease checks above contribute the
-        # exact current effect context; no await occurs after authorization and
+        # exact current effect context. No await occurs after authorization and
         # before dispatch.
         if not await self._authorizer(
             item.command,
@@ -467,7 +467,7 @@ class SessionController:
             item.principal,
             item.authorization,
         ):
-            raise SessionAuthorizationError("session command was not authorized")
+            raise SessionAuthorizationError("the authorizer rejected the session command")
 
         if isinstance(item.command, TerminateSession):
             return await self._execute_termination(

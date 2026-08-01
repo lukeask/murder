@@ -1,5 +1,7 @@
 """Atomic deduplicated trigger firing."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import json
@@ -12,6 +14,7 @@ from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter
 
+from murder.state.persistence.connection import Connection, RepoDb
 from murder.state.persistence.workflow_runs import enqueue_workflow_signal
 from murder.work.triggers.runtime import (
     ManualTrigger,
@@ -27,18 +30,19 @@ from murder.work.workflows.runtime import ExternalWorkflowSignal
 LOGGER = logging.getLogger(__name__)
 _SPEC: TypeAdapter[TriggerSpec] = TypeAdapter(TriggerSpec)
 _TARGET: TypeAdapter[TriggerTarget] = TypeAdapter(TriggerTarget)
-StartWorkflow = Callable[[sqlite3.Connection, StartWorkflowTarget, datetime], UUID]
+StartWorkflow = Callable[[RepoDb, StartWorkflowTarget, datetime], UUID]
 
 
-def create_trigger(conn: sqlite3.Connection, trigger: TriggerRecord) -> None:
-    conn.execute(
+def create_trigger(db: RepoDb, trigger: TriggerRecord) -> None:
+    db.conn.execute(
         """
         INSERT INTO workflow_triggers(
-            trigger_id, name, version, dedup_window_seconds,
+            repository_id, trigger_id, name, version, dedup_window_seconds,
             spec_json, target_json, enabled, created_at, last_fired_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            db.repository_id,
             str(trigger.trigger_id),
             trigger.name,
             trigger.version,
@@ -52,31 +56,32 @@ def create_trigger(conn: sqlite3.Connection, trigger: TriggerRecord) -> None:
     )
 
 
-def list_triggers(conn: sqlite3.Connection) -> tuple[TriggerRecord, ...]:
-    rows = conn.execute(
-        "SELECT * FROM workflow_triggers WHERE enabled = 1 ORDER BY created_at, trigger_id"
+def list_triggers(db: RepoDb) -> tuple[TriggerRecord, ...]:
+    rows = db.conn.execute(
+        "SELECT * FROM workflow_triggers WHERE repository_id = ? AND enabled = 1 ORDER BY created_at, trigger_id",
+        (db.repository_id,),
     ).fetchall()
     return tuple(_trigger(row) for row in rows)
 
 
-def get_trigger(conn: sqlite3.Connection, trigger_id: UUID) -> TriggerRecord | None:
-    row = conn.execute(
-        "SELECT * FROM workflow_triggers WHERE trigger_id = ?",
-        (str(trigger_id),),
+def get_trigger(db: RepoDb, trigger_id: UUID) -> TriggerRecord | None:
+    row = db.conn.execute(
+        "SELECT * FROM workflow_triggers WHERE trigger_id = ? AND repository_id = ?",
+        (str(trigger_id), db.repository_id),
     ).fetchone()
     return None if row is None else _trigger(row)
 
 
 def enqueue_manual_trigger_fire(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     trigger_id: UUID,
     *,
     occurrence_key: str | None = None,
     now: datetime | None = None,
 ) -> str:
-    """Persist a pending manual fire; returns the occurrence key."""
+    """Persist a pending manual fire. Return the occurrence key."""
 
-    trigger = get_trigger(conn, trigger_id)
+    trigger = get_trigger(db, trigger_id)
     if trigger is None:
         raise ValueError(f"trigger {trigger_id} does not exist")
     if not trigger.enabled:
@@ -87,40 +92,41 @@ def enqueue_manual_trigger_fire(
     if not key:
         raise ValueError("occurrence_key must not be empty")
     timestamp = _aware(now)
+    conn = db.conn
     with _transaction(conn):
         conn.execute(
             """
-            INSERT INTO trigger_manual_pending(trigger_id, occurrence_key, enqueued_at)
-            VALUES (?, ?, ?)
+            INSERT INTO trigger_manual_pending(repository_id, trigger_id, occurrence_key, enqueued_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(trigger_id, occurrence_key) DO NOTHING
             """,
-            (str(trigger_id), key, _time(timestamp)),
+            (db.repository_id, str(trigger_id), key, _time(timestamp)),
         )
     return key
 
 
-def list_pending_manual_fires(conn: sqlite3.Connection, trigger_id: UUID) -> tuple[str, ...]:
+def list_pending_manual_fires(db: RepoDb, trigger_id: UUID) -> tuple[str, ...]:
     """Pending manual occurrence keys not yet recorded in ``trigger_firings``."""
 
-    rows = conn.execute(
+    rows = db.conn.execute(
         """
         SELECT p.occurrence_key AS occurrence_key
           FROM trigger_manual_pending AS p
-         WHERE p.trigger_id = ?
+         WHERE p.repository_id = ? AND p.trigger_id = ?
            AND NOT EXISTS (
                 SELECT 1 FROM trigger_firings AS f
-                 WHERE f.trigger_id = p.trigger_id
+                 WHERE f.repository_id = p.repository_id AND f.trigger_id = p.trigger_id
                    AND f.occurrence_key = p.occurrence_key
            )
          ORDER BY p.enqueued_at, p.occurrence_key
         """,
-        (str(trigger_id),),
+        (db.repository_id, str(trigger_id)),
     ).fetchall()
     return tuple(str(row["occurrence_key"]) for row in rows)
 
 
 def fire_trigger(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     trigger_id: UUID,
     *,
     occurrence_key: str,
@@ -133,19 +139,20 @@ def fire_trigger(
         raise ValueError("occurrence_key must not be empty")
     timestamp = _aware(now)
     wake_workflow_id: UUID | None = None
+    conn = db.conn
     with _transaction(conn):
         existing = conn.execute(
             """
             SELECT * FROM trigger_firings
-            WHERE trigger_id = ? AND occurrence_key = ?
+            WHERE repository_id = ? AND trigger_id = ? AND occurrence_key = ?
             """,
-            (str(trigger_id), occurrence_key),
+            (db.repository_id, str(trigger_id), occurrence_key),
         ).fetchone()
         if existing is not None:
             return _firing(existing)
         row = conn.execute(
-            "SELECT * FROM workflow_triggers WHERE trigger_id = ? AND enabled = 1",
-            (str(trigger_id),),
+            "SELECT * FROM workflow_triggers WHERE repository_id = ? AND trigger_id = ? AND enabled = 1",
+            (db.repository_id, str(trigger_id)),
         ).fetchone()
         if row is None:
             raise ValueError("trigger does not exist or is disabled")
@@ -154,10 +161,11 @@ def fire_trigger(
             recent = conn.execute(
                 """
                 SELECT * FROM trigger_firings
-                WHERE trigger_id = ? AND fired_at > ?
+                WHERE repository_id = ? AND trigger_id = ? AND fired_at > ?
                 ORDER BY fired_at DESC LIMIT 1
                 """,
                 (
+                    db.repository_id,
                     str(trigger_id),
                     _time(timestamp - timedelta(seconds=dedup_window)),
                 ),
@@ -166,11 +174,11 @@ def fire_trigger(
                 return _firing(recent)
         target = _TARGET.validate_python(json.loads(str(row["target_json"])))
         if isinstance(target, StartWorkflowTarget):
-            workflow_id = start_workflow(conn, target, timestamp)
+            workflow_id = start_workflow(db, target, timestamp)
             wake_workflow_id = workflow_id
         elif isinstance(target, SignalWorkflowTarget):
             enqueue_workflow_signal(
-                conn,
+                db,
                 workflow_id=target.workflow_id,
                 deduplication_key=f"trigger:{trigger_id}:{occurrence_key}",
                 payload=ExternalWorkflowSignal(
@@ -194,10 +202,11 @@ def fire_trigger(
         conn.execute(
             """
             INSERT INTO trigger_firings(
-                firing_id, trigger_id, occurrence_key, fired_at, workflow_id
-            ) VALUES (?, ?, ?, ?, ?)
+                repository_id, firing_id, trigger_id, occurrence_key, fired_at, workflow_id
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
+                db.repository_id,
                 str(firing.firing_id),
                 str(trigger_id),
                 occurrence_key,
@@ -206,14 +215,16 @@ def fire_trigger(
             ),
         )
         conn.execute(
-            "UPDATE workflow_triggers SET last_fired_at = ? WHERE trigger_id = ?",
-            (_time(timestamp), str(trigger_id)),
+            "UPDATE workflow_triggers SET last_fired_at = ? WHERE trigger_id = ? AND repository_id = ?",
+            (_time(timestamp), str(trigger_id), db.repository_id),
         )
     if wake_workflow_id is not None:
         try:
             from murder.work.workflows.service import WorkflowRuntime  # noqa: PLC0415
 
-            WorkflowRuntime(conn).decide_once(wake_workflow_id, now=timestamp)
+            WorkflowRuntime(db).decide_once(
+                wake_workflow_id, now=timestamp
+            )
         except Exception:
             LOGGER.warning(
                 "best-effort wake failed for workflow %s after trigger fire",
@@ -224,7 +235,15 @@ def fire_trigger(
 
 
 def _firing(row: sqlite3.Row) -> TriggerFiringRecord:
-    return TriggerFiringRecord.model_validate(dict(row))
+    return TriggerFiringRecord.model_validate(
+        {
+            "firing_id": row["firing_id"],
+            "trigger_id": row["trigger_id"],
+            "occurrence_key": row["occurrence_key"],
+            "fired_at": row["fired_at"],
+            "workflow_id": row["workflow_id"],
+        }
+    )
 
 
 def _trigger(row: sqlite3.Row) -> TriggerRecord:
@@ -259,8 +278,8 @@ def _time(value: datetime) -> str:
 
 
 @contextmanager
-def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    if conn.in_transaction:
+def _transaction(conn: Connection) -> Iterator[None]:
+    if getattr(conn, "in_transaction", False):
         name = f"trigger_{uuid4().hex}"
         conn.execute(f"SAVEPOINT {name}")
         try:

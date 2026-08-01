@@ -215,8 +215,8 @@ class AgentSdkConnection:
             )
         except ImportError as exc:  # pragma: no cover — exercised when package absent
             raise ImportError(
-                "claude-agent-sdk is required for the Claude Agent SDK control backend; "
-                "install with: pip install 'murder[agent_sdk]' or pip install claude-agent-sdk"
+                "claude-agent-sdk is required for the Claude Agent SDK control backend. "
+                "Install with: pip install 'murder[agent_sdk]' or pip install claude-agent-sdk"
             ) from exc
 
         # Keep references for can_use_tool result construction without re-importing.

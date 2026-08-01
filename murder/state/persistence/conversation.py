@@ -3,11 +3,11 @@
 Two storage paths live side-by-side in this module:
 
 **Legacy flat-turns path** (``merge_transcript``, ``read_conversation``, ``clear``):
-  An interactive harness renders its chat in a tmux pane; ``parse_transcript``
+  An interactive harness renders its chat in a tmux pane. ``parse_transcript``
   turns a pane capture into an ordered list of ``(role, text)`` turns.
   ``merge_transcript`` reconciles a fresh parse against what's already persisted
   so the stored log is the longest, most complete transcript observed.
-  Still used for compatibility; see ``agent_messages`` table.
+  Still used for compatibility. See ``agent_messages`` table.
 
 **JSON conversation-block path** (Phase 1.b):
   Parsed segment dicts are stored block-per-row in ``conversation_blocks``
@@ -21,10 +21,11 @@ Both paths are independent. The JSON path is the one wired into the live app
 ``runtime/agents/base.py`` and ``conversation_producer.py``).
 """
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -38,6 +39,7 @@ from murder.state.persistence.agents import (
     get_agent_messages,
     replace_agent_messages,
 )
+from murder.state.persistence.connection import RepoDb
 
 # ---------------------------------------------------------------------------
 # Legacy flat-turns path (agent_messages table) — unchanged
@@ -47,16 +49,18 @@ from murder.state.persistence.agents import (
 Turn = tuple[str, str]
 
 
-def _invalidate_conversations(conn: sqlite3.Connection, subject_key: str) -> None:
+def _invalidate_conversations(db: RepoDb, subject_key: str) -> None:
+    conn = db.conn
     """Append a durable key-only invalidation for the conversations snapshot."""
     row = conn.execute(
         "SELECT COALESCE(MAX(generation), -1) + 1 AS generation "
-        "FROM projection_inputs WHERE projection = 'conversations' AND subject_key = ?",
-        (subject_key,),
+        "FROM projection_inputs WHERE repository_id = ? AND projection = 'conversations' "
+        "AND subject_key = ?",
+        (db.repository_id, subject_key),
     ).fetchone()
     generation = int(row["generation"])
     append_projection_input(
-        conn,
+        db,
         ProjectionInputDraft(
             input_id=uuid5(
                 NAMESPACE_URL,
@@ -69,13 +73,14 @@ def _invalidate_conversations(conn: sqlite3.Connection, subject_key: str) -> Non
     )
 
 
-def read_conversation(conn: sqlite3.Connection, agent_id: str) -> list[Turn]:
-    return [(r["role"], r["body"]) for r in get_agent_messages(conn, agent_id)]
+def read_conversation(db: RepoDb, agent_id: str) -> list[Turn]:
+    return [(r["role"], r["body"]) for r in get_agent_messages(db, agent_id)]
 
 
-def clear(conn: sqlite3.Connection, agent_id: str) -> None:
+def clear(db: RepoDb, agent_id: str) -> None:
+    conn = db.conn
     """Drop the persisted log for ``agent_id`` — call when a fresh agent
-    session starts, so a new run doesn't show the previous run's chat.
+    session starts, so a new run does not show the previous run's chat.
 
     Clears *both* stores: the legacy flat ``agent_messages`` log and the 1.b
     JSON conversation store (blocks + metadata row). Leaving stale JSON blocks
@@ -84,18 +89,24 @@ def clear(conn: sqlite3.Connection, agent_id: str) -> None:
     (one live conversation per agent, 1.c).
     """
     existed = conn.execute(
-        "SELECT 1 FROM conversations WHERE conversation_id = ?",
-        (agent_id,),
+        "SELECT 1 FROM conversations WHERE conversation_id = ? AND repository_id = ?",
+        (agent_id, db.repository_id),
     ).fetchone()
-    replace_agent_messages(conn, agent_id, [])
-    conn.execute("DELETE FROM conversation_blocks WHERE conversation_id = ?", (agent_id,))
-    conn.execute("DELETE FROM conversations WHERE conversation_id = ?", (agent_id,))
+    replace_agent_messages(db, agent_id, [])
+    conn.execute(
+        "DELETE FROM conversation_blocks WHERE conversation_id = ? AND repository_id = ?",
+        (agent_id, db.repository_id),
+    )
+    conn.execute(
+        "DELETE FROM conversations WHERE conversation_id = ? AND repository_id = ?",
+        (agent_id, db.repository_id),
+    )
     if existed is not None:
-        _invalidate_conversations(conn, agent_id)
+        _invalidate_conversations(db, agent_id)
 
 
 def merge_transcript(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     agent_id: str,
     parsed: list[Turn],
     *,
@@ -108,11 +119,11 @@ def merge_transcript(
     shorter parse is treated as transient pane noise and ignored. Returns the
     effective transcript after merging.
     """
-    stored = read_conversation(conn, agent_id)
+    stored = read_conversation(db, agent_id)
     if not parsed:
         return stored
     if len(parsed) > len(stored) or (len(parsed) == len(stored) and parsed != stored):
-        replace_agent_messages(conn, agent_id, parsed, captured_at=captured_at)
+        replace_agent_messages(db, agent_id, parsed, captured_at=captured_at)
         return parsed
     return stored
 
@@ -129,7 +140,7 @@ def _now() -> str:
 # Canonical set of block kinds.  assistant segment is split by phase so each
 # kind maps unambiguously back to a segment dict stored in payload_json.
 # `notice` carries service-originated usage/error notices written via
-# `append_notice` (not emitted by any parser; the service injects them).
+# `append_notice` (not emitted by any parser. The service injects them).
 BLOCK_KINDS: tuple[str, ...] = (
     "user",
     "assistant_intermediate",
@@ -138,7 +149,7 @@ BLOCK_KINDS: tuple[str, ...] = (
     "plan_update",
     "agent_event",
     "choice_prompt",
-    "notice",  # service-injected; see append_notice
+    "notice",  # service-injected. See append_notice
 )
 
 
@@ -153,7 +164,7 @@ def segment_to_block_kind(seg: dict[str, Any]) -> str:
     if seg_type == "assistant":
         phase = seg.get("phase", "intermediate")
         return f"assistant_{phase}"
-    return seg_type
+    return str(seg_type)
 
 
 @dataclass
@@ -202,7 +213,7 @@ def block_to_wire(block: ConversationBlock) -> dict[str, Any]:
 
 
 def upsert_conversation(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     conversation_id: str,
     agent_id: str,
@@ -212,6 +223,7 @@ def upsert_conversation(
     live_state: str | None = None,
     status: str = "in_progress",
 ) -> None:
+    conn = db.conn
     """Insert or update the metadata row for a conversation session.
 
     Note: condensed summaries are no longer stored on this row — they live in
@@ -219,18 +231,19 @@ def upsert_conversation(
     """
     now = _now()
     existing = conn.execute(
-        "SELECT 1 FROM conversations WHERE conversation_id = ?",
-        (conversation_id,),
+        "SELECT 1 FROM conversations WHERE conversation_id = ? AND repository_id = ?",
+        (conversation_id, db.repository_id),
     ).fetchone()
     if existing is None:
         conn.execute(
             """
             INSERT INTO conversations
-                (conversation_id, agent_id, harness, model, harness_session_id,
+                (repository_id, conversation_id, agent_id, harness, model, harness_session_id,
                  live_state, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                db.repository_id,
                 conversation_id,
                 agent_id,
                 harness,
@@ -252,7 +265,7 @@ def upsert_conversation(
                    live_state         = COALESCE(?, live_state),
                    status             = ?,
                    updated_at         = ?
-             WHERE conversation_id = ?
+             WHERE conversation_id = ? AND repository_id = ?
             """,
             (
                 harness,
@@ -262,30 +275,33 @@ def upsert_conversation(
                 status,
                 now,
                 conversation_id,
+                db.repository_id,
             ),
         )
 
 
 def set_conversation_status(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     status: str,
 ) -> None:
+    conn = db.conn
     """Transition conversation status (in_progress → complete | stale)."""
     cur = conn.execute(
         "UPDATE conversations SET status = ?, updated_at = ? "
-        "WHERE conversation_id = ? AND status IS NOT ?",
-        (status, _now(), conversation_id, status),
+        "WHERE conversation_id = ? AND repository_id = ? AND status IS NOT ?",
+        (status, _now(), conversation_id, db.repository_id, status),
     )
     if cur.rowcount:
-        _invalidate_conversations(conn, conversation_id)
+        _invalidate_conversations(db, conversation_id)
 
 
 def set_queued_message(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     message: str | None,
 ) -> None:
+    conn = db.conn
     """Record (or clear, with ``None``) the busy-crow queued user message.
 
     DB-owns-runtime: the queued line the TUI renders survives a service or
@@ -293,21 +309,22 @@ def set_queued_message(
     """
     cur = conn.execute(
         "UPDATE conversations SET queued_message = ?, updated_at = ? "
-        "WHERE conversation_id = ? AND queued_message IS NOT ?",
-        (message, _now(), conversation_id, message),
+        "WHERE conversation_id = ? AND repository_id = ? AND queued_message IS NOT ?",
+        (message, _now(), conversation_id, db.repository_id, message),
     )
     if cur.rowcount:
-        _invalidate_conversations(conn, conversation_id)
+        _invalidate_conversations(db, conversation_id)
 
 
 def get_queued_message(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
 ) -> str | None:
+    conn = db.conn
     """Read the queued-but-undelivered user message for a conversation."""
     row = conn.execute(
-        "SELECT queued_message FROM conversations WHERE conversation_id = ?",
-        (conversation_id,),
+        "SELECT queued_message FROM conversations WHERE conversation_id = ? AND repository_id = ?",
+        (conversation_id, db.repository_id),
     ).fetchone()
     if row is None:
         return None
@@ -316,21 +333,22 @@ def get_queued_message(
 
 
 def set_harness_session_id(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     harness_session_id: str,
 ) -> None:
+    conn = db.conn
     """Record the resume session id captured from the harness on graceful exit."""
     cur = conn.execute(
         """
         UPDATE conversations
            SET harness_session_id = ?, updated_at = ?
-         WHERE conversation_id = ? AND harness_session_id IS NOT ?
+         WHERE conversation_id = ? AND repository_id = ? AND harness_session_id IS NOT ?
         """,
-        (harness_session_id, _now(), conversation_id, harness_session_id),
+        (harness_session_id, _now(), conversation_id, db.repository_id, harness_session_id),
     )
     if cur.rowcount:
-        _invalidate_conversations(conn, conversation_id)
+        _invalidate_conversations(db, conversation_id)
 
 
 # ---------------------------------------------------------------------------
@@ -338,19 +356,21 @@ def set_harness_session_id(
 # ---------------------------------------------------------------------------
 
 
-def _seal_live_block(conn: sqlite3.Connection, conversation_id: str) -> None:
+def _seal_live_block(db: RepoDb, conversation_id: str) -> None:
+    conn = db.conn
     """Seal the single mutable trailing block for this conversation, if any."""
     conn.execute(
-        "UPDATE conversation_blocks SET sealed = 1 WHERE conversation_id = ? AND sealed = 0",
-        (conversation_id,),
+        "UPDATE conversation_blocks SET sealed = 1 WHERE conversation_id = ? AND repository_id = ? AND sealed = 0",
+        (conversation_id, db.repository_id),
     )
 
 
 def _read_block_by_id(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     block_id: int | None,
 ) -> ConversationBlock | None:
+    conn = db.conn
     """Read one block row by its id, scoped to a conversation. ``None`` if absent."""
     if block_id is None:
         return None
@@ -358,9 +378,9 @@ def _read_block_by_id(
         """
         SELECT id, ordinal, kind, payload_json, sealed, service_received_at
           FROM conversation_blocks
-         WHERE conversation_id = ? AND id = ?
+         WHERE conversation_id = ? AND repository_id = ? AND id = ?
         """,
-        (conversation_id, block_id),
+        (conversation_id, db.repository_id, block_id),
     ).fetchone()
     if row is None:
         return None
@@ -390,13 +410,14 @@ def _block_is_live(kind: str, seg: dict[str, Any]) -> bool:
 
 
 def append_block(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     seg: dict[str, Any],
     *,
     received_at: str | None = None,
     seal_previous: bool = True,
 ) -> ConversationBlock:
+    conn = db.conn
     """Append one block row for ``seg``.
 
     When ``seal_previous`` is True (the default), any existing live block for
@@ -410,27 +431,27 @@ def append_block(
     kind = segment_to_block_kind(seg)
 
     if seal_previous:
-        _seal_live_block(conn, conversation_id)
+        _seal_live_block(db, conversation_id)
 
     row = conn.execute(
         "SELECT COALESCE(MAX(ordinal), -1) + 1 AS next_ord FROM conversation_blocks"
-        " WHERE conversation_id = ?",
-        (conversation_id,),
+        " WHERE conversation_id = ? AND repository_id = ?",
+        (conversation_id, db.repository_id),
     ).fetchone()
     ordinal = int(row["next_ord"]) if row is not None else 0
 
     # Live blocks (see _block_is_live: streaming assistant turns + unanswered
-    # choice prompts) stay unsealed for in-place merge updates; everything else
+    # choice prompts) stay unsealed for in-place merge updates. Everything else
     # seals immediately.
     sealed = 0 if _block_is_live(kind, seg) else 1
 
     conn.execute(
         """
         INSERT INTO conversation_blocks
-            (conversation_id, ordinal, kind, payload_json, sealed, service_received_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (repository_id, conversation_id, ordinal, kind, payload_json, sealed, service_received_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (conversation_id, ordinal, kind, json.dumps(seg), sealed, ts),
+        (db.repository_id, conversation_id, ordinal, kind, json.dumps(seg), sealed, ts),
     )
     row_id = conn.execute("SELECT last_insert_rowid() AS rid").fetchone()["rid"]
 
@@ -446,12 +467,13 @@ def append_block(
 
 
 def update_live_block(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     seg: dict[str, Any],
     *,
     received_at: str | None = None,
 ) -> bool:
+    conn = db.conn
     """Replace the payload of the live trailing block with ``seg``.
 
     Used when an intermediate assistant turn grows (new text appended) or when
@@ -469,9 +491,9 @@ def update_live_block(
     cur = conn.execute(
         """
         SELECT id FROM conversation_blocks
-         WHERE conversation_id = ? AND sealed = 0
+         WHERE conversation_id = ? AND repository_id = ? AND sealed = 0
         """,
-        (conversation_id,),
+        (conversation_id, db.repository_id),
     ).fetchone()
     if cur is None:
         return False
@@ -479,9 +501,9 @@ def update_live_block(
         """
         UPDATE conversation_blocks
            SET kind = ?, payload_json = ?, sealed = ?, service_received_at = ?
-         WHERE id = ?
+         WHERE id = ? AND repository_id = ?
         """,
-        (kind, json.dumps(seg), sealed, ts, cur["id"]),
+        (kind, json.dumps(seg), sealed, ts, cur["id"], db.repository_id),
     )
     return True
 
@@ -503,12 +525,13 @@ def _sealed_block_can_grow(existing: ConversationBlock, seg: dict[str, Any]) -> 
 
 
 def _update_block_by_id(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     block_id: int | None,
     seg: dict[str, Any],
     *,
     received_at: str | None = None,
 ) -> ConversationBlock | None:
+    conn = db.conn
     if block_id is None:
         return None
     ts = received_at or _now()
@@ -518,17 +541,17 @@ def _update_block_by_id(
         """
         UPDATE conversation_blocks
            SET kind = ?, payload_json = ?, sealed = ?, service_received_at = ?
-         WHERE id = ?
+         WHERE id = ? AND repository_id = ?
         """,
-        (kind, json.dumps(seg), sealed, ts, block_id),
+        (kind, json.dumps(seg), sealed, ts, block_id, db.repository_id),
     )
     row = conn.execute(
         """
         SELECT conversation_id, ordinal, kind, payload_json, sealed, service_received_at
           FROM conversation_blocks
-         WHERE id = ?
+         WHERE id = ? AND repository_id = ?
         """,
-        (block_id,),
+        (block_id, db.repository_id),
     ).fetchone()
     if row is None:
         return None
@@ -544,18 +567,19 @@ def _update_block_by_id(
 
 
 def read_conversation_blocks(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
 ) -> list[ConversationBlock]:
+    conn = db.conn
     """Return all blocks for a conversation in ordinal order."""
     rows = conn.execute(
         """
         SELECT id, ordinal, kind, payload_json, sealed, service_received_at
           FROM conversation_blocks
-         WHERE conversation_id = ?
+         WHERE conversation_id = ? AND repository_id = ?
          ORDER BY ordinal
         """,
-        (conversation_id,),
+        (conversation_id, db.repository_id),
     ).fetchall()
     return [
         ConversationBlock(
@@ -572,21 +596,22 @@ def read_conversation_blocks(
 
 
 def _restore_parsed_turn_order(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     parsed_segments: Sequence[dict[str, Any]],
 ) -> dict[int, int]:
+    conn = db.conn
     """Restore user/assistant interleaving without trusting parsed user payloads.
 
     User rows are authoritative and are written at the send boundary. Parsed
-    user segments are therefore used only as exact-text position anchors; their
+    user segments are therefore used only as exact-text position anchors. Their
     payloads never enter storage. This repairs the case where several user rows
     land before a cumulative harness projection appends their assistant replies.
 
     Returns changed block-id → ordinal mappings so already-built change objects
     can carry the corrected position.
     """
-    blocks = read_conversation_blocks(conn, conversation_id)
+    blocks = read_conversation_blocks(db, conversation_id)
     users = [block for block in blocks if block.kind == "user"]
     # Notices are service-injected and have no parsed-segment counterpart.
     non_users = [block for block in blocks if block.kind not in {"user", "notice"}]
@@ -638,20 +663,21 @@ def _restore_parsed_turn_order(
 
     offset = len(blocks) + 1
     conn.execute(
-        "UPDATE conversation_blocks SET ordinal = ordinal + ? WHERE conversation_id = ?",
-        (offset, conversation_id),
+        "UPDATE conversation_blocks SET ordinal = ordinal + ? "
+        "WHERE conversation_id = ? AND repository_id = ?",
+        (offset, conversation_id, db.repository_id),
     )
     changed: dict[int, int] = {}
     for ordinal, block_id in enumerate(ordered_ids):
         conn.execute(
-            "UPDATE conversation_blocks SET ordinal = ? WHERE id = ?",
-            (ordinal, block_id),
+            "UPDATE conversation_blocks SET ordinal = ? WHERE id = ? AND repository_id = ?",
+            (ordinal, block_id, db.repository_id),
         )
         changed[block_id] = ordinal
     return changed
 
 
-def read_user_texts(conn: sqlite3.Connection, conversation_id: str) -> list[str]:
+def read_user_texts(db: RepoDb, conversation_id: str) -> list[str]:
     """Return the text of every ground-truth ``user`` block, in order.
 
     These are recorded authoritatively at the send boundary, so they are the
@@ -660,15 +686,16 @@ def read_user_texts(conn: sqlite3.Connection, conversation_id: str) -> list[str]
     """
     return [
         text
-        for b in read_conversation_blocks(conn, conversation_id)
+        for b in read_conversation_blocks(db, conversation_id)
         if b.kind == "user" and (text := str(b.payload.get("text", "")).strip())
     ]
 
 
 def read_conversation_doc(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
 ) -> dict[str, Any] | None:
+    conn = db.conn
     """Reconstruct a ``TranscriptDoc`` dict from stored blocks.
 
     Returns ``None`` if the conversation_id is not found.
@@ -682,13 +709,14 @@ def read_conversation_doc(
     conversation_chunk_summaries, read via ``read_chunk_summaries``.
     """
     conv_row = conn.execute(
-        "SELECT harness, live_state FROM conversations WHERE conversation_id = ?",
-        (conversation_id,),
+        "SELECT harness, live_state FROM conversations "
+        "WHERE conversation_id = ? AND repository_id = ?",
+        (conversation_id, db.repository_id),
     ).fetchone()
     if conv_row is None:
         return None
 
-    blocks = read_conversation_blocks(conn, conversation_id)
+    blocks = read_conversation_blocks(db, conversation_id)
     segments = [b.payload for b in blocks]
     return {
         "harness": conv_row["harness"],
@@ -716,14 +744,15 @@ class ChunkSummary:
 
 
 def write_chunk_summary(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     *,
     summary: str,
     block_ids: Sequence[int],
     created_at: str | None = None,
 ) -> int:
-    """Append one chunk summary + its attribution pointers; return summary_id.
+    conn = db.conn
+    """Append one chunk summary + its attribution pointers. Return summary_id.
 
     ``chunk_idx`` is assigned as the next index for the conversation (ordered
     append). ``block_ids`` are explicit pointers into ``conversation_blocks.id``
@@ -733,18 +762,20 @@ def write_chunk_summary(
     """
     text = (summary or "").strip()
     if not text:
-        raise ValueError("refusing to persist an empty chunk summary")
+        raise ValueError("do not persist an empty chunk summary")
     ts = created_at or _now()
     row = conn.execute(
         "SELECT COALESCE(MAX(chunk_idx) + 1, 0) AS next_idx"
-        " FROM conversation_chunk_summaries WHERE conversation_id = ?",
-        (conversation_id,),
+        " FROM conversation_chunk_summaries "
+        "WHERE conversation_id = ? AND repository_id = ?",
+        (conversation_id, db.repository_id),
     ).fetchone()
     chunk_idx = int(row["next_idx"])
     cur = conn.execute(
         "INSERT INTO conversation_chunk_summaries"
-        " (conversation_id, chunk_idx, summary, created_at) VALUES (?, ?, ?, ?)",
-        (conversation_id, chunk_idx, text, ts),
+        " (repository_id, conversation_id, chunk_idx, summary, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (db.repository_id, conversation_id, chunk_idx, text, ts),
     )
     summary_id = int(cur.lastrowid)
     # De-dup + preserve order of explicit block-id pointers.
@@ -754,23 +785,25 @@ def write_chunk_summary(
             continue
         seen.add(bid)
         conn.execute(
-            "INSERT OR IGNORE INTO chunk_summary_blocks (summary_id, block_id) VALUES (?, ?)",
-            (summary_id, int(bid)),
+            "INSERT OR IGNORE INTO chunk_summary_blocks "
+            "(repository_id, summary_id, block_id) VALUES (?, ?, ?)",
+            (db.repository_id, summary_id, int(bid)),
         )
-    _invalidate_conversations(conn, conversation_id)
+    _invalidate_conversations(db, conversation_id)
     return summary_id
 
 
 def read_chunk_summaries(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
 ) -> list[ChunkSummary]:
+    conn = db.conn
     """Read all chunk summaries for a conversation, ordered by chunk_idx."""
     rows = conn.execute(
         "SELECT summary_id, chunk_idx, summary, created_at"
         " FROM conversation_chunk_summaries"
-        " WHERE conversation_id = ? ORDER BY chunk_idx",
-        (conversation_id,),
+        " WHERE conversation_id = ? AND repository_id = ? ORDER BY chunk_idx",
+        (conversation_id, db.repository_id),
     ).fetchall()
     if not rows:
         return []
@@ -778,9 +811,10 @@ def read_chunk_summaries(
         "SELECT csb.summary_id AS summary_id, csb.block_id AS block_id"
         " FROM chunk_summary_blocks csb"
         " JOIN conversation_chunk_summaries ccs ON ccs.summary_id = csb.summary_id"
-        " WHERE ccs.conversation_id = ?"
+        " AND ccs.repository_id = csb.repository_id"
+        " WHERE ccs.conversation_id = ? AND ccs.repository_id = ?"
         " ORDER BY csb.summary_id, csb.block_id",
-        (conversation_id,),
+        (conversation_id, db.repository_id),
     ).fetchall()
     blocks_by_summary: dict[int, list[int]] = {}
     for br in block_rows:
@@ -803,8 +837,8 @@ def read_chunk_summaries(
 # ---------------------------------------------------------------------------
 
 
-def merge_conversation_doc(
-    conn: sqlite3.Connection,
+def merge_conversation_doc(  # noqa: PLR0912 - closed merge-state branches
+    db: RepoDb,
     conversation_id: str,
     doc: dict[str, Any],
     *,
@@ -831,14 +865,14 @@ def merge_conversation_doc(
 
     # Refresh conversation metadata from this parse.
     upsert_conversation(
-        conn,
+        db,
         conversation_id=conversation_id,
-        agent_id=_get_agent_id(conn, conversation_id),
+        agent_id=_get_agent_id(db, conversation_id),
         harness=doc.get("harness"),
         live_state=doc.get("state"),
     )
 
-    stored = read_conversation_blocks(conn, conversation_id)
+    stored = read_conversation_blocks(db, conversation_id)
 
     if not segments:
         return stored
@@ -859,7 +893,7 @@ def merge_conversation_doc(
             new_kind = segment_to_block_kind(segments[-1])
             new_payload = segments[-1]
             if new_payload != live.payload:
-                update_live_block(conn, conversation_id, new_payload, received_at=ts)
+                update_live_block(db, conversation_id, new_payload, received_at=ts)
                 # Refresh the local object so callers see updated state.
                 stored[-1] = ConversationBlock(
                     id=live.id,
@@ -871,11 +905,11 @@ def merge_conversation_doc(
                     service_received_at=ts,
                 )
         elif _sealed_block_can_grow(live, segments[-1]):
-            _update_block_by_id(conn, live.id, segments[-1], received_at=ts)
-        return read_conversation_blocks(conn, conversation_id)
+            _update_block_by_id(db, live.id, segments[-1], received_at=ts)
+        return read_conversation_blocks(db, conversation_id)
 
     # n_parsed > n_stored: apply the longer parse.
-    # Reuse stored sealed history; update/append from the divergence point.
+    # Reuse stored sealed history. Update/append from the divergence point.
     # All previously stored sealed blocks are kept as-is.
     # For blocks already stored, update the live tail if content changed.
     result = list(stored)
@@ -885,7 +919,7 @@ def merge_conversation_doc(
             if not existing.sealed:
                 # Live trailing block — update in place if content changed.
                 if seg != existing.payload:
-                    update_live_block(conn, conversation_id, seg, received_at=ts)
+                    update_live_block(db, conversation_id, seg, received_at=ts)
                     new_kind = segment_to_block_kind(seg)
                     result[i] = ConversationBlock(
                         id=existing.id,
@@ -897,28 +931,28 @@ def merge_conversation_doc(
                         service_received_at=ts,
                     )
             elif _sealed_block_can_grow(existing, seg):
-                updated = _update_block_by_id(conn, existing.id, seg, received_at=ts)
+                updated = _update_block_by_id(db, existing.id, seg, received_at=ts)
                 if updated is not None:
                     result[i] = updated
             # Other sealed blocks are immutable — leave them as-is.
         else:
             # New segment beyond stored history: seal previous live block,
             # then append.
-            new_block = append_block(conn, conversation_id, seg, received_at=ts, seal_previous=True)
+            new_block = append_block(db, conversation_id, seg, received_at=ts, seal_previous=True)
             result.append(new_block)
 
-    return read_conversation_blocks(conn, conversation_id)
+    return read_conversation_blocks(db, conversation_id)
 
 
 def merge_non_user_segments(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     segments: list[dict[str, Any]],
     *,
     received_at: str | None = None,
 ) -> list[ConversationBlock]:
     blocks, _changes = merge_non_user_segments_with_changes(
-        conn,
+        db,
         conversation_id,
         segments,
         received_at=received_at,
@@ -927,12 +961,13 @@ def merge_non_user_segments(
 
 
 def merge_non_user_segments_with_changes(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     conversation_id: str,
     segments: list[dict[str, Any]],
     *,
     received_at: str | None = None,
 ) -> tuple[list[ConversationBlock], list[ConversationBlockChange]]:
+    conn = db.conn
     """Reconcile parsed *non-user* segments against stored non-user blocks.
 
     This is the projector-side sibling of :func:`merge_conversation_doc`. The
@@ -949,7 +984,7 @@ def merge_non_user_segments_with_changes(
     the single ever-unsealed block (if any) is the global trailing block, which
     is necessarily ``non_user[-1]``. ``update_live_block`` targets that one
     ``sealed=0`` row. New segments append after every stored block (including a
-    trailing sealed user block) via ``append_block``'s ``MAX(ordinal)+1``;
+    trailing sealed user block) via ``append_block``'s ``MAX(ordinal)+1``.
     ``seal_previous=True`` is a no-op when the tail is an already-sealed user
     block.
 
@@ -957,9 +992,9 @@ def merge_non_user_segments_with_changes(
     """
     ts = received_at or _now()
     if not segments:
-        return read_conversation_blocks(conn, conversation_id), []
+        return read_conversation_blocks(db, conversation_id), []
 
-    stored = read_conversation_blocks(conn, conversation_id)
+    stored = read_conversation_blocks(db, conversation_id)
     non_user = [b for b in stored if b.kind != "user"]
     n_stored = len(non_user)
     n_parsed = len(segments)
@@ -973,14 +1008,14 @@ def merge_non_user_segments_with_changes(
         existing = non_user[i]
         if not existing.sealed and segments[i] != existing.payload:
             # Live trailing block grew or flipped terminal — update in place.
-            update_live_block(conn, conversation_id, segments[i], received_at=ts)
+            update_live_block(db, conversation_id, segments[i], received_at=ts)
             row = conn.execute(
                 """
                 SELECT id, ordinal, kind, payload_json, sealed, service_received_at
                   FROM conversation_blocks
-                 WHERE id = ?
+                 WHERE id = ? AND repository_id = ?
                 """,
-                (existing.id,),
+                (existing.id, db.repository_id),
             ).fetchone()
             if row is not None:
                 changes.append(
@@ -1000,7 +1035,7 @@ def merge_non_user_segments_with_changes(
                     )
                 )
         elif _sealed_block_can_grow(existing, segments[i]):
-            updated = _update_block_by_id(conn, existing.id, segments[i], received_at=ts)
+            updated = _update_block_by_id(db, existing.id, segments[i], received_at=ts)
             if updated is not None:
                 changes.append(
                     ConversationBlockChange(
@@ -1025,10 +1060,10 @@ def merge_non_user_segments_with_changes(
         live_pred = non_user[-1] if non_user and not non_user[-1].sealed else None
         for i in range(n_stored, n_parsed):
             block = append_block(
-                conn, conversation_id, segments[i], received_at=ts, seal_previous=True
+                db, conversation_id, segments[i], received_at=ts, seal_previous=True
             )
             if live_pred is not None and i == n_stored:
-                sealed_pred = _read_block_by_id(conn, conversation_id, live_pred.id)
+                sealed_pred = _read_block_by_id(db, conversation_id, live_pred.id)
                 if sealed_pred is not None and sealed_pred.sealed:
                     changes.append(
                         ConversationBlockChange(
@@ -1040,14 +1075,15 @@ def merge_non_user_segments_with_changes(
                     )
             changes.append(ConversationBlockChange(action="block-appended", block=block))
 
-    return read_conversation_blocks(conn, conversation_id), changes
+    return read_conversation_blocks(db, conversation_id), changes
 
 
-def _get_agent_id(conn: sqlite3.Connection, conversation_id: str) -> str:
+def _get_agent_id(db: RepoDb, conversation_id: str) -> str:
+    conn = db.conn
     """Return the agent_id for an existing conversation, or empty string."""
     row = conn.execute(
-        "SELECT agent_id FROM conversations WHERE conversation_id = ?",
-        (conversation_id,),
+        "SELECT agent_id FROM conversations WHERE conversation_id = ? AND repository_id = ?",
+        (conversation_id, db.repository_id),
     ).fetchone()
     return str(row["agent_id"]) if row else ""
 
@@ -1058,7 +1094,7 @@ def _get_agent_id(conn: sqlite3.Connection, conversation_id: str) -> str:
 
 
 def append_user_message(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     agent_id: str,
     text: str,
     *,
@@ -1089,18 +1125,18 @@ def append_user_message(
         return None
     conv_id = conversation_id or agent_id
     ts = received_at or _now()
-    upsert_conversation(conn, conversation_id=conv_id, agent_id=agent_id)
+    upsert_conversation(db, conversation_id=conv_id, agent_id=agent_id)
     payload: dict[str, Any] = {"type": "user", "text": body}
     if isinstance(client_message_id, str) and client_message_id.strip():
         payload["client_message_id"] = client_message_id.strip()
-    block = append_block(conn, conv_id, payload, received_at=ts)
-    append_agent_message(conn, agent_id, "user", body, captured_at=ts)
-    _invalidate_conversations(conn, conv_id)
+    block = append_block(db, conv_id, payload, received_at=ts)
+    append_agent_message(db, agent_id, "user", body, captured_at=ts)
+    _invalidate_conversations(db, conv_id)
     return block
 
 
 def append_notice(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     agent_id: str,
     message: str,
     *,
@@ -1120,21 +1156,21 @@ def append_notice(
         return None
     conv_id = conversation_id or agent_id
     ts = received_at or _now()
-    upsert_conversation(conn, conversation_id=conv_id, agent_id=agent_id)
+    upsert_conversation(db, conversation_id=conv_id, agent_id=agent_id)
     block = append_block(
-        conn,
+        db,
         conv_id,
         {"type": "notice", "severity": severity, "message": body},
         received_at=ts,
     )
-    _invalidate_conversations(conn, conv_id)
+    _invalidate_conversations(db, conv_id)
     return block
 
 
 def _doc_to_flat_turns(doc: dict[str, Any]) -> list[Turn]:
     """Project a TranscriptDoc's segments into flat ``(role, text)`` turns.
 
-    Only ``user`` and ``assistant`` segments carry into the flat log; tool /
+    Only ``user`` and ``assistant`` segments carry into the flat log. Tool /
     plan / event segments live only in the JSON store.
     """
     turns: list[Turn] = []
@@ -1150,7 +1186,7 @@ def _doc_to_flat_turns(doc: dict[str, Any]) -> list[Turn]:
 
 
 def project_parsed_doc(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     agent_id: str,
     doc: dict[str, Any],
     *,
@@ -1158,7 +1194,7 @@ def project_parsed_doc(
     received_at: str | None = None,
 ) -> dict[str, Any]:
     merged, _changes = project_parsed_doc_with_changes(
-        conn,
+        db,
         agent_id,
         doc,
         conversation_id=conversation_id,
@@ -1168,13 +1204,14 @@ def project_parsed_doc(
 
 
 def project_parsed_doc_with_changes(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     agent_id: str,
     doc: dict[str, Any],
     *,
     conversation_id: str | None = None,
     received_at: str | None = None,
 ) -> tuple[dict[str, Any], list[ConversationBlockChange]]:
+    conn = db.conn
     """Reconcile a freshly parsed pane ``doc`` into the unified stores.
 
     The send boundary already recorded authoritative ``user`` blocks, so the
@@ -1197,29 +1234,30 @@ def project_parsed_doc_with_changes(
     segments = doc.get("segments", [])
     non_user = [s for s in segments if not (isinstance(s, dict) and s.get("type") == "user")]
     previous_metadata = conn.execute(
-        "SELECT harness, live_state, status FROM conversations WHERE conversation_id = ?",
-        (conv_id,),
+        "SELECT harness, live_state, status FROM conversations "
+        "WHERE conversation_id = ? AND repository_id = ?",
+        (conv_id, db.repository_id),
     ).fetchone()
     upsert_conversation(
-        conn,
+        db,
         conversation_id=conv_id,
         agent_id=agent_id,
         harness=doc.get("harness"),
         live_state=doc.get("state"),
     )
     _blocks, changes = merge_non_user_segments_with_changes(
-        conn,
+        db,
         conv_id,
         non_user,
         received_at=received_at,
     )
-    reordered = _restore_parsed_turn_order(conn, conv_id, segments)
+    reordered = _restore_parsed_turn_order(db, conv_id, segments)
     for change in changes:
         if change.block.id in reordered:
             change.block.ordinal = reordered[change.block.id]
 
-    merged = read_conversation_doc(conn, conv_id) or {"segments": []}
-    replace_agent_messages(conn, agent_id, _doc_to_flat_turns(merged), captured_at=received_at)
+    merged = read_conversation_doc(db, conv_id) or {"segments": []}
+    replace_agent_messages(db, agent_id, _doc_to_flat_turns(merged), captured_at=received_at)
     metadata_changed = (
         previous_metadata is None
         or (doc.get("harness") is not None and doc.get("harness") != previous_metadata["harness"])
@@ -1227,15 +1265,16 @@ def project_parsed_doc_with_changes(
         or previous_metadata["status"] != "in_progress"
     )
     if changes or metadata_changed or reordered:
-        _invalidate_conversations(conn, conv_id)
+        _invalidate_conversations(db, conv_id)
     return merged, changes
 
 
-def mark_stale_conversations(conn: sqlite3.Connection) -> int:
+def mark_stale_conversations(db: RepoDb) -> int:
+    conn = db.conn
     """Flip all in_progress conversations to stale.
 
     Called during startup reconciliation (1.g) — any conversation left
-    in_progress from a prior run has no live pane; mark it stale. Also
+    in_progress from a prior run has no live pane. Mark it stale. Also
     clears ``queued_message``: graceful stop clears it in on_session_end,
     but a SIGKILL bypasses that path and would leave a stale queued badge
     in the TUI after restart.
@@ -1243,9 +1282,9 @@ def mark_stale_conversations(conn: sqlite3.Connection) -> int:
     """
     cur = conn.execute(
         "UPDATE conversations SET status = 'stale', queued_message = NULL,"
-        " updated_at = ? WHERE status = 'in_progress'",
-        (_now(),),
+        " updated_at = ? WHERE repository_id = ? AND status = 'in_progress'",
+        (_now(), db.repository_id),
     )
     if cur.rowcount:
-        _invalidate_conversations(conn, "*")
-    return cur.rowcount
+        _invalidate_conversations(db, "*")
+    return int(cur.rowcount)

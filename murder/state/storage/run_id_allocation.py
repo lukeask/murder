@@ -1,7 +1,7 @@
 """Run-id allocation + per-run dir setup.
 
 A run is one `murder up` (or one bare-`murder` kickoff). Run id format:
-`<unix-ts>` zero-padded to 10 chars; on collision, append `_<counter>`.
+`<unix-ts>` zero-padded to 10 chars. On collision, append `_<counter>`.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from murder.state.storage.paths import panes_dir, run_dir, runs_dir
 
 
 def allocate_run_id(repo_root: Path) -> str:
-    """Return an unused run id; create the per-run directory tree."""
+    """Return an unused run id. Create the per-run directory tree."""
     runs_dir(repo_root).mkdir(parents=True, exist_ok=True)
     base = f"{int(time.time()):010d}"
     suffix = 0

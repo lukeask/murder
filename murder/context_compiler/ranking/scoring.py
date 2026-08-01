@@ -87,7 +87,7 @@ def ranking_identity(candidate: Candidate) -> tuple[Any, ...]:  # noqa: PLR0911
 
 
 def merge_ranked(existing: Candidate, incoming: Candidate) -> Candidate:
-    """Merge same-identity candidates; preserve all providers and reasons."""
+    """Merge same-identity candidates. Preserve all providers and reasons."""
     return merge_candidates(existing, incoming)
 
 
@@ -236,7 +236,7 @@ def score_candidate(  # noqa: PLR0912, PLR0915
     hop: int = 0,
     estimated_tokens: int = 0,
 ) -> ScoredCandidate:
-    """Compute one score from present signals; reasons list what fired."""
+    """Compute one score from present signals. Reasons list what fired."""
     reasons: list[str] = list(candidate.reasons)
     total = 0.0
 

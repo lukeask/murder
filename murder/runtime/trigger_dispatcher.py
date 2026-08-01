@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import subprocess
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
-from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from murder.facts.log import replay_facts
 from murder.runtime.cron import iter_cron_fires
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.triggers import (
     StartWorkflow,
     fire_trigger,
@@ -67,12 +67,12 @@ class DurableTriggerOccurrences:
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         *,
         repo_root: Path | None = None,
         repository_fingerprint: Callable[[Path], str] | None = None,
     ) -> None:
-        self._connection = connection
+        self._db = db
         self._repo_root = None if repo_root is None else Path(repo_root)
         self._repository_fingerprint = repository_fingerprint or _repository_fingerprint
 
@@ -103,7 +103,7 @@ class DurableTriggerOccurrences:
                 else f"{_CURSOR_PREFIX}{fact.sequence}"
             )
             for fact in replay_facts(
-                self._connection,
+                self._db,
                 after_sequence=after_sequence,
                 kind=spec.fact_kind,
                 limit=100,
@@ -121,8 +121,7 @@ class DurableTriggerOccurrences:
         root = self._repo_root
         if root is None:
             return ()
-        expected_id = uuid5(NAMESPACE_URL, f"murder:repository:{root.resolve()}")
-        if spec.repository_id != expected_id:
+        if str(spec.repository_id) != self._db.repository_id:
             return ()
         fingerprint = self._repository_fingerprint(root)
         if not fingerprint:
@@ -147,19 +146,19 @@ class DurableTriggerOccurrences:
         self, trigger: TriggerDefinition, spec: ManualTrigger, cursor: str | None, now: datetime
     ) -> Sequence[str]:
         del spec, cursor, now
-        return list_pending_manual_fires(self._connection, trigger.trigger_id)
+        return list_pending_manual_fires(self._db, trigger.trigger_id)
 
 
 class TriggerDispatcher:
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         *,
         occurrences: TriggerOccurrenceProvider,
         start_workflow: StartWorkflow,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
-        self._connection = connection
+        self._db = db
         self._occurrences = occurrences
         self._start_workflow = start_workflow
         self._clock = clock
@@ -167,7 +166,7 @@ class TriggerDispatcher:
     def tick(self, *, limit: int = 100) -> int:
         now = self._clock()
         fired = 0
-        for trigger in list_triggers(self._connection):
+        for trigger in list_triggers(self._db):
             cursor = self._cursor(trigger.trigger_id)
             spec = trigger.spec
             if isinstance(spec, CronTrigger):
@@ -185,7 +184,7 @@ class TriggerDispatcher:
                     self._set_cursor(trigger.trigger_id, key.removeprefix(_CURSOR_PREFIX), now)
                     continue
                 fire_trigger(
-                    self._connection,
+                    self._db,
                     trigger.trigger_id,
                     occurrence_key=key,
                     start_workflow=self._start_workflow,
@@ -198,44 +197,44 @@ class TriggerDispatcher:
         return fired
 
     def _cursor(self, trigger_id: UUID) -> str | None:
-        row = self._connection.execute(
-            "SELECT cursor FROM trigger_cursors WHERE trigger_id = ?",
-            (str(trigger_id),),
+        row = self._db.conn.execute(
+            "SELECT cursor FROM trigger_cursors WHERE repository_id = ? AND trigger_id = ?",
+            (self._db.repository_id, str(trigger_id)),
         ).fetchone()
         return None if row is None else str(row["cursor"])
 
     def _set_cursor(self, trigger_id: UUID, cursor: str, now: datetime) -> None:
-        self._connection.execute(
+        self._db.conn.execute(
             """
-            INSERT INTO trigger_cursors(trigger_id, cursor, updated_at)
-            VALUES (?, ?, ?)
+            INSERT INTO trigger_cursors(repository_id, trigger_id, cursor, updated_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(trigger_id) DO UPDATE SET
                 cursor = excluded.cursor, updated_at = excluded.updated_at
             """,
-            (str(trigger_id), cursor, now.isoformat()),
+            (self._db.repository_id, str(trigger_id), cursor, now.isoformat()),
         )
 
 
 def build_default_trigger_dispatcher(
-    connection: sqlite3.Connection,
+    db: RepoDb,
     *,
     repo_root: Path | None = None,
 ) -> TriggerDispatcher:
     return TriggerDispatcher(
-        connection,
-        occurrences=DurableTriggerOccurrences(connection, repo_root=repo_root),
+        db,
+        occurrences=DurableTriggerOccurrences(db, repo_root=repo_root),
         start_workflow=_start_trigger_workflow,
     )
 
 
 def _start_trigger_workflow(
-    connection: sqlite3.Connection,
+    db: RepoDb,
     target: StartWorkflowTarget,
     now: datetime,
 ) -> UUID:
     workflow_id = uuid4()
     create_workflow_run(
-        connection,
+        db,
         WorkflowRunRecord(
             workflow_id=workflow_id,
             definition_name=target.definition_name,

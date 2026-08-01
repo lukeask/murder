@@ -55,7 +55,7 @@ class FactActor(FactContract):
     id: str = Field(min_length=1, max_length=500)
 
 
-# Shared correlation identity; alias retained for fact call sites.
+# Shared correlation identity. Alias retained for fact call sites.
 FactCorrelation = Correlation
 
 
@@ -267,7 +267,7 @@ class PrivateFactPayload(FactContract):
         if FACT_PAYLOAD_REGISTRY.is_public(self.kind):
             raise ValueError(
                 f"private fact kind {self.kind!r} is registered as a public "
-                "FactPayload; construct the typed public payload instead"
+                "FactPayload. Construct the typed public payload instead"
             )
         return self
 

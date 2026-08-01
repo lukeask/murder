@@ -20,6 +20,7 @@ from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEv
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.projection import invalidate_schedule
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
+from murder.state.persistence.connection import DB_INTEGRITY_ERRORS, RepoDb
 from murder.state.persistence.harness_control import prune_capture_history
 from murder.state.persistence.tickets import compute_ready
 from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
@@ -100,8 +101,8 @@ class SchedulerWorker(Worker):
     - manual: never kicks anything automatically (operator-driven via CLI)
     - autorun_ready: every tick, submits scheduler.kickoff_ready to orchestrator
       when ready tickets with clear deps exist
-    - crow_magic: per-(harness, window) usage gate via usage_threshold_curve; per-harness
-      priority pick; respects multiharness_cutoff
+    - crow_magic: per-(harness, window) usage gate via usage_threshold_curve. Per-harness
+      priority pick. Respects multiharness_cutoff
     """
 
     SET_MODE = OrchestrationCommand.SCHEDULER_SET_MODE
@@ -132,9 +133,9 @@ class SchedulerWorker(Worker):
         if ctx.db is None:
             return
         now = datetime.now(timezone.utc).isoformat()
-        ctx.db.execute(
-            "INSERT OR IGNORE INTO scheduler_state(id, mode, updated_at) VALUES (1, 'manual', ?)",
-            (now,),
+        ctx.db.conn.execute(
+            "INSERT OR IGNORE INTO scheduler_state(repository_id, mode, updated_at) VALUES (?, 'manual', ?)",
+            (ctx.db.repository_id, now),
         )
         self._prune_old_snapshots(ctx.db)
         self._last_prune_day = datetime.now(timezone.utc).date().isoformat()
@@ -148,14 +149,15 @@ class SchedulerWorker(Worker):
                 self._tick_seq += 1
                 await self._tick(ctx)
 
-    def _prune_old_snapshots(self, db: sqlite3.Connection, *, now: datetime | None = None) -> None:
+    def _prune_old_snapshots(self, db: RepoDb, *, now: datetime | None = None) -> None:
         current_time = now or datetime.now(timezone.utc)
         prune_capture_history(
             db,
             captured_before=current_time - _HARNESS_CAPTURE_RETENTION,
         )
-        db.execute(
-            "DELETE FROM harness_usage_snapshots WHERE fetched_at < datetime('now', '-60 days')"
+        db.conn.execute(
+            "DELETE FROM harness_usage_snapshots WHERE repository_id = ? AND fetched_at < datetime('now', '-60 days')",
+            (db.repository_id,),
         )
 
     async def _tick(self, ctx: WorkerCtx) -> None:
@@ -167,7 +169,9 @@ class SchedulerWorker(Worker):
             self._last_prune_day = today
         if ctx.run_id is None:
             return
-        row = ctx.db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
+        row = ctx.db.conn.execute(
+            "SELECT mode FROM scheduler_state WHERE repository_id = ?", (ctx.db.repository_id,)
+        ).fetchone()
         if row is None:
             return
         mode = row["mode"]
@@ -202,32 +206,34 @@ class SchedulerWorker(Worker):
                     retryable=False,
                 )
             )
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERRORS:
             pass  # duplicate key — previous tick's command still pending
 
     async def _tick_crow_magic(self, ctx: WorkerCtx) -> None:
         assert ctx.db is not None and ctx.run_id is not None
         now = datetime.now(timezone.utc)
 
-        snap_rows = ctx.db.execute(
+        snap_rows = ctx.db.conn.execute(
             """
             SELECT s.harness, s.status_json
               FROM harness_usage_snapshots s
               JOIN (
-                    -- Pick the single newest row per harness; the rowid tiebreak
+                    -- Pick the single newest row per harness. The rowid tiebreak
                     -- prevents duplicate-timestamp snapshots from selecting a
                     -- harness twice in one tick (double-emit).
                     SELECT harness, MAX(rowid) AS rowid
                       FROM harness_usage_snapshots
-                     WHERE fetched_at = (
+                     WHERE repository_id = ? AND fetched_at = (
                            SELECT MAX(fetched_at)
                              FROM harness_usage_snapshots AS inner_s
-                            WHERE inner_s.harness = harness_usage_snapshots.harness
+                            WHERE inner_s.repository_id = harness_usage_snapshots.repository_id
+                              AND inner_s.harness = harness_usage_snapshots.harness
                        )
                      GROUP BY harness
                    ) latest
                 ON latest.rowid = s.rowid
-            """
+            """,
+            (ctx.db.repository_id,),
         ).fetchall()
 
         for snap_row in snap_rows:
@@ -243,19 +249,20 @@ class SchedulerWorker(Worker):
 
     async def _check_usage_reset(self, ctx: WorkerCtx) -> None:
         assert ctx.db is not None and ctx.run_id is not None
-        harnesses = ctx.db.execute(
-            "SELECT DISTINCT harness FROM harness_usage_snapshots"
+        harnesses = ctx.db.conn.execute(
+            "SELECT DISTINCT harness FROM harness_usage_snapshots WHERE repository_id = ?",
+            (ctx.db.repository_id,),
         ).fetchall()
         for row in harnesses:
             harness = row["harness"]
-            pair = ctx.db.execute(
+            pair = ctx.db.conn.execute(
                 """
                 SELECT status_json FROM harness_usage_snapshots
-                 WHERE harness = ?
+                 WHERE repository_id = ? AND harness = ?
                  ORDER BY fetched_at DESC, rowid DESC
                  LIMIT 2
                 """,
-                (harness,),
+                (ctx.db.repository_id, harness),
             ).fetchall()
             if len(pair) < 2:
                 continue
@@ -355,11 +362,11 @@ class SchedulerWorker(Worker):
         # no prefer exists) keeps today's NULL-inclusive eligibility.
         reserve_null = any_prefer and steering != "prefer"
 
-        # Load per-(harness, window_key) params; fall back to usage_threshold_curve defaults
-        params_row = ctx.db.execute(
+        # Load per-(harness, window_key) params. Fall back to usage_threshold_curve defaults
+        params_row = ctx.db.conn.execute(
             "SELECT c_changeoff, t_alwaysyes, alwayscutoff, intensity, multiharness_cutoff "
-            "FROM scheduler_params WHERE harness = ? AND window_key = ?",
-            (harness, window_key),
+            "FROM scheduler_params WHERE repository_id = ? AND harness = ? AND window_key = ?",
+            (ctx.db.repository_id, harness, window_key),
         ).fetchone()
 
         params_obj = SchedulerParamsPayload()
@@ -369,27 +376,27 @@ class SchedulerWorker(Worker):
                 params_obj = parsed
 
         busy = (
-            ctx.db.execute(
-                "SELECT COUNT(*) AS n FROM tickets WHERE harness = ? AND status = 'in_progress'",
-                (harness,),
+            ctx.db.conn.execute(
+                "SELECT COUNT(*) AS n FROM tickets WHERE repository_id = ? AND harness = ? AND status = 'in_progress'",
+                (ctx.db.repository_id, harness),
             ).fetchone()["n"]
             > 0
         )
         harness_clause = "t.harness = ?" if reserve_null else "(t.harness = ? OR t.harness IS NULL)"
-        ready_rows = ctx.db.execute(
+        ready_rows = ctx.db.conn.execute(
             f"""
             SELECT t.id, t.schedule_at, t.harness, t.updated_at
               FROM tickets AS t
-             WHERE t.status = 'ready'
+             WHERE t.repository_id = ? AND t.status = 'ready'
                AND {harness_clause}
                AND NOT EXISTS (
                    SELECT 1 FROM ticket_deps AS d
-                     JOIN tickets AS dep ON dep.id = d.depends_on_id
-                    WHERE d.ticket_id = t.id
+                     JOIN tickets AS dep ON dep.repository_id = d.repository_id AND dep.id = d.depends_on_id
+                    WHERE d.repository_id = t.repository_id AND d.ticket_id = t.id
                       AND dep.status NOT IN ('done', 'archived')
                )
             """,
-            (harness,),
+            (ctx.db.repository_id, harness),
         ).fetchall()
         ready_tickets = [
             TicketRecord(
@@ -399,7 +406,7 @@ class SchedulerWorker(Worker):
             )
             for row in ready_rows
         ]
-        # ticket_id -> updated_at of its current `ready` row; folded into the
+        # ticket_id -> updated_at of its current `ready` row. Folded into the
         # kickoff idempotency key so a ticket that stays `ready` (kickoff
         # enqueued but not yet flipped to in_progress) is NOT re-enqueued every
         # tick, while a ticket that cycles back to `ready` (new updated_at)
@@ -488,7 +495,7 @@ class SchedulerWorker(Worker):
                     retryable=False,
                 )
             )
-        except sqlite3.IntegrityError:
+        except DB_INTEGRITY_ERRORS:
             pass
 
     def _upsert_decision_cache(
@@ -505,11 +512,11 @@ class SchedulerWorker(Worker):
         rationale: str,
         kicked_ticket_id: str | None,
     ) -> bool:
-        """Upsert the decision cache; return True iff a *rendered* field changed.
+        """Upsert the decision cache. Return True iff a rendered field changed.
 
         F11 H1: only ``decision`` / ``rationale`` / ``kicked_ticket_id`` are read
         back into ``state.schedule_snapshot`` (``_load_crow_magic`` / ``_crow_rationale``
-        in ``schedule_snapshot.py``); ``usage`` / ``threshold`` / ``t_until_reset``
+        in ``schedule_snapshot.py``). ``usage``, ``threshold``, and ``t_until_reset``
         are continuous, tick-by-tick values that are NOT rendered from this row (the
         usage gauges read ``harness_usage_snapshots`` instead). So we compare only the
         rendered columns against the prior row and report whether a visible change
@@ -518,23 +525,23 @@ class SchedulerWorker(Worker):
         """
         assert ctx.db is not None
         now = datetime.now(timezone.utc).isoformat()
-        prior = ctx.db.execute(
+        prior = ctx.db.conn.execute(
             "SELECT decision, rationale, kicked_ticket_id"
-            "  FROM scheduler_decision_cache WHERE harness = ? AND window_key = ?",
-            (harness, window_key),
+            "  FROM scheduler_decision_cache WHERE repository_id = ? AND harness = ? AND window_key = ?",
+            (ctx.db.repository_id, harness, window_key),
         ).fetchone()
         visible_changed = prior is None or (
             int(prior["decision"]) != int(decision)
             or str(prior["rationale"] or "") != str(rationale or "")
             or (prior["kicked_ticket_id"] or None) != (kicked_ticket_id or None)
         )
-        ctx.db.execute(
+        ctx.db.conn.execute(
             """
             INSERT INTO scheduler_decision_cache
-                (harness, window_key, mode, decision, usage, t_until_reset,
+                (repository_id, harness, window_key, mode, decision, usage, t_until_reset,
                  t_period, threshold, rationale, kicked_ticket_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(harness, window_key) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(repository_id, harness, window_key) DO UPDATE SET
                 mode             = excluded.mode,
                 decision         = excluded.decision,
                 usage            = excluded.usage,
@@ -546,6 +553,7 @@ class SchedulerWorker(Worker):
                 updated_at       = excluded.updated_at
             """,
             (
+                ctx.db.repository_id,
                 harness,
                 window_key,
                 mode,
@@ -623,12 +631,14 @@ class SchedulerWorker(Worker):
         to_mode = command.payload.get("mode")
         if to_mode not in _VALID_MODES:
             raise ValueError(f"scheduler.set_mode: unknown mode {to_mode!r}")
-        row = ctx.db.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
+        row = ctx.db.conn.execute(
+            "SELECT mode FROM scheduler_state WHERE repository_id = ?", (ctx.db.repository_id,)
+        ).fetchone()
         from_mode = row["mode"] if row else "manual"
         now = datetime.now(timezone.utc).isoformat()
-        ctx.db.execute(
-            "UPDATE scheduler_state SET mode = ?, updated_at = ? WHERE id = 1",
-            (to_mode, now),
+        ctx.db.conn.execute(
+            "UPDATE scheduler_state SET mode = ?, updated_at = ? WHERE repository_id = ?",
+            (to_mode, now, ctx.db.repository_id),
         )
         if self._events is not None and ctx.run_id is not None:
             changed_by = command.payload.get("changed_by", "user")
@@ -661,13 +671,13 @@ class SchedulerWorker(Worker):
             raise ValueError("scheduler.set_params: window_key required")
 
         now = datetime.now(timezone.utc).isoformat()
-        ctx.db.execute(
+        ctx.db.conn.execute(
             """
             INSERT INTO scheduler_params
-                (harness, window_key, c_changeoff, t_alwaysyes, alwayscutoff,
+                (repository_id, harness, window_key, c_changeoff, t_alwaysyes, alwayscutoff,
                  intensity, multiharness_cutoff, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(harness, window_key) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(repository_id, harness, window_key) DO UPDATE SET
                 c_changeoff         = excluded.c_changeoff,
                 t_alwaysyes         = excluded.t_alwaysyes,
                 alwayscutoff        = excluded.alwayscutoff,
@@ -676,6 +686,7 @@ class SchedulerWorker(Worker):
                 updated_at          = excluded.updated_at
             """,
             (
+                ctx.db.repository_id,
                 harness,
                 window_key,
                 payload.params.c_changeoff,
@@ -700,35 +711,36 @@ class SchedulerWorker(Worker):
             raise ValueError(f"scheduler.set_steering: unknown steering {steering!r}")
 
         now = datetime.now(timezone.utc).isoformat()
-        ctx.db.execute(
+        ctx.db.conn.execute(
             """
-            INSERT INTO scheduler_steering (harness, steering, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(harness) DO UPDATE SET
+            INSERT INTO scheduler_steering (repository_id, harness, steering, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(repository_id, harness) DO UPDATE SET
                 steering   = excluded.steering,
                 updated_at = excluded.updated_at
             """,
-            (harness, steering, now),
+            (ctx.db.repository_id, harness, steering, now),
         )
         invalidate_schedule(ctx.db, subject_key=f"steering:{harness}")
         return {"handled": True, "harness": harness, "steering": steering}
 
-    def _load_steering(self, db: sqlite3.Connection, harness: str) -> tuple[str, bool]:
+    def _load_steering(self, db: RepoDb, harness: str) -> tuple[str, bool]:
         """Return (steering_for_harness, any_prefer_exists).
 
         Fail-soft (locked decision): a missing row OR a value outside the valid
         set coerces to 'auto', so a malformed table can never wedge scheduling.
         """
-        row = db.execute(
-            "SELECT steering FROM scheduler_steering WHERE harness = ?",
-            (harness,),
+        row = db.conn.execute(
+            "SELECT steering FROM scheduler_steering WHERE repository_id = ? AND harness = ?",
+            (db.repository_id, harness),
         ).fetchone()
         steering = row["steering"] if row is not None else "auto"
         if steering not in _VALID_STEERING:
             steering = "auto"
         any_prefer = (
-            db.execute(
-                "SELECT COUNT(*) AS n FROM scheduler_steering WHERE steering = 'prefer'"
+            db.conn.execute(
+                "SELECT COUNT(*) AS n FROM scheduler_steering WHERE repository_id = ? AND steering = 'prefer'",
+                (db.repository_id,),
             ).fetchone()["n"]
             > 0
         )

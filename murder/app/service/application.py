@@ -1,7 +1,7 @@
 """Typed, in-process application dispatch.
 
 The public application protocol terminates here.  A request is selected by its
-closed enum and invokes the feature handler directly; no bus event, RPC target,
+closed enum and invokes the feature handler directly. No bus event, RPC target,
 or broker participates in normal application dispatch.
 """
 

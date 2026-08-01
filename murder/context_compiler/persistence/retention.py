@@ -142,9 +142,9 @@ def cleanup_non_ready_snapshots(
 
     After deleting the matching snapshots, this also runs worktree-scoped
     garbage collection in the same transaction so file versions that were
-    only attached to the deleted snapshots don't linger — but the *counts*
+    only attached to the deleted snapshots do not linger. The *counts*
     from that cleanup are not returned here. Call :func:`garbage_collect` or
-    :func:`apply_retention` separately if those counts are needed; this
+    :func:`apply_retention` separately if you need those counts. This
     function's return value is always just the number of snapshot rows
     deleted, per its signature.
 

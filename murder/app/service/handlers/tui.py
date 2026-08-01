@@ -148,7 +148,7 @@ def register(
             result = run_workflow_by_name(db, host.repo_root, name, args)
         except KeyError as exc:
             # Turn the lookup miss into a client-facing message (KeyError's
-            # repr would leak as a bare name); mirrors other handlers'
+            # repr would leak as a bare name. Mirrors other handlers'
             # bad-input -> ValueError contract.
             raise ValueError(f"no workflow named {name!r}") from exc
 

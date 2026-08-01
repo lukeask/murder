@@ -1,7 +1,7 @@
 """Atomic-write helpers + flock convenience.
 
 All state-bearing markdown files use atomic writes (tempfile + os.replace)
-so a SIGKILL mid-write doesn't leave a half-truncated file.
+so a SIGKILL mid-write does not leave a half-truncated file.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     """Write `text` to `path` atomically.
 
     Tempfile in the same directory (so os.replace is on one filesystem),
-    flush + fsync before replace (so a crash post-rename can't yield a
+    flush + fsync before replace (so a crash post-rename cannot yield a
     zero-length file).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -29,7 +29,7 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
             os.fsync(f.fileno())
         os.replace(tmp_name, path)
     except Exception:
-        # Best-effort cleanup; don't mask the real error.
+        # Best-effort cleanup. Do not mask the real error.
         try:
             os.unlink(tmp_name)
         except OSError:

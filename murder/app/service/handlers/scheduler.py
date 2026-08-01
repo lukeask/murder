@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, Protocol
 
 from murder.app.protocol.requests import CommandName
 from murder.app.protocol.session_control import SetSchedulerSteeringParams
 from murder.app.service.application import ApplicationRegistrar
 from murder.app.service.scheduler_steering import set_steering
+from murder.state.persistence.connection import RepoDb
 
 
 class SchedulerEffects(Protocol):
-    db: sqlite3.Connection | None
+    db: RepoDb | None
 
 
 def register(app: ApplicationRegistrar, effects: SchedulerEffects) -> None:

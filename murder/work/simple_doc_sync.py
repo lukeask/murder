@@ -11,7 +11,7 @@ It is parameterised at construction time with:
 - ``upsert_fn`` — ``(db, name, *, body, materialized_path) -> None``
 - ``insert_revision_fn`` — ``(db, name, *, source, body, content_hash) -> int``
 
-Notes and reports are structural twins (no frontmatter, body-only); both use
+Notes and reports are structural twins (no frontmatter, body-only). Both use
 this class.  ``NotetakerContextSync`` and ``PlanSync`` remain separate
 subclasses — they are genuinely different (singleton, parser, etc.).
 """
@@ -23,6 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.markdown_loop import MarkdownSyncLoop
 
@@ -41,12 +42,12 @@ class SimpleDocSync(MarkdownSyncLoop):
     def __init__(
         self,
         repo_root: Path,
-        db: Any,
+        db: RepoDb,
         *,
         dir_fn: Callable[[Path], Path],
         md_path_fn: Callable[[Path, str], Path],
-        list_fn: Callable[[Any], list[dict[str, Any]]],
-        get_fn: Callable[[Any, str], dict[str, Any] | None],
+        list_fn: Callable[[RepoDb], list[dict[str, Any]]],
+        get_fn: Callable[[RepoDb, str], dict[str, Any] | None],
         upsert_fn: Callable[..., None],
         insert_revision_fn: Callable[..., int],
         poll_s: float = 1.5,

@@ -34,7 +34,7 @@ DEFAULT_LEXICAL_SEARCH_CEILING = 2_097_152  # 2 MiB
 # Do not read / index files larger than this.
 DEFAULT_HARD_READ_CEILING = 10_485_760  # 10 MiB
 
-# Git enumeration is an optimization; never let a stuck Git process block indexing.
+# Git enumeration is an optimization. Never let a stuck Git process block indexing.
 GIT_ENUMERATION_TIMEOUT_SECONDS = 10.0
 
 

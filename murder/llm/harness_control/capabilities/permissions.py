@@ -427,7 +427,7 @@ def advance_answer_permission(
     snapshot: ObservationSnapshot,
     now: datetime,
 ) -> AnswerPermissionOperation:
-    """Persist response intent before terminal I/O; approvals are not replayable."""
+    """Persist response intent before terminal I/O. Approvals are not replayable."""
 
     status = _status_after(op.envelope.status, decision.kind)
     phase = (

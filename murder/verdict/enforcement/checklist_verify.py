@@ -7,10 +7,10 @@ against the working tree:
 
 - Cited path exists.
 - If a symbol is named (function/class/method), it exists in the file.
-- The symbol's body isn't a stub (`pass`, `...`, bare `raise
+- The symbol body is not a stub (`pass`, `...`, bare `raise
   NotImplementedError`, lone docstring, empty).
 
-Heuristic, not airtight: it can't catch semantically-wrong code, only
+Heuristic, not airtight: it cannot catch semantically wrong code, only
 empty claims. But it raises the floor — "I checked off `parse Foo` but
 the function is still `raise NotImplementedError`" stops being silent.
 
@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import ast
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from murder.state.persistence.connection import RepoDb
 
 # Backtick-wrapped tokens that look like file references.
 # Accepts:
@@ -117,7 +118,7 @@ def extract_citations(text: str, repo_root: Path) -> list[CitedReference]:
         seen.add(key)
         out.append(ref)
 
-    # Bare dotted names outside backticks (looser; only emit if file exists).
+    # Bare dotted names outside backticks (looser). Only emit if the file exists.
     outside = _BACKTICK_RE.sub(" ", text)
     for word in re.findall(r"\b[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)+\b", outside):
         if not _DOTTED_RE.match(word):
@@ -330,14 +331,14 @@ def verify_item_text(
     *,
     require_citation: bool,
 ) -> tuple[list[CitedReference], list[str]]:
-    """Inspect one checklist item; return (citations, issues)."""
+    """Inspect one checklist item. Return (citations, issues)."""
     citations = extract_citations(text, repo_root)
     issues: list[str] = []
 
     if not citations:
         if require_citation:
             issues.append(
-                "no file citation found; expected `path/to/file.py` "
+                "no file citation found. Expected `path/to/file.py` "
                 "or `path/to/file.py:Symbol` in the item text"
             )
         return citations, issues
@@ -365,7 +366,7 @@ def verify_item_text(
 
 
 # Heuristic: items whose text reads like prose-only chores (e.g., "write
-# a paragraph in the README", "decide on naming") shouldn't be required
+# a paragraph in the README", "decide on naming") should not be required
 # to cite a code symbol. We default to requiring citations only for
 # items that look like they describe code work.
 _CODEY_HINTS = (
@@ -401,7 +402,7 @@ def looks_like_code_work(text: str) -> bool:
 
 
 def verify_checklist(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     ticket_id: str,
     repo_root: Path,
     *,
@@ -410,7 +411,7 @@ def verify_checklist(
 ) -> VerificationResult:
     """Verify all checklist items for `ticket_id` against the working tree.
 
-    By default only checks items already marked `done = 1`; the goal is
+    By default only checks items already marked `done = 1`. The goal is
     to catch fakes after the fact. Pass `only_done=False` to dry-run
     against in-progress items.
 
@@ -418,9 +419,9 @@ def verify_checklist(
     code-shaped items missing any backtick file reference. Prose items
     (e.g. "decide on naming") are always exempt.
     """
-    rows = conn.execute(
-        "SELECT id, ord, text, done FROM checklist WHERE ticket_id = ? ORDER BY ord",
-        (ticket_id,),
+    rows = db.conn.execute(
+        "SELECT id, ord, text, done FROM checklist WHERE repository_id = ? AND ticket_id = ? ORDER BY ord",
+        (db.repository_id, ticket_id),
     ).fetchall()
 
     items: list[ItemFinding] = []
@@ -445,7 +446,7 @@ def verify_checklist(
 
 
 def format_report(result: VerificationResult) -> str:
-    """Human-readable summary; safe for tmux pane / escalation body."""
+    """Human-readable summary. Safe for tmux pane or escalation body."""
     lines = [f"checklist verification — ticket {result.ticket_id}"]
     if result.overall_ok:
         lines.append(f"  all {len(result.items)} item(s) ok")

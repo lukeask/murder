@@ -62,6 +62,7 @@ from murder.llm.harness_control.model.operations import (
     DecisionRecord,
     OperationEnvelope,
 )
+from murder.state.persistence.connection import RepoDb
 
 
 def _now() -> str:
@@ -83,7 +84,7 @@ def _json_value(value: object) -> object:  # noqa: PLR0911 - explicit type encod
 
     Type markers make stored records inspectable and reprocessable even when a
     payload includes enums, dataclasses, timedeltas, or explicit knowledge
-    wrappers.  Harness evidence payload dictionaries remain dictionaries; no
+    wrappers. Harness evidence payload dictionaries remain dictionaries. No
     lowest-common-denominator projection occurs here.
     """
     if isinstance(value, datetime):
@@ -163,7 +164,7 @@ _OBSERVATION_TYPES: dict[str, type[object]] = {
 def _decode_observation_value(  # noqa: PLR0911, PLR0912 - persisted markers are explicit
     value: object, *, path: str = "snapshot"
 ) -> object:
-    """Decode only allowlisted observation types; persisted JSON cannot import code."""
+    """Decode only allowlisted observation types. Persisted JSON cannot import code."""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, list):
@@ -231,7 +232,7 @@ def _regions_json(regions: tuple[ScreenRegionRef, ...]) -> str:
 
 def _regions_from_json(raw: str) -> tuple[ScreenRegionRef, ...]:
     value = _json_load(raw)
-    # `_json_value` marks tuples; retain a small backwards-compatible reader for
+    # `_json_value` marks tuples. Retain a small backwards-compatible reader for
     # future hand-written SQL fixtures that provide a plain JSON array.
     rows = value.get("items", []) if isinstance(value, dict) else value
     result: list[ScreenRegionRef] = []
@@ -257,15 +258,16 @@ def _plain_int(value: object) -> int | None:
 
 
 def persist_frame(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     frame: TerminalFrame,
     *,
     session_id: str | None = None,
 ) -> None:
-    """Insert an immutable raw frame; duplicate ids must describe the same frame."""
-    existing = conn.execute(
-        "SELECT harness_id, captured_at, raw_text FROM harness_control_frames WHERE frame_id = ?",
-        (str(frame.frame_id),),
+    """Insert an immutable raw frame. Duplicate ids must describe the same frame."""
+    existing = db.conn.execute(
+        "SELECT harness_id, captured_at, raw_text FROM harness_control_frames "
+        "WHERE repository_id = ? AND frame_id = ?",
+        (db.repository_id, str(frame.frame_id)),
     ).fetchone()
     if existing is not None:
         if (
@@ -275,15 +277,15 @@ def persist_frame(
         ):
             raise ValueError(f"frame id {frame.frame_id!r} already identifies different content")
         return
-    conn.execute(
+    db.conn.execute(
         """
         INSERT INTO harness_control_frames(
-            frame_id, harness_id, session_id, captured_at, width, height, raw_text,
+            repository_id, frame_id, harness_id, session_id, captured_at, width, height, raw_text,
             ansi_preserved, pane_epoch, capture_sequence, stored_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            str(frame.frame_id),
+            db.repository_id, str(frame.frame_id),
             str(frame.harness_id),
             session_id,
             frame.captured_at.isoformat(),
@@ -298,9 +300,10 @@ def persist_frame(
     )
 
 
-def get_frame(conn: sqlite3.Connection, frame_id: str) -> TerminalFrame | None:
-    row = conn.execute(
-        "SELECT * FROM harness_control_frames WHERE frame_id = ?", (frame_id,)
+def get_frame(db: RepoDb, frame_id: str) -> TerminalFrame | None:
+    row = db.conn.execute(
+        "SELECT * FROM harness_control_frames WHERE repository_id = ? AND frame_id = ?",
+        (db.repository_id, frame_id),
     ).fetchone()
     if row is None:
         return None
@@ -317,20 +320,20 @@ def get_frame(conn: sqlite3.Connection, frame_id: str) -> TerminalFrame | None:
     )
 
 
-def persist_evidence(conn: sqlite3.Connection, evidence: EvidenceEnvelope) -> None:
+def persist_evidence(db: RepoDb, evidence: EvidenceEnvelope) -> None:
     """Persist broad parser output after its supporting raw frame exists."""
-    frame = conn.execute(
-        "SELECT harness_id FROM harness_control_frames WHERE frame_id = ?",
-        (str(evidence.frame_id),),
+    frame = db.conn.execute(
+        "SELECT harness_id FROM harness_control_frames WHERE repository_id = ? AND frame_id = ?",
+        (db.repository_id, str(evidence.frame_id)),
     ).fetchone()
     if frame is None:
         raise ValueError(f"evidence {evidence.evidence_id!r} references an unknown frame")
     if str(frame["harness_id"]) != str(evidence.harness_id):
         raise ValueError("evidence harness does not match its frame harness")
-    existing = conn.execute(
+    existing = db.conn.execute(
         "SELECT frame_id, parser_version, evidence_type, payload_json "
-        "FROM harness_control_evidence WHERE evidence_id = ?",
-        (str(evidence.evidence_id),),
+        "FROM harness_control_evidence WHERE repository_id = ? AND evidence_id = ?",
+        (db.repository_id, str(evidence.evidence_id)),
     ).fetchone()
     payload_json = _json_dump(evidence.payload)
     if existing is not None:
@@ -350,15 +353,16 @@ def persist_evidence(conn: sqlite3.Connection, evidence: EvidenceEnvelope) -> No
         "unrecognized_regions": evidence.diagnostics.unrecognized_regions,
         "contradictory_fields": evidence.diagnostics.contradictory_fields,
     }
-    conn.execute(
+    db.conn.execute(
         """
         INSERT INTO harness_control_evidence(
-            evidence_id, frame_id, harness_id, parser_version, evidence_type, captured_at,
+            repository_id, evidence_id, frame_id, harness_id, parser_version,
+            evidence_type, captured_at,
             payload_json, source_regions_json, diagnostics_json, stored_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            str(evidence.evidence_id),
+            db.repository_id, str(evidence.evidence_id),
             str(evidence.frame_id),
             str(evidence.harness_id),
             evidence.parser_version,
@@ -372,22 +376,23 @@ def persist_evidence(conn: sqlite3.Connection, evidence: EvidenceEnvelope) -> No
     )
 
 
-def get_evidence(conn: sqlite3.Connection, evidence_id: str) -> EvidenceEnvelope | None:
-    row = conn.execute(
-        "SELECT * FROM harness_control_evidence WHERE evidence_id = ?", (evidence_id,)
+def get_evidence(db: RepoDb, evidence_id: str) -> EvidenceEnvelope | None:
+    row = db.conn.execute(
+        "SELECT * FROM harness_control_evidence WHERE repository_id = ? AND evidence_id = ?",
+        (db.repository_id, evidence_id),
     ).fetchone()
     return _evidence_from_row(row) if row is not None else None
 
 
 def list_evidence(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     harness_id: str | None = None,
     frame_id: str | None = None,
     evidence_type: str | None = None,
 ) -> list[EvidenceEnvelope]:
-    clauses: list[str] = []
-    params: list[str] = []
+    clauses: list[str] = ["repository_id = ?"]
+    params: list[str] = [db.repository_id]
     for column, value in (
         ("harness_id", harness_id),
         ("frame_id", frame_id),
@@ -397,7 +402,7 @@ def list_evidence(
             clauses.append(f"{column} = ?")
             params.append(value)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(
+    rows = db.conn.execute(
         f"SELECT * FROM harness_control_evidence{where} ORDER BY captured_at, evidence_id", params
     ).fetchall()
     return [_evidence_from_row(row) for row in rows]
@@ -466,27 +471,29 @@ class SemanticEventRecord:
 
 
 def persist_observation_snapshot(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     snapshot: ObservationSnapshot,
     *,
     session_id: str | None = None,
 ) -> None:
     """Persist a revisioned shared snapshot with the evidence it relies on."""
     refs = _snapshot_evidence_refs(snapshot)
-    conn.execute(
+    db.conn.execute(
         """
         INSERT INTO harness_control_observations(
-            harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence,
+            repository_id, harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence,
             captured_at, snapshot_json, evidence_refs_json, stored_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(
+            repository_id, harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence
+        )
         DO UPDATE SET snapshot_json=excluded.snapshot_json,
                       evidence_refs_json=excluded.evidence_refs_json,
                       captured_at=excluded.captured_at,
                       stored_at=excluded.stored_at
         """,
         (
-            str(snapshot.harness_id),
+            db.repository_id, str(snapshot.harness_id),
             _session_key(session_id),
             snapshot.revision.pane_epoch,
             snapshot.revision.capture_sequence,
@@ -500,7 +507,7 @@ def persist_observation_snapshot(
 
 
 def persist_observation_delta(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     harness_id: str,
     session_id: str | None,
@@ -514,16 +521,17 @@ def persist_observation_delta(
     diagnostics = _json_dump(delta.diagnostics)
     for event in delta.semantic_events:
         event_type = str(event.get("type", event.get("event_type", "unknown")))
-        cur = conn.execute(
+        cur = db.conn.execute(
             """
             INSERT INTO harness_control_semantic_events(
-                harness_id, session_id, pane_epoch, capture_sequence, semantic_sequence,
+                repository_id, harness_id, session_id, pane_epoch, capture_sequence,
+                semantic_sequence,
                 event_type, payload_json, evidence_refs_json, diagnostics_json,
                 captured_at, stored_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                harness_id,
+                db.repository_id, harness_id,
                 _session_key(session_id),
                 revision.pane_epoch,
                 revision.capture_sequence,
@@ -540,7 +548,7 @@ def persist_observation_delta(
     return inserted
 
 
-def prune_capture_history(conn: sqlite3.Connection, *, captured_before: datetime) -> None:
+def prune_capture_history(db: RepoDb, *, captured_before: datetime) -> None:
     """Delete raw capture history strictly older than ``captured_before``.
 
     Observations are removed before their supporting frames so an interrupted
@@ -553,41 +561,41 @@ def prune_capture_history(conn: sqlite3.Connection, *, captured_before: datetime
         else captured_before
     )
     cutoff_iso = cutoff.isoformat()
-    conn.execute(
-        "DELETE FROM harness_control_observations WHERE captured_at < ?",
-        (cutoff_iso,),
+    db.conn.execute(
+        "DELETE FROM harness_control_observations WHERE repository_id = ? AND captured_at < ?",
+        (db.repository_id, cutoff_iso),
     )
-    conn.execute(
-        "DELETE FROM harness_control_frames WHERE captured_at < ?",
-        (cutoff_iso,),
+    db.conn.execute(
+        "DELETE FROM harness_control_frames WHERE repository_id = ? AND captured_at < ?",
+        (db.repository_id, cutoff_iso),
     )
 
 
 def latest_observation(
-    conn: sqlite3.Connection, *, harness_id: str, session_id: str | None = None
+    db: RepoDb, *, harness_id: str, session_id: str | None = None
 ) -> PersistedObservation | None:
-    row = conn.execute(
+    row = db.conn.execute(
         """
         SELECT * FROM harness_control_observations
-         WHERE harness_id = ? AND session_id = ?
+         WHERE repository_id = ? AND harness_id = ? AND session_id = ?
          ORDER BY pane_epoch DESC, capture_sequence DESC, semantic_sequence DESC LIMIT 1
         """,
-        (harness_id, _session_key(session_id)),
+        (db.repository_id, harness_id, _session_key(session_id)),
     ).fetchone()
     return _observation_from_row(row) if row is not None else None
 
 
 def latest_observation_snapshot(
-    conn: sqlite3.Connection, *, harness_id: str, session_id: str | None = None
+    db: RepoDb, *, harness_id: str, session_id: str | None = None
 ) -> ObservationSnapshot | None:
     """Strictly reconstruct the latest normalized snapshot for restart hydration."""
-    row = conn.execute(
+    row = db.conn.execute(
         """
         SELECT * FROM harness_control_observations
-         WHERE harness_id = ? AND session_id = ?
+         WHERE repository_id = ? AND harness_id = ? AND session_id = ?
          ORDER BY pane_epoch DESC, capture_sequence DESC, semantic_sequence DESC LIMIT 1
         """,
-        (harness_id, _session_key(session_id)),
+        (db.repository_id, harness_id, _session_key(session_id)),
     ).fetchone()
     if row is None:
         return None
@@ -607,7 +615,7 @@ def latest_observation_snapshot(
 
 
 def list_session_evidence(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     harness_id: str,
     session_id: str | None = None,
@@ -615,7 +623,7 @@ def list_session_evidence(
 ) -> tuple[EvidenceEnvelope, ...]:
     """Load a bounded recent parser context for one pane session.
 
-    Raw frames and evidence remain durably retained for audit/reprocessing; an
+    Raw frames and evidence remain durably retained for audit/reprocessing. An
     attach only needs enough recent context to parse the next frame.  Selecting
     recent frames first keeps both the query and deserialization independent of
     the session's total history.
@@ -624,24 +632,25 @@ def list_session_evidence(
         raise ValueError("frame_limit must be positive")
     session_clause = "session_id IS NULL" if session_id is None else "session_id = ?"
     params: tuple[str | int, ...] = (
-        (harness_id, frame_limit)
+        (db.repository_id, harness_id, frame_limit)
         if session_id is None
-        else (harness_id, session_id, frame_limit)
+        else (db.repository_id, harness_id, session_id, frame_limit)
     )
-    rows = conn.execute(
+    rows = db.conn.execute(
         f"""
         SELECT evidence.*
           FROM (
                 SELECT frame_id, pane_epoch, capture_sequence
                  FROM harness_control_frames
-                 WHERE harness_id = ? AND {session_clause}
+                 WHERE repository_id = ? AND harness_id = ? AND {session_clause}
                  ORDER BY pane_epoch DESC, capture_sequence DESC
                  LIMIT ?
                ) AS frame
-          JOIN harness_control_evidence AS evidence ON evidence.frame_id = frame.frame_id
+          JOIN harness_control_evidence AS evidence
+            ON evidence.repository_id = ? AND evidence.frame_id = frame.frame_id
          ORDER BY frame.pane_epoch, frame.capture_sequence, evidence.evidence_id
         """,
-        params,
+        (*params, db.repository_id),
     ).fetchall()
     return tuple(_evidence_from_row(row) for row in rows)
 
@@ -662,12 +671,12 @@ def _observation_from_row(row: sqlite3.Row) -> PersistedObservation:
 
 
 def list_semantic_events(
-    conn: sqlite3.Connection, *, harness_id: str, session_id: str | None = None
+    db: RepoDb, *, harness_id: str, session_id: str | None = None
 ) -> list[SemanticEventRecord]:
-    rows = conn.execute(
+    rows = db.conn.execute(
         "SELECT * FROM harness_control_semantic_events "
-        "WHERE harness_id = ? AND session_id = ? ORDER BY id",
-        (harness_id, _session_key(session_id)),
+        "WHERE repository_id = ? AND harness_id = ? AND session_id = ? ORDER BY id",
+        (db.repository_id, harness_id, _session_key(session_id)),
     ).fetchall()
     records: list[SemanticEventRecord] = []
     for row in rows:
@@ -762,7 +771,7 @@ class RecoveryCandidate:
 
 
 def persist_operation(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     envelope: OperationEnvelope[object],
     *,
     harness_id: str,
@@ -775,14 +784,14 @@ def persist_operation(
     phase_payload = _json_dump(envelope.phase)
     request_payload = _json_dump(request if request is not None else {})
     state_payload = _json_dump(operation_state if operation_state is not None else {})
-    conn.execute(
+    db.conn.execute(
         """
         INSERT INTO harness_control_operations(
-            operation_id, harness_id, session_id, capability, status, phase_type,
+            repository_id, operation_id, harness_id, session_id, capability, status, phase_type,
             phase_payload_json, request_json, operation_state_json, created_at, updated_at,
             deadline, attempt_count, last_pane_epoch, last_capture_sequence,
             last_semantic_sequence, warnings_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(operation_id) DO UPDATE SET
             harness_id=excluded.harness_id, session_id=excluded.session_id,
             capability=excluded.capability, status=excluded.status, phase_type=excluded.phase_type,
@@ -795,7 +804,7 @@ def persist_operation(
             warnings_json=excluded.warnings_json
         """,
         (
-            str(envelope.operation_id),
+            db.repository_id, str(envelope.operation_id),
             harness_id,
             session_id,
             envelope.capability,
@@ -816,21 +825,22 @@ def persist_operation(
     )
 
 
-def get_operation(conn: sqlite3.Connection, operation_id: str) -> PersistedOperation | None:
-    row = conn.execute(
-        "SELECT * FROM harness_control_operations WHERE operation_id = ?", (operation_id,)
+def get_operation(db: RepoDb, operation_id: str) -> PersistedOperation | None:
+    row = db.conn.execute(
+        "SELECT * FROM harness_control_operations WHERE repository_id = ? AND operation_id = ?",
+        (db.repository_id, operation_id),
     ).fetchone()
     return _operation_from_row(row) if row is not None else None
 
 
-def persist_action_record(conn: sqlite3.Connection, record: ActionRecord) -> None:
+def persist_action_record(db: RepoDb, record: ActionRecord) -> None:
     """Atomically write action intent and all lowered effects before emission."""
-    if get_operation(conn, str(record.operation_id)) is None:
+    if get_operation(db, str(record.operation_id)) is None:
         raise ValueError(f"action {record.action_id!r} references an unknown operation")
-    existing = conn.execute(
+    existing = db.conn.execute(
         "SELECT operation_id, semantic_action_json "
-        "FROM harness_control_actions WHERE action_id = ?",
-        (str(record.action_id),),
+        "FROM harness_control_actions WHERE repository_id = ? AND action_id = ?",
+        (db.repository_id, str(record.action_id)),
     ).fetchone()
     action_json = _json_dump(record.semantic_action)
     if existing is not None:
@@ -840,16 +850,17 @@ def persist_action_record(conn: sqlite3.Connection, record: ActionRecord) -> Non
         ):
             raise ValueError(f"action id {record.action_id!r} already identifies different intent")
         return
-    conn.execute(
+    db.conn.execute(
         """
         INSERT INTO harness_control_actions(
-            action_id, operation_id, semantic_action_type, semantic_action_json, duplicate_policy,
+            repository_id, action_id, operation_id, semantic_action_type,
+            semantic_action_json, duplicate_policy,
             selected_pane_epoch, selected_capture_sequence, selected_semantic_sequence,
             requested_at, expectation_json, emitted_at, emission_error, emission_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            str(record.action_id),
+            db.repository_id, str(record.action_id),
             str(record.operation_id),
             _type_name(record.semantic_action),
             action_json,
@@ -865,14 +876,15 @@ def persist_action_record(conn: sqlite3.Connection, record: ActionRecord) -> Non
         ),
     )
     for ordinal, effect in enumerate(record.lowered_effects):
-        conn.execute(
+        db.conn.execute(
             """
             INSERT INTO harness_control_effects(
-                effect_id, action_id, effect_type, payload_json, ordinal, emission_status
-            ) VALUES (?, ?, ?, ?, ?, 'PENDING')
+                repository_id, effect_id, action_id, effect_type, payload_json,
+                ordinal, emission_status
+            ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING')
             """,
             (
-                str(effect.effect_id),
+                db.repository_id, str(effect.effect_id),
                 str(record.action_id),
                 _type_name(effect),
                 _json_dump(effect),
@@ -882,31 +894,32 @@ def persist_action_record(conn: sqlite3.Connection, record: ActionRecord) -> Non
 
 
 def record_effect_emissions(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     action_id: str,
     results: Iterable[EffectEmission],
     emitted_at: datetime,
 ) -> None:
     """Record tmux acceptance/failure only after an action was durably selected."""
-    action = conn.execute(
-        "SELECT action_id FROM harness_control_actions WHERE action_id = ?", (action_id,)
+    action = db.conn.execute(
+        "SELECT action_id FROM harness_control_actions WHERE repository_id = ? AND action_id = ?",
+        (db.repository_id, action_id),
     ).fetchone()
     if action is None:
         raise ValueError(f"cannot record emission for unknown action {action_id!r}")
     results = tuple(results)
     for result in results:
-        updated = conn.execute(
+        updated = db.conn.execute(
             """
             UPDATE harness_control_effects
                SET emission_status = ?, emitted_at = ?, emission_error = ?
-             WHERE effect_id = ? AND action_id = ?
+             WHERE repository_id = ? AND effect_id = ? AND action_id = ?
             """,
             (
                 result.status.name,
                 emitted_at.isoformat(),
                 result.error,
-                str(result.effect_id),
+                db.repository_id, str(result.effect_id),
                 action_id,
             ),
         )
@@ -914,8 +927,9 @@ def record_effect_emissions(
             raise ValueError(f"effect {result.effect_id!r} is not part of action {action_id!r}")
     statuses = [
         str(row["emission_status"])
-        for row in conn.execute(
-            "SELECT emission_status FROM harness_control_effects WHERE action_id = ?", (action_id,)
+        for row in db.conn.execute(
+            "SELECT emission_status FROM harness_control_effects "
+            "WHERE repository_id = ? AND action_id = ?", (db.repository_id, action_id)
         ).fetchall()
     ]
     action_status = (
@@ -926,28 +940,29 @@ def record_effect_emissions(
         )
     )
     error = next((result.error for result in results if result.error), None)
-    conn.execute(
+    db.conn.execute(
         """
         UPDATE harness_control_actions
            SET emitted_at = ?, emission_error = COALESCE(?, emission_error), emission_status = ?
-         WHERE action_id = ?
+         WHERE repository_id = ? AND action_id = ?
         """,
-        (emitted_at.isoformat(), error, action_status, action_id),
+        (emitted_at.isoformat(), error, action_status, db.repository_id, action_id),
     )
 
 
-def persist_decision_record(conn: sqlite3.Connection, record: DecisionRecord) -> int:
-    if get_operation(conn, str(record.operation_id)) is None:
+def persist_decision_record(db: RepoDb, record: DecisionRecord) -> int:
+    if get_operation(db, str(record.operation_id)) is None:
         raise ValueError(f"decision references an unknown operation {record.operation_id!r}")
-    cur = conn.execute(
+    cur = db.conn.execute(
         """
         INSERT INTO harness_control_decisions(
-            operation_id, pane_epoch, capture_sequence, semantic_sequence, phase_before,
+            repository_id, operation_id, pane_epoch, capture_sequence,
+            semantic_sequence, phase_before,
             predicate_results_json, selected_decision, selected_action_id, reason, decided_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            str(record.operation_id),
+            db.repository_id, str(record.operation_id),
             record.observation_revision.pane_epoch,
             record.observation_revision.capture_sequence,
             record.observation_revision.semantic_sequence,
@@ -963,7 +978,7 @@ def persist_decision_record(conn: sqlite3.Connection, record: DecisionRecord) ->
 
 
 def load_recovery_candidates(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     harness_id: str,
     session_id: str | None = None,
@@ -974,29 +989,30 @@ def load_recovery_candidates(
     `has_ambiguous_unsafe_effect` explicitly flags actions that must not be
     replayed merely because the process restarted.
     """
-    params: list[str] = [harness_id]
+    params: list[str] = [db.repository_id, harness_id]
     session_clause = "session_id IS NULL" if session_id is None else "session_id = ?"
     if session_id is not None:
         params.append(session_id)
-    rows = conn.execute(
+    rows = db.conn.execute(
         f"""
         SELECT * FROM harness_control_operations
-         WHERE harness_id = ? AND {session_clause} AND status IN ('PENDING', 'RUNNING')
+         WHERE repository_id = ? AND harness_id = ? AND {session_clause}
+           AND status IN ('PENDING', 'RUNNING')
          ORDER BY created_at, operation_id
         """,
         params,
     ).fetchall()
-    latest = latest_observation(conn, harness_id=harness_id, session_id=session_id)
+    latest = latest_observation(db, harness_id=harness_id, session_id=session_id)
     candidates: list[RecoveryCandidate] = []
     for row in rows:
         operation = _operation_from_row(row)
-        actions = _actions_for_operation(conn, operation.operation_id)
+        actions = _actions_for_operation(db, operation.operation_id)
         candidates.append(RecoveryCandidate(operation, latest, tuple(actions)))
     return candidates
 
 
 def escalate_recovery_candidate(
-    conn: sqlite3.Connection, *, operation_id: str, reason: str, observed_at: datetime
+    db: RepoDb, *, operation_id: str, reason: str, observed_at: datetime
 ) -> None:
     """Durably close unfinished work after a new restart observation.
 
@@ -1005,22 +1021,23 @@ def escalate_recovery_candidate(
     explicit escalation prevents a later startup from blindly re-emitting it.
     """
 
-    row = conn.execute(
-        "SELECT warnings_json FROM harness_control_operations WHERE operation_id = ?",
-        (operation_id,),
+    row = db.conn.execute(
+        "SELECT warnings_json FROM harness_control_operations "
+        "WHERE repository_id = ? AND operation_id = ?",
+        (db.repository_id, operation_id),
     ).fetchone()
     if row is None:
         raise ValueError(f"unknown recovery operation {operation_id!r}")
     warnings = _json_load(str(row["warnings_json"]))
     items = warnings if isinstance(warnings, list) else []
     items.append({"recovery_escalation": reason, "observed_at": observed_at.isoformat()})
-    conn.execute(
+    db.conn.execute(
         """
         UPDATE harness_control_operations
            SET status = 'ESCALATED', updated_at = ?, warnings_json = ?
-         WHERE operation_id = ? AND status IN ('PENDING', 'RUNNING')
+         WHERE repository_id = ? AND operation_id = ? AND status IN ('PENDING', 'RUNNING')
         """,
-        (observed_at.isoformat(), _json_dump(items), operation_id),
+        (observed_at.isoformat(), _json_dump(items), db.repository_id, operation_id),
     )
 
 
@@ -1051,18 +1068,18 @@ def _operation_from_row(row: sqlite3.Row) -> PersistedOperation:
     )
 
 
-def _actions_for_operation(conn: sqlite3.Connection, operation_id: str) -> list[PersistedAction]:
-    rows = conn.execute(
+def _actions_for_operation(db: RepoDb, operation_id: str) -> list[PersistedAction]:
+    rows = db.conn.execute(
         "SELECT * FROM harness_control_actions "
-        "WHERE operation_id = ? ORDER BY requested_at, action_id",
-        (operation_id,),
+        "WHERE repository_id = ? AND operation_id = ? ORDER BY requested_at, action_id",
+        (db.repository_id, operation_id),
     ).fetchall()
     actions: list[PersistedAction] = []
     for row in rows:
-        effects = conn.execute(
+        effects = db.conn.execute(
             "SELECT emission_status FROM harness_control_effects "
-            "WHERE action_id = ? ORDER BY ordinal",
-            (str(row["action_id"]),),
+            "WHERE repository_id = ? AND action_id = ? ORDER BY ordinal",
+            (db.repository_id, str(row["action_id"])),
         ).fetchall()
         actions.append(
             PersistedAction(

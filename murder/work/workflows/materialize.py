@@ -17,13 +17,13 @@ filesystem->DB reconcile, and planned->ready transitions all stay hidden here.
 from __future__ import annotations
 
 import re
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 from uuid import UUID, uuid4
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.workflow_runs import create_workflow_run
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import ticket_md, tickets_dir
@@ -51,7 +51,7 @@ from murder.work.workflows.runtime import (
 insert_workflow_run = create_workflow_run
 
 _TNUM_RE = re.compile(r"^t(\d+)$")
-# Named ``{placeholder}`` tokens; unknown keys are left verbatim so an
+# Named ``{placeholder}`` tokens. Unknown keys are left verbatim so an
 # unfilled placeholder survives into the crow's brief rather than vanishing.
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z0-9_-]+)\}")
 
@@ -65,14 +65,14 @@ class MaterializeResult:
 
 
 def materialize_workflow(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     defn: WorkflowDef,
     args: dict[str, str] | None = None,
     *,
     now: str | None = None,
 ) -> MaterializeResult:
-    """Materialize *defn* into a ticket tree; return the created ids.
+    """Materialize *defn* into a ticket tree. Return the created ids.
 
     Raises ``ValueError`` if the definition is invalid (so a bad workflow never
     leaves a partial tree behind).
@@ -81,7 +81,7 @@ def materialize_workflow(
     # even when *defn* is still marked builtin (unprepared launch path).
     errors = validate_workflow(defn.model_copy(update={"builtin": False}))
     if errors:
-        raise ValueError("invalid workflow: " + "; ".join(errors))
+        raise ValueError("invalid workflow: " + ". ".join(errors))
 
     created_at = now or _now()
     workflow_now = _workflow_time(created_at)
@@ -93,7 +93,7 @@ def materialize_workflow(
     # Allocate every id from ONE scan: next_ticket_id-style max-scan returns the
     # same id until a row/file exists, so calling it per ticket would collide.
     # Parent first, then stages in topological order.
-    ids = _allocate_ids(conn, repo_root, count=1 + len(ordered_stages))
+    ids = _allocate_ids(db, repo_root, count=1 + len(ordered_stages))
     run_ticket_id = ids[0]
     stage_ticket_ids: dict[str, str] = {
         stage.id: ticket_id for stage, ticket_id in zip(ordered_stages, ids[1:], strict=True)
@@ -113,7 +113,7 @@ def materialize_workflow(
         # so reconcile lands it ``planned`` with no required harness/model. It is
         # never transitioned to ``ready``, so the scheduler ignores it.
         _write_run_ticket(repo_root, run_ticket_id, defn, args)
-        reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id=run_ticket_id)
+        reconcile_ticket_md(db=db, repo_root=repo_root, ticket_id=run_ticket_id)
         created.append(run_ticket_id)
 
         # Stages in topological order: a stage's dependency tickets must already
@@ -130,8 +130,8 @@ def materialize_workflow(
                 dep_ticket_ids=dep_ticket_ids,
                 args=args,
             )
-            reconcile_ticket_md(conn=conn, repo_root=repo_root, ticket_id=ticket_id)
-            transition(conn, ticket_id, cast(TicketStatus, TicketStatus.READY))
+            reconcile_ticket_md(db=db, repo_root=repo_root, ticket_id=ticket_id)
+            transition(db, ticket_id, cast(TicketStatus, TicketStatus.READY))
             created.append(ticket_id)
 
         workflow_id = uuid4()
@@ -153,7 +153,7 @@ def materialize_workflow(
             for stage in defn.stages
         )
         insert_workflow_run(
-            conn,
+            db,
             WorkflowRunRecord(
                 workflow_id=workflow_id,
                 definition_name=defn.name,
@@ -179,7 +179,7 @@ def materialize_workflow(
             waits=initial_waits,
         )
     except Exception:
-        _cleanup_partial(conn, repo_root, created)
+        _cleanup_partial(db, repo_root, created)
         raise
 
     return MaterializeResult(
@@ -223,7 +223,7 @@ def _topo_sorted(defn: WorkflowDef) -> list[StageDef]:
     return out
 
 
-def _cleanup_partial(conn: sqlite3.Connection, repo_root: Path, created: list[str]) -> None:
+def _cleanup_partial(db: RepoDb, repo_root: Path, created: list[str]) -> None:
     """Best-effort teardown of a half-built workflow tree.
 
     Each ticket was committed in its own transaction by ``reconcile_ticket_md``,
@@ -235,13 +235,13 @@ def _cleanup_partial(conn: sqlite3.Connection, repo_root: Path, created: list[st
     """
     for ticket_id in reversed(created):
         try:
-            conn.execute(
-                "DELETE FROM ticket_deps WHERE ticket_id = ? OR depends_on_id = ?",
-                (ticket_id, ticket_id),
+            db.conn.execute(
+                "DELETE FROM ticket_deps WHERE repository_id = ? AND (ticket_id = ? OR depends_on_id = ?)",
+                (db.repository_id, ticket_id, ticket_id),
             )
-            conn.execute("DELETE FROM workflow_runs WHERE parent_ticket_id = ?", (ticket_id,))
-            conn.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
-            conn.commit()
+            db.conn.execute("DELETE FROM workflow_runs WHERE repository_id = ? AND parent_ticket_id = ?", (db.repository_id, ticket_id))
+            db.conn.execute("DELETE FROM tickets WHERE repository_id = ? AND id = ?", (db.repository_id, ticket_id))
+            db.conn.commit()
         except Exception:
             pass
         try:
@@ -250,7 +250,7 @@ def _cleanup_partial(conn: sqlite3.Connection, repo_root: Path, created: list[st
             pass
 
 
-def _allocate_ids(conn: sqlite3.Connection, repo_root: Path, *, count: int) -> list[str]:
+def _allocate_ids(db: RepoDb, repo_root: Path, *, count: int) -> list[str]:
     """Allocate *count* sequential ``t<NNN>`` ids from one DB + filesystem scan.
 
     Mirrors ``TicketOps.next_ticket_id`` but hands out a contiguous block in a
@@ -258,7 +258,7 @@ def _allocate_ids(conn: sqlite3.Connection, repo_root: Path, *, count: int) -> l
     until the prior row/file lands, which a synchronous batch never does.
     """
     max_n = 0
-    for row in conn.execute("SELECT id FROM tickets WHERE id LIKE 't%'").fetchall():
+    for row in db.conn.execute("SELECT id FROM tickets WHERE repository_id = ? AND id LIKE 't%'", (db.repository_id,)).fetchall():
         m = _TNUM_RE.match(str(row["id"]))
         if m:
             max_n = max(max_n, int(m.group(1)))

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from murder.app.protocol.lifecycle import TriggerFireParams, TriggerFireResult
 from murder.app.protocol.requests import CommandName
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.triggers import enqueue_manual_trigger_fire
 
 if TYPE_CHECKING:
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 def register(host: ServiceHost) -> None:
-    def _db() -> sqlite3.Connection:
+    def _db() -> RepoDb:
         runtime = host.runtime
         if runtime is None or runtime.db is None:
             raise RuntimeError("service not started")

@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 # After this many *consecutive* poll-loop failures, publish one ErrorEvent so
-# the operator sees a stuck planner relay. The loop keeps running; a clean tick
+# the operator sees a stuck planner relay. The loop keeps running. A clean tick
 # resets the counter and re-arms the escalation.
 POLL_FAILURE_ESCALATION_THRESHOLD = 5
 
@@ -71,10 +71,10 @@ class PlanningHandler(Daemon):
         # ask is pending, the new ask replaces the old pending entry.
         self._pending: dict[str, PendingAsk] = {}
         self._next_pending_generation = 0
-        # The pane may contain the same answer on multiple ticks; route each
+        # The pane may contain the same answer on multiple ticks. Route each
         # ticket's answer once.
         self._routed: set[str] = set()
-        # A carve form persists in the pane across ticks; enqueue its
+        # A carve form persists in the pane across ticks. Enqueue its
         # apply-carve-ready command once per (ticket_id, form-hash). The hash
         # lets a *re-carve* (edited form for the same ticket) re-enqueue, while a
         # stable form is enqueued exactly once.
@@ -130,7 +130,7 @@ class PlanningHandler(Daemon):
                 raise
             except Exception as exc:
                 # A transient planner pane read failure should not terminate
-                # the handler; relay_ask() will surface dead sessions. But a
+                # the handler. relay_ask() will surface dead sessions. But a
                 # *sustained* failure run is now visible (logged every tick and
                 # escalated once on the bus) instead of silently swallowed.
                 # If the planner is *genuinely* gone (session absent + agent
@@ -190,7 +190,7 @@ class PlanningHandler(Daemon):
             exc,
         )
         if self._consecutive_poll_failures != POLL_FAILURE_ESCALATION_THRESHOLD:
-            # Only escalate on the threshold-crossing tick; a reset re-arms it.
+            # Only escalate on the threshold-crossing tick. A reset re-arms it.
             return False
         if not (self.runtime.orchestration_events and self.runtime.run_id):
             return False

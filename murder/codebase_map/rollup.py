@@ -22,7 +22,7 @@ ROLLUP_MODEL = "codebase-map-rollup"
 # A child entry is (name, the child's rendered markdown body).
 ChildEntry = tuple[str, str]
 
-# Roll-ups are summaries-of-summaries; keep the budget a fraction of the
+# Roll-ups are summaries-of-summaries. Keep the budget a fraction of the
 # combined child input so the pyramid keeps compressing as it climbs. The
 # provider cap adds REASONING_HEADROOM on top (see tokens.py).
 ROLLUP_BUDGET_FRACTION = 0.5

@@ -2,14 +2,14 @@
 
 Oracle is a workflow feature, not a provider. It:
 
-1. prepares an Oracle-specific context;
-2. resolves a provider/model through the Oracle model policy;
-3. chooses submission mode via the Oracle execution policy;
-4. persists or awaits the result;
+1. prepares an Oracle-specific context.
+2. resolves a provider/model through the Oracle model policy.
+3. chooses submission mode via the Oracle execution policy.
+4. persists or awaits the result.
 5. resumes the workflow from persisted state.
 
-Full Oracle workflow UX is out of scope for the parent llm-providers spec;
-this module provides the service + persistence/resume foundation.
+Full Oracle workflow UX is out of scope for the parent llm-providers spec.
+This module provides the service and persistence/resume foundation.
 """
 
 from __future__ import annotations

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Protocol
+
+from murder.state.persistence.connection import RepoDb
 
 try:
     from enum import StrEnum
@@ -33,7 +34,7 @@ class CheckResult:
 class CompletionContext:
     ticket_id: str
     repo_root: Path
-    db: sqlite3.Connection
+    db: RepoDb
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "repo_root", Path(self.repo_root))

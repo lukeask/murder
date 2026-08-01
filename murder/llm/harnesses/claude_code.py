@@ -32,7 +32,7 @@ _CC_MODEL_LINE_RE = re.compile(
 )
 # Fallback: banner line "Haiku 4.5 · Claude Pro" without effort text. The
 # trailing " ·" anchors this to the banner/status line so a bare "Opus 4.x"
-# mentioned in conversation prose can't be misread as the active model.
+# mentioned in conversation prose cannot be misread as the active model.
 # Fable's banner version has no minor component ("Fable 5 · Claude Pro"),
 # hence the optional decimal part.
 _CC_BANNER_MODEL_RE = re.compile(
@@ -87,7 +87,7 @@ class ClaudeCodeAdapter(HarnessAdapter):
 
     # Claude Code prompt is ">" or "? " depending on version/context.
     # We also accept any non-empty pane after seeing the banner so startup
-    # doesn't hang for 240 s if the regex misses a prompt variant.
+    # does not hang for 240 s if the regex misses a prompt variant.
     _READY_RE = re.compile(
         r"[>?❯]\s*$"  # bare prompt at end of line
         r"|✓\s+claude"  # "✓ claude@api" banner line

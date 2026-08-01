@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol, cast
 from uuid import UUID
 
+from murder.state.persistence.connection import DB_OPERATIONAL_ERRORS, RepoDb
 from murder.state.persistence.workflow_runs import (
     StaleWorkflowRevisionError,
     apply_transition_plan,
@@ -57,7 +57,7 @@ class WorkflowMachineKey:
 
 
 class WorkflowMachineRegistry:
-    """Exact compatibility registry; unknown persisted semantics never fall through."""
+    """Exact compatibility registry. Unknown persisted semantics never fall through."""
 
     def __init__(self) -> None:
         self._machines: dict[WorkflowMachineKey, WorkflowMachine[WorkflowContract]] = {}
@@ -100,7 +100,7 @@ def resolve_persisted_machine(
         raise WorkflowDefinitionUnavailableError(
             "persisted workflow definition version does not match its run envelope"
         )
-    # StaticDagWorkflowStateV1 is a WorkflowContract subtype; the resolver's
+    # StaticDagWorkflowStateV1 is a WorkflowContract subtype. The resolver's
     # erased protocol type is intentional at this runtime registry boundary.
     machine = cast(
         WorkflowMachine[WorkflowContract],
@@ -116,14 +116,14 @@ class WorkflowRuntime:
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         *,
         resolver: WorkflowMachineResolver = resolve_persisted_machine,
         max_conflict_retries: int = 3,
     ) -> None:
         if max_conflict_retries < 0:
             raise ValueError("max_conflict_retries must not be negative")
-        self._connection = connection
+        self._db = db
         self._resolver = resolver
         self._max_conflict_retries = max_conflict_retries
 
@@ -135,7 +135,7 @@ class WorkflowRuntime:
     ) -> WorkflowRunRecord:
         for attempt in range(self._max_conflict_retries + 1):
             decision = load_workflow_decision_input(
-                self._connection,
+                self._db,
                 workflow_id,
                 now=now,
             )
@@ -156,7 +156,7 @@ class WorkflowRuntime:
             )
             try:
                 return apply_transition_plan(
-                    self._connection,
+                    self._db,
                     workflow_id=workflow_id,
                     plan=plan,
                     applied_at=decision.now,
@@ -164,7 +164,7 @@ class WorkflowRuntime:
             except StaleWorkflowRevisionError:
                 if attempt >= self._max_conflict_retries:
                     raise
-        raise AssertionError("bounded workflow retry loop did not terminate")
+        raise AssertionError("the bounded workflow retry loop did not terminate")
 
     def recover_pending_signals(
         self,
@@ -186,19 +186,19 @@ class WorkflowRuntime:
                 blocked_sql = f" AND r.workflow_id NOT IN ({placeholders})"
                 parameters.extend(str(workflow_id) for workflow_id in sorted(blocked, key=str))
             parameters.append(limit)
-            rows = self._connection.execute(
+            rows = self._db.conn.execute(
                 f"""
                 SELECT r.workflow_id, COUNT(*) AS pending_count
                 FROM workflow_runs AS r
-                JOIN workflow_signals AS s ON s.workflow_id = r.workflow_id
-                WHERE s.consumed_at IS NULL
+                JOIN workflow_signals AS s ON s.repository_id = r.repository_id AND s.workflow_id = r.workflow_id
+                WHERE r.repository_id = ? AND s.consumed_at IS NULL
                   AND r.status IN ('running', 'waiting')
                   {blocked_sql}
                 GROUP BY r.workflow_id
                 ORDER BY r.updated_at, r.workflow_id
                 LIMIT ?
                 """,
-                tuple(parameters),
+                tuple([self._db.repository_id, *parameters]),
             ).fetchall()
             if not rows:
                 break
@@ -213,7 +213,7 @@ class WorkflowRuntime:
                     blocked.add(workflow_id)
                     continue
                 recovered[workflow_id] = updated
-                pending_after = _pending_signal_count(self._connection, workflow_id)
+                pending_after = _pending_signal_count(self._db, workflow_id)
                 if pending_after >= pending_before:
                     # The machine deliberately left this wakeup pending. Do not
                     # spin or starve later workflow pages during this recovery.
@@ -231,7 +231,7 @@ class WorkflowRuntime:
         """Durably enqueue one addressed signal, then notify its local runtime."""
 
         signal = enqueue_workflow_signal(
-            self._connection,
+            self._db,
             workflow_id=workflow_id,
             deduplication_key=deduplication_key,
             payload=payload,
@@ -239,7 +239,7 @@ class WorkflowRuntime:
         )
         if signal.consumed_at is not None:
             decision = load_workflow_decision_input(
-                self._connection,
+                self._db,
                 workflow_id,
                 now=created_at,
             )
@@ -257,7 +257,7 @@ class WorkflowRuntime:
     ) -> WorkflowStateMigrationRecord:
         """Apply an explicit state-schema migration and record its provenance."""
 
-        run = load_workflow_decision_input(self._connection, workflow_id, now=now).run
+        run = load_workflow_decision_input(self._db, workflow_id, now=now).run
         if run.revision != expected_revision:
             raise StaleWorkflowRevisionError(workflow_id, expected_revision, run.revision)
         candidate = run.model_copy(update={"state": target_state})
@@ -265,7 +265,7 @@ class WorkflowRuntime:
         machine = self._resolver(candidate)
         machine.state_model.model_validate(target_state.value)
         return apply_workflow_state_migration(
-            self._connection,
+            self._db,
             workflow_id=workflow_id,
             expected_revision=expected_revision,
             target_state=target_state,
@@ -284,7 +284,7 @@ class WorkflowRuntime:
 
         timestamp = _aware(occurred_at)
         updated: list[WorkflowRunRecord] = []
-        for run in list_workflow_runs(self._connection):
+        for run in list_workflow_runs(self._db):
             if run.status in {
                 WorkflowStatus.COMPLETED,
                 WorkflowStatus.FAILED,
@@ -294,7 +294,7 @@ class WorkflowRuntime:
             if ticket_id not in run.stage_map.values():
                 continue
             signal = enqueue_workflow_signal(
-                self._connection,
+                self._db,
                 workflow_id=run.workflow_id,
                 deduplication_key=f"ticket:{ticket_id}:terminal:{status}",
                 payload=ExternalWorkflowSignal(
@@ -312,7 +312,7 @@ class WorkflowRuntime:
 
 
 def notify_ticket_status(
-    connection: sqlite3.Connection,
+    db: RepoDb,
     *,
     ticket_id: str,
     status: str,
@@ -322,11 +322,11 @@ def notify_ticket_status(
     if status not in {"done", "failed", "archived"}:
         return ()
     try:
-        return WorkflowRuntime(connection).signal_ticket_finished(
+        return WorkflowRuntime(db).signal_ticket_finished(
             ticket_id=ticket_id,
             status=status,
         )
-    except sqlite3.OperationalError as exc:
+    except DB_OPERATIONAL_ERRORS as exc:
         # Tiny unit schemas and pre-migration administrative tools may not own
         # workflow tables. Do not turn an unrelated ticket write into a crash.
         if "no such table" not in str(exc):
@@ -341,14 +341,14 @@ def _aware(value: datetime | None) -> datetime:
     return instant.astimezone(timezone.utc)
 
 
-def _pending_signal_count(connection: sqlite3.Connection, workflow_id: UUID) -> int:
-    row = connection.execute(
+def _pending_signal_count(db: RepoDb, workflow_id: UUID) -> int:
+    row = db.conn.execute(
         """
         SELECT COUNT(*) AS count
         FROM workflow_signals
-        WHERE workflow_id = ? AND consumed_at IS NULL
+        WHERE repository_id = ? AND workflow_id = ? AND consumed_at IS NULL
         """,
-        (str(workflow_id),),
+        (db.repository_id, str(workflow_id)),
     ).fetchone()
     return int(row["count"])
 

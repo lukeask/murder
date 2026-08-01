@@ -141,7 +141,7 @@ class UserHarnessRolePatch(BaseModel):
     harnesses: list[UserHarnessKind] | None = Field(
         default=None,
         description=(
-            "Pool of harness kinds; tickets without harness override pick stably by ticket id."
+            "Pool of harness kinds. Tickets without harness override pick stably by ticket id."
         ),
     )
     startup_model: str | None = None
@@ -149,14 +149,14 @@ class UserHarnessRolePatch(BaseModel):
     startup_models: list[str] | None = Field(
         default=None,
         description=(
-            "Pool of startup model strings; tickets without model override pick "
+            "Pool of startup model strings. Tickets without model override pick "
             "stably by ticket id."
         ),
     )
     startup_models_by_harness: dict[UserHarnessKind, list[str]] | None = Field(
         default=None,
         description=(
-            "Per-harness startup model pools; tickets without model override pick "
+            "Per-harness startup model pools. Tickets without model override pick "
             "from the pool matching the resolved harness."
         ),
     )
@@ -585,7 +585,7 @@ BUILTIN_TIERS: dict[str, UserLlmTier] = {
 def resolve_tier(cfg: UserConfig | None, role: str) -> UserLlmTier | None:
     """Resolve *role* to a tier: roles[role] -> tier name -> user tiers, then builtins.
 
-    Returns None when there's no role mapping or the tier name is unknown.
+    Returns None when there is no role mapping or the tier name is unknown.
     """
     if cfg is None or cfg.llm is None:
         return None
@@ -614,7 +614,7 @@ _PROVIDER_ENV_MAP: dict[tuple[str, str], str] = {
 def apply_llm_env(user_cfg: UserConfig | None) -> None:
     """Apply config.yaml provider settings to ``os.environ`` with setdefault.
 
-    Only sets a var when it isn't already present (env/.env always win) and the
+    Only sets a var when it is not already present (env/.env always win) and the
     config value is non-empty. Testable in isolation; call from ``Config.load``.
     """
     if user_cfg is None or user_cfg.llm is None:
@@ -987,7 +987,7 @@ def _normalize_workflows(records: Any) -> list[dict[str, Any]]:
 
     A record is dropped if pydantic rejects its shape OR ``validate_workflow``
     reports a graph/name problem — the registry never persists a definition that
-    can't later be materialized. Built-in names / ``builtin: true`` records are
+    cannot later be materialized. Built-in names / ``builtin: true`` records are
     also dropped so clients cannot persist over the built-in catalog. Kept defs
     are re-serialized from the model so the stored form is canonical regardless
     of the caller's input dict.

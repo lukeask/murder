@@ -291,7 +291,7 @@ def parse_numbered_effort_choices(pane_text: str) -> list[HarnessEffortChoice]:
 # Confirmed against Claude Code v2.1.172's live `/model` menu + `/model <id>`
 # round-trips (2026-06-10): Default→`default`, `Sonnet (1M context)`→`sonnet[1m]`,
 # Fable→`fable`, Opus→`opus`, Haiku→`haiku`. Opus Plan Mode (`opusplan`) is
-# handled for harness versions that present it though it wasn't in this capture.
+# handled for harness versions that present it though it was not in this capture.
 def _claude_code_slash_id(label: str) -> str | None:
     """Derive the `/model <id>` slash arg from a Claude Code menu row label.
 
@@ -534,7 +534,7 @@ def parse_harness_model_list(pane_text: str) -> list[tuple[str, str]]:
     dialog, cursor table, pi ``provider/model`` list). This is a conservative
     heuristic: it keeps an ordered ``(model_id, label)`` list, drawing the id
     from a backtick/parenthesised hint or the first model-id-shaped token on
-    the line, and skips obvious chrome. Adapters whose picker doesn't survive
+    the line, and skips obvious chrome. Adapters whose picker does not survive
     this (or who have a stable hardcoded list) should set
     ``model_list_command = None`` rather than feed it garbage.
     """

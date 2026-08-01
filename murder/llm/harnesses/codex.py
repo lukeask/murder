@@ -118,7 +118,7 @@ def _update_menu_active(clean: str) -> bool:
             continue
         if _MENU_OPTION_RE.match(clean[m.start() : m.end()]):
             continue
-        return False  # a real live composer prompt below the menu → it's gone
+        return False  # a real live composer prompt below the menu. The menu is gone.
     return True
 
 

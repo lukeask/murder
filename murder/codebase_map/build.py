@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -32,6 +31,7 @@ from murder.codebase_map.render import (
 from murder.codebase_map.rollup import ChildEntry, dir_summary, root_summary
 from murder.codebase_map.summarize import FileSummarizer, FileSummary
 from murder.codebase_map.tokens import count_tokens
+from murder.state.persistence.connection import RepoDb, open_repo_db
 
 # Extensions we treat as binary/non-text and skip outright.
 _BINARY_EXTS = {
@@ -189,7 +189,7 @@ def _root_children(
 
 async def _summarize_or_reuse(
     summarizer: FileSummarizer,
-    db: sqlite3.Connection | None,
+    db: RepoDb | None,
     repo_rel: str,
     src: str,
 ) -> FileSummary:
@@ -222,7 +222,7 @@ async def _apply_changeset(
     repo_root: Path,
     summarizer: FileSummarizer,
     *,
-    db: sqlite3.Connection | None,
+    db: RepoDb | None,
     head_sha: str | None,
     present: list[str],
     deleted: list[str],
@@ -339,7 +339,7 @@ async def _apply_changeset(
         if db is not None:
             store_mod.prune_file_snapshots(db, repo_rel)
 
-    # Current mappable files grouped by dir; the full closure tells us, for any
+    # Current mappable files grouped by dir. The full closure tells us, for any
     # re-rolled dir, its complete set of immediate subdirectories (including
     # unchanged ones we must re-feed).
     tracked_now = {p for p in await _git_ls_files(repo_root) if _mappable(repo_root, p)}
@@ -465,7 +465,7 @@ async def fresh_build(
     repo_root: Path,
     summarizer: FileSummarizer,
     *,
-    db: sqlite3.Connection | None = None,
+    db: RepoDb | None = None,
     concurrency: int = 8,
 ) -> None:
     """Regenerate the whole ``.murder/map/`` tree from the working tree.
@@ -505,7 +505,7 @@ async def incremental_update(
     repo_root: Path,
     summarizer: FileSummarizer,
     *,
-    db: sqlite3.Connection,
+    db: RepoDb,
     base_sha: str,
     head_sha: str,
     concurrency: int = 8,
@@ -549,7 +549,7 @@ async def reconcile_map(
     repo_root: Path,
     summarizer: FileSummarizer,
     *,
-    db: sqlite3.Connection,
+    db: RepoDb,
     head_sha: str | None = None,
     concurrency: int = 8,
 ) -> None:
@@ -646,16 +646,12 @@ async def _amain(repo_root: Path, *, use_db: bool) -> None:
 
     client = AutoFreeClient.build_default()
     if client is None:
-        raise SystemExit("no free LLM client available — set a provider key")
+        raise SystemExit("no free LLM client is available. Set a provider key.")
     summarizer = FileSummarizer(client)
 
-    db: sqlite3.Connection | None = None
+    db: RepoDb | None = None
     if use_db:
-        from murder.state.persistence.schema import get_db, init_db
-        from murder.state.storage.paths import db_path
-
-        db = get_db(db_path(repo_root))
-        init_db(db)
+        db = open_repo_db(repo_root)
 
     try:
         await fresh_build(repo_root, summarizer, db=db)
@@ -666,7 +662,7 @@ async def _amain(repo_root: Path, *, use_db: bool) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
-    # Default snapshots to the repo DB (t060); --no-db is render-only.
+    # Default snapshots to the repo DB (t060). --no-db is render-only.
     use_db = True
     if "--no-db" in args:
         use_db = False

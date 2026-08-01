@@ -2,7 +2,7 @@
 
 Preferred names going forward: ``WorkflowTemplate`` (alias of ``WorkflowDef``)
 and ``WorkflowNodeTemplate`` (alias of ``StageDef``). Persisted/API shapes still
-use the legacy class names; new code should prefer the aliases.
+use the legacy class names. New code should prefer the aliases.
 
 This is a deep module: the surface is ``WorkflowTemplate`` / ``WorkflowDef`` +
 ``validate_workflow``, while the dependency-graph reasoning (uniqueness,
@@ -12,8 +12,8 @@ Validation is deliberately I/O-free so the storage layer
 the filesystem.
 
 Several fields (``gate``, ``mode``) are reserved for the coordination layer that
-isn't built yet; only their default value is honored today. They live in the
-schema now so persisted definitions don't need a migration when that layer
+is not built yet. Only their default value is honored today. They live in the
+schema now so persisted definitions do not need a migration when that layer
 lands.
 """
 
@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from murder.app.protocol.common import ApplicationModel
 
 # Workflow template names are human-readable registry keys.  A single ASCII
-# space may separate words; identifier-style names remain valid for persisted
+# space may separate words. Identifier-style names remain valid for persisted
 # records.  Quotes and colons are intentionally excluded so ``:\"Name\"`` chat
 # invocation remains unambiguous.
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$")
@@ -71,7 +71,7 @@ class StageDef(BaseModel):
     model: str | None = None
     worktree: str | None = None
     depends_on: list[str] = Field(default_factory=list)  # other stage ids, same workflow
-    # Reserved for the coordination layer; only "auto" is honored today.
+    # Reserved for the coordination layer. Only "auto" is honored today.
     gate: Literal["auto", "human", "conditional"] = "auto"
 
 
@@ -82,17 +82,17 @@ class WorkflowDef(BaseModel):
     the concrete class (and the name used in persisted/API payloads) for now.
     """
 
-    name: str  # exact registry key; words may be separated by single spaces
+    name: str  # exact registry key. Words may be separated by single spaces
     # Definition versions are compatibility boundaries for already-running
-    # persisted state machines; changing semantics requires a new version.
+    # persisted state machines. Changing semantics requires a new version.
     definition_version: int = Field(default=1, ge=1)
     description: str = ""
     # Built-in templates (e.g. ``ticket``) are merged at read/launch time and
     # never persisted in the userspace registry.
     builtin: bool = False
-    # Reserved for generative ticket expansion; only "static" is honored today.
+    # Reserved for generative ticket expansion. Only "static" is honored today.
     mode: Literal["static", "generative"] = "static"
-    # Optional declared inputs; undeclared ``{placeholders}`` are still inferred.
+    # Optional declared inputs. Undeclared ``{placeholders}`` are still inferred.
     inputs: dict[str, WorkflowInputDecl] = Field(default_factory=dict)
     stages: list[StageDef] = Field(default_factory=list)
 
@@ -149,10 +149,10 @@ class WorkflowIssue(ApplicationModel):
 
 
 def validate_workflow(defn: WorkflowDef) -> list[str]:
-    """Return human-readable errors for *defn*; empty list means valid.
+    """Return human-readable errors for *defn*. Empty list means valid.
 
-    Pydantic already guarantees field *shapes*; this checks the cross-field and
-    graph invariants it can't express: a usable name, a non-empty stage set with
+    Pydantic already guarantees field shapes. This checks the cross-field and
+    graph invariants it cannot express: a usable name, a non-empty stage set with
     unique well-formed ids, dependency references that resolve, no self-edges, an
     acyclic graph, and (for static mode) at least one root to kick off.
     """
@@ -194,13 +194,13 @@ def workflow_issues(defn: WorkflowDef) -> list[WorkflowIssue]:  # noqa: PLR0912
         issues.append(
             WorkflowIssue(
                 code="unsupported_mode",
-                message=f"workflow mode {defn.mode!r} is not supported at runtime",
+                message=f"workflow mode {defn.mode!r} is unsupported at runtime",
                 path=["mode"],
                 severity="warning",
             )
         )
 
-    # Build the id set first; later checks reference it. A duplicate id makes the
+    # Build the id set first. Later checks reference it. A duplicate id makes the
     # later-listed stage shadow the earlier one in any id->stage map, so we flag
     # duplicates explicitly rather than letting them silently merge.
     seen: set[str] = set()
@@ -233,7 +233,7 @@ def workflow_issues(defn: WorkflowDef) -> list[WorkflowIssue]:  # noqa: PLR0912
         # deliberate "this harness, this model" agent invocation.
         #
         # Built-in templates (launch-oriented ``ticket``) may omit harness/model in
-        # the stored shape; ``prepare_workflow_for_launch`` fills configured
+        # the stored shape. ``prepare_workflow_for_launch`` fills configured
         # defaults before materialize, so skip these checks for builtins.
         if not defn.builtin and not stage.harness:
             issues.append(
@@ -257,7 +257,7 @@ def workflow_issues(defn: WorkflowDef) -> list[WorkflowIssue]:  # noqa: PLR0912
             issues.append(
                 WorkflowIssue(
                     code="unsupported_gate",
-                    message=f"stage {stage.id!r} gate {stage.gate!r} is not supported at runtime",
+                    message=f"stage {stage.id!r} gate {stage.gate!r} is unsupported at runtime",
                     path=["stages", stage_index, "gate"],
                     stage_id=stage.id,
                     severity="warning",
@@ -336,7 +336,7 @@ def _find_cycle(defn: WorkflowDef) -> str | None:
     """
     adj: dict[str, list[str]] = {}
     for stage in defn.stages:
-        # First occurrence wins for a duplicate id; duplicates are already an error.
+        # First occurrence wins for a duplicate id. Duplicates are already an error.
         adj.setdefault(stage.id, [d for d in stage.depends_on if d != stage.id])
 
     GREY, BLACK = 1, 2
@@ -355,7 +355,7 @@ def _find_cycle(defn: WorkflowDef) -> str | None:
                 stack[-1] = (node, i + 1)
                 nxt = deps[i]
                 if nxt not in adj:
-                    continue  # dangling dep (flagged elsewhere); not a cycle here
+                    continue  # dangling dep (flagged elsewhere). Not a cycle here
                 state = color.get(nxt)
                 if state == GREY:
                     return nxt  # back-edge onto the active path

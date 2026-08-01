@@ -43,7 +43,7 @@ class _WorkerState:
 
 
 class Supervisor:
-    """Worker task lifecycle only; command durability lives in CommandDispatcher."""
+    """Worker task lifecycle only. Command durability lives in CommandDispatcher."""
 
     def __init__(
         self,

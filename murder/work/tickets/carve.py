@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 from typing import Any
 
 from murder.state.persistence import tickets as dbmod
+from murder.state.persistence.connection import RepoDb
 from murder.work.tickets import lifecycle
 from murder.work.tickets.status import TicketStatus
 
@@ -37,7 +37,7 @@ def _normalize_model(spec: dict[str, Any]) -> str | None:
 
 
 def apply_carve_ready_spec(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     ticket_id: str,
     spec: dict[str, Any],
 ) -> TicketStatus:
@@ -75,7 +75,7 @@ def apply_carve_ready_spec(
 
     model = _normalize_model(spec)
 
-    row = dbmod.get_ticket(conn, ticket_id)
+    row = dbmod.get_ticket(db, ticket_id)
     if row is not None and row["status"] not in (
         TicketStatus.PLANNED.value,
         TicketStatus.READY.value,
@@ -84,24 +84,24 @@ def apply_carve_ready_spec(
             f"ticket {ticket_id} must be planned or ready (currently {row['status']})"
         )
 
-    conn.execute("BEGIN")
+    db.conn.execute("BEGIN IMMEDIATE")
     try:
         if row is None:
             # Upsert: the carve form arrived before (or without) the `.md`
             # ingest. Seed a `planned` row so the carve payload + transition can
             # apply, end state being a `ready` row.
             now = _now()
-            conn.execute(
+            db.conn.execute(
                 """
                 INSERT INTO tickets(
-                    id, title, status, harness, model, attempts, created_at, updated_at
+                    repository_id, id, title, status, harness, model, attempts, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
                 """,
-                (ticket_id, title_s, TicketStatus.PLANNED.value, harness_s, model, now, now),
+                (db.repository_id, ticket_id, title_s, TicketStatus.PLANNED.value, harness_s, model, now, now),
             )
         dbmod.apply_ticket_carve_payload(
-            conn,
+            db,
             ticket_id,
             title=title_s,
             harness=harness_s,
@@ -111,9 +111,9 @@ def apply_carve_ready_spec(
         )
         # transition() is a no-op (returns prev == to) when already ready, so a
         # duplicate carve form is a safe re-apply with no InvalidTransition.
-        prev = lifecycle.transition(conn, ticket_id, TicketStatus.READY)
-        conn.execute("COMMIT")
+        prev = lifecycle.transition(db, ticket_id, TicketStatus.READY)
+        db.conn.execute("COMMIT")
     except BaseException:
-        conn.execute("ROLLBACK")
+        db.conn.execute("ROLLBACK")
         raise
     return prev

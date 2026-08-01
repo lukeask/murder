@@ -96,14 +96,14 @@ def build_qualified_name(*parts: str, separator: str = ".") -> str:
 def inclusive_range(start_line: int, end_line: int) -> tuple[int, int]:
     """Validate and return a one-based inclusive ``(start, end)`` line range."""
     if start_line <= 0 or end_line <= 0:
-        raise ValueError(f"line range endpoints must be positive; got {start_line}-{end_line}")
+        raise ValueError(f"line range endpoints must be positive. Got {start_line}-{end_line}")
     if end_line < start_line:
         raise ValueError(f"end_line ({end_line}) must be >= start_line ({start_line})")
     return start_line, end_line
 
 
 def normalize_signature(signature: str | None) -> str | None:
-    """Collapse interior whitespace in a signature; preserve ``None``."""
+    """Collapse interior whitespace in a signature. Preserve ``None``."""
     if signature is None:
         return None
     collapsed = _WHITESPACE_RE.sub(" ", signature.strip())

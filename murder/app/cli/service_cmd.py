@@ -15,17 +15,16 @@ from pathlib import Path
 
 import typer
 
-from murder.work.tickets.status import TicketStatus
-from murder.config import Config
-from murder.state.persistence.escalations import list_pending_escalations
-from murder.state.persistence.schema import get_db, init_db
-from murder.state.persistence.tickets import get_ticket
-from murder.work.plans.sync import PlanSync, content_hash
+from murder.app.cli._util import pid_is_alive as _pid_is_alive
+from murder.app.cli._util import repo_root as _repo_root
 from murder.app.service.host import ServiceHost
+from murder.config import Config
+from murder.state.persistence.connection import RepoDb, open_repo_db
+from murder.state.persistence.escalations import list_pending_escalations
+from murder.state.persistence.tickets import get_ticket
 from murder.state.storage.filesystem import lock_is_held, read_lock_pid
 from murder.state.storage.paths import (
     agents_dir,
-    db_path,
     lock_path,
     logs_dir,
     notes_dir,
@@ -39,11 +38,11 @@ from murder.state.storage.service_registry import (
     remove_service_session,
     resolve_service_session_selector,
 )
+from murder.work.plans.sync import PlanSync, content_hash
 from murder.work.tickets import lifecycle
 from murder.work.tickets.schema import ChecklistItem, Ticket
+from murder.work.tickets.status import TicketStatus
 from murder.work.tickets.sync import TicketSync
-from murder.app.cli._util import pid_is_alive as _pid_is_alive
-from murder.app.cli._util import repo_root as _repo_root
 
 LOGGER = logging.getLogger(__name__)
 
@@ -98,13 +97,10 @@ def apply_client_log_level(cli_value: str | None) -> None:
 
 
 def _open_existing_db(repo: Path):  # type: ignore[return]
-    path = db_path(repo)
-    if not path.exists():
+    if not agents_dir(repo).exists():
         typer.secho("No murder.db — run murder init", err=True)
         raise typer.Exit(1)
-    conn = get_db(path)
-    init_db(conn)
-    return conn
+    return open_repo_db(repo)
 
 
 def _live_service_sessions() -> list[ServiceSession]:
@@ -163,7 +159,7 @@ def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
 
 
 async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
-    """Ensure a responsive supervisor, returning whether this call started it."""
+    """Make sure a responsive supervisor is running. Return whether this call started it."""
     if await _supervisor_is_live(repo, socket_path):
         return False
 
@@ -186,7 +182,7 @@ async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
 
         # Fail fast if the child already died (e.g. crashed on import) instead
         # of polling the full window for a process that's gone.  A code-1 child
-        # can also mean a concurrent launcher won the flock race; in that case
+        # can also mean a concurrent launcher won the flock race. In that case
         # follow the winner rather than surfacing the loser's exit status.
         if proc is not None:
             rc = proc.poll()
@@ -270,7 +266,7 @@ def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) ->
     # Re-read the live lock pid right before signalling so we don't SIGTERM a
     # recycled, unrelated process: between the session-registry read and here
     # the daemon may have exited and its pid been reused. Only signal if the
-    # repo lock still names this exact pid; otherwise the old service is gone.
+    # repo lock still names this exact pid. Otherwise the old service is gone.
     current = read_lock_pid(lock_path(repo))
     if current != pid:
         if current is None:
@@ -291,7 +287,7 @@ def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) ->
         return
     typer.echo(f"Sent SIGTERM to pid {pid}")
 
-    # Wait for a clean exit; escalate if the supervisor hangs after removing its
+    # Wait for a clean exit. Escalate if the supervisor hangs after removing its
     # session file (clients would otherwise see lock-held-but-no-session).
     deadline = time.monotonic() + _DOWN_WAIT_S
     while time.monotonic() < deadline:
@@ -381,21 +377,23 @@ def cmd_ls() -> None:
 def cmd_status() -> None:
     """Print a concise status snapshot (no TUI)."""
     repo = _repo_root()
-    if not db_path(repo).exists():
+    if not agents_dir(repo).exists():
         typer.echo("No database — murder init")
         return
-    conn = get_db(db_path(repo))
-    init_db(conn)
+    conn = open_repo_db(repo)
     try:
         typer.echo("Tickets by status:")
         for st in ("planned", "ready", "in_progress", "blocked", "done", "failed"):
-            n = conn.execute(
-                "SELECT COUNT(*) AS c FROM tickets WHERE status = ?", (st,)
+            n = conn.conn.execute(
+                "SELECT COUNT(*) AS c FROM tickets WHERE repository_id = ? AND status = ?",
+                (conn.repository_id, st),
             ).fetchone()["c"]
             typer.echo(f"  {st}: {n}")
         typer.echo("Agents:")
-        for r in conn.execute(
-            "SELECT agent_id, role, ticket_id, status FROM agents ORDER BY started_at DESC LIMIT 20"
+        for r in conn.conn.execute(
+            "SELECT agent_id, role, ticket_id, status FROM agents "
+            "WHERE repository_id = ? ORDER BY started_at DESC LIMIT 20",
+            (conn.repository_id,),
         ).fetchall():
             typer.echo(
                 f"  {r['agent_id']} role={r['role']} ticket={r['ticket_id']} status={r['status']}"
@@ -409,8 +407,7 @@ def cmd_status() -> None:
 def cmd_reopen(ticket_id: str) -> None:
     """Mark a done ticket as planned and cascade to dependents (D7)."""
     repo = _repo_root()
-    conn = get_db(db_path(repo))
-    init_db(conn)
+    conn = open_repo_db(repo)
     try:
         cascaded = lifecycle.reopen(conn, ticket_id)
     except lifecycle.InvalidTransition as e:
@@ -424,8 +421,7 @@ def cmd_reopen(ticket_id: str) -> None:
 def cmd_retry(ticket_id: str) -> None:
     """Retry a failed ticket — transition failed → planned and clear its last_error."""
     repo = _repo_root()
-    conn = get_db(db_path(repo))
-    init_db(conn)
+    conn = open_repo_db(repo)
     try:
         lifecycle.transition(conn, ticket_id, TicketStatus.PLANNED, reason="retry")
         lifecycle.clear_last_error(conn, ticket_id)
@@ -448,24 +444,28 @@ def cmd_replay(run_id: str) -> None:
 
 
 def cmd_lint() -> None:
-    """Reconcile DB ↔ markdown ↔ filesystem; print mismatches."""
+    """Reconcile DB ↔ markdown ↔ filesystem. Print mismatches."""
     repo = _repo_root()
-    if not db_path(repo).exists():
+    if not agents_dir(repo).exists():
         typer.secho("No murder.db — run murder init", err=True)
         raise typer.Exit(1)
-    conn = get_db(db_path(repo))
-    init_db(conn)
+    conn = open_repo_db(repo)
     try:
         _run_lint_checks(repo, conn)
     finally:
         conn.close()
 
 
-def _run_lint_checks(repo: Path, conn) -> None:  # type: ignore[no-untyped-def]
+def _run_lint_checks(repo: Path, conn: RepoDb) -> None:
     asyncio.run(PlanSync(repo, conn).reconcile_all())
     asyncio.run(TicketSync(repo, conn).reconcile_all())
     issues: list[str] = []
-    plan_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM plans").fetchall()}
+    plan_rows = {
+        r["name"]: dict(r)
+        for r in conn.conn.execute(
+            "SELECT * FROM plans WHERE repository_id = ?", (conn.repository_id,)
+        ).fetchall()
+    }
     for name, row in plan_rows.items():
         md = repo / row["materialized_path"]
         if not md.exists():
@@ -483,7 +483,12 @@ def _run_lint_checks(repo: Path, conn) -> None:  # type: ignore[no-untyped-def]
         for md in plans_dir(repo).glob("*.md"):
             if md.stem not in plan_rows:
                 issues.append(f"plan {md.stem}: orphan markdown {md}")
-    note_rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM notes").fetchall()}
+    note_rows = {
+        r["name"]: dict(r)
+        for r in conn.conn.execute(
+            "SELECT * FROM notes WHERE repository_id = ?", (conn.repository_id,)
+        ).fetchall()
+    }
     for name, row in note_rows.items():
         md = repo / row["materialized_path"]
         if not md.exists():
@@ -496,7 +501,9 @@ def _run_lint_checks(repo: Path, conn) -> None:  # type: ignore[no-untyped-def]
         for md in notes_dir(repo).glob("*.md"):
             if md.stem not in note_rows:
                 issues.append(f"note {md.stem}: orphan markdown {md}")
-    rows = conn.execute("SELECT id FROM tickets").fetchall()
+    rows = conn.conn.execute(
+        "SELECT id FROM tickets WHERE repository_id = ?", (conn.repository_id,)
+    ).fetchall()
     tickets: list[Ticket] = []
     for r in rows:
         tid = r["id"]

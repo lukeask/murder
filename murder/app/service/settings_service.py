@@ -1,7 +1,7 @@
 """Service-side settings persistence and model discovery (W2/W9).
 
 This is the single persistence policy for user-scope settings. Handlers commit
-through ``SettingsRepository.save``; harness-doc regeneration remains part of
+through ``SettingsRepository.save``. Harness-doc regeneration remains part of
 save so catalog docs stay current. Model-catalog refresh is opt-in via
 ``schedule_model_refresh`` so settings.update is not coupled to discovery I/O.
 """
@@ -59,7 +59,7 @@ class HostLiveConfig:
 class SettingsService:
     """Owns user config writes and configured harness model catalog access.
 
-    Harness/model selection is user-scope only; there is no project
+    Harness/model selection is user-scope only. There is no project
     ``roles.yaml`` write path.
     """
 
@@ -74,7 +74,7 @@ class SettingsService:
         write_harnesses_doc(self.repo_root)
 
     def save_global(self, user_config: UserConfig) -> SettingsApplyResult:
-        """Persist + regenerate docs; schedule catalog refresh on success."""
+        """Persist and regenerate docs. Schedule catalog refresh on success."""
         try:
             self.save(user_config)
         except OSError as exc:
@@ -89,7 +89,7 @@ class SettingsService:
         Best-effort: if no running loop exists (e.g. called from a sync test
         in a non-async context), the refresh is silently skipped. DB
         persistence is skipped here since ``SettingsService`` has no DB
-        reference; the service startup and reconfiguration paths persist it.
+        reference. The service startup and reconfiguration paths persist it.
         """
         repo_root = self.repo_root
         try:
@@ -113,7 +113,7 @@ class SettingsService:
             return ModelDiscoveryResult(
                 ok=False,
                 models=(),
-                message=f"unknown harness {kind!r}; no configured model catalog",
+                message=f"unknown harness {kind!r}. No configured model catalog",
             )
         if kind in LIVE_MODEL_DISCOVERY_HARNESSES:
             result = await probe_live_models(kind, self.repo_root)

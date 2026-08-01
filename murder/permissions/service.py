@@ -148,7 +148,7 @@ class PermissionService:
             raise InvalidAuthorizationError("approval request targets another decision")
         if prior_decisions:
             raise InvalidAuthorizationError(
-                "approval evidence is loaded from persistence, not supplied by callers"
+                "callers must not supply approval evidence. The service loads it from persistence"
             )
         now = self._aware_now()
         from murder.state.persistence.approvals import (  # noqa: PLC0415
@@ -156,7 +156,7 @@ class PermissionService:
         )
 
         _review, _grant, authorization = resolve_standalone_approval_request(
-            self._store.connection,
+            self._store.db,
             approval_id=request.approval_id,
             expected_operation_digest=digest,
             reviewer=reviewer,

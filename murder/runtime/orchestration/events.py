@@ -2,7 +2,7 @@
 
 Application clients use the typed WebSocket contract in
 ``murder.app.protocol``. This module contains only notification and command
-shapes exchanged inside one service process; it is not a wire protocol and
+shapes exchanged inside one service process. It is not a wire protocol and
 must not grow client-facing envelopes.
 """
 
@@ -52,8 +52,8 @@ class _BaseEvent(BaseModel):
     # Flight-recorder routing. The recorder subscribes to the private notifier
     # and captures each event into the table named here — events self-describe
     # their family, so there is no central match/registry to edit per new type.
-    # Default ``event_records`` means "captured into the generic bulky dump";
-    # subclasses whose forensic shape belongs in a typed family override it; a
+    # Default ``event_records`` means "captured into the generic bulky dump".
+    # Subclasses whose forensic shape belongs in a typed family override it. A
     # value of ``None`` opts the event out of capture entirely. A structural
     # guard test asserts every subclass declares a value that is None or a real
     # family, so a typo'd family fails loudly at CI instead of silently never

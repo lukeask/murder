@@ -54,7 +54,7 @@ RESOURCE_GENERATED = "generated"
 
 @dataclass(frozen=True, slots=True)
 class ExtractionDiagnostic:
-    """Observability record for extraction; not recipient-facing prose."""
+    """Observability record for extraction. Not recipient-facing prose."""
 
     severity: DiagnosticSeverity
     message: str

@@ -22,7 +22,7 @@ class TerminalTarget(ApplicationModel):
 
 
 class TerminalColor(ApplicationModel):
-    """A terminal colour represented without renderer-specific escape codes."""
+    """A terminal color represented without renderer-specific escape codes."""
 
     kind: Literal["default", "indexed", "rgb"]
     index: int | None = Field(default=None, ge=0, le=255)
@@ -35,17 +35,17 @@ class TerminalColor(ApplicationModel):
         if self.kind == "default" and any(
             value is not None for value in (self.index, self.red, self.green, self.blue)
         ):
-            raise ValueError("default terminal colours cannot have a value")
+            raise ValueError("default terminal colors cannot have a value")
         if self.kind == "indexed" and (
             self.index is None
             or any(value is not None for value in (self.red, self.green, self.blue))
         ):
-            raise ValueError("indexed terminal colours require only index")
+            raise ValueError("indexed terminal colors require only index")
         if self.kind == "rgb" and (
             self.index is not None
             or any(value is None for value in (self.red, self.green, self.blue))
         ):
-            raise ValueError("rgb terminal colours require red, green, and blue")
+            raise ValueError("rgb terminal colors require red, green, and blue")
         return self
 
 
@@ -157,7 +157,7 @@ class TerminalKeyframe(ApplicationModel):
 class TerminalFrame(ApplicationModel):
     """Legacy UTF-8 replace frame retained for compatibility-only captures.
 
-    New streams use :class:`TerminalKeyframe`; clients should treat this model
+    New streams use :class:`TerminalKeyframe`. Clients should treat this model
     as a replace update and never mix it with raw terminal chunks.
     """
 

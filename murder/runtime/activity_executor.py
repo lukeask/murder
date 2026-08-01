@@ -7,7 +7,6 @@ session controller when a compatible live session exists.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Callable
 from uuid import uuid4
 
@@ -17,6 +16,7 @@ from murder.runtime.sessions.contracts import (
     SendStructuredMessage,
 )
 from murder.runtime.sessions.registry import registry_for_connection
+from murder.state.persistence.connection import RepoDb
 from murder.work.activities.runtime import (
     ActivityClaim,
     ActivityFailure,
@@ -28,7 +28,7 @@ from murder.work.workflows.runtime import RunAgentTurnActivity, RunReviewActivit
 
 
 def build_session_bound_executor(
-    connection: sqlite3.Connection,
+    db: RepoDb,
 ) -> Callable[
     [ActivityRecord, ActivityClaim, Callable[[], ActivityClaim]],
     object,
@@ -61,12 +61,12 @@ def build_session_bound_executor(
             return ActivityFailure(
                 code="session_required",
                 message=(
-                    "no compatible live session for this activity; "
-                    "create or reuse a harness session before retrying"
+                    "no compatible live session for this activity. "
+                    "Create or reuse a harness session before retrying"
                 ),
                 retryable=True,
             )
-        registry = registry_for_connection(connection)
+        registry = registry_for_connection(db)
         controller = await registry.get_or_create(session_id, recover=True)
         instructions = (
             payload.instructions

@@ -4,19 +4,17 @@ Called during Runtime.start() to detect and clean up zombie agents —
 rows that claim to be running/idle but whose tmux sessions are gone
 (TUI crash, kill -9, system reboot, etc.).
 
-This module is synchronous-DB-only; the caller fetches live sessions
+This module is synchronous-DB-only. The caller fetches live sessions
 and passes them in so the function is easily testable without tmux.
 """
 
 from __future__ import annotations
 
 import logging
-import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import UUID, uuid5
 
-from murder.work.tickets.status import TicketStatus
 from murder.runtime.sessions.contracts import (
     Correlation,
     PrincipalKind,
@@ -25,7 +23,9 @@ from murder.runtime.sessions.contracts import (
 )
 from murder.runtime.sessions.persistence import SessionStore
 from murder.state.persistence.agents import set_agent_status as _db_set_agent_status
+from murder.state.persistence.connection import RepoDb
 from murder.work.tickets import lifecycle
+from murder.work.tickets.status import TicketStatus
 
 LOGGER = logging.getLogger(__name__)
 _RECOVERY_FACT_NAMESPACE = UUID("9b584cc6-113e-4cba-b845-e4df8498248d")
@@ -60,10 +60,7 @@ class ReconcileReport:
         if self.sessions_to_kill:
             parts.append(f"sessions to kill: {', '.join(self.sessions_to_kill)}")
         if self.harness_sessions_marked_lost:
-            parts.append(
-                "harness sessions lost: "
-                + ", ".join(self.harness_sessions_marked_lost)
-            )
+            parts.append("harness sessions lost: " + ", ".join(self.harness_sessions_marked_lost))
         if self.crows_to_reattach:
             parts.append(
                 "crows to reattach: "
@@ -79,10 +76,10 @@ _NON_RESUMABLE_ROLES = frozenset({"planner", "planning_handler"})
 
 
 def reconcile_agents_vs_tmux(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     live_sessions: set[str],
 ) -> ReconcileReport:
-    """Mark zombie agents dead; recover tickets stuck in in_progress.
+    """Mark zombie agents dead. Recover tickets stuck in in_progress.
 
     Algorithm:
     1. For every non-terminal agent row, if its session name is not in
@@ -96,36 +93,42 @@ def reconcile_agents_vs_tmux(
     """
     report = ReconcileReport()
 
+    conn = db.conn
     rows = conn.execute(
         "SELECT agent_id, role, ticket_id, status, session FROM agents "
-        "WHERE status IN ('running','idle','blocked','escalating','failed')"
+        "WHERE repository_id = ? "
+        "AND status IN ('running','idle','blocked','escalating','failed')",
+        (db.repository_id,),
     ).fetchall()
 
     for row in rows:
         session = row["session"]
         if row["role"] in _NON_RESUMABLE_ROLES:
-            _db_set_agent_status(conn, row["agent_id"], "dead")
+            _db_set_agent_status(db, row["agent_id"], "dead")
             report.agents_marked_dead.append(row["agent_id"])
             if session:
                 report.sessions_to_kill.append(session)
             continue
         # Agents with no session (pure-coroutine roles) are managed entirely
-        # by the runtime; skip them — they'll be re-registered on startup.
+        # by the runtime. Skip them. They will re-register on startup.
         if not session:
             continue
         if session not in live_sessions:
-            _db_set_agent_status(conn, row["agent_id"], "dead")
+            _db_set_agent_status(db, row["agent_id"], "dead")
             report.agents_marked_dead.append(row["agent_id"])
 
-    _reconcile_persisted_harness_sessions(conn, live_sessions, report)
+    _reconcile_persisted_harness_sessions(db, live_sessions, report)
 
     # Recover in_progress tickets whose crow agent is no longer live.
-    in_progress = conn.execute("SELECT id FROM tickets WHERE status = 'in_progress'").fetchall()
+    in_progress = conn.execute(
+        "SELECT id FROM tickets WHERE repository_id = ? AND status = 'in_progress'",
+        (db.repository_id,),
+    ).fetchall()
     for t_row in in_progress:
         tid = t_row["id"]
         crow_row = conn.execute(
-            "SELECT status FROM agents WHERE agent_id = ?",
-            (f"crow-{tid}",),
+            "SELECT status FROM agents WHERE agent_id = ? AND repository_id = ?",
+            (f"crow-{tid}", db.repository_id),
         ).fetchone()
         crow_alive = (
             crow_row is not None
@@ -133,15 +136,15 @@ def reconcile_agents_vs_tmux(
             and (
                 # The crow's session must also be live.
                 conn.execute(
-                    "SELECT session FROM agents WHERE agent_id = ?",
-                    (f"crow-{tid}",),
+                    "SELECT session FROM agents WHERE agent_id = ? AND repository_id = ?",
+                    (f"crow-{tid}", db.repository_id),
                 ).fetchone()["session"]
                 in live_sessions
             )
         )
         if not crow_alive:
             try:
-                lifecycle.transition(conn, tid, TicketStatus.FAILED)
+                lifecycle.transition(db, tid, TicketStatus.FAILED)
                 report.tickets_reset_to_failed.append(tid)
             except Exception:
                 # Already in a terminal state or transition not allowed — skip.
@@ -156,21 +159,21 @@ def reconcile_agents_vs_tmux(
         # Crow IS alive: rehydrate it on startup instead of leaving the ticket
         # stuck in in_progress with no handler to consume DONE.
         crow_session = conn.execute(
-            "SELECT session FROM agents WHERE agent_id = ?",
-            (f"crow-{tid}",),
+            "SELECT session FROM agents WHERE agent_id = ? AND repository_id = ?",
+            (f"crow-{tid}", db.repository_id),
         ).fetchone()["session"]
         report.crows_to_reattach.append((tid, crow_session))
 
-        # The old handler row (and its debug log-tail session) is stale; mark it
+        # The old handler row (and its debug log-tail session) is stale. Mark it
         # dead so the fresh handler spawned during reattach re-registers cleanly.
         # The first loop may have already marked it dead if its tail session was
         # gone — make this pass idempotent.
         handler_row = conn.execute(
-            "SELECT status, session FROM agents WHERE agent_id = ?",
-            (f"crow_handler-{tid}",),
+            "SELECT status, session FROM agents WHERE agent_id = ? AND repository_id = ?",
+            (f"crow_handler-{tid}", db.repository_id),
         ).fetchone()
         if handler_row is not None and handler_row["status"] not in ("dead", "done", "failed"):
-            _db_set_agent_status(conn, f"crow_handler-{tid}", "dead")
+            _db_set_agent_status(db, f"crow_handler-{tid}", "dead")
             report.agents_marked_dead.append(f"crow_handler-{tid}")
             if handler_row["session"]:
                 report.sessions_to_kill.append(handler_row["session"])
@@ -179,12 +182,13 @@ def reconcile_agents_vs_tmux(
 
 
 def _reconcile_persisted_harness_sessions(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     live_sessions: set[str],
     report: ReconcileReport,
 ) -> None:
     """Mark vanished tmux controller resources LOST and revoke their writers."""
 
+    conn = db.conn
     exists = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'harness_sessions'"
     ).fetchone()
@@ -194,12 +198,14 @@ def _reconcile_persisted_harness_sessions(
         """
         SELECT session_id, transport_ref, revision
         FROM harness_sessions
-        WHERE transport = 'tmux'
+        WHERE repository_id = ?
+          AND transport = 'tmux'
           AND status NOT IN ('stopped', 'failed', 'lost')
-        """
+        """,
+        (db.repository_id,),
     ).fetchall()
     now = datetime.now(timezone.utc)
-    store = SessionStore(conn)
+    store = SessionStore(db)
     for row in rows:
         if str(row["transport_ref"]) in live_sessions:
             continue

@@ -1,7 +1,7 @@
 """Closed request/reply contracts exposed to Murder clients.
 
 Names describe product capabilities.  They deliberately do not contain
-worker targets or arbitrary RPC handler names; the service gateway owns the
+worker targets or arbitrary RPC handler names. The service gateway owns the
 mapping to transitional internals.
 """
 

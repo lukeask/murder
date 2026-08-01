@@ -81,7 +81,7 @@ class CollaboratorWorker(Worker):
                 send_result = await agent.send(text)
                 if hasattr(agent, "record_notice_block_event"):
                     await agent.record_notice_block_event(
-                        "Collaborator restarted after its tmux session died; "
+                        "Collaborator restarted after its tmux session died. "
                         "message delivered to the new session.",
                         severity="warning",
                     )

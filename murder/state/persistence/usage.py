@@ -1,19 +1,22 @@
 """Persistence helpers for harness usage sampling."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
+
+from murder.state.persistence.connection import RepoDb
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def get_usage_probe_session_id(conn: sqlite3.Connection, harness: str) -> str | None:
-    row = conn.execute(
-        "SELECT session_id FROM harness_usage_probe_sessions WHERE harness = ?",
-        (harness,),
+def get_usage_probe_session_id(db: RepoDb, harness: str) -> str | None:
+    row = db.conn.execute(
+        "SELECT session_id FROM harness_usage_probe_sessions WHERE repository_id = ? AND harness = ?",
+        (db.repository_id, harness),
     ).fetchone()
     if row is None:
         return None
@@ -22,29 +25,29 @@ def get_usage_probe_session_id(conn: sqlite3.Connection, harness: str) -> str | 
 
 
 def set_usage_probe_session_id(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     harness: str,
     session_id: str,
 ) -> None:
     session_id = session_id.strip()
     if not session_id:
         return
-    conn.execute(
+    db.conn.execute(
         """
-        INSERT INTO harness_usage_probe_sessions (harness, session_id, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(harness) DO UPDATE SET
+        INSERT INTO harness_usage_probe_sessions (repository_id, harness, session_id, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(repository_id, harness) DO UPDATE SET
             session_id = excluded.session_id,
             updated_at = excluded.updated_at
         """,
-        (harness, session_id, _now()),
+        (db.repository_id, harness, session_id, _now()),
     )
 
 
-def clear_usage_probe_session_id(conn: sqlite3.Connection, harness: str) -> None:
-    conn.execute(
-        "DELETE FROM harness_usage_probe_sessions WHERE harness = ?",
-        (harness,),
+def clear_usage_probe_session_id(db: RepoDb, harness: str) -> None:
+    db.conn.execute(
+        "DELETE FROM harness_usage_probe_sessions WHERE repository_id = ? AND harness = ?",
+        (db.repository_id, harness),
     )
 
 

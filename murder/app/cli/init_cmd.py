@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import sqlite3
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
@@ -13,14 +12,16 @@ from uuid import uuid4
 
 import typer
 
-from murder.work.tickets.status import TicketStatus
 from murder.config import project_env_path
-from murder.state.persistence.schema import get_db, init_db
+from murder.state.persistence.connection import RepoDb, connect, open_repo_db
+from murder.state.persistence.repositories import forget_repository, registered_repository_id
+from murder.state.persistence.schema import init_db
 from murder.state.persistence.tickets import insert_ticket
-from murder.state.storage.paths import agents_dir, db_path, ticket_md
+from murder.state.storage.paths import agents_dir, db_path, repository_id_path, ticket_md
 from murder.work.examples import seed_examples
 from murder.work.tickets import parser as ticket_parser
 from murder.work.tickets.schema import ChecklistItem, Ticket
+from murder.work.tickets.status import TicketStatus
 
 tickets_app = typer.Typer(help="Create and import tickets.")
 
@@ -29,14 +30,11 @@ def _repo_root() -> Path:
     return Path.cwd().resolve()
 
 
-def _open_existing_db(repo: Path) -> sqlite3.Connection:
-    path = db_path(repo)
-    if not path.exists():
+def _open_existing_db(repo: Path) -> RepoDb:
+    if not agents_dir(repo).exists():
         typer.secho("No murder.db — run murder init", err=True)
         raise typer.Exit(1)
-    conn = get_db(path)
-    init_db(conn)
-    return conn
+    return open_repo_db(repo)
 
 
 def _append_gitignore_entries(repo: Path, entries: str) -> None:
@@ -92,15 +90,13 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
     ad = agents_dir(repo)
     if ad.exists() and not force:
         typer.secho(
-            f"Refusing: {ad} already exists. Use --force to delete and re-scaffold.",
+            f"Refusing: {ad} already exists. Use --force to reset its database partition and re-scaffold.",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(1)
-    # Read every template up front, BEFORE the destructive rmtree, so a
-    # missing/unreadable template resource fails fast and leaves the user's
-    # existing .murder/ intact rather than deleting it and then discovering we
-    # can't rebuild (init --force footgun).
+    # Read templates before writing any scaffold files so a missing resource
+    # cannot leave a partially refreshed project state.
     tpl_root = resources.files("murder.resources.templates")
     project_name = repo.name
     quoted_project_name = project_name.replace("'", "''")
@@ -111,6 +107,18 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
     gitignore_text = tpl_root.joinpath("gitignore").read_text(encoding="utf-8")
 
     if ad.exists() and force:
+        shared_path = db_path()
+        if shared_path.exists():
+            shared = connect(shared_path)
+            try:
+                init_db(shared)
+                repository_id = registered_repository_id(shared, repo)
+                if repository_id is not None:
+                    forget_repository(shared, repository_id)
+            finally:
+                shared.close()
+        # Preserve the historical --force contract (full local re-scaffold)
+        # while also resetting the now-shared database partition.
         shutil.rmtree(ad)
     ad.mkdir(parents=True, exist_ok=True)
     for sub in ("tickets", "plans", "reports", "shelved", "escalations", "runs"):
@@ -123,9 +131,7 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
 
     seed_examples(repo)
 
-    conn = get_db(db_path(repo))
-    init_db(conn)
-    conn.close()
+    open_repo_db(repo).close()
 
     from murder.user_config import ensure_user_themes
 
@@ -134,15 +140,11 @@ def _scaffold_project(repo: Path, *, force: bool = False) -> Path:
 
 
 def _ensure_initialized_for_bare_command(repo: Path) -> None:
-    if db_path(repo).exists():
+    if repository_id_path(repo).exists():
         return
     if agents_dir(repo).exists():
-        typer.secho(
-            "Found .murder/ but no murder.db. Run `murder init --force` to re-scaffold.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(1)
+        open_repo_db(repo).close()
+        return
     should_init = typer.confirm(
         "This directory has not been initialized for murder. Run `murder init` now?",
         default=True,
@@ -151,16 +153,20 @@ def _ensure_initialized_for_bare_command(repo: Path) -> None:
         typer.secho("Aborted. Run `murder init` when you're ready.", err=True)
         raise typer.Exit(1)
     ad = _scaffold_project(repo)
-    typer.secho(f"Initialized {ad} and {db_path(repo)}", fg=typer.colors.GREEN)
+    typer.secho(f"Initialized {ad} with partition in {db_path()}", fg=typer.colors.GREEN)
 
 
 def cmd_init(
-    force: bool = typer.Option(False, "--force", help="Overwrite existing .murder/ tree."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Reset this repository's database partition and refresh its scaffold.",
+    ),
 ) -> None:
     """Scaffold .murder/ and create murder.db in the current repo."""
     repo = _repo_root()
     ad = _scaffold_project(repo, force=force)
-    typer.secho(f"Initialized {ad} and {db_path(repo)}", fg=typer.colors.GREEN)
+    typer.secho(f"Initialized {ad} with partition in {db_path()}", fg=typer.colors.GREEN)
 
 
 @tickets_app.command("create")

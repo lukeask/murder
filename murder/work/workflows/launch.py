@@ -1,7 +1,7 @@
 """Launch a saved or built-in workflow by name into the current project.
 
 The userspace registry (``~/.config/murder/workflows.yaml``) stores reusable
-``WorkflowTemplate`` (``WorkflowDef``) dumps; launching one resolves it by
+``WorkflowTemplate`` (``WorkflowDef``) dumps. Launching one resolves it by
 name (built-ins first), fills harness/model defaults for built-ins, compiles
 it authoritatively (expand ``:foo:``, resolve inputs), and hands the expanded
 snapshot to ``materialize_workflow``. This module is the thin name→definition
@@ -10,9 +10,9 @@ lookup that sits in front of that deep module, so the RPC handler stays a shell.
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
+from murder.state.persistence.connection import RepoDb
 from murder.work.workflows.compile import (
     apply_input_defaults,
     compile_workflow_template,
@@ -24,7 +24,7 @@ from murder.work.workflows.materialize import MaterializeResult, materialize_wor
 
 
 def run_workflow_by_name(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     name: str,
     args: dict[str, str] | None = None,
@@ -33,7 +33,7 @@ def run_workflow_by_name(
 ) -> MaterializeResult:
     """Load workflow *name* (built-in or userspace registry), prepare, and start.
 
-    Raises KeyError if no workflow with that name exists; ValueError if the
+    Raises KeyError if no workflow with that name exists. Raises ValueError if the
     definition is invalid, launch defaults cannot make it runnable, or
     compile/start validation fails.
     """
@@ -59,13 +59,13 @@ def run_workflow_by_name(
         defn = WorkflowDef.model_validate(found)
 
     resolved = prepare_workflow_for_launch(defn, args)
-    # Built-ins omit harness/model until launch; after prepare they must be concrete.
+    # Built-ins omit harness/model until launch. After prepare they must be concrete.
     errors = validate_workflow(resolved.model_copy(update={"builtin": False}))
     if errors:
-        raise ValueError("invalid workflow: " + "; ".join(errors))
+        raise ValueError("invalid workflow: " + ". ".join(errors))
 
     return start_workflow_from_def(
-        conn,
+        db,
         repo_root,
         resolved,
         args,
@@ -74,7 +74,7 @@ def run_workflow_by_name(
 
 
 def start_workflow_from_def(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     defn: WorkflowDef,
     args: dict[str, str] | None = None,
@@ -92,13 +92,13 @@ def start_workflow_from_def(
     compiled = compile_workflow_template(defn, prompt_templates=templates)
     if not compiled.ok:
         messages = [issue.message for issue in compiled.issues if issue.severity == "error"]
-        raise ValueError("workflow compile failed: " + "; ".join(messages))
+        raise ValueError("workflow compile failed: " + ". ".join(messages))
 
     merged = apply_input_defaults(compiled.inputs, args)
     missing = required_input_issues(compiled.inputs, merged)
     if missing:
         raise ValueError(
-            "workflow start blocked: " + "; ".join(issue.message for issue in missing)
+            "workflow start blocked: " + ". ".join(issue.message for issue in missing)
         )
 
-    return materialize_workflow(conn, repo_root, compiled.expanded_template, merged)
+    return materialize_workflow(db, repo_root, compiled.expanded_template, merged)

@@ -11,8 +11,9 @@ Each row represents the most-recent discovery attempt for one harness kind.
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime
+
+from murder.state.persistence.connection import RepoDb
 
 
 def _now() -> str:
@@ -20,7 +21,7 @@ def _now() -> str:
 
 
 def upsert_harness_models(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     harness: str,
     models: list[dict[str, str]],
@@ -30,33 +31,36 @@ def upsert_harness_models(
     """Insert or replace the discovery row for *harness*.
 
     *models* must be a list of ``{"id": ..., "label": ...}`` dicts.
-    Pass ``discovery_error`` when the probe failed; it is stored in the row
+    Pass ``discovery_error`` when the probe failed. It is stored in the row
     alongside whatever models were available (classvar fallback or empty).
     """
     ts = fetched_at or _now()
-    conn.execute(
+    db.conn.execute(
         """
-        INSERT INTO harness_models (harness, fetched_at, models_json, discovery_error)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(harness) DO UPDATE SET
+        INSERT INTO harness_models
+            (repository_id, harness, fetched_at, models_json, discovery_error)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(repository_id, harness) DO UPDATE SET
                  fetched_at      = excluded.fetched_at,
                  models_json     = excluded.models_json,
                  discovery_error = excluded.discovery_error
         """,
-        (harness, ts, json.dumps(models), discovery_error),
+        (db.repository_id, harness, ts, json.dumps(models), discovery_error),
     )
 
 
 def get_all_harness_models(
-    conn: sqlite3.Connection,
+    db: RepoDb,
 ) -> list[dict[str, object]]:
     """Return all rows from ``harness_models`` as plain dicts.
 
     Each dict has keys: ``harness``, ``fetched_at``, ``models`` (list of
     ``{"id", "label"}``), ``discovery_error``.
     """
-    rows = conn.execute(
-        "SELECT harness, fetched_at, models_json, discovery_error FROM harness_models"
+    rows = db.conn.execute(
+        "SELECT harness, fetched_at, models_json, discovery_error FROM harness_models "
+        "WHERE repository_id = ?",
+        (db.repository_id,),
     ).fetchall()
     result = []
     for row in rows:

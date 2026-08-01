@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -21,11 +20,13 @@ from murder.state.persistence.approvals import (
     resolve_approval_request,
     resolve_standalone_approval_request,
 )
+from murder.state.persistence.connection import RepoDb
+
 
 class ApprovalEffects(Protocol):
     """Runtime capabilities required by approval and grant use cases."""
 
-    db: sqlite3.Connection | None
+    db: RepoDb | None
 
 
 def register(
@@ -34,7 +35,8 @@ def register(
     effects: ApprovalEffects,
 ) -> None:
     """Register approval use cases and authoritative approval projections."""
-    def _db() -> sqlite3.Connection:
+
+    def _db() -> RepoDb:
         connection = effects.db
         if connection is None:
             raise RuntimeError("service not started")
@@ -69,8 +71,8 @@ def register(
         if params.reviewer is None:
             raise ValueError("approval.decide requires a reviewer")
         reviewer = params.reviewer
-        connection = _db()
-        request = PermissionStore(connection).get_approval_request(params.approval_id)
+        db = _db()
+        request = PermissionStore(db).get_approval_request(params.approval_id)
         if request is None:
             raise ValueError(f"approval {params.approval_id} does not exist")
         now = datetime.now(timezone.utc)
@@ -79,11 +81,9 @@ def register(
                 params.workflow_id != request.workflow_id
                 or params.expected_workflow_revision is None
             ):
-                raise ValueError(
-                    "workflow approval requires its workflow id and expected revision"
-                )
+                raise ValueError("workflow approval requires its workflow id and expected revision")
             decision, grant, authorization = resolve_approval_request(
-                connection,
+                db,
                 workflow_id=params.workflow_id,
                 approval_id=params.approval_id,
                 expected_workflow_revision=params.expected_workflow_revision,
@@ -94,13 +94,10 @@ def register(
                 decided_at=now,
             )
         else:
-            if (
-                params.workflow_id is not None
-                or params.expected_workflow_revision is not None
-            ):
+            if params.workflow_id is not None or params.expected_workflow_revision is not None:
                 raise ValueError("standalone approval does not belong to a workflow")
             decision, grant, authorization = resolve_standalone_approval_request(
-                connection,
+                db,
                 approval_id=params.approval_id,
                 expected_operation_digest=params.expected_operation_digest,
                 reviewer=reviewer,
@@ -112,9 +109,7 @@ def register(
             "decision": decision.model_dump(mode="json"),
             "grant": grant.model_dump(mode="json") if grant is not None else None,
             "authorization": (
-                authorization.model_dump(mode="json")
-                if authorization is not None
-                else None
+                authorization.model_dump(mode="json") if authorization is not None else None
             ),
         }
 

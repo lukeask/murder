@@ -214,7 +214,7 @@ class VerifiedHarnessSessionBackend:
     async def interrupt(self, command: InterruptSession) -> None:
         del command
         if not await self._control.interrupt():
-            raise SessionBackendError("verified harness did not acknowledge interruption")
+            raise SessionBackendError("the verified harness did not acknowledge interruption")
 
     async def terminate(self, command: TerminateSession) -> None:
         await self._terminate_writer(command.force, command.reason)

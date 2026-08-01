@@ -11,10 +11,11 @@ same SHA replaces rows, it does not duplicate them.
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
+from typing import Any
 
 from murder.codebase_map.summarize import FileSummary
+from murder.state.persistence.connection import RepoDb
 
 
 def _now() -> str:
@@ -22,19 +23,19 @@ def _now() -> str:
 
 
 def snapshot_file(
-    db: sqlite3.Connection,
+    db: RepoDb,
     path: str,
     commit_sha: str,
     summary: FileSummary,
 ) -> None:
     """Upsert a file summary row, carrying source_hash + token counts."""
-    db.execute(
+    db.conn.execute(
         """
         INSERT INTO map_summaries
-            (path, commit_sha, kind, body, source_hash,
+            (repository_id, path, commit_sha, kind, body, source_hash,
              source_tokens, summary_tokens, generated_at)
-        VALUES (?, ?, 'file', ?, ?, ?, ?, ?)
-        ON CONFLICT(path, commit_sha) DO UPDATE SET
+        VALUES (?, ?, ?, 'file', ?, ?, ?, ?, ?)
+        ON CONFLICT(repository_id, path, commit_sha) DO UPDATE SET
             kind = excluded.kind,
             body = excluded.body,
             source_hash = excluded.source_hash,
@@ -43,6 +44,7 @@ def snapshot_file(
             generated_at = excluded.generated_at
         """,
         (
+            db.repository_id,
             path,
             commit_sha,
             summary.body,
@@ -55,7 +57,7 @@ def snapshot_file(
 
 
 def snapshot_rollup(
-    db: sqlite3.Connection,
+    db: RepoDb,
     path: str,
     commit_sha: str,
     kind: str,
@@ -64,13 +66,13 @@ def snapshot_rollup(
     summary_tokens: int,
 ) -> None:
     """Upsert a dir/root roll-up row (no source_hash/source_tokens)."""
-    db.execute(
+    db.conn.execute(
         """
         INSERT INTO map_summaries
-            (path, commit_sha, kind, body, source_hash,
+            (repository_id, path, commit_sha, kind, body, source_hash,
              source_tokens, summary_tokens, generated_at)
-        VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
-        ON CONFLICT(path, commit_sha) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+        ON CONFLICT(repository_id, path, commit_sha) DO UPDATE SET
             kind = excluded.kind,
             body = excluded.body,
             source_hash = excluded.source_hash,
@@ -78,26 +80,26 @@ def snapshot_rollup(
             summary_tokens = excluded.summary_tokens,
             generated_at = excluded.generated_at
         """,
-        (path, commit_sha, kind, body, summary_tokens, _now()),
+        (db.repository_id, path, commit_sha, kind, body, summary_tokens, _now()),
     )
 
 
 def load_summary(
-    db: sqlite3.Connection,
+    db: RepoDb,
     path: str,
     commit_sha: str,
-) -> sqlite3.Row | None:
+) -> Any | None:
     """Return the row for ``(path, commit_sha)`` or None."""
-    return db.execute(
-        "SELECT * FROM map_summaries WHERE path = ? AND commit_sha = ?",
-        (path, commit_sha),
+    return db.conn.execute(
+        "SELECT * FROM map_summaries WHERE repository_id = ? AND path = ? AND commit_sha = ?",
+        (db.repository_id, path, commit_sha),
     ).fetchone()
 
 
 def load_latest_summary(
-    db: sqlite3.Connection,
+    db: RepoDb,
     path: str,
-) -> sqlite3.Row | None:
+) -> Any | None:
     """The most-recently-generated row for ``path``, any commit_sha.
 
     Incremental updates snapshot ONLY changed/re-rolled paths under the new
@@ -105,53 +107,55 @@ def load_latest_summary(
     back — read-back must take the latest known row, not an exact-sha hit.
     ``rowid DESC`` breaks generated_at ties (seconds resolution).
     """
-    return db.execute(
+    return db.conn.execute(
         """
         SELECT * FROM map_summaries
-         WHERE path = ?
+         WHERE repository_id = ? AND path = ?
          ORDER BY generated_at DESC, rowid DESC
          LIMIT 1
         """,
-        (path,),
+        (db.repository_id, path),
     ).fetchone()
 
 
-def latest_map_sha(db: sqlite3.Connection) -> str | None:
+def latest_map_sha(db: RepoDb) -> str | None:
     """Most-recently-generated commit_sha present (the hinge for t061's diff)."""
-    row = db.execute(
+    row = db.conn.execute(
         """
         SELECT commit_sha
-          FROM map_summaries
+          FROM map_summaries WHERE repository_id = ?
          GROUP BY commit_sha
-         ORDER BY MAX(generated_at) DESC
-         LIMIT 1
-        """
+        ORDER BY MAX(generated_at) DESC
+        LIMIT 1
+        """,
+        (db.repository_id,),
     ).fetchone()
     return row["commit_sha"] if row else None
 
 
-def rows_for_commit(db: sqlite3.Connection, commit_sha: str) -> list[sqlite3.Row]:
+def rows_for_commit(db: RepoDb, commit_sha: str) -> list[object]:
     """All map rows for a given commit_sha."""
-    return db.execute(
-        "SELECT * FROM map_summaries WHERE commit_sha = ? ORDER BY path",
-        (commit_sha,),
+    return db.conn.execute(
+        "SELECT * FROM map_summaries WHERE repository_id = ? AND commit_sha = ? ORDER BY path",
+        (db.repository_id, commit_sha),
     ).fetchall()
 
 
-def all_file_paths(db: sqlite3.Connection) -> set[str]:
+def all_file_paths(db: RepoDb) -> set[str]:
     """Every distinct ``path`` that has ever been snapshotted as a file summary.
 
     The reconcile loop diffs this against the live working tree to find files
     that were summarized once but have since been deleted (their rendered nodes
     must be pruned). Roll-up rows (``kind in ('dir','root')``) are excluded.
     """
-    rows = db.execute(
-        "SELECT DISTINCT path FROM map_summaries WHERE kind = 'file'"
+    rows = db.conn.execute(
+        "SELECT DISTINCT path FROM map_summaries WHERE repository_id = ? AND kind = 'file'",
+        (db.repository_id,),
     ).fetchall()
     return {r["path"] for r in rows}
 
 
-def prune_file_snapshots(db: sqlite3.Connection, path: str) -> None:
+def prune_file_snapshots(db: RepoDb, path: str) -> None:
     """Drop the file-summary history for ``path`` — the deletion tombstone.
 
     When a tracked file is deleted, ``reconcile_map`` re-rolls its parent dir /
@@ -163,9 +167,9 @@ def prune_file_snapshots(db: sqlite3.Connection, path: str) -> None:
     processed exactly once. The live map no longer references it once the
     rollups have been re-rolled, so dropping the history is safe.
     """
-    db.execute(
-        "DELETE FROM map_summaries WHERE path = ? AND kind = 'file'",
-        (path,),
+    db.conn.execute(
+        "DELETE FROM map_summaries WHERE repository_id = ? AND path = ? AND kind = 'file'",
+        (db.repository_id, path),
     )
 
 

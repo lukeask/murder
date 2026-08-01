@@ -59,7 +59,7 @@ class InProcessOrchestrationEventSink:
         async with self._lock:
             handlers = list(self._subs.values())
 
-        # Fan out concurrently; each handler isolated.
+        # Fan out concurrently. Each handler isolated.
         async def _dispatch(h: OrchestrationHandler) -> None:
             try:
                 await h(event)

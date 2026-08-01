@@ -129,8 +129,8 @@ def upsert_semantic_unit_version(
 ) -> SemanticUnitVersionRecord:
     """Upsert the extraction of ``unit_id`` within ``file_version_id``.
 
-    Raises ``ValueError`` if the unit's logical file does not match the file
-    version's logical file (i.e. they don't belong to the same ``file_id``).
+    Raises ``ValueError`` if the unit logical file does not match the file
+    version logical file (they do not belong to the same ``file_id``).
     """
     unit_row = conn.execute(
         "SELECT file_id FROM semantic_units WHERE unit_id = ?",
@@ -277,7 +277,7 @@ def list_child_unit_versions_in_snapshot(
 
 
 def get_semantic_unit(conn: sqlite3.Connection, unit_id: int) -> SemanticUnitRecord | None:
-    """Fetch a logical semantic unit by id, or ``None`` if it doesn't exist."""
+    """Fetch a logical semantic unit by id, or ``None`` if it does not exist."""
     row = conn.execute(
         """
         SELECT unit_id, file_id, logical_key, first_seen_at, last_seen_at
@@ -294,7 +294,7 @@ def get_semantic_unit(conn: sqlite3.Connection, unit_id: int) -> SemanticUnitRec
 def get_semantic_unit_version(
     conn: sqlite3.Connection, unit_version_id: int
 ) -> SemanticUnitVersionRecord | None:
-    """Fetch a unit version by id, or ``None`` if it doesn't exist."""
+    """Fetch a unit version by id, or ``None`` if it does not exist."""
     row = conn.execute(
         """
         SELECT unit_version_id, unit_id, file_version_id, language_kind, semantic_role,

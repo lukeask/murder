@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 # Known client prefixes for wire RPC correlation IDs. Stripped only when deriving
-# a domain request UUID; transport handles themselves stay opaque strings.
+# a domain request UUID. Transport handles themselves stay opaque strings.
 _WIRE_REQUEST_ID_PREFIXES = ("request-", "req-")
 
 

@@ -14,7 +14,7 @@ class ProjectionSnapshotProvider(Protocol):
 
 
 class ProjectionProviderRegistry:
-    """Register and find projection providers; it owns no projection logic."""
+    """Register and find projection providers. It owns no projection logic."""
 
     def __init__(self) -> None:
         self._providers: dict[ProjectionTopic, ProjectionSnapshotProvider] = {}

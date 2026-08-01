@@ -21,7 +21,7 @@ _RESERVED_EXTRA_KEYS: frozenset[str] = frozenset(
     }
 )
 
-# Per-event log level. Failures warn; everything else is INFO default-tier.
+# Per-event log level. Failures warn. Everything else is INFO default-tier.
 _EVENT_LEVELS: dict[str, int] = {
     "AgentFailedEvent": logging.WARNING,
 }
@@ -100,7 +100,7 @@ class LoggingAgentEventSink:
         for field in fields(event):
             key = field.name
             value = getattr(event, key)
-            # ``session_name`` already rides in the message string; keep it
+            # ``session_name`` already rides in the message string. Keep it
             # structured too. Remap any field whose name would collide with a
             # reserved LogRecord attribute (e.g. ``message``) before it reaches
             # ``extra=``, which would otherwise raise.

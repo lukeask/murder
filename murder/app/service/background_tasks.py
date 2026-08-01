@@ -111,7 +111,7 @@ class ServiceBackgroundTasks:
         self._tasks.clear()
 
     async def _ensure_startup_rogue_safely(self) -> None:
-        """Best-effort configured Startup Rogue creation; never fail boot."""
+        """Best-effort configured Startup Rogue creation. Never fail boot."""
         try:
             await self.orchestrator.ensure_startup_rogue()
         except Exception:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol
 from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.events import CompletionVerdictEvent
 from murder.runtime.orchestration.ports import OrchestrationEventSink
+from murder.state.persistence.connection import RepoDb
 
 from .checks.base import CheckResult, CheckStatus, CompletionContext
 from .persistence import bump_attempts, get_attempts, reset_attempts, write_check_result
@@ -39,7 +39,7 @@ class CoordinatorHost(Protocol):
     """Subset of runtime the coordinator requires."""
 
     repo_root: Path
-    db: sqlite3.Connection | None
+    db: RepoDb | None
     orchestration_events: OrchestrationEventSink | None
     run_id: str | None
 
@@ -47,7 +47,7 @@ class CoordinatorHost(Protocol):
 
     def get_agent(self, agent_id: str) -> Agent | None: ...
 
-    # F1: key-only ticket snapshot emit (async choke point; see Runtime).
+    # F1: key-only ticket snapshot emit (async choke point). See Runtime.
 
 
 EnsurePlanner = Callable[[str], Awaitable[str]]
@@ -57,14 +57,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
-def _get_plan_name(conn: sqlite3.Connection, ticket_id: str) -> str | None:
-    has_plan_tickets = conn.execute(
+def _get_plan_name(db: RepoDb, ticket_id: str) -> str | None:
+    has_plan_tickets = db.conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'plan_tickets'"
     ).fetchone()
     table = "plan_tickets" if has_plan_tickets is not None else "plan_related_tickets"
-    row = conn.execute(
-        f"SELECT plan_name FROM {table} WHERE ticket_id = ? LIMIT 1",
-        (ticket_id,),
+    row = db.conn.execute(
+        f"SELECT plan_name FROM {table} WHERE repository_id = ? AND ticket_id = ? LIMIT 1",
+        (db.repository_id, ticket_id),
     ).fetchone()
     return str(row["plan_name"]) if row else None
 
@@ -93,8 +93,8 @@ class CompletionCoordinator:
         if self._rt.db is None:
             return DoneHandleResult(completed=False)
 
-        conn = self._rt.db
-        row = _db_get_ticket(conn, ticket_id)
+        db = self._rt.db
+        row = _db_get_ticket(db, ticket_id)
         if row is None:
             LOGGER.warning("coordinator.handle_done: ticket %s not found", ticket_id)
             return DoneHandleResult(completed=False)
@@ -102,7 +102,7 @@ class CompletionCoordinator:
         ctx = CompletionContext(
             ticket_id=ticket_id,
             repo_root=repo_root or self._rt.repo_root,
-            db=conn,
+            db=db,
         )
 
         checks = self._registry.assigned_checks(row)
@@ -114,13 +114,13 @@ class CompletionCoordinator:
                 result = await check.run(ctx)
             except Exception as exc:
                 LOGGER.error("check %s raised: %s", check.name, exc)
-                write_check_result(conn, ticket_id, check.name, timestamp, "fail", None)
+                write_check_result(db, ticket_id, check.name, timestamp, "fail", None)
                 results.append((check.name, None))
                 continue
 
             data_json = json.dumps({"message": result.message, "hint": result.hint})
             write_check_result(
-                conn, ticket_id, check.name, timestamp, result.status.value, data_json
+                db, ticket_id, check.name, timestamp, result.status.value, data_json
             )
             results.append((check.name, result))
 
@@ -130,7 +130,7 @@ class CompletionCoordinator:
         failures = [(name, r) for name, r in results if r is None or r.status == CheckStatus.FAIL]
 
         for name, _ in passes:
-            reset_attempts(conn, ticket_id, name)
+            reset_attempts(db, ticket_id, name)
 
         if not failures:
             await self._transition_done(ticket_id)
@@ -140,8 +140,8 @@ class CompletionCoordinator:
         reprompt_msgs: list[str] = []
         ticket_failed = False
         for name, result in failures:
-            n = get_attempts(conn, ticket_id, name)
-            bump_attempts(conn, ticket_id, name)
+            n = get_attempts(db, ticket_id, name)
+            bump_attempts(db, ticket_id, name)
             owner = resolution_policy(name, n)
             ticket_failed = await self._dispatch(
                 owner,
@@ -345,7 +345,7 @@ class CompletionCoordinator:
 
         assert self._rt.db is not None
         return TicketOutcomeService(
-            conn=self._rt.db,
+            db=self._rt.db,
             repo_root=self._rt.repo_root,
             escalations=self._make_escalation_service(),
             emit_status=self._emit_status,
@@ -358,18 +358,18 @@ class CompletionCoordinator:
     async def _block_ticket(self, ticket_id: str) -> None:
         if self._rt.db is None:
             return
-        from murder.work.tickets.status import TicketStatus
         from murder.state.persistence.tickets import update_ticket_status
+        from murder.work.tickets.status import TicketStatus
 
         update_ticket_status(self._rt.db, ticket_id, TicketStatus.BLOCKED.value)
-        self._rt.db.commit()
+        self._rt.db.conn.commit()
 
     def _make_escalation_service(self) -> EscalationService:
         from murder.verdict.escalations.service import EscalationService
 
         assert self._rt.db is not None
         return EscalationService(
-            conn=self._rt.db,
+            db=self._rt.db,
             repo_root=self._rt.repo_root,
             events=self._rt.orchestration_events,
             run_id=self._rt.run_id,

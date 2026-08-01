@@ -54,7 +54,7 @@ class DoneSessionSweeperWorker(Worker):
                     LOGGER.info("swept stale crow session %s for agent %s", session, agent_id)
                 except Exception:
                     LOGGER.warning(
-                        "failed to kill stale crow session %s for agent %s; "
+                        "failed to kill stale crow session %s for agent %s. "
                         "leaving DB row for retry",
                         session,
                         agent_id,

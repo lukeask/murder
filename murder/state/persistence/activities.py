@@ -1,5 +1,7 @@
 """Persistence and fenced lifecycle for durable workflow activities."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import json
@@ -25,6 +27,7 @@ from murder.facts.contracts import (
 )
 from murder.facts.log import append_fact
 from murder.runtime.admission import AdmissionDecision, Admitted, Rejected
+from murder.state.persistence.connection import DB_INTEGRITY_ERRORS, Connection, RepoDb
 from murder.state.persistence.workflow_runs import (
     enqueue_workflow_signal,
     require_workflow_run,
@@ -57,28 +60,30 @@ class ActivityLifecycleError(RuntimeError):
 
 
 def insert_activity_requests(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     workflow_revision: int,
     drafts: Sequence[ActivityRequestDraft],
     created_at: datetime,
 ) -> None:
-    """Insert transition-owned activities; caller owns the transition transaction."""
+    """Insert transition-owned activities. The caller owns the transition transaction."""
 
+    conn = db.conn
     for ordinal, draft in enumerate(drafts):
         conn.execute(
             """
             INSERT INTO activities(
-                activity_id, workflow_id, workflow_revision, ordinal, status,
+                repository_id, activity_id, workflow_id, workflow_revision, ordinal, status,
                 revision,
                 payload_json, requirements_json, idempotency_key, priority,
                 retry_policy, max_attempts, route_json, route_id, session_id, attempts,
                 claim_owner, claim_fence, claim_expires_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL,
+            ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL,
                       0, NULL, 0, NULL, ?, ?)
             """,
             (
+                db.repository_id,
                 str(draft.activity_id),
                 str(workflow_id),
                 workflow_revision,
@@ -94,42 +99,43 @@ def insert_activity_requests(
             ),
         )
         _append_activity_input(
-            conn,
-            activity=_require(conn, draft.activity_id),
+            db,
+            activity=_require(db, draft.activity_id),
             operation="created",
             timestamp=created_at,
         )
 
 
-def get_activity(conn: sqlite3.Connection, activity_id: UUID) -> ActivityRecord | None:
-    row = conn.execute(
-        "SELECT * FROM activities WHERE activity_id = ?",
-        (str(activity_id),),
+def get_activity(db: RepoDb, activity_id: UUID) -> ActivityRecord | None:
+    row = db.conn.execute(
+        "SELECT * FROM activities WHERE activity_id = ? AND repository_id = ?",
+        (str(activity_id), db.repository_id),
     ).fetchone()
     return _activity(row) if row is not None else None
 
 
 def list_activities(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     status: ActivityStatus | None = None,
 ) -> tuple[ActivityRecord, ...]:
-    rows = conn.execute(
-        "SELECT * FROM activities"
-        + (" WHERE status = ?" if status is not None else "")
+    rows = db.conn.execute(
+        "SELECT * FROM activities WHERE repository_id = ?"
+        + (" AND status = ?" if status is not None else "")
         + " ORDER BY priority DESC, created_at, activity_id",
-        (() if status is None else (status.value,)),
+        (db.repository_id,) + (() if status is None else (status.value,)),
     ).fetchall()
     return tuple(_activity(row) for row in rows)
 
 
 def persist_route(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     activity_id: UUID,
     route: ExecutionRoute,
     *,
     now: datetime | None = None,
 ) -> ActivityRecord:
+    conn = db.conn
     timestamp = _aware(now)
     with _transaction(conn, immediate=True):
         updated = conn.execute(
@@ -137,7 +143,7 @@ def persist_route(
             UPDATE activities
             SET status = 'waiting_admission', revision = revision + 1,
                 route_json = ?, route_id = ?, session_id = ?, updated_at = ?
-            WHERE activity_id = ? AND status IN ('pending', 'routing', 'waiting_admission')
+            WHERE activity_id = ? AND repository_id = ? AND status IN ('pending', 'routing', 'waiting_admission')
             """,
             (
                 _json(route.model_dump(mode="json")),
@@ -145,13 +151,14 @@ def persist_route(
                 str(route.selected_session_id) if route.selected_session_id else None,
                 _time(timestamp),
                 str(activity_id),
+                db.repository_id,
             ),
         )
         if updated.rowcount != 1:
             raise ActivityLifecycleError("activity cannot be routed from its current state")
-        activity = _require(conn, activity_id)
+        activity = _require(db, activity_id)
         _append_activity_input(
-            conn,
+            db,
             activity=activity,
             operation="routed",
             timestamp=timestamp,
@@ -160,26 +167,27 @@ def persist_route(
 
 
 def persist_admission(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     activity_id: UUID,
     decision: AdmissionDecision,
     *,
     now: datetime | None = None,
 ) -> ActivityRecord:
+    conn = db.conn
     timestamp = _aware(now)
     rejected_workflow_id: UUID | None = None
     with _transaction(conn, immediate=True):
-        current = _require(conn, activity_id)
+        current = _require(db, activity_id)
         if current.status != ActivityStatus.WAITING_ADMISSION:
             raise ActivityLifecycleError("only routed activities may be admitted")
         if isinstance(decision, Admitted):
-            _release_expired_reservations(conn, timestamp)
+            _release_expired_reservations(db, timestamp)
             conn.execute(
                 """
                 INSERT INTO activity_reservations(
-                    reservation_id, activity_id, reservation_keys_json,
+                    repository_id, reservation_id, activity_id, reservation_keys_json,
                     admitted_at, expires_at, released_at
-                ) VALUES (?, ?, ?, ?, ?, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(activity_id) DO UPDATE SET
                     reservation_id = excluded.reservation_id,
                     reservation_keys_json = excluded.reservation_keys_json,
@@ -188,6 +196,7 @@ def persist_admission(
                     released_at = NULL
                 """,
                 (
+                    db.repository_id,
                     str(decision.reservation_id),
                     str(activity_id),
                     _json(list(decision.reservation_keys)),
@@ -196,17 +205,18 @@ def persist_admission(
                 ),
             )
             conn.execute(
-                "DELETE FROM activity_reservation_locks WHERE activity_id = ?",
-                (str(activity_id),),
+                "DELETE FROM activity_reservation_locks WHERE activity_id = ? AND repository_id = ?",
+                (str(activity_id), db.repository_id),
             )
             try:
                 conn.executemany(
                     """
-                    INSERT INTO activity_reservation_locks(resource_key, activity_id, expires_at)
-                    VALUES (?, ?, ?)
+                    INSERT INTO activity_reservation_locks(repository_id, resource_key, activity_id, expires_at)
+                    VALUES (?, ?, ?, ?)
                     """,
                     (
                         (
+                            db.repository_id,
                             key,
                             str(activity_id),
                             _time(decision.reservation_expires_at),
@@ -214,19 +224,19 @@ def persist_admission(
                         for key in decision.reservation_keys
                     ),
                 )
-            except sqlite3.IntegrityError as exc:
+            except DB_INTEGRITY_ERRORS as exc:
                 raise ActivityLifecycleError("admission resource lock is already reserved") from exc
             conn.execute(
                 """
                 UPDATE activities
                    SET revision = revision + 1, updated_at = ?
-                 WHERE activity_id = ?
+                 WHERE activity_id = ? AND repository_id = ?
                 """,
-                (_time(timestamp), str(activity_id)),
+                (_time(timestamp), str(activity_id), db.repository_id),
             )
             _append_activity_input(
-                conn,
-                activity=_require(conn, activity_id),
+                db,
+                activity=_require(db, activity_id),
                 operation="admitted",
                 timestamp=timestamp,
             )
@@ -236,10 +246,11 @@ def persist_admission(
             conn.execute(
                 """
                 INSERT INTO activity_results(
-                    result_id, activity_id, attempt, outcome_json, completed_at
-                ) VALUES (?, ?, 0, ?, ?)
+                    repository_id, result_id, activity_id, attempt, outcome_json, completed_at
+                ) VALUES (?, ?, ?, 0, ?, ?)
                 """,
                 (
+                    db.repository_id,
                     str(result_id),
                     str(activity_id),
                     _json(_OUTCOME.dump_python(outcome, mode="json")),
@@ -249,11 +260,11 @@ def persist_admission(
             conn.execute(
                 "UPDATE activities SET status = 'cancelled', "
                 "revision = revision + 1, updated_at = ? "
-                "WHERE activity_id = ?",
-                (_time(timestamp), str(activity_id)),
+                "WHERE activity_id = ? AND repository_id = ?",
+                (_time(timestamp), str(activity_id), db.repository_id),
             )
             _append_completion_fact(
-                conn,
+                db,
                 activity=current,
                 result_id=result_id,
                 attempt=0,
@@ -263,7 +274,7 @@ def persist_admission(
                 timestamp=timestamp,
             )
             enqueue_workflow_signal(
-                conn,
+                db,
                 workflow_id=current.workflow_id,
                 deduplication_key=f"activity:{activity_id}:admission:rejected",
                 payload=ActivityFinishedSignal(
@@ -274,12 +285,12 @@ def persist_admission(
             )
             rejected_workflow_id = current.workflow_id
     if rejected_workflow_id is not None:
-        _best_effort_wake(conn, rejected_workflow_id, timestamp)
-    return _require(conn, activity_id)
+        _best_effort_wake(db, rejected_workflow_id, timestamp)
+    return _require(db, activity_id)
 
 
 def claim_activity(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     activity_id: UUID,
     *,
     owner: str,
@@ -289,6 +300,7 @@ def claim_activity(
 ) -> ActivityClaim:
     if not owner or lease_for.total_seconds() <= 0:
         raise ValueError("claim owner and positive lease are required")
+    conn = db.conn
     timestamp = _aware(now)
     expires = timestamp + lease_for
     with _transaction(conn, immediate=True):
@@ -296,10 +308,10 @@ def claim_activity(
             """
             SELECT a.*, r.released_at, r.expires_at AS reservation_expires_at
             FROM activities AS a
-            JOIN activity_reservations AS r ON r.activity_id = a.activity_id
-            WHERE a.activity_id = ?
+            JOIN activity_reservations AS r ON r.activity_id = a.activity_id AND r.repository_id = a.repository_id
+            WHERE a.activity_id = ? AND a.repository_id = ?
             """,
-            (str(activity_id),),
+            (str(activity_id), db.repository_id),
         ).fetchone()
         if (
             row is None
@@ -327,13 +339,21 @@ def claim_activity(
             UPDATE activities SET status = 'claimed', revision = revision + 1,
                 attempts = ?, claim_owner = ?,
                 claim_fence = ?, claim_expires_at = ?, updated_at = ?
-            WHERE activity_id = ?
+            WHERE activity_id = ? AND repository_id = ?
             """,
-            (attempt, owner, fence, _time(expires), _time(timestamp), str(activity_id)),
+            (
+                attempt,
+                owner,
+                fence,
+                _time(expires),
+                _time(timestamp),
+                str(activity_id),
+                db.repository_id,
+            ),
         )
         _append_activity_input(
-            conn,
-            activity=_require(conn, activity_id),
+            db,
+            activity=_require(db, activity_id),
             operation="claimed",
             timestamp=timestamp,
         )
@@ -348,12 +368,13 @@ def claim_activity(
 
 
 def renew_activity_claim(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     claim: ActivityClaim,
     *,
     lease_for: timedelta,
     now: datetime | None = None,
 ) -> ActivityClaim:
+    conn = db.conn
     timestamp = _aware(now)
     expires = timestamp + lease_for
     if lease_for.total_seconds() <= 0:
@@ -363,7 +384,7 @@ def renew_activity_claim(
             """
             UPDATE activities SET revision = revision + 1,
                 claim_expires_at = ?, updated_at = ?
-            WHERE activity_id = ? AND status IN ('claimed','running')
+            WHERE activity_id = ? AND repository_id = ? AND status IN ('claimed','running')
               AND attempts = ? AND claim_owner = ? AND claim_fence = ?
               AND claim_expires_at > ?
             """,
@@ -371,6 +392,7 @@ def renew_activity_claim(
                 _time(expires),
                 _time(timestamp),
                 str(claim.activity_id),
+                db.repository_id,
                 claim.attempt,
                 claim.owner,
                 claim.fence,
@@ -380,8 +402,8 @@ def renew_activity_claim(
         if updated.rowcount != 1:
             raise ActivityLifecycleError("activity claim is stale or expired")
         _append_activity_input(
-            conn,
-            activity=_require(conn, claim.activity_id),
+            db,
+            activity=_require(db, claim.activity_id),
             operation="claim_renewed",
             timestamp=timestamp,
         )
@@ -389,22 +411,24 @@ def renew_activity_claim(
 
 
 def start_activity(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     claim: ActivityClaim,
     *,
     now: datetime | None = None,
 ) -> ActivityRecord:
+    conn = db.conn
     timestamp = _aware(now)
     with _transaction(conn, immediate=True):
         updated = conn.execute(
             """
             UPDATE activities SET status = 'running', revision = revision + 1, updated_at = ?
-            WHERE activity_id = ? AND status = 'claimed' AND attempts = ?
+            WHERE activity_id = ? AND repository_id = ? AND status = 'claimed' AND attempts = ?
               AND claim_owner = ? AND claim_fence = ? AND claim_expires_at > ?
             """,
             (
                 _time(timestamp),
                 str(claim.activity_id),
+                db.repository_id,
                 claim.attempt,
                 claim.owner,
                 claim.fence,
@@ -413,9 +437,9 @@ def start_activity(
         )
         if updated.rowcount != 1:
             raise ActivityLifecycleError("activity claim is stale or expired")
-        activity = _require(conn, claim.activity_id)
+        activity = _require(db, claim.activity_id)
         _append_activity_input(
-            conn,
+            db,
             activity=activity,
             operation="started",
             timestamp=timestamp,
@@ -424,51 +448,53 @@ def start_activity(
 
 
 def reap_expired_claims(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     now: datetime | None = None,
 ) -> int:
+    conn = db.conn
     timestamp = _aware(now)
     with _transaction(conn, immediate=True):
         rows = conn.execute(
             """
             SELECT activity_id FROM activities
-             WHERE status IN ('claimed','running') AND claim_expires_at <= ?
+             WHERE repository_id = ? AND status IN ('claimed','running') AND claim_expires_at <= ?
             """,
-            (_time(timestamp),),
+            (db.repository_id, _time(timestamp)),
         ).fetchall()
         updated = conn.execute(
             """
             UPDATE activities
             SET status = 'waiting_admission', revision = revision + 1, claim_owner = NULL,
                 claim_expires_at = NULL, updated_at = ?
-            WHERE status IN ('claimed','running') AND claim_expires_at <= ?
+            WHERE repository_id = ? AND status IN ('claimed','running') AND claim_expires_at <= ?
             """,
-            (_time(timestamp), _time(timestamp)),
+            (_time(timestamp), db.repository_id, _time(timestamp)),
         )
         for row in rows:
             activity_id = UUID(str(row["activity_id"]))
             _append_activity_input(
-                conn,
-                activity=_require(conn, activity_id),
+                db,
+                activity=_require(db, activity_id),
                 operation="claim_reaped",
                 timestamp=timestamp,
             )
-        return updated.rowcount
+        return int(updated.rowcount)
 
 
 def reap_expired_reservations(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     now: datetime | None = None,
 ) -> int:
+    conn = db.conn
     timestamp = _aware(now)
     with _transaction(conn, immediate=True):
-        return _release_expired_reservations(conn, timestamp)
+        return _release_expired_reservations(db, timestamp)
 
 
 def complete_activity(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     claim: ActivityClaim,
     outcome: ActivityOutcome,
     *,
@@ -476,6 +502,7 @@ def complete_activity(
 ) -> ActivityResultRecord:
     """Terminalize once and wake the owning workflow in the same transaction."""
 
+    conn = db.conn
     timestamp = _aware(now)
     result = ActivityResultRecord(
         result_id=uuid4(),
@@ -486,7 +513,7 @@ def complete_activity(
     )
     terminal_status = _outcome_status(outcome)
     with _transaction(conn, immediate=True):
-        activity = _require(conn, claim.activity_id)
+        activity = _require(db, claim.activity_id)
         retrying = (
             isinstance(outcome, ActivityFailure)
             and outcome.retryable
@@ -496,9 +523,9 @@ def complete_activity(
         existing_result_row = conn.execute(
             """
             SELECT * FROM activity_results
-            WHERE activity_id = ? AND attempt = ?
+            WHERE activity_id = ? AND repository_id = ? AND attempt = ?
             """,
-            (str(claim.activity_id), claim.attempt),
+            (str(claim.activity_id), db.repository_id, claim.attempt),
         ).fetchone()
         if existing_result_row is not None:
             existing = _result(existing_result_row)
@@ -519,10 +546,11 @@ def complete_activity(
         conn.execute(
             """
             INSERT INTO activity_results(
-                result_id, activity_id, attempt, outcome_json, completed_at
-            ) VALUES (?, ?, ?, ?, ?)
+                repository_id, result_id, activity_id, attempt, outcome_json, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
+                db.repository_id,
                 str(result.result_id),
                 str(result.activity_id),
                 result.attempt,
@@ -533,20 +561,20 @@ def complete_activity(
         conn.execute(
             """
             UPDATE activities SET status = ?, revision = revision + 1, claim_owner = NULL,
-                claim_expires_at = NULL, updated_at = ? WHERE activity_id = ?
+                claim_expires_at = NULL, updated_at = ? WHERE activity_id = ? AND repository_id = ?
             """,
-            (persisted_status.value, _time(timestamp), str(claim.activity_id)),
+            (persisted_status.value, _time(timestamp), str(claim.activity_id), db.repository_id),
         )
         conn.execute(
-            "UPDATE activity_reservations SET released_at = ? WHERE activity_id = ?",
-            (_time(timestamp), str(claim.activity_id)),
+            "UPDATE activity_reservations SET released_at = ? WHERE activity_id = ? AND repository_id = ?",
+            (_time(timestamp), str(claim.activity_id), db.repository_id),
         )
         conn.execute(
-            "DELETE FROM activity_reservation_locks WHERE activity_id = ?",
-            (str(claim.activity_id),),
+            "DELETE FROM activity_reservation_locks WHERE activity_id = ? AND repository_id = ?",
+            (str(claim.activity_id), db.repository_id),
         )
         _append_completion_fact(
-            conn,
+            db,
             activity=activity,
             result_id=result.result_id,
             attempt=result.attempt,
@@ -554,15 +582,11 @@ def complete_activity(
             actor_kind="activity_worker",
             actor_id=claim.owner,
             timestamp=timestamp,
-            kind=(
-                "activity.attempt_failed"
-                if retrying
-                else f"activity.{terminal_status.value}"
-            ),
+            kind=("activity.attempt_failed" if retrying else f"activity.{terminal_status.value}"),
         )
         if not retrying:
             enqueue_workflow_signal(
-                conn,
+                db,
                 workflow_id=activity.workflow_id,
                 deduplication_key=(
                     f"activity:{activity.activity_id}:attempt:{claim.attempt}:finished"
@@ -575,12 +599,12 @@ def complete_activity(
             )
     # Wake after the durable completion transaction. Recovery owns any crash gap.
     if not retrying:
-        _best_effort_wake(conn, activity.workflow_id, timestamp)
+        _best_effort_wake(db, activity.workflow_id, timestamp)
     return result
 
 
 def _append_completion_fact(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     activity: ActivityRecord,
     result_id: UUID,
@@ -591,7 +615,7 @@ def _append_completion_fact(
     timestamp: datetime,
     kind: str | None = None,
 ) -> None:
-    run = require_workflow_run(conn, activity.workflow_id)
+    run = require_workflow_run(db, activity.workflow_id)
     fact_type = kind or f"activity.{_outcome_status(outcome).value}"
     outcome_data = _OUTCOME.dump_python(outcome, mode="json")
     if fact_type in {"activity.succeeded", "activity.failed", "activity.cancelled"}:
@@ -615,7 +639,7 @@ def _append_completion_fact(
             },
         )
     append_fact(
-        conn,
+        db,
         RetainedFactDraft(
             fact_id=result_id,
             occurred_at=timestamp,
@@ -628,7 +652,7 @@ def _append_completion_fact(
             ProjectionInputDraft(
                 projection="activities",
                 subject_key=str(activity.activity_id),
-                generation=_require(conn, activity.activity_id).revision,
+                generation=_require(db, activity.activity_id).revision,
             ),
         ),
         recorded_at=timestamp,
@@ -636,7 +660,7 @@ def _append_completion_fact(
 
 
 def _append_activity_input(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     activity: ActivityRecord,
     operation: Literal[
@@ -650,7 +674,7 @@ def _append_activity_input(
     ],
     timestamp: datetime,
 ) -> None:
-    run = require_workflow_run(conn, activity.workflow_id)
+    run = require_workflow_run(db, activity.workflow_id)
     fact_type: ActivityStateFactType = f"activity.{operation}"  # type: ignore[assignment]
     payload = ActivityStateChangedPayload(
         type=fact_type,
@@ -662,7 +686,7 @@ def _append_activity_input(
         claim_fence=activity.claim_fence,
     )
     append_fact(
-        conn,
+        db,
         RetainedFactDraft(
             fact_id=uuid5(
                 _ACTIVITY_FACT_NAMESPACE,
@@ -702,14 +726,16 @@ def _outcome_status(outcome: ActivityOutcome) -> ActivityStatus:
 
 
 def _best_effort_wake(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     workflow_id: UUID,
     timestamp: datetime,
 ) -> None:
     try:
         from murder.work.workflows.service import WorkflowRuntime  # noqa: PLC0415
 
-        WorkflowRuntime(conn).decide_once(workflow_id, now=timestamp)
+        WorkflowRuntime(db).decide_once(
+            workflow_id, now=timestamp
+        )
     except Exception:
         LOGGER.warning(
             "best-effort wake failed for workflow %s",
@@ -718,23 +744,24 @@ def _best_effort_wake(
         )
 
 
-def _require(conn: sqlite3.Connection, activity_id: UUID) -> ActivityRecord:
-    result = get_activity(conn, activity_id)
+def _require(db: RepoDb, activity_id: UUID) -> ActivityRecord:
+    result = get_activity(db, activity_id)
     if result is None:
         raise ActivityLifecycleError(f"activity {activity_id} does not exist")
     return result
 
 
 def _release_expired_reservations(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     timestamp: datetime,
 ) -> int:
+    conn = db.conn
     rows = conn.execute(
         """
         SELECT activity_id FROM activity_reservations
-        WHERE released_at IS NULL AND expires_at <= ?
+        WHERE repository_id = ? AND released_at IS NULL AND expires_at <= ?
         """,
-        (_time(timestamp),),
+        (db.repository_id, _time(timestamp)),
     ).fetchall()
     ids = [str(row["activity_id"]) for row in rows]
     if not ids:
@@ -742,13 +769,13 @@ def _release_expired_reservations(
     placeholders = ",".join("?" for _ in ids)
     conn.execute(
         f"UPDATE activity_reservations SET released_at = ? "
-        f"WHERE activity_id IN ({placeholders})",
-        (_time(timestamp), *ids),
+        f"WHERE repository_id = ? AND activity_id IN ({placeholders})",
+        (db.repository_id, _time(timestamp), *ids),
     )
     conn.execute(
         f"DELETE FROM activity_reservation_locks "
-        f"WHERE activity_id IN ({placeholders})",
-        tuple(ids),
+        f"WHERE repository_id = ? AND activity_id IN ({placeholders})",
+        (db.repository_id, *ids),
     )
     return len(ids)
 
@@ -813,8 +840,8 @@ def _parse_time(value: object) -> datetime | None:
 
 
 @contextmanager
-def _transaction(conn: sqlite3.Connection, *, immediate: bool = False) -> Iterator[None]:
-    if conn.in_transaction:
+def _transaction(conn: Connection, *, immediate: bool = False) -> Iterator[None]:
+    if getattr(conn, "in_transaction", False):
         name = f"activity_{uuid4().hex}"
         conn.execute(f"SAVEPOINT {name}")
         try:

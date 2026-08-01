@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -16,6 +15,7 @@ from murder.app.protocol.workflows import (
 )
 from murder.app.service.application import ApplicationRegistrar
 from murder.app.service.projection_registry import ProjectionProviderRegistry
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.workflow_runs import (
     get_workflow_run,
     list_workflow_runs,
@@ -32,7 +32,7 @@ from murder.work.workflows.service import WorkflowRuntime
 class WorkflowEffects(Protocol):
     """Runtime capabilities required by workflow-run use cases."""
 
-    db: sqlite3.Connection | None
+    db: RepoDb | None
 
 
 def register(
@@ -41,7 +41,8 @@ def register(
     effects: WorkflowEffects,
 ) -> None:
     """Register workflow-run use cases and their feature-owned snapshot."""
-    def _db() -> sqlite3.Connection:
+
+    def _db() -> RepoDb:
         connection = effects.db
         if connection is None:
             raise RuntimeError("service not started")
@@ -59,15 +60,11 @@ def register(
 
     def _runs_get(body: dict[str, Any]) -> dict[str, Any]:
         params = GetWorkflowRunParams.model_validate(body)
-        connection = _db()
-        run = get_workflow_run(connection, params.workflow_id)
+        db = _db()
+        run = get_workflow_run(db, params.workflow_id)
         if run is None:
             return {"ok": False, "run": None, "waits": [], "error": "not_found"}
-        waits = (
-            list_workflow_waits(connection, params.workflow_id)
-            if params.include_waits
-            else []
-        )
+        waits = list_workflow_waits(db, params.workflow_id) if params.include_waits else []
         return {
             "ok": True,
             "run": run.model_dump(mode="json"),
@@ -91,12 +88,11 @@ def register(
 
     def _signal(body: dict[str, Any]) -> dict[str, Any]:
         params = SignalWorkflowParams.model_validate(body)
-        connection = _db()
+        db = _db()
         deduplication_key = params.deduplication_key or (
-            f"external:{params.name}:{params.correlation_key or ''}:"
-            f"{params.request_id or uuid4()}"
+            f"external:{params.name}:{params.correlation_key or ''}:{params.request_id or uuid4()}"
         )
-        signal, run = WorkflowRuntime(connection).enqueue_and_wake(
+        signal, run = WorkflowRuntime(db).enqueue_and_wake(
             workflow_id=params.workflow_id,
             deduplication_key=deduplication_key,
             payload=params.external_signal(),

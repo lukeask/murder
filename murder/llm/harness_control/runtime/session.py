@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -163,6 +162,7 @@ from murder.llm.harnesses.models import (
     HarnessUsageTotals,
     HarnessUsageWindow,
 )
+from murder.state.persistence.connection import DB_OPERATIONAL_ERRORS, RepoDb
 from murder.state.persistence.harness_control import (
     escalate_recovery_candidate,
     get_operation,
@@ -267,7 +267,7 @@ class VerifiedHarnessControlSession:
         model_discovery_driver: VerifiedModelDiscoveryDriver | None = None,
         harness_id: HarnessId,
         terminal_session: str,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         persistence_session_id: str | None,
         operation_arbiter: SessionOperationArbiter | None = None,
         structured_decision_timing: StructuredDecisionTimingPolicy = (
@@ -285,7 +285,8 @@ class VerifiedHarnessControlSession:
             controller, observer
         )
         self._usage_driver = usage_driver
-        self._connection = connection
+        self._db = db
+        self._connection = db.conn
         self._persistence_session_id = persistence_session_id
         self._operation_arbiter = operation_arbiter or SessionOperationArbiter()
         self._structured_decision_timing = structured_decision_timing
@@ -317,7 +318,7 @@ class VerifiedHarnessControlSession:
     async def ensure_session_controller(
         self,
         *,
-        repository_key: str | None = None,
+        repository_id: UUID | str | None = None,
         agent_key: str | None = None,
         registry: object | None = None,
         recover: bool = False,
@@ -347,22 +348,21 @@ class VerifiedHarnessControlSession:
         )
 
         ensure_session_schema(self._connection)
-        repository_identity = repository_key or _database_identity(self._connection)
+        if repository_id is None:
+            raise ValueError("repository_id is required when creating a session controller")
+        repository_uuid = UUID(str(repository_id))
         durable_agent_key = agent_key or self._persistence_session_id or self.terminal_session
         session_id = uuid5(
             NAMESPACE_URL,
-            f"murder:harness-session:{repository_identity}:{durable_agent_key}",
+            f"murder:harness-session:{repository_uuid}:{durable_agent_key}",
         )
-        store = SessionStore(self._connection)
+        store = SessionStore(self._db)
         record = store.get_session(session_id)
         if record is None:
             record = HarnessSessionRecord(
                 session_id=session_id,
                 agent_id=uuid5(NAMESPACE_URL, f"murder:agent:{durable_agent_key}"),
-                repository_id=uuid5(
-                    NAMESPACE_URL,
-                    f"murder:repository:{repository_identity}",
-                ),
+                repository_id=repository_uuid,
                 harness=str(self.harness_id),
                 transport=SessionTransport.TMUX,
                 transport_ref=self.terminal_session,
@@ -391,7 +391,7 @@ class VerifiedHarnessControlSession:
         selected_registry = (
             registry
             if isinstance(registry, SessionControllerRegistry)
-            else registry_for_connection(self._connection)
+            else registry_for_connection(self._db)
         )
         controller = await selected_registry.get_or_create(
             record,
@@ -479,7 +479,7 @@ class VerifiedHarnessControlSession:
         *,
         harness_kind: str,
         terminal_session: str,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         persistence_session_id: str | None = None,
         pane_epoch: int = 0,
         observation_adapter: HarnessObservationAdapter | None = None,
@@ -498,13 +498,13 @@ class VerifiedHarnessControlSession:
         """
 
         harness_id = HarnessId(harness_kind)
-        observation_adapter = observation_adapter or _adapter_for(harness_kind, connection)
+        observation_adapter = observation_adapter or _adapter_for(harness_kind, db)
         action_adapter = action_adapter or observation_adapter
         if not hasattr(action_adapter, "lower"):
             raise TypeError(f"verified adapter for {harness_kind!r} cannot lower semantic actions")
         captured_at = datetime.now(timezone.utc)
         persisted_snapshot = latest_observation_snapshot(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
         )
@@ -512,7 +512,7 @@ class VerifiedHarnessControlSession:
             harness_id, captured_at=captured_at
         )
         initial_evidence = list_session_evidence(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
             frame_limit=PARSER_HISTORY_FRAME_LIMIT,
@@ -528,7 +528,7 @@ class VerifiedHarnessControlSession:
             action_adapter,
             ObservationStore(initial_snapshot),
             HarnessActuator(TmuxTerminalEffectTransport(terminal_session)),
-            SqliteHarnessControlJournal(connection, session_id=persistence_session_id),
+            SqliteHarnessControlJournal(db, session_id=persistence_session_id),
             initial_evidence=initial_evidence,
         )
         observer = TmuxFrameObserver(
@@ -551,7 +551,7 @@ class VerifiedHarnessControlSession:
             model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
             harness_id=harness_id,
             terminal_session=terminal_session,
-            connection=connection,
+            db=db,
             persistence_session_id=persistence_session_id,
             structured_decision_timing=structured_decision_timing,
         )
@@ -563,7 +563,7 @@ class VerifiedHarnessControlSession:
         app_server: AppServerConnection,
         harness_kind: str = "codex",
         terminal_session: str,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         persistence_session_id: str | None = None,
         pane_epoch: int = 0,
         observation_adapter: HarnessObservationAdapter | None = None,
@@ -587,7 +587,7 @@ class VerifiedHarnessControlSession:
             raise TypeError(f"verified adapter for {harness_kind!r} cannot lower semantic actions")
         captured_at = datetime.now(timezone.utc)
         persisted_snapshot = latest_observation_snapshot(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
         )
@@ -595,7 +595,7 @@ class VerifiedHarnessControlSession:
             harness_id, captured_at=captured_at
         )
         initial_evidence = list_session_evidence(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
             frame_limit=PARSER_HISTORY_FRAME_LIMIT,
@@ -611,7 +611,7 @@ class VerifiedHarnessControlSession:
             action_adapter,
             ObservationStore(initial_snapshot),
             HarnessActuator(AppServerEffectTransport(app_server)),
-            SqliteHarnessControlJournal(connection, session_id=persistence_session_id),
+            SqliteHarnessControlJournal(db, session_id=persistence_session_id),
             initial_evidence=initial_evidence,
         )
         observer = AppServerFrameObserver(
@@ -634,7 +634,7 @@ class VerifiedHarnessControlSession:
             model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
             harness_id=harness_id,
             terminal_session=terminal_session,
-            connection=connection,
+            db=db,
             persistence_session_id=persistence_session_id,
             structured_decision_timing=structured_decision_timing,
             app_server_connection=app_server,
@@ -647,7 +647,7 @@ class VerifiedHarnessControlSession:
         acp: AcpConnection,
         harness_kind: str,
         terminal_session: str,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         persistence_session_id: str | None = None,
         pane_epoch: int = 0,
         observation_adapter: HarnessObservationAdapter | None = None,
@@ -676,7 +676,7 @@ class VerifiedHarnessControlSession:
             raise TypeError(f"verified adapter for {harness_kind!r} cannot lower semantic actions")
         captured_at = datetime.now(timezone.utc)
         persisted_snapshot = latest_observation_snapshot(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
         )
@@ -684,7 +684,7 @@ class VerifiedHarnessControlSession:
             harness_id, captured_at=captured_at
         )
         initial_evidence = list_session_evidence(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
             frame_limit=PARSER_HISTORY_FRAME_LIMIT,
@@ -700,7 +700,7 @@ class VerifiedHarnessControlSession:
             action_adapter,
             ObservationStore(initial_snapshot),
             HarnessActuator(AcpEffectTransport(acp)),
-            SqliteHarnessControlJournal(connection, session_id=persistence_session_id),
+            SqliteHarnessControlJournal(db, session_id=persistence_session_id),
             initial_evidence=initial_evidence,
         )
         observer = AcpFrameObserver(
@@ -723,7 +723,7 @@ class VerifiedHarnessControlSession:
             model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
             harness_id=harness_id,
             terminal_session=terminal_session,
-            connection=connection,
+            db=db,
             persistence_session_id=persistence_session_id,
             structured_decision_timing=structured_decision_timing,
             acp_connection=acp,
@@ -736,7 +736,7 @@ class VerifiedHarnessControlSession:
         agent_sdk: AgentSdkConnection,
         harness_kind: str = "claude_code",
         terminal_session: str,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         persistence_session_id: str | None = None,
         pane_epoch: int = 0,
         observation_adapter: HarnessObservationAdapter | None = None,
@@ -760,7 +760,7 @@ class VerifiedHarnessControlSession:
             raise TypeError(f"verified adapter for {harness_kind!r} cannot lower semantic actions")
         captured_at = datetime.now(timezone.utc)
         persisted_snapshot = latest_observation_snapshot(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
         )
@@ -768,7 +768,7 @@ class VerifiedHarnessControlSession:
             harness_id, captured_at=captured_at
         )
         initial_evidence = list_session_evidence(
-            connection,
+            db,
             harness_id=str(harness_id),
             session_id=persistence_session_id,
             frame_limit=PARSER_HISTORY_FRAME_LIMIT,
@@ -784,7 +784,7 @@ class VerifiedHarnessControlSession:
             action_adapter,
             ObservationStore(initial_snapshot),
             HarnessActuator(AgentSdkEffectTransport(agent_sdk)),
-            SqliteHarnessControlJournal(connection, session_id=persistence_session_id),
+            SqliteHarnessControlJournal(db, session_id=persistence_session_id),
             initial_evidence=initial_evidence,
         )
         observer = AgentSdkFrameObserver(
@@ -807,7 +807,7 @@ class VerifiedHarnessControlSession:
             model_discovery_driver=VerifiedModelDiscoveryDriver(controller, observer),
             harness_id=harness_id,
             terminal_session=terminal_session,
-            connection=connection,
+            db=db,
             persistence_session_id=persistence_session_id,
             structured_decision_timing=structured_decision_timing,
             agent_sdk_connection=agent_sdk,
@@ -876,7 +876,7 @@ class VerifiedHarnessControlSession:
     async def _recover_pending_operations(self) -> tuple[str, ...]:
         snapshot = await self.observe_once()
         plans = load_recovery_plans(
-            self._connection,
+            self._db,
             harness_id=str(self.harness_id),
             session_id=self._persistence_session_id,
         )
@@ -888,7 +888,7 @@ class VerifiedHarnessControlSession:
                 reconcile, advance, priority = _recovery_contract(operation)
             except (RecoveryDecodeError, TypeError) as exc:
                 _escalate_recovery(
-                    self._connection,
+                    self._db,
                     plan.operation_id,
                     f"persisted operation cannot be reconstructed: {exc}",
                     snapshot.captured_at,
@@ -1009,7 +1009,7 @@ class VerifiedHarnessControlSession:
     async def collect_usage(self, *, trigger: str) -> HarnessUsageStatus | None:
         """Collect a fresh terminal usage observation through the actuator.
 
-        ``trigger`` is retained as persistence context by the caller; it does
+        ``trigger`` is retained as persistence context by the caller. It does
         not alter controller policy or lower directly to terminal syntax.
         """
         del trigger
@@ -1204,7 +1204,7 @@ class VerifiedHarnessControlSession:
         deadline: timedelta = timedelta(minutes=2),
         operation_id: str | None = None,
     ) -> bool:
-        """Execute one recorded permission decision; approvals are never replayed."""
+        """Execute one recorded permission decision. Approvals are never replayed."""
 
         _validate_structured_decision_deadline(deadline, "permission answer")
         now = self._structured_decision_timing.clock()
@@ -1230,7 +1230,7 @@ class VerifiedHarnessControlSession:
 
     def _preemption_hook(self, operation_id: str) -> Callable[[str], Awaitable[None]]:
         async def persist(preempted_by: str) -> None:
-            stored = get_operation(self._connection, operation_id)
+            stored = get_operation(self._db, operation_id)
             if stored is None:
                 raise RuntimeError(
                     f"operation {operation_id!r} cannot be preempted before durable creation"
@@ -1292,7 +1292,7 @@ class VerifiedHarnessControlSession:
         return result.decision.kind is ControllerDecisionKind.SUCCEED
 
     async def interrupt(self, *, deadline: timedelta = timedelta(seconds=20)) -> bool:
-        """Verify a generation interruption from fresh evidence; never resend it."""
+        """Verify a generation interruption from fresh evidence. Never resend it."""
 
         now = datetime.now(timezone.utc)
         operation = InterruptOperation(
@@ -1434,13 +1434,13 @@ def _recovery_contract(operation: object):
 
 
 def _escalate_recovery(
-    connection: sqlite3.Connection,
+    db: RepoDb,
     operation_id: str,
     reason: str,
     observed_at: datetime,
 ) -> None:
     escalate_recovery_candidate(
-        connection,
+        db,
         operation_id=operation_id,
         reason=reason,
         observed_at=observed_at,
@@ -1448,7 +1448,7 @@ def _escalate_recovery(
 
 
 def _adapter_for(
-    harness_kind: str, connection: sqlite3.Connection | None = None
+    harness_kind: str, db: RepoDb | None = None
 ) -> HarnessObservationAdapter:
     # Imports remain at this composition root so model/runtime layers never
     # import concrete adapters.  A missing adapter is explicit, rather than a
@@ -1458,7 +1458,7 @@ def _adapter_for(
     if harness_kind == "claude_code":
         return ClaudeCodeAdapter()
     if harness_kind == "cursor":
-        return CursorHarnessAdapter(http_usage=_latest_cursor_http_usage(connection))
+        return CursorHarnessAdapter(http_usage=_latest_cursor_http_usage(db))
     if harness_kind == "antigravity":
         return AntigravityHarnessAdapter()
     if harness_kind == "pi":
@@ -1466,7 +1466,7 @@ def _adapter_for(
     raise ValueError(f"no verified adapter registered for harness {harness_kind!r}")
 
 
-def _latest_cursor_http_usage(connection: sqlite3.Connection | None) -> dict[str, object] | None:
+def _latest_cursor_http_usage(db: RepoDb | None) -> dict[str, object] | None:
     """Load persisted authoritative Cursor HTTP evidence for the adapter edge.
 
     The background sampler is allowed to call Cursor's HTTP endpoint, but it
@@ -1475,23 +1475,24 @@ def _latest_cursor_http_usage(connection: sqlite3.Connection | None) -> dict[str
     A missing table is normal for narrow unit-test connections.
     """
 
-    if connection is None:
+    if db is None:
         return None
     try:
-        row = connection.execute(
+        row = db.conn.execute(
             """
             SELECT status_json
             FROM harness_usage_snapshots
-            WHERE harness = 'cursor'
+            WHERE repository_id = ? AND harness = 'cursor'
             ORDER BY fetched_at DESC, id DESC
             LIMIT 1
-            """
+            """,
+            (db.repository_id,),
         ).fetchone()
-    except sqlite3.OperationalError:
+    except DB_OPERATIONAL_ERRORS:
         return None
     if row is None:
         return None
-    raw = row[0] if not isinstance(row, sqlite3.Row) else row["status_json"]
+    raw = row["status_json"]
     try:
         payload = json.loads(raw)
     except (TypeError, ValueError):
@@ -1544,13 +1545,6 @@ def _as_harness_usage_status(harness: str, usage: UsageState) -> HarnessUsageSta
 
 def _fetched_at() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _database_identity(connection: sqlite3.Connection) -> str:
-    row = connection.execute("PRAGMA database_list").fetchone()
-    if row is None or not row[2]:
-        return f"memory:{id(connection)}"
-    return str(row[2])
 
 
 def _int_or_none(value: object) -> int | None:

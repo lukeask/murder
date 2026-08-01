@@ -56,7 +56,7 @@ class EvidenceLedger(Protocol):
         scope: EvidenceScope,
         drafts: Sequence[LedgerEntryDraft],
     ) -> str:
-        """Persist prepared entries; return a ``delivery_id``."""
+        """Persist prepared entries. Return a ``delivery_id``."""
         ...
 
     def mark_supplied(self, delivery_id: str) -> None:
@@ -72,11 +72,11 @@ class EvidenceLedger(Protocol):
         ...
 
     def cleanup_scope(self, scope: EvidenceScope) -> int:
-        """Delete all ledger rows for ``scope``; GC orphaned blobs. Returns rows deleted."""
+        """Delete all ledger rows for ``scope``. GC orphaned blobs. Returns rows deleted."""
         ...
 
     def cleanup_session(self, session_id: str) -> int:
-        """Delete every scope tied to ``session_id``; GC orphaned blobs."""
+        """Delete every scope tied to ``session_id``. GC orphaned blobs."""
         ...
 
     def cleanup_abandoned_deliveries(self) -> int:
@@ -84,7 +84,7 @@ class EvidenceLedger(Protocol):
         ...
 
     def cleanup_repository(self, repository_root: Path) -> int:
-        """Remove all scopes for ``repository_root``; GC orphaned blobs."""
+        """Remove all scopes for ``repository_root``. GC orphaned blobs."""
         ...
 
 

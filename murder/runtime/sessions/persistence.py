@@ -46,6 +46,7 @@ from murder.runtime.sessions.contracts import (
     WriterLeaseReply,
     WriterMode,
 )
+from murder.state.persistence.connection import Connection, RepoDb
 
 _SESSION_FACT_NAMESPACE = UUID("91fb3af9-2940-58b9-ae42-249ee8af5c59")
 
@@ -79,11 +80,13 @@ CREATE INDEX IF NOT EXISTS idx_harness_sessions_agent
 CREATE TABLE IF NOT EXISTS session_writer_fences (
     session_id             TEXT PRIMARY KEY
                            REFERENCES harness_sessions(session_id) ON DELETE CASCADE,
+    repository_id          TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     last_fence             INTEGER NOT NULL CHECK (last_fence >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS writer_leases (
     lease_id               TEXT PRIMARY KEY,
+    repository_id          TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     session_id             TEXT NOT NULL
                            REFERENCES harness_sessions(session_id) ON DELETE CASCADE,
     holder_kind            TEXT NOT NULL CHECK (holder_kind IN (
@@ -105,6 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_writer_leases_active
 
 CREATE TABLE IF NOT EXISTS writer_lease_audit_facts (
     fact_id                TEXT PRIMARY KEY,
+    repository_id          TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     session_id             TEXT NOT NULL
                            REFERENCES harness_sessions(session_id) ON DELETE CASCADE,
     fact_kind              TEXT NOT NULL CHECK (fact_kind IN ('writer_force_takeover')),
@@ -114,10 +118,10 @@ CREATE TABLE IF NOT EXISTS writer_lease_audit_facts (
 
 CREATE INDEX IF NOT EXISTS idx_writer_lease_audit_session
     ON writer_lease_audit_facts(session_id, occurred_at);
-"""
+""".replace(" DEFAULT '00000000-0000-0000-0000-000000000000'", "")
 
 
-def ensure_session_schema(connection: sqlite3.Connection) -> None:
+def ensure_session_schema(connection: Connection) -> None:
     """Create the feature-owned tables idempotently."""
 
     ensure_fact_schema(connection)
@@ -150,11 +154,13 @@ class SessionStore:
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         *,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        self._connection = connection
+        self._db = db
+        self._connection = db.conn
+        self._repository_id = db.repository_id
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def save_session(
@@ -166,9 +172,12 @@ class SessionStore:
         correlation: Correlation | None = None,
     ) -> None:
         with self._atomic():
+            if str(record.repository_id) != self._repository_id:
+                raise ValueError("session repository_id does not match the bound RepoDb")
             existing = self._connection.execute(
-                "SELECT revision, status FROM harness_sessions WHERE session_id = ?",
-                (str(record.session_id),),
+                "SELECT revision, status FROM harness_sessions "
+                "WHERE repository_id = ? AND session_id = ?",
+                (self._repository_id, str(record.session_id)),
             ).fetchone()
             if expected_revision is not None:
                 actual = None if existing is None else int(existing[0])
@@ -201,15 +210,15 @@ class SessionStore:
                     last_observed_at = excluded.last_observed_at,
                     stopped_at = excluded.stopped_at
                 """,
-                _session_values(record),
+                _session_values(record, self._repository_id),
             )
             self._connection.execute(
                 """
-                INSERT INTO session_writer_fences(session_id, last_fence)
-                VALUES (?, 0)
+                INSERT INTO session_writer_fences(session_id, repository_id, last_fence)
+                VALUES (?, ?, 0)
                 ON CONFLICT(session_id) DO NOTHING
                 """,
-                (str(record.session_id),),
+                (str(record.session_id), self._repository_id),
             )
             previous_status = None if existing is None else SessionStatus(str(existing[1]))
             if record.status in {
@@ -233,9 +242,9 @@ class SessionStore:
                    owning_workflow_id, owning_activity_id, started_at,
                    last_observed_at, stopped_at
             FROM harness_sessions
-            WHERE session_id = ?
+            WHERE repository_id = ? AND session_id = ?
             """,
-            (str(session_id),),
+            (self._repository_id, str(session_id)),
         ).fetchone()
         return None if row is None else _session_from_row(row)
 
@@ -247,9 +256,9 @@ class SessionStore:
                    owning_workflow_id, owning_activity_id, started_at,
                    last_observed_at, stopped_at
             FROM harness_sessions
-            WHERE status NOT IN ('stopped', 'failed', 'lost')
+            WHERE repository_id = ? AND status NOT IN ('stopped', 'failed', 'lost')
             ORDER BY started_at, session_id
-            """
+            """, (self._repository_id,)
         ).fetchall()
         return tuple(_session_from_row(row) for row in rows)
 
@@ -260,9 +269,9 @@ class SessionStore:
                    transport, transport_ref, status, revision, capabilities_json,
                    owning_workflow_id, owning_activity_id, started_at,
                    last_observed_at, stopped_at
-            FROM harness_sessions
+            FROM harness_sessions WHERE repository_id = ?
             ORDER BY started_at, session_id
-            """
+            """, (self._repository_id,)
         ).fetchall()
         return tuple(_session_from_row(row) for row in rows)
 
@@ -279,8 +288,9 @@ class SessionStore:
             self._require_session(request.session_id)
             if request.meta.expected_revision is not None:
                 revision_row = self._connection.execute(
-                    "SELECT revision FROM harness_sessions WHERE session_id = ?",
-                    (str(request.session_id),),
+                    "SELECT revision FROM harness_sessions "
+                    "WHERE repository_id = ? AND session_id = ?",
+                    (self._repository_id, str(request.session_id)),
                 ).fetchone()
                 assert revision_row is not None
                 if int(revision_row[0]) != request.meta.expected_revision:
@@ -320,11 +330,12 @@ class SessionStore:
                     """
                     UPDATE writer_leases
                     SET revoked_at = ?, revocation_reason = ?
-                    WHERE lease_id = ? AND revoked_at IS NULL
+                    WHERE repository_id = ? AND lease_id = ? AND revoked_at IS NULL
                     """,
                     (
                         _dump_time(now),
                         revocation_reason or f"force takeover by {holder.kind.value}:{holder.id}",
+                        self._repository_id,
                         str(current[0]),
                     ),
                 )
@@ -384,11 +395,11 @@ class SessionStore:
                 self._connection.execute(
                     """
                     INSERT INTO writer_lease_audit_facts (
-                        fact_id, session_id, fact_kind, occurred_at, payload_json
-                    ) VALUES (?, ?, 'writer_force_takeover', ?, ?)
+                        fact_id, repository_id, session_id, fact_kind, occurred_at, payload_json
+                    ) VALUES (?, ?, ?, 'writer_force_takeover', ?, ?)
                     """,
                     (
-                        str(uuid4()),
+                        str(uuid4()), self._repository_id,
                         str(request.session_id),
                         _dump_time(now),
                         json.dumps(
@@ -434,8 +445,8 @@ class SessionStore:
         now = _aware(self._clock())
         with self._atomic():
             row = self._connection.execute(
-                _LEASE_SELECT + " WHERE lease_id = ?",
-                (str(request.lease_id),),
+                _LEASE_SELECT + " WHERE repository_id = ? AND lease_id = ?",
+                (self._repository_id, str(request.lease_id)),
             ).fetchone()
             if row is None:
                 return WriterLeaseDenied(
@@ -463,10 +474,12 @@ class SessionStore:
                 }
             )
             self._connection.execute(
-                "UPDATE writer_leases SET renewed_at = ?, expires_at = ? WHERE lease_id = ?",
+                "UPDATE writer_leases SET renewed_at = ?, expires_at = ? "
+                "WHERE repository_id = ? AND lease_id = ?",
                 (
                     _dump_time(renewed.renewed_at),
                     _dump_time(renewed.expires_at),
+                    self._repository_id,
                     str(renewed.lease_id),
                 ),
             )
@@ -498,8 +511,8 @@ class SessionStore:
         now = _aware(self._clock())
         with self._atomic():
             row = self._connection.execute(
-                _LEASE_SELECT + " WHERE lease_id = ?",
-                (str(request.lease_id),),
+                _LEASE_SELECT + " WHERE repository_id = ? AND lease_id = ?",
+                (self._repository_id, str(request.lease_id)),
             ).fetchone()
             if row is None:
                 return WriterLeaseDenied(
@@ -522,9 +535,15 @@ class SessionStore:
                 """
                 UPDATE writer_leases
                 SET revoked_at = ?, revocation_reason = ?
-                WHERE lease_id = ? AND fence = ? AND revoked_at IS NULL
+                WHERE repository_id = ? AND lease_id = ? AND fence = ? AND revoked_at IS NULL
                 """,
-                (_dump_time(now), reason, str(request.lease_id), request.fence),
+                (
+                    _dump_time(now),
+                    reason,
+                    self._repository_id,
+                    str(request.lease_id),
+                    request.fence,
+                ),
             )
             released = lease.model_copy(update={"revoked_at": now, "revocation_reason": reason})
             self._append_writer_fact(
@@ -557,8 +576,9 @@ class SessionStore:
     def writer_fence(self, session_id: UUID) -> int:
         self._require_session(session_id)
         row = self._connection.execute(
-            "SELECT last_fence FROM session_writer_fences WHERE session_id = ?",
-            (str(session_id),),
+            "SELECT last_fence FROM session_writer_fences "
+            "WHERE repository_id = ? AND session_id = ?",
+            (self._repository_id, str(session_id)),
         ).fetchone()
         return 0 if row is None else int(row[0])
 
@@ -578,16 +598,16 @@ class SessionStore:
             self._require_session(session_id)
             rows = self._connection.execute(
                 _LEASE_SELECT
-                + " WHERE session_id = ? AND revoked_at IS NULL",
-                (str(session_id),),
+                + " WHERE repository_id = ? AND session_id = ? AND revoked_at IS NULL",
+                (self._repository_id, str(session_id)),
             ).fetchall()
             cursor = self._connection.execute(
                 """
                 UPDATE writer_leases
                 SET revoked_at = ?, revocation_reason = ?
-                WHERE session_id = ? AND revoked_at IS NULL
+                WHERE repository_id = ? AND session_id = ? AND revoked_at IS NULL
                 """,
-                (_dump_time(now), reason, str(session_id)),
+                (_dump_time(now), reason, self._repository_id, str(session_id)),
             )
             fact_actor = actor or PrincipalRef(
                 kind=PrincipalKind.SERVICE,
@@ -668,10 +688,10 @@ class SessionStore:
         row = self._connection.execute(
             _LEASE_SELECT
             + """
-              WHERE lease_id = ? AND session_id = ?
+              WHERE repository_id = ? AND lease_id = ? AND session_id = ?
                 AND fence = ? AND revoked_at IS NULL AND expires_at > ?
             """,
-            (str(lease_id), str(session_id), fence, _dump_time(now)),
+            (self._repository_id, str(lease_id), str(session_id), fence, _dump_time(now)),
         ).fetchone()
         if row is None:
             raise StaleWriterLeaseError("writer lease is stale, expired, revoked, or unknown")
@@ -683,11 +703,12 @@ class SessionStore:
                 f"writer lease mode is {lease.mode.value}, expected {required_mode.value}"
             )
         fence_row = self._connection.execute(
-            "SELECT last_fence FROM session_writer_fences WHERE session_id = ?",
-            (str(session_id),),
+            "SELECT last_fence FROM session_writer_fences "
+            "WHERE repository_id = ? AND session_id = ?",
+            (self._repository_id, str(session_id)),
         ).fetchone()
         if fence_row is None or int(fence_row[0]) != fence:
-            raise StaleWriterLeaseError("writer lease fence has been superseded")
+            raise StaleWriterLeaseError("a newer fence superseded the writer lease")
         return lease
 
     def _append_writer_fact(
@@ -706,7 +727,7 @@ class SessionStore:
         occurred_at: datetime,
     ) -> None:
         append_fact(
-            self._connection,
+            self._db,
             RetainedFactDraft(
                 fact_id=fact_id,
                 occurred_at=occurred_at,
@@ -757,7 +778,7 @@ class SessionStore:
             transport=record.transport.value,
         )
         append_fact(
-            self._connection,
+            self._db,
             RetainedFactDraft(
                 fact_id=uuid5(
                     _SESSION_FACT_NAMESPACE,
@@ -786,8 +807,8 @@ class SessionStore:
     def _require_session(self, session_id: UUID) -> None:
         if (
             self._connection.execute(
-                "SELECT 1 FROM harness_sessions WHERE session_id = ?",
-                (str(session_id),),
+                "SELECT 1 FROM harness_sessions WHERE repository_id = ? AND session_id = ?",
+                (self._repository_id, str(session_id)),
             ).fetchone()
             is None
         ):
@@ -799,24 +820,26 @@ class SessionStore:
         row = self._connection.execute(
             _LEASE_SELECT
             + """
-              WHERE session_id = ? AND revoked_at IS NULL AND expires_at > ?
+              WHERE repository_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > ?
               ORDER BY fence DESC LIMIT 1
             """,
-            (str(session_id), _dump_time(at)),
+            (self._repository_id, str(session_id), _dump_time(at)),
         ).fetchone()
         return cast("sqlite3.Row | tuple[Any, ...] | None", row)
 
     def _next_fence(self, session_id: UUID) -> int:
         row = self._connection.execute(
-            "SELECT last_fence FROM session_writer_fences WHERE session_id = ?",
-            (str(session_id),),
+            "SELECT last_fence FROM session_writer_fences "
+            "WHERE repository_id = ? AND session_id = ?",
+            (self._repository_id, str(session_id)),
         ).fetchone()
         if row is None:
             raise SessionNotFoundError(f"session {session_id} has no fence counter")
         fence = int(row[0]) + 1
         self._connection.execute(
-            "UPDATE session_writer_fences SET last_fence = ? WHERE session_id = ?",
-            (fence, str(session_id)),
+            "UPDATE session_writer_fences SET last_fence = ? "
+            "WHERE repository_id = ? AND session_id = ?",
+            (fence, self._repository_id, str(session_id)),
         )
         return fence
 
@@ -824,12 +847,12 @@ class SessionStore:
         self._connection.execute(
             """
             INSERT INTO writer_leases (
-                lease_id, session_id, holder_kind, holder_id, mode, fence,
+                lease_id, repository_id, session_id, holder_kind, holder_id, mode, fence,
                 issued_at, renewed_at, expires_at, revoked_at, revocation_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                str(lease.lease_id),
+                str(lease.lease_id), self._repository_id,
                 str(lease.resource.session_id),
                 lease.holder.kind.value,
                 lease.holder.id,
@@ -847,6 +870,16 @@ class SessionStore:
     def _atomic(self) -> Iterator[None]:
         """Use a savepoint so callers may already own a broader transaction."""
 
+        if not self._connection.in_transaction:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                self._connection.rollback()
+                raise
+            else:
+                self._connection.commit()
+            return
         name = f"session_store_{uuid4().hex}"
         self._connection.execute(f"SAVEPOINT {name}")
         try:
@@ -866,11 +899,11 @@ FROM writer_leases
 """
 
 
-def _session_values(record: HarnessSessionRecord) -> tuple[object, ...]:
+def _session_values(record: HarnessSessionRecord, repository_id: str) -> tuple[object, ...]:
     return (
         str(record.session_id),
         str(record.agent_id) if record.agent_id else None,
-        str(record.repository_id),
+        repository_id,
         record.harness,
         record.model,
         record.effort,

@@ -3,8 +3,8 @@
 All functions operate on a single tmux server (the user's). Session names
 follow `murder_<project>_<role>{_<ticket>}` (config.RuntimeConfig).
 
-Per D10: payloads >LARGE_PAYLOAD_BYTES use `load-buffer`/`paste-buffer`;
-below that, `send-keys -l <literal>` is fine. The boundary saves seconds
+Per D10: payloads >LARGE_PAYLOAD_BYTES use `load-buffer`/`paste-buffer`.
+Below that, `send-keys -l <literal>` is fine. The boundary saves seconds
 on big ticket-startup prompts (5–10KB combined system+ticket prompts).
 """
 
@@ -57,7 +57,7 @@ class TmuxError(RuntimeError):
 
 
 async def _tmux(*args: str, check: bool = True, timeout_s: float = 10) -> tuple[int, str, str]:
-    """Run `tmux <args>`; return (rc, stdout, stderr)."""
+    """Run `tmux <args>`. Return (rc, stdout, stderr)."""
 
     proc = await asyncio.create_subprocess_exec(
         "tmux",
@@ -128,7 +128,7 @@ async def create_session(
         # The has-session pre-check is not atomic: a concurrent caller (or a
         # respawning sweeper) can create the same name in the window between the
         # check and new-session. tmux serializes and fails with "duplicate
-        # session"; surface that as the intended "already exists" error.
+        # session". Surface that as the intended "already exists" error.
         if "duplicate session" in str(exc).lower():
             raise TmuxError(f"session already exists: {name}") from exc
         raise
@@ -138,7 +138,7 @@ async def create_session(
 
 
 async def kill_session(name: str) -> None:
-    """Kill `name`. No-op if it doesn't exist."""
+    """Kill `name`. No-op if it does not exist."""
     if await session_exists(name):
         await _tmux("kill-session", "-t", name)
         current_advanced_log().record_tmux_frame(TmuxFrameRecord(session=name, op="kill"))
@@ -153,7 +153,7 @@ async def resize_session(name: str, *, columns: int, rows: int) -> None:
 
 
 async def rename_session(old_name: str, new_name: str) -> bool:
-    """Rename a tmux session if it exists; return whether a rename happened."""
+    """Rename a tmux session if it exists. Return whether a rename happened."""
     if old_name == new_name:
         return False
     if not await session_exists(old_name):
@@ -206,7 +206,7 @@ async def capture_pane(
     user-input blocks (e.g. cursor) rely on this to recover turn roles; default
     off so the common case stays plain text.
     """
-    # -p: pipe to stdout; -S -<n>: start n lines back from the bottom of history;
+    # -p: pipe to stdout. -S -<n>: start n lines back from the bottom of history.
     # -e: keep SGR escapes (opt-in).
     extra = ("-e",) if escapes else ()
     if perf is not None and getattr(perf, "enabled", False):
@@ -396,7 +396,7 @@ async def _paste_buffer_bytes(name: str, payload: bytes) -> None:
             f.write(payload)
         await _tmux("load-buffer", "-b", buf_name, tmp_name)
         loaded = True
-        # -d deletes the buffer after paste so we don't leak buffer slots.
+        # -d deletes the buffer after paste so we do not leak buffer slots.
         await _tmux("paste-buffer", "-d", "-t", name, "-b", buf_name)
         loaded = False
     finally:

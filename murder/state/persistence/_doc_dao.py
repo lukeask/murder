@@ -8,13 +8,15 @@ name used in the revisions table (e.g. ``note_name`` / ``report_name``).
 These names are module-level constants in each binding, never sourced from
 wire input.  f-string interpolation is safe here.
 """
+# ruff: noqa: E501
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
+
+from murder.state.persistence.connection import RepoDb
 
 
 def _now() -> str:
@@ -26,38 +28,42 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 
 
-def get_doc(conn: sqlite3.Connection, table: str, name: str) -> dict[str, Any] | None:
-    row = conn.execute(f"SELECT * FROM {table} WHERE name = ?", (name,)).fetchone()
+def get_doc(db: RepoDb, table: str, name: str) -> dict[str, Any] | None:
+    row = db.conn.execute(
+        f"SELECT * FROM {table} WHERE repository_id = ? AND name = ?", (db.repository_id, name)
+    ).fetchone()
     return dict(row) if row else None
 
 
-def list_docs(conn: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
+def list_docs(db: RepoDb, table: str) -> list[dict[str, Any]]:
     """List active docs, projecting ``size`` (length of body) not raw body.
 
     Projection mirrors the notes.list_notes shape so callers consume ``size``
     rather than ``body`` — preserving the established contract.
     """
-    rows = conn.execute(
+    rows = db.conn.execute(
         f"""
         SELECT id, name, created_at, updated_at, status, retired_at,
                materialized_path, length(body) AS size
           FROM {table}
-         WHERE status = 'active'
+         WHERE repository_id = ? AND status = 'active'
          ORDER BY updated_at DESC, name
-        """
+        """,
+        (db.repository_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def latest_doc_name(conn: sqlite3.Connection, table: str) -> str | None:
-    row = conn.execute(
-        f"SELECT name FROM {table} WHERE status = 'active' ORDER BY updated_at DESC, name LIMIT 1"
+def latest_doc_name(db: RepoDb, table: str) -> str | None:
+    row = db.conn.execute(
+        f"SELECT name FROM {table} WHERE repository_id = ? AND status = 'active' ORDER BY updated_at DESC, name LIMIT 1",
+        (db.repository_id,),
     ).fetchone()
     return str(row["name"]) if row else None
 
 
 def upsert_doc(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     table: str,
     name: str,
     *,
@@ -65,30 +71,32 @@ def upsert_doc(
     materialized_path: str,
 ) -> None:
     now = _now()
-    existing = conn.execute(f"SELECT 1 FROM {table} WHERE name = ?", (name,)).fetchone()
+    existing = db.conn.execute(
+        f"SELECT 1 FROM {table} WHERE repository_id = ? AND name = ?", (db.repository_id, name)
+    ).fetchone()
     if existing is None:
-        conn.execute(
+        db.conn.execute(
             f"""
             INSERT INTO {table}
-                (id, name, created_at, updated_at, status, retired_at, body, materialized_path)
-            VALUES (?, ?, ?, ?, 'active', NULL, ?, ?)
+                (repository_id, id, name, created_at, updated_at, status, retired_at, body, materialized_path)
+            VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, ?)
             """,
-            (str(uuid4()), name, now, now, body, materialized_path),
+            (db.repository_id, str(uuid4()), name, now, now, body, materialized_path),
         )
     else:
-        conn.execute(
+        db.conn.execute(
             f"""
             UPDATE {table}
                SET updated_at = ?, status = 'active', retired_at = NULL,
                    body = ?, materialized_path = ?
-             WHERE name = ?
+             WHERE repository_id = ? AND name = ?
             """,
-            (now, body, materialized_path, name),
+            (now, body, materialized_path, db.repository_id, name),
         )
 
 
 def rename_doc(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     table: str,
     revisions_table: str,
     fk_col: str,
@@ -101,53 +109,59 @@ def rename_doc(
     # a clear ValueError up front instead of an unguarded IntegrityError mid-
     # transaction. Matches rename_plan's contract. The check covers retired rows
     # too, since the unique index is not status-scoped.
-    if conn.execute(f"SELECT 1 FROM {table} WHERE name = ?", (new_name,)).fetchone() is not None:
+    if (
+        db.conn.execute(
+            f"SELECT 1 FROM {table} WHERE repository_id = ? AND name = ?",
+            (db.repository_id, new_name),
+        ).fetchone()
+        is not None
+    ):
         raise ValueError(f"{table} already exists: {new_name}")
     now = _now()
-    conn.execute("PRAGMA foreign_keys = OFF")
-    conn.execute("BEGIN")
+    db.conn.execute("PRAGMA foreign_keys = OFF")
+    db.conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute(
+        db.conn.execute(
             f"""
             UPDATE {table}
                SET name = ?, updated_at = ?, materialized_path = ?
-             WHERE name = ? AND status = 'active'
+             WHERE repository_id = ? AND name = ? AND status = 'active'
             """,
-            (new_name, now, materialized_path, old_name),
+            (new_name, now, materialized_path, db.repository_id, old_name),
         )
-        conn.execute(
-            f"UPDATE {revisions_table} SET {fk_col} = ? WHERE {fk_col} = ?",
-            (new_name, old_name),
+        db.conn.execute(
+            f"UPDATE {revisions_table} SET {fk_col} = ? WHERE repository_id = ? AND {fk_col} = ?",
+            (new_name, db.repository_id, old_name),
         )
-        conn.execute("COMMIT")
+        db.conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        db.conn.execute("ROLLBACK")
         raise
     finally:
-        conn.execute("PRAGMA foreign_keys = ON")
+        db.conn.execute("PRAGMA foreign_keys = ON")
 
 
 def mark_doc_retired(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     table: str,
     name: str,
     *,
     materialized_path: str,
 ) -> None:
     now = _now()
-    conn.execute(
+    db.conn.execute(
         f"""
         UPDATE {table}
            SET status = 'retired', retired_at = ?, updated_at = ?,
                materialized_path = ?
-         WHERE name = ?
+         WHERE repository_id = ? AND name = ?
         """,
-        (now, now, materialized_path, name),
+        (now, now, materialized_path, db.repository_id, name),
     )
 
 
 def insert_revision(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     revisions_table: str,
     fk_col: str,
     name: str,
@@ -156,29 +170,29 @@ def insert_revision(
     body: str,
     content_hash: str,
 ) -> int:
-    cur = conn.execute(
+    cur = db.conn.execute(
         f"""
-        INSERT INTO {revisions_table} ({fk_col}, created_at, source, body, content_hash)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO {revisions_table} (repository_id, {fk_col}, created_at, source, body, content_hash)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (name, _now(), source, body, content_hash),
+        (db.repository_id, name, _now(), source, body, content_hash),
     )
     return int(cur.lastrowid or 0)
 
 
 def list_revisions(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     revisions_table: str,
     fk_col: str,
     name: str,
 ) -> list[dict[str, Any]]:
-    rows = conn.execute(
+    rows = db.conn.execute(
         f"""
         SELECT id, {fk_col}, created_at, source, body, content_hash
           FROM {revisions_table}
-         WHERE {fk_col} = ?
+         WHERE repository_id = ? AND {fk_col} = ?
          ORDER BY id
         """,
-        (name,),
+        (db.repository_id, name),
     ).fetchall()
     return [dict(r) for r in rows]

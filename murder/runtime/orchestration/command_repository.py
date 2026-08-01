@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 
 from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.ports import CommandRepository, OrchestrationEventSink
+from murder.state.persistence.connection import RepoDb
 
 
 @dataclass(frozen=True, slots=True)
 class SqliteCommandRepository:
-    connection: sqlite3.Connection
+    db: RepoDb
 
     def add(self, command: CommandEvent) -> None:
         # Keep persistence behind the adapter method. Importing the persistence
@@ -20,7 +20,7 @@ class SqliteCommandRepository:
         from murder.state.persistence.commands import enqueue_command  # noqa: PLC0415
 
         enqueue_command(
-            self.connection,
+            self.db,
             command_id=str(command.id),
             run_id=command.run_id,
             agent_id=command.agent_id,

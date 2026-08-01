@@ -14,10 +14,9 @@ class TransitReadModel(ReadModelBase):
         """Build the per-lane git commit-graph for the Transit panel.
 
         Derived from git on demand (``main`` + ``.murder/worktrees`` branches),
-        not persisted. ``repo_root`` is recovered from ``db_path`` (which is
-        ``<repo_root>/.murder/murder.db``). The fingerprint doubles as the
+        not persisted. The repository root is carried explicitly with the
+        scoped database handle. The fingerprint doubles as the
         ``invalidation_key`` so the poll loop's change detection and the
         client's refetch keying agree.
         """
-        repo_root = self.db_path.parent.parent
-        return build_transit_snapshot(repo_root)
+        return build_transit_snapshot(self.repo_root)

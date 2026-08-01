@@ -1,6 +1,6 @@
 """ConversationProducer — portable per-conversation projection unit.
 
-Owns one conversation's accumulator + hash-skip; drives projection and publish
+Owns one conversation's accumulator and hash-skip. It drives projection and publish
 without any tmux or process knowledge so it stays unit-testable in isolation.
 """
 
@@ -12,15 +12,13 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from murder.llm.harnesses.transcript_summarize import SummaryProvider, summarize_chunk
 from murder.llm.harnesses.transcripts import TranscriptAccumulator
 from murder.runtime.agents.summarization_buffer import PendingChunk, SummarizationBuffer
 from murder.state.persistence import conversation as conv_store
-
-if TYPE_CHECKING:
-    import sqlite3
+from murder.state.persistence.connection import RepoDb
 
 _log = logging.getLogger(__name__)
 
@@ -53,7 +51,7 @@ class ConversationProducer:
         conversation_id: str,
         harness_kind: str,
         system_prompt: str | None,
-        db: sqlite3.Connection,
+        db: RepoDb,
         publish: Callable[[str, dict[str, Any]], Awaitable[None]],
         *,
         summary_provider: SummaryProvider | None = None,
@@ -69,7 +67,7 @@ class ConversationProducer:
         # projection tick for queued-message delivery + conversation.state push.
         self.last_state: str | None = None
         # Condensed-view rolling summarization (TUIchat Phase 4). The buffer's
-        # char-accounting is synchronous and inline; the summary call itself is
+        # char-accounting is synchronous and inline. The summary call itself is
         # dispatched off the hot path via asyncio.create_task so it never adds
         # latency to the pane→bus projection. Disabled (no summarization) when
         # no provider can be built — Condensed then falls back to Verbose.
@@ -84,7 +82,7 @@ class ConversationProducer:
         self._prev_summary_state: str = "working"
 
     async def poll(self, pane: str) -> ConversationProjectionResult:
-        """Feed a new pane capture; no-op if the pane hasn't changed since last poll.
+        """Feed a new pane capture. No-op if the pane has not changed since last poll.
 
         Returns ``True`` iff this poll produced real block changes (i.e. the pane
         hash advanced AND the reconcile yielded at least one ConversationBlockChange).
@@ -138,7 +136,7 @@ class ConversationProducer:
         changes: Sequence[conv_store.ConversationBlockChange],
         state: str,
     ) -> None:
-        """Feed *sealed* blocks into the summarization buffer; schedule flushes.
+        """Feed sealed blocks into the summarization buffer. Schedule flushes.
 
         Only sealed blocks are buffered: an unsealed (still-growing) trailing
         block is not final content yet, and buffering it would re-buffer on each
@@ -173,7 +171,7 @@ class ConversationProducer:
     def _schedule_summary(self, chunk: PendingChunk) -> None:
         """Dispatch one chunk summary as a fire-and-forget background task.
 
-        Runs strictly off the streaming hot path: ``poll`` returns immediately;
+        Runs strictly off the streaming hot path. ``poll`` returns immediately.
         the network round-trip and DB write happen in this task. Single-threaded
         asyncio means the synchronous DB write cannot interleave another poll's
         write mid-transaction.
@@ -208,7 +206,7 @@ class ConversationProducer:
                 summary=summary,
                 block_ids=chunk.block_ids,
             )
-            self._db.commit()
+            self._db.conn.commit()
         except Exception:  # noqa: BLE001
             _log.warning("condense: chunk summary persist failed", exc_info=True)
             return

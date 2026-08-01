@@ -2,65 +2,65 @@
 
 from __future__ import annotations
 
-import sqlite3
+from murder.state.persistence.connection import RepoDb
 
 
 def write_check_result(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     ticket_id: str,
     check_name: str,
     timestamp: str,
     status: str,
     data_json: str | None,
 ) -> None:
-    conn.execute(
+    db.conn.execute(
         "INSERT OR REPLACE INTO check_results"
-        " (ticket_id, check_name, timestamp, status, data_json)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (ticket_id, check_name, timestamp, status, data_json),
+        " (repository_id, ticket_id, check_name, timestamp, status, data_json)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (db.repository_id, ticket_id, check_name, timestamp, status, data_json),
     )
-    conn.commit()
+    db.conn.commit()
 
 
-def get_attempts(conn: sqlite3.Connection, ticket_id: str, check_name: str) -> int:
-    row = conn.execute(
-        "SELECT attempts FROM completion_attempts WHERE ticket_id = ? AND check_name = ?",
-        (ticket_id, check_name),
+def get_attempts(db: RepoDb, ticket_id: str, check_name: str) -> int:
+    row = db.conn.execute(
+        "SELECT attempts FROM completion_attempts WHERE repository_id = ? AND ticket_id = ? AND check_name = ?",
+        (db.repository_id, ticket_id, check_name),
     ).fetchone()
     return int(row["attempts"]) if row else 0
 
 
-def bump_attempts(conn: sqlite3.Connection, ticket_id: str, check_name: str) -> None:
-    conn.execute(
-        "INSERT INTO completion_attempts (ticket_id, check_name, attempts) VALUES (?, ?, 1)"
-        " ON CONFLICT (ticket_id, check_name) DO UPDATE SET attempts = attempts + 1",
-        (ticket_id, check_name),
+def bump_attempts(db: RepoDb, ticket_id: str, check_name: str) -> None:
+    db.conn.execute(
+        "INSERT INTO completion_attempts (repository_id, ticket_id, check_name, attempts) VALUES (?, ?, ?, 1)"
+        " ON CONFLICT (repository_id, ticket_id, check_name) DO UPDATE SET attempts = attempts + 1",
+        (db.repository_id, ticket_id, check_name),
     )
-    conn.commit()
+    db.conn.commit()
 
 
 def get_latest_check_status(
-    conn: sqlite3.Connection, ticket_id: str, check_name: str
+    db: RepoDb, ticket_id: str, check_name: str
 ) -> str | None:
-    row = conn.execute(
+    row = db.conn.execute(
         """
         SELECT status FROM check_results
-         WHERE ticket_id = ? AND check_name = ?
+         WHERE repository_id = ? AND ticket_id = ? AND check_name = ?
          ORDER BY timestamp DESC
          LIMIT 1
         """,
-        (ticket_id, check_name),
+        (db.repository_id, ticket_id, check_name),
     ).fetchone()
     return str(row["status"]) if row else None
 
 
-def reset_attempts(conn: sqlite3.Connection, ticket_id: str, check_name: str) -> None:
-    conn.execute(
-        "INSERT INTO completion_attempts (ticket_id, check_name, attempts) VALUES (?, ?, 0)"
-        " ON CONFLICT (ticket_id, check_name) DO UPDATE SET attempts = 0",
-        (ticket_id, check_name),
+def reset_attempts(db: RepoDb, ticket_id: str, check_name: str) -> None:
+    db.conn.execute(
+        "INSERT INTO completion_attempts (repository_id, ticket_id, check_name, attempts) VALUES (?, ?, ?, 0)"
+        " ON CONFLICT (repository_id, ticket_id, check_name) DO UPDATE SET attempts = 0",
+        (db.repository_id, ticket_id, check_name),
     )
-    conn.commit()
+    db.conn.commit()
 
 
 __all__ = [

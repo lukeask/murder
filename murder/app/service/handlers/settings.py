@@ -47,7 +47,7 @@ def register(
             raise ValueError("settings.update requires a settings object")
         mutation = apply_settings_patch(_repository().load(), partial)
         commit_settings_mutation(mutation, _repository(), _live())
-        # NOTE: llm env changes are NOT applied live; they take effect at next
+        # NOTE: llm env changes are NOT applied live. They take effect at next
         # daemon start via apply_llm_env in Config.load.
         project = host.config.project.name if host.config.project is not None else None
         return {

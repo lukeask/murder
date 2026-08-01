@@ -1,4 +1,4 @@
-"""Canonical TicketStatus enum — owned here; all other modules import from here."""
+"""Canonical TicketStatus enum. Owned here. All other modules import from here."""
 
 from __future__ import annotations
 

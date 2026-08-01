@@ -3,11 +3,11 @@
 Compilation order for each templatable stage field (``title``, ``instructions``):
 
 1. Expand inline ``:foo:`` or ``:\"Prompt Name\":`` prompt templates
-   (single-pass; bodies are not re-scanned).
+   (single-pass. Bodies are not re-scanned).
 2. Collect ``{workflow-input}`` placeholders from the expanded text.
 3. Merge with optional declared ``WorkflowDef.inputs`` into wizard fields + diagnostics.
 
-The expanded template still contains unresolved ``{inputs}``; substitution happens
+The expanded template still contains unresolved ``{inputs}``. Substitution happens
 later at materialize time. Unknown ``:name:`` references are compile errors (unlike
 chat, which leaves them literal silently).
 """
@@ -181,7 +181,7 @@ def compile_workflow_template(
             issues.append(
                 WorkflowCompileIssue(
                     code="unused_input",
-                    message=f"declared input {name!r} is not used in any stage field",
+                    message=f"declared input {name!r} is unused in any stage field",
                     severity="warning",
                     path=["inputs", name],
                     input_name=name,
@@ -194,7 +194,7 @@ def compile_workflow_template(
         update={
             "stages": expanded_stages,
             # Snapshot keeps declarations so re-inspection of a run can explain
-            # wizard metadata; placeholders themselves remain unresolved.
+            # wizard metadata. Placeholders themselves remain unresolved.
             "inputs": dict(declared),
         }
     )
@@ -235,7 +235,7 @@ def required_input_issues(
             issues.append(
                 WorkflowCompileIssue(
                     code="required_input_missing",
-                    message=f"required input {field.name!r} is not filled",
+                    message=f"required input {field.name!r} is empty",
                     severity="error",
                     path=["inputs", field.name],
                     input_name=field.name,

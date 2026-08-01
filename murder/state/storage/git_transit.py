@@ -7,7 +7,7 @@ fingerprint (``transit_fingerprint``) lets the service poll loop detect HEAD
 changes without doing the full ``git log`` work.
 
 Git calls are synchronous ``subprocess`` (mirroring ``list_git_worktrees_sync``
-in ``worktrees.py``); ``build_transit_snapshot`` runs inside the read-model on
+in ``worktrees.py``). ``build_transit_snapshot`` runs inside the read-model on
 demand, not on the hot poll path.
 """
 
@@ -74,9 +74,9 @@ def _git(repo_root: Path, *args: str) -> tuple[int, str]:
 
 
 def _resolve_main_branch(repo_root: Path, worktrees) -> str:
-    """Resolve the trunk branch name robustly.
+    """Resolve the trunk branch name.
 
-    Prefer the literal ``main``; otherwise fall back to the branch of the
+    Prefer the literal ``main``. Otherwise fall back to the branch of the
     worktree git marks as the main checkout (``is_main``).
     """
     rc, _out = _git(repo_root, "rev-parse", "--verify", "--quiet", "refs/heads/main")
@@ -123,7 +123,7 @@ def _parse_log(text: str) -> tuple[TransitCommit, ...]:
 
 def _lane_commits(repo_root: Path, branch: str) -> tuple[TransitCommit, ...]:
     # Qualify the ref as refs/heads/<branch> so a branch name like ``--all`` or
-    # ``-n5`` can't be parsed as a git flag, and append ``--`` so it can't be
+    # ``-n5`` cannot be parsed as a git flag, and append ``--`` so it cannot be
     # taken as a pathspec.
     rc, out = _git(
         repo_root,
@@ -162,13 +162,13 @@ def build_transit_snapshot(repo_root: Path) -> TransitSnapshot:
     for branch, worktree_path in lane_specs:
         is_main = branch == main_branch
         # Qualify as refs/heads/<branch> so the rev never resolves to a flag or
-        # pathspec; an unborn/detached HEAD or a non-existent main fails here.
+        # pathspec. An unborn/detached HEAD or a non-existent main fails here.
         rc, head_out = _git(repo_root, "rev-parse", "--verify", f"refs/heads/{branch}")
         head_sha = head_out.strip() if rc == 0 else ""
         if not head_sha:
             # No resolvable branch head (empty repo, detached HEAD, or a main
-            # that doesn't exist as a branch): skip the lane rather than emit one
-            # with an empty sha the rail can't render.
+            # that does not exist as a branch): skip the lane rather than emit one
+            # with an empty sha the rail cannot render.
             continue
 
         fork_sha: str | None = None

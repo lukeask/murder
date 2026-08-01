@@ -3,7 +3,7 @@
 Owns the asyncio loop, the SQLite connection, private orchestration signals,
 and the lifecycle of all agents. This backend runs headless: application
 clients connect to the service-owned WebSocket endpoint. Daemons (e.g. CrowHandler) are coroutines spawned and supervised
-here; their "tmux session" is a logfile being tailed for debug
+here. Their "tmux session" is a logfile being tailed for debug
 visibility, not a real interactive session.
 
 Process model rules:
@@ -21,13 +21,12 @@ import contextlib
 import json
 import logging
 import signal
-import sqlite3
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from murder.app.service.agent_registry import AgentRegistry
 from murder.app.service.document_access import DocumentAccess
@@ -68,10 +67,6 @@ from murder.runtime.orchestration.notifier import (
 )
 from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEventSink
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
-from murder.runtime.sessions.registry import (
-    close_registry_for_connection,
-    registry_for_connection,
-)
 from murder.runtime.sessions import (
     HarnessSessionRecord,
     PrincipalKind,
@@ -81,8 +76,12 @@ from murder.runtime.sessions import (
     SessionStore,
     SessionTransport,
     TmuxSessionBackend,
-    WriteTerminalInput,
     WriterMode,
+    WriteTerminalInput,
+)
+from murder.runtime.sessions.registry import (
+    close_registry_for_connection,
+    registry_for_connection,
 )
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.output import TerminalOutputRegistry, TmuxTerminalOutput
@@ -90,17 +89,15 @@ from murder.state.persistence.activities import (
     reap_expired_claims,
     reap_expired_reservations,
 )
+from murder.state.persistence.connection import RepoDb, open_repo_db
 from murder.state.persistence.conversation import mark_stale_conversations
 from murder.state.persistence.runs import end_run as _db_end_run
 from murder.state.persistence.runs import insert_run as _db_insert_run
 from murder.state.persistence.runs import (
     set_run_advanced_log_path as _db_set_run_advanced_log_path,
 )
-from murder.state.persistence.schema import get_db as _db_connect
-from murder.state.persistence.schema import init_db as _db_init_schema
 from murder.state.storage.filesystem import acquire_flock, release_flock
 from murder.state.storage.paths import (
-    db_path,
     lock_path,
     logs_dir,
     panes_dir,
@@ -120,8 +117,8 @@ if TYPE_CHECKING:
     from murder.work.simple_doc_sync import SimpleDocSync
     from murder.work.tickets.sync import TicketSync
 
-ActivityDispatcherFactory = Callable[[sqlite3.Connection], "ActivityDispatcher"]
-TriggerDispatcherFactory = Callable[[sqlite3.Connection], "TriggerDispatcher"]
+ActivityDispatcherFactory = Callable[[RepoDb], "ActivityDispatcher"]
+TriggerDispatcherFactory = Callable[[RepoDb], "TriggerDispatcher"]
 
 
 class Runtime:
@@ -139,7 +136,7 @@ class Runtime:
         self.config = config
         self.repo_root = repo_root
         self.user_cfg = user_cfg
-        self.db: sqlite3.Connection | None = None
+        self.db: RepoDb | None = None
         self.session_controllers: Any | None = None
         self._activity_dispatcher_factory = activity_dispatcher_factory
         self._trigger_dispatcher_factory = trigger_dispatcher_factory
@@ -179,7 +176,7 @@ class Runtime:
         # It owns no policy and is initialized only once the persisted bus exists.
         self.structured_decisions: Any | None = None
         self.crow_ask_router: Callable[[str | None, str, str], Awaitable[None]] | None = None
-        self.roster = RosterService(db_path(self.repo_root))
+        self.roster: RosterService | None = None
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -225,8 +222,8 @@ class Runtime:
         # fires after ``__aenter__`` returns. Release the lock + close the DB
         # on any failure before re-raising.
         try:
-            self.db = _db_connect(db_path(self.repo_root))
-            _db_init_schema(self.db)
+            self.db = open_repo_db(self.repo_root)
+            self.roster = RosterService(self.db)
             self.terminal_outputs = TerminalOutputRegistry(self.db)
             self.session_controllers = registry_for_connection(self.db)
             WorkflowRuntime(self.db).recover_pending_signals()
@@ -254,7 +251,7 @@ class Runtime:
             snap = json.dumps(self.config.model_dump(mode="json"), default=str)
             _db_insert_run(self.db, self.run_id, snap)
             # Phase 2: open the opt-in flight recorder. No-op when the recorder
-            # mode is off; otherwise creates a per-session DB under .murder/advlogs/,
+            # mode is off. Otherwise it creates a per-session DB under .murder/advlogs/,
             # writes the session_info row (with the main-DB schema marker), and
             # stores the pointer on the runs row.
             mode = resolve_recorder_mode()
@@ -268,7 +265,7 @@ class Runtime:
                         self.db, self.run_id, str(getattr(self.advanced_log, "_db_path", ""))
                     )
             # Phase 2 (Step 2.6): register REFERENCES (never contents) to the
-            # known large per-run artifacts. Stat is existence-guarded; the
+            # known large per-run artifacts. Stat is existence-guarded. The
             # panes dir is referenced as a whole (per-pane logs are created
             # lazily later). No-op when advanced logging is off.
             for artifact in (
@@ -476,6 +473,7 @@ class Runtime:
         """Persist an agent plus its roster invalidation as one feature operation."""
         if self.db is None:
             return
+        assert self.roster is not None
         worktree_path = getattr(agent, "worktree_path", None)
         self.roster.sync_agent(
             self.db,
@@ -490,7 +488,7 @@ class Runtime:
             worktree_path=str(worktree_path) if worktree_path is not None else None,
             pid=None,
         )
-        # Flight-recorder data is observational only; roster refresh travels
+        # Flight-recorder data is observational only. Roster refresh travels
         # through the transactional feature projection input above.
         self.advanced_log.record_state_mutation(
             StateMutationRecord(
@@ -519,6 +517,7 @@ class Runtime:
         return self._agents.get_crow_handler(ticket_id)
 
     async def reap(self, agent_id: str) -> None:
+        assert self.roster is not None
         await self._agents.reap(
             agent_id,
             tasks=self._tasks,
@@ -625,7 +624,7 @@ class Runtime:
         if existing is None:
             record = HarnessSessionRecord(
                 session_id=session.session_id,
-                repository_id=uuid5(NAMESPACE_URL, f"murder:repository:{self.repo_root.resolve()}"),
+                repository_id=UUID(self.db.repository_id),
                 harness="document_editor",
                 transport=SessionTransport.TMUX,
                 transport_ref=session.tmux_name,
@@ -699,7 +698,7 @@ class Runtime:
         lease_id: UUID,
         fence: int,
     ) -> None:
-        """Fast admission check; the controller repeats it at write time."""
+        """Fast admission check. The controller repeats it at write time."""
 
         if self.db is None:
             raise RuntimeError("service session store is unavailable")

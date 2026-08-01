@@ -30,20 +30,20 @@ from murder.state.storage.service_registry import (
     service_registry_dir,
 )
 
-# Node runtime floor (current LTS). Ink 5 needs >=18; 20 is the future-proof floor we ship against.
+# Node runtime floor (current LTS). Ink 5 needs >=18. 20 is the future-proof floor we ship against.
 MIN_NODE_MAJOR = 20
 
 
 class InkLaunchError(RuntimeError):
     """A precondition for launching the Ink TUI is unmet (Node missing/old, deps absent, …).
 
-    Carries a clear, actionable message; the CLI surfaces it via the shared `_run_async_entry`
+    Carries a clear, actionable message. The CLI surfaces it via the shared `_run_async_entry`
     handler (RuntimeError → red message + non-zero exit), so we never spawn on failure.
     """
 
 
 def _require_node() -> None:
-    """Ensure a usable Node (>= MIN_NODE_MAJOR) is on PATH, or raise with install guidance."""
+    """Make sure a usable Node (>= MIN_NODE_MAJOR) is on PATH, or raise with install guidance."""
     major = _node_major_version()
     have = "none" if major is None else str(major)
     if major is None or major < MIN_NODE_MAJOR:
@@ -62,7 +62,7 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
 
     1. **Source checkout** — the Ink source entrypoint is present → run ``tsx`` with the
        TUI's development tsconfig from its package directory. That config resolves shared-package
-       imports directly to workspace source. Requires ``inktui/node_modules`` to be present; a
+       imports directly to workspace source. Requires ``inktui/node_modules`` to be present. A
        clear, distinct error fires if it is absent.
     2. **Installed wheel** — else the packaged self-contained bundle at
        ``importlib.resources``→ ``murder/_inktui/index.js`` → ``node <that path>``.
@@ -74,7 +74,7 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
         if not node_modules.is_dir():
             raise InkLaunchError(
                 f"inktui/node_modules is missing at {node_modules}. The dev TUI runs from source "
-                "via tsx; install the Node workspace first: `npm ci` from the repository root, then re-run "
+                "via tsx. Install the Node workspace first: `npm ci` from the repository root, then re-run "
                 "`murder`."
             )
         tsx_bin = node_modules / ".bin" / "tsx"
@@ -128,7 +128,7 @@ async def _launch_tui() -> None:
                 f"service is running (PID {owner}) but no WebSocket endpoint is published "
                 f"under {service_registry_dir()}. "
                 "The service may have started with a different runtime directory "
-                "(check XDG_RUNTIME_DIR); try `murder down` then `murder up`."
+                "(check XDG_RUNTIME_DIR). Try `murder down` then `murder up`."
             )
         raise InkLaunchError("service started without publishing its WebSocket endpoint")
     _spawn_ink(argv, cwd, session.websocket_url, repo.name)
@@ -147,7 +147,7 @@ def cmd_up(
 ) -> None:
     """Start the background supervisor and print whether it was already running."""
     # Resolve + propagate the rung to env BEFORE spawning serviced (inherited env
-    # carries it; the recorder mode rides the same rung — no separate flag).
+    # carries it. The recorder mode rides the same rung. No separate flag.
     apply_client_log_level(log_level)
 
     async def _up() -> None:

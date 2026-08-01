@@ -32,7 +32,7 @@ class HarnessRoleConfig(BaseModel):
     harnesses: list[HarnessKind] | None = Field(
         default=None,
         description=(
-            "Pool of harness kinds; tickets without harness override pick stably by ticket id."
+            "Pool of harness kinds. Tickets without harness override pick stably by ticket id."
         ),
     )
     startup_model: str | None = None
@@ -40,14 +40,14 @@ class HarnessRoleConfig(BaseModel):
     startup_models: list[str] | None = Field(
         default=None,
         description=(
-            "Pool of startup model strings; tickets without model override pick "
+            "Pool of startup model strings. Tickets without model override pick "
             "stably by ticket id."
         ),
     )
     startup_models_by_harness: dict[HarnessKind, list[str]] | None = Field(
         default=None,
         description=(
-            "Per-harness startup model pools; tickets without model override pick "
+            "Per-harness startup model pools. Tickets without model override pick "
             "from the pool matching the resolved harness."
         ),
     )

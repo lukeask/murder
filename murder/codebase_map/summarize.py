@@ -62,7 +62,7 @@ class FileSummarizer:
         if not body:
             # Even with reasoning headroom the model can occasionally burn
             # the whole cap thinking and emit no content. Retry once with the
-            # cap doubled; the budget checks below still clamp the result.
+            # cap doubled. The budget checks below still clamp the result.
             body, summary_tokens = await self._complete(
                 path=path,
                 symbols_text=symbols_text,
@@ -129,7 +129,7 @@ class FileSummarizer:
             messages=[{"role": "user", "content": user}],
             tools=None,
             # The provider cap covers reasoning + content on reasoning
-            # models; the *content* budget is enforced by the prompt and the
+            # models. The *content* budget is enforced by the prompt and the
             # local measurement below.
             max_tokens=(budget_tokens + REASONING_HEADROOM) if max_tokens is None else max_tokens,
             temperature=0.0,

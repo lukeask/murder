@@ -54,7 +54,7 @@ class SqliteEvidenceLedger:
         scope: EvidenceScope,
         drafts: Sequence[LedgerEntryDraft],
     ) -> str:
-        """Persist prepared entries for ``scope``; return a new ``delivery_id``.
+        """Persist prepared entries for ``scope``. Return a new ``delivery_id``.
 
         Does **not** mark anything supplied — the consumer must deliver first.
         """
@@ -151,7 +151,7 @@ class SqliteEvidenceLedger:
         return tuple(self._row_to_entry(row) for row in rows)
 
     def cleanup_scope(self, scope: EvidenceScope) -> int:
-        """Delete all ledger rows for ``scope``; GC orphaned blobs. Returns rows deleted."""
+        """Delete all ledger rows for ``scope``. GC orphaned blobs. Returns rows deleted."""
         scope_id = self._find_scope_id(scope)
         if scope_id is None:
             return 0

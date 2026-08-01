@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from murder import __version__
+from murder.app.cli.db_cmd import db_app
 from murder.app.cli.doctor_cmd import cmd_doctor
 from murder.app.cli.init_cmd import (
     _ensure_initialized_for_bare_command,
@@ -38,6 +39,7 @@ app = typer.Typer(
 )
 app.add_typer(tickets_app, name="ticket")
 app.add_typer(web_app, name="web")
+app.add_typer(db_app, name="db")
 
 
 @app.callback()
@@ -56,7 +58,7 @@ def _root(
 ) -> None:
     """Bare entrypoint launches the TUI. Start a plan with the new-plan popup
     (the command-modifier + `p` chord — `alt+p` by default, `ctrl+p` when the
-    command modifier is configured to ctrl; see the hint bar), which creates a
+    command modifier is configured to ctrl. See the hint bar), which creates a
     plan and starts its planning agent."""
     if version:
         typer.echo(f"murder {__version__}")

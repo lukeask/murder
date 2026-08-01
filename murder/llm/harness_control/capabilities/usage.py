@@ -1,5 +1,5 @@
 # ruff: noqa: PLR0911
-"""Pure verified usage collection; adapters lower ``RequestUsage`` physically."""
+"""Pure verified usage collection. Adapters lower ``RequestUsage`` physically."""
 
 from __future__ import annotations
 
@@ -136,7 +136,7 @@ def reconcile_usage(  # noqa: PLR0912 -- explicit verified operation phases
                 ControllerDecisionKind.OBSERVE_MORE,
                 UsagePhase.WAITING_TO_RETRY_STALE,
                 None,
-                "Codex reported stale limits; wait before one bounded retry",
+                "Codex reported stale limits. Wait before one bounded retry",
             )
         return ControllerDecision(
             ControllerDecisionKind.ESCALATE,

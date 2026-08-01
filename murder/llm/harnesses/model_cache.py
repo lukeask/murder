@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from murder.llm.harness_control.runtime.live_model_probe import (
     probe_live_models,
 )
 from murder.llm.harnesses import REGISTRY
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.harness_models import upsert_harness_models
 
 LOGGER = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ async def _discover_one(
 
 async def refresh_and_persist_harness_models(
     repo_root: Path,
-    db: sqlite3.Connection | None = None,
+    db: RepoDb | None = None,
     *,
     timeout_s: float = DISCOVERY_TIMEOUT_S,
 ) -> None:
@@ -97,7 +97,7 @@ async def refresh_and_persist_harness_models(
             discovery_error=error,
         )
     if db is not None:
-        db.commit()
+        db.conn.commit()
 
 
 __all__ = [

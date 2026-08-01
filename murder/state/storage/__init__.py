@@ -1,6 +1,6 @@
 """Filesystem helpers, path conventions, run id allocation.
 
-Most state is in SQLite (D2); this package handles things that have to
+Most state is in SQLite (D2). This package handles things that have to
 live as files: pane logfiles, escalation .md bodies, plan .md files,
 ticket prose .md files, lockfile.
 """

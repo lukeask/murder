@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +12,11 @@ from murder.llm.harnesses.usage_sampling import (
     sample_harness_usages,
 )
 from murder.runtime.scheduler.projection import invalidate_schedule
+from murder.state.persistence.connection import RepoDb
 
 
 async def sample_usage(
-    *, repo_root: Path, db: sqlite3.Connection, modes: set[str] | None = None
+    *, repo_root: Path, db: RepoDb, modes: set[str] | None = None
 ) -> dict[str, Any]:
     """Persist a usage sample and invalidate the schedule projection for the TUI.
 

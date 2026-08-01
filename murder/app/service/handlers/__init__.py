@@ -41,7 +41,7 @@ def register_all(
 
     The three stateful vertical slices receive only the application registrar,
     projection registry, and their runtime effects.  ``effects`` defaults to
-    ``app`` only for the lightweight registration test seam; production passes
+    ``app`` only for the lightweight registration test seam. Production passes
     the runtime explicitly from the composition root.
     """
     feature_projections = projections or ProjectionProviderRegistry()

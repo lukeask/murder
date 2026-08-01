@@ -266,7 +266,7 @@ class AgentOps:
         if not receipt.accepted_by_terminal_transport:
             return {
                 "ok": False,
-                "error": "terminal transport rejected manual input; harness interpretation unknown",
+                "error": "terminal transport rejected manual input. Harness interpretation unknown",
                 "operation_id": receipt.operation_id,
                 "action_id": receipt.action_id,
             }
@@ -337,7 +337,7 @@ class AgentOps:
             # ctrl+m on a planner must also reap its planning_handler companion,
             # else the orphaned handler polls a now-dead session and escalates
             # ("planner missed in poll" red toasts). Reap the planner first so
-            # the handler's own planner-gone check would also self-terminate; the
+            # the handler's own planner-gone check would also self-terminate. The
             # explicit reap here makes teardown immediate and deterministic.
             await self.rt.reap(agent_id)
             await self._reap_planner_handler(agent_id[len("planner-") :])
@@ -364,10 +364,10 @@ class AgentOps:
         db = self.rt.db
         if db is None:
             return
-        row = db.execute(
+        row = db.conn.execute(
             "SELECT agent_id, session FROM agents "
-            "WHERE agent_id = ? AND status NOT IN ('done', 'dead')",
-            (handler_id,),
+            "WHERE repository_id = ? AND agent_id = ? AND status NOT IN ('done', 'dead')",
+            (db.repository_id, handler_id),
         ).fetchone()
         if row is None:
             return
@@ -382,13 +382,13 @@ class AgentOps:
         db = self.rt.db
         if db is None:
             return {"ok": False, "error": f"no agent named {agent_id}"}
-        rows = db.execute(
+        rows = db.conn.execute(
             """
             SELECT agent_id, session FROM agents
-             WHERE (agent_id = ? OR agent_id = ?)
+             WHERE repository_id = ? AND (agent_id = ? OR agent_id = ?)
                AND status NOT IN ('done', 'dead')
             """,
-            (agent_id, _crow_handler_companion(agent_id)),
+            (db.repository_id, agent_id, _crow_handler_companion(agent_id)),
         ).fetchall()
         if not rows:
             return {"ok": False, "error": f"no agent named {agent_id}"}
@@ -463,7 +463,7 @@ class AgentOps:
             if not callable(interrupt):
                 return {"ok": False, "error": f"agent {agent_id} has no verified harness control"}
             if not await interrupt():
-                return {"ok": False, "error": f"agent {agent_id} interrupt was not verified"}
+                return {"ok": False, "error": f"the runtime did not verify interrupt for agent {agent_id}"}
             return {"handled": True}
         if not agent_id.startswith("crow-"):
             return {"ok": False, "error": "interrupt is only supported for crow agents"}

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -37,23 +36,24 @@ class WorkReadModel(ReadModelBase):
 
     def get_plans_snapshot(self) -> PlansSnapshot:
         as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
+        rows = self.db.conn.execute(
                 """
                 SELECT p.name, p.status, p.sync_state, p.updated_at,
                        p.frontmatter_json, length(p.body) AS body_chars,
-                       (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_name = p.name)
+                       (SELECT COUNT(*) FROM plan_revisions r
+                         WHERE r.repository_id = p.repository_id AND r.plan_name = p.name)
                            AS revisions
                   FROM plans p
-                 WHERE p.status != 'superseded'
+                 WHERE p.repository_id = ? AND p.status != 'superseded'
                  ORDER BY COALESCE(
                    (SELECT MAX(captured_at) FROM agent_messages
-                     WHERE agent_id = 'planner-' || p.name
+                     WHERE repository_id = p.repository_id AND agent_id = 'planner-' || p.name
                        AND role IN ('user', 'assistant')),
                    p.created_at
                  ) DESC, p.name
-                """
-            ).fetchall()
+                """,
+                (self.db.repository_id,),
+        ).fetchall()
         plans = tuple(
             PlanSummary(
                 name=str(row["name"]),
@@ -74,25 +74,27 @@ class WorkReadModel(ReadModelBase):
 
     def get_notes_snapshot(self) -> NotesSnapshot:
         as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            cols = {row["name"] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
-            if "status" in cols:
-                rows = conn.execute(
+        cols = {row["name"] for row in self.db.conn.execute("PRAGMA table_info(notes)").fetchall()}
+        if "status" in cols:
+            rows = self.db.conn.execute(
                     """
                     SELECT name, length(body) AS size, updated_at
                       FROM notes
-                     WHERE status = 'active'
+                     WHERE repository_id = ? AND status = 'active'
                      ORDER BY updated_at DESC, name
-                    """
-                ).fetchall()
-            else:
-                rows = conn.execute(
+                    """,
+                    (self.db.repository_id,),
+            ).fetchall()
+        else:
+            rows = self.db.conn.execute(
                     """
                     SELECT name, length(body) AS size, updated_at
                       FROM notes
+                     WHERE repository_id = ?
                      ORDER BY updated_at DESC, name
-                    """
-                ).fetchall()
+                    """,
+                    (self.db.repository_id,),
+            ).fetchall()
         notes = tuple(
             NoteSummary(
                 name=str(row["name"]),
@@ -109,23 +111,22 @@ class WorkReadModel(ReadModelBase):
 
     def get_reports_snapshot(self) -> ReportsSnapshot:
         as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            # Guard: reports table may not exist on a very old DB that predates
-            # F5.2 schema migration (get_db does not call init_db).
-            table_exists = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reports'"
-            ).fetchone()
-            if table_exists:
-                rows = conn.execute(
+        # Guard: reports table may not exist on a very old database.
+        table_exists = self.db.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reports'"
+        ).fetchone()
+        if table_exists:
+            rows = self.db.conn.execute(
                     """
                     SELECT name, length(body) AS size, updated_at
                       FROM reports
-                     WHERE status = 'active'
+                     WHERE repository_id = ? AND status = 'active'
                      ORDER BY updated_at DESC, name
-                    """
-                ).fetchall()
-            else:
-                rows = []
+                    """,
+                    (self.db.repository_id,),
+            ).fetchall()
+        else:
+            rows = []
         reports = tuple(
             ReportSummary(
                 name=str(row["name"]),
@@ -142,8 +143,7 @@ class WorkReadModel(ReadModelBase):
 
     def get_ticket_detail(self, ticket_id: str) -> TicketDetailSnapshot:
         as_of = datetime.utcnow()
-        with closing(self._connect()) as conn:
-            ticket = ticket_store.get_ticket(conn, ticket_id)
+        ticket = ticket_store.get_ticket(self.db, ticket_id)
         if ticket is None:
             raise KeyError(f"ticket not found: {ticket_id}")
 
@@ -167,22 +167,21 @@ class WorkReadModel(ReadModelBase):
         )
 
     def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None:
-        with closing(self._connect()) as conn:
-            row = conn.execute(
+        row = self.db.conn.execute(
                 """
                 SELECT materialized_path, sync_state, parse_error
                   FROM plans
-                 WHERE name = ?
+                 WHERE repository_id = ? AND name = ?
                 """,
-                (name,),
-            ).fetchone()
+                (self.db.repository_id, name),
+        ).fetchone()
         if row is None:
             return None
         materialized_path = Path(str(row["materialized_path"]))
         path = (
             materialized_path
             if materialized_path.is_absolute()
-            else self.db_path.parent.parent / materialized_path
+            else self.repo_root / materialized_path
         )
         if path.exists():
             text = path.read_text(encoding="utf-8")
@@ -194,18 +193,17 @@ class WorkReadModel(ReadModelBase):
         return PlanDisplaySnapshot(name=name, markdown=text)
 
     def get_note_display(self, name: str) -> NoteDisplaySnapshot | None:
-        with closing(self._connect()) as conn:
-            row = conn.execute(
+        row = self.db.conn.execute(
                 """
                 SELECT materialized_path, body
                   FROM notes
-                 WHERE name = ?
+                 WHERE repository_id = ? AND name = ?
                 """,
-                (name,),
-            ).fetchone()
+                (self.db.repository_id, name),
+        ).fetchone()
         if row is None:
             return None
-        path = self.db_path.parent / str(row["materialized_path"])
+        path = self.repo_root / str(row["materialized_path"])
         if path.exists():
             text = path.read_text(encoding="utf-8")
         else:
@@ -213,14 +211,18 @@ class WorkReadModel(ReadModelBase):
         return NoteDisplaySnapshot(name=name, markdown=text)
 
     def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
-        path = report_md(self.db_path.parent.parent, name)
-        if not path.exists() or not path.is_file():
+        row = self.db.conn.execute(
+            "SELECT materialized_path, body FROM reports WHERE repository_id = ? AND name = ?",
+            (self.db.repository_id, name),
+        ).fetchone()
+        if row is None:
             return None
-        text = path.read_text(encoding="utf-8")
+        path = report_md(self.repo_root, name)
+        text = path.read_text(encoding="utf-8") if path.is_file() else str(row["body"])
         return ReportDisplaySnapshot(name=name, markdown=text)
 
     def _read_ticket_prose(self, ticket_id: str) -> dict[str, str]:
-        path = self.db_path.parent / "tickets" / f"{ticket_id}.md"
+        path = self.repo_root / ".murder" / "tickets" / f"{ticket_id}.md"
         if not path.exists():
             return {"plan": "", "working_notes": "", "body": ""}
         raw = path.read_text(encoding="utf-8")

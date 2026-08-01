@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -18,6 +17,7 @@ from murder.runtime.sessions.controller import (
     trusted_local_session_authorizer,
 )
 from murder.runtime.sessions.persistence import SessionNotFoundError, SessionStore
+from murder.state.persistence.connection import Connection, RepoDb
 
 BackendFactory = Callable[
     [HarnessSessionRecord],
@@ -43,7 +43,7 @@ class SessionControllerRegistry:
         self._store = store
         self._backend_factory = backend_factory
         # Default denies until an explicit authorizer is supplied. Production
-        # uses ``registry_for_connection`` (SessionPermissionAuthorizer);
+        # uses ``registry_for_connection`` (SessionPermissionAuthorizer).
         # tests that need the old bypass must opt into
         # ``trusted_local_controller_factory``.
         self._controller_factory = controller_factory or (
@@ -136,19 +136,20 @@ class SessionControllerRegistry:
         )
 
 
-_CONNECTION_REGISTRIES: dict[int, tuple[sqlite3.Connection, SessionControllerRegistry]] = {}
+_CONNECTION_REGISTRIES: dict[int, tuple[Connection, SessionControllerRegistry]] = {}
 
 
-def registry_for_connection(connection: sqlite3.Connection) -> SessionControllerRegistry:
+def registry_for_connection(db: RepoDb) -> SessionControllerRegistry:
     """Return the process owner for every controller persisted by this DB."""
 
+    connection = db.conn
     key = id(connection)
     current = _CONNECTION_REGISTRIES.get(key)
     if current is not None and current[0] is connection:
         return current[1]
-    store = SessionStore(connection)
+    store = SessionStore(db)
     permission_service = PermissionService(
-        store=PermissionStore(connection),
+        store=PermissionStore(db),
         policy=LocalServicePermissionPolicy(),
     )
     permission_authorizer = SessionPermissionAuthorizer(permission_service)
@@ -180,7 +181,8 @@ def registry_for_connection(connection: sqlite3.Connection) -> SessionController
     return registry
 
 
-async def close_registry_for_connection(connection: sqlite3.Connection) -> None:
+async def close_registry_for_connection(db: RepoDb) -> None:
+    connection = db.conn
     current = _CONNECTION_REGISTRIES.pop(id(connection), None)
     if current is not None and current[0] is connection:
         await current[1].close()

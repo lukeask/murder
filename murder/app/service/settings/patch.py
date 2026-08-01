@@ -49,7 +49,7 @@ _TUI_SCALAR_KEYS = (
 def _require_backend(value: Any, backend_type: type[Any], field: str) -> Any:
     valid = set(get_args(backend_type))
     if value not in valid:
-        raise ValueError(f"{field} must be one of {sorted(valid)}; got {value!r}")
+        raise ValueError(f"{field} must be one of {sorted(valid)}. Got {value!r}.")
     return value
 
 

@@ -37,7 +37,7 @@ def register(app: ApplicationRegistrar, effects: DocumentEditorEffects) -> None:
         # know about it have upgraded, but never let it bypass the fenced raw
         # terminal stream.  ``terminal.input`` is the sole editor write path.
         del params
-        raise RuntimeError("document.editor.input has been replaced by terminal.input")
+        raise RuntimeError("use terminal.input instead of document.editor.input")
 
     async def resize(params: dict[str, Any]) -> dict[str, object]:
         await effects.resize_document_editor(

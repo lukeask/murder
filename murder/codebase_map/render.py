@@ -1,7 +1,7 @@
 """On-disk renderer for the codebase map (t059).
 
 Writes the ``.murder/map/`` mirror tree: one ``<relpath>.md`` per source file
-(keeping the source extension so ``foo.py.md`` and ``foo.pyi.md`` don't
+(keeping the source extension so ``foo.py.md`` and ``foo.pyi.md`` do not
 collide), plus a ``DIR.md`` per directory and a ``ROOT.md`` at the top.
 
 Every rendered file carries YAML frontmatter so the map self-reports

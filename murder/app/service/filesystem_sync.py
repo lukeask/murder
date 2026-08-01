@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from murder.state.persistence.connection import RepoDb
 from murder.work.attribution import attribute_edit
 from murder.work.examples import seed_examples
 from murder.work.notes.sync import NoteSync, NotetakerContextSync
@@ -29,10 +28,10 @@ MessageSender = Callable[[str, str], Awaitable[None]]
 def _build_parse_error_message(path: Path, parse_error: str) -> str:
     """The fix-prompt sent to the owning agent for a malformed artifact."""
     return (
-        f"The file you edited at `{path}` failed to parse and was not saved:\n"
+        f"The file you edited at `{path}` failed to parse and did not save:\n"
         f"  {parse_error}\n"
-        "Please re-open that file, fix the malformed frontmatter/content, and "
-        "save it again so it can be ingested."
+        "Re-open that file, fix the malformed frontmatter or content, and "
+        "save it again so the system can load it."
     )
 
 SYNC_TASK_KEYS = (
@@ -59,10 +58,10 @@ class FilesystemSyncSupervisor:
     def attach(
         cls,
         repo_root: Path,
-        db: sqlite3.Connection,
-    ) -> "FilesystemSyncSupervisor":
+        db: RepoDb,
+    ) -> FilesystemSyncSupervisor:
         sup = cls.__new__(cls)
-        # Initialise dataclass fields manually (avoid __init__ arg ordering issues).
+        # Initialize dataclass fields manually (avoid __init__ arg ordering issues).
         sup.repo_root = repo_root
         sup.plan_sync = PlanSync(repo_root, db)
         sup.note_sync = NoteSync(repo_root, db)
@@ -98,7 +97,7 @@ class FilesystemSyncSupervisor:
         self.ticket_sync.parse_error_notifier = _notify
 
     def seed(self) -> None:
-        """Restore any missing example artifacts. Cheap + idempotent; kept on the boot path."""
+        """Restore any missing example artifacts. Cheap and idempotent. Kept on the boot path."""
         if self.repo_root is not None:
             seed_examples(self.repo_root)
 

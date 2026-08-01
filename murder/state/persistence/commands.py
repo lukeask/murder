@@ -1,14 +1,16 @@
 """Persistence for the commands and worker_heartbeats tables."""
 
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime
 from typing import Any
 
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.worker_names import WorkerName
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.records import CommandRecord, command_record_from_row
 
 
@@ -17,7 +19,7 @@ def _now() -> str:
 
 
 def enqueue_command(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     command_id: str,
     run_id: str,
@@ -38,13 +40,13 @@ def enqueue_command(
     last_error: str | None = None,
 ) -> None:
     now = _now()
-    conn.execute(
+    db.conn.execute(
         """
         INSERT INTO commands
             (id, created_at, updated_at, run_id, agent_id, role, ticket_id, target_worker,
-             kind, payload_json, correlation_id, idempotency_key, status, claimed_by,
+             repository_id, kind, payload_json, correlation_id, idempotency_key, status, claimed_by,
              lease_expires_at, attempt_count, retryable, result_json, last_error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             command_id,
@@ -55,6 +57,7 @@ def enqueue_command(
             role,
             ticket_id,
             target_worker.value,
+            db.repository_id,
             kind.value,
             json.dumps(payload, default=str),
             correlation_id,
@@ -71,22 +74,23 @@ def enqueue_command(
 
 
 def claim_next_command(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     target_worker: WorkerName,
     claimed_by: str,
     lease_expires_at: int,
 ) -> CommandRecord | None:
+    conn = db.conn
     row = conn.execute(
         """
         SELECT id
           FROM commands
-         WHERE target_worker = ?
+         WHERE repository_id = ? AND target_worker = ?
            AND status = 'pending'
          ORDER BY created_at, id
          LIMIT 1
         """,
-        (target_worker.value,),
+        (db.repository_id, target_worker.value),
     ).fetchone()
     if row is None:
         return None
@@ -98,31 +102,36 @@ def claim_next_command(
                lease_expires_at = ?,
                attempt_count = attempt_count + 1,
                updated_at = ?
-         WHERE id = ?
+         WHERE id = ? AND repository_id = ?
         """,
-        (claimed_by, lease_expires_at, _now(), row["id"]),
+        (claimed_by, lease_expires_at, _now(), row["id"], db.repository_id),
     )
-    claimed = conn.execute("SELECT * FROM commands WHERE id = ?", (row["id"],)).fetchone()
+    claimed = conn.execute(
+        "SELECT * FROM commands WHERE id = ? AND repository_id = ?", (row["id"], db.repository_id)
+    ).fetchone()
     return command_record_from_row(claimed) if claimed else None
 
 
-def complete_command(
-    conn: sqlite3.Connection, *, command_id: str, result: dict[str, Any] | None = None
-) -> None:
-    conn.execute(
+def complete_command(db: RepoDb, *, command_id: str, result: dict[str, Any] | None = None) -> None:
+    db.conn.execute(
         """
         UPDATE commands
            SET status = 'done',
                result_json = ?,
                updated_at = ?
-         WHERE id = ?
+         WHERE id = ? AND repository_id = ?
         """,
-        (json.dumps(result, default=str) if result is not None else None, _now(), command_id),
+        (
+            json.dumps(result, default=str) if result is not None else None,
+            _now(),
+            command_id,
+            db.repository_id,
+        ),
     )
 
 
 def renew_command_lease(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     command_id: str,
     claimed_by: str,
@@ -134,7 +143,7 @@ def renew_command_lease(
     cannot revive a command that was completed, failed, or claimed elsewhere.
     """
 
-    cursor = conn.execute(
+    cursor = db.conn.execute(
         """
         UPDATE commands
            SET lease_expires_at = ?,
@@ -142,34 +151,35 @@ def renew_command_lease(
          WHERE id = ?
            AND status = 'in_flight'
            AND claimed_by = ?
+           AND repository_id = ?
         """,
-        (lease_expires_at, _now(), command_id, claimed_by),
+        (lease_expires_at, _now(), command_id, claimed_by, db.repository_id),
     )
-    return cursor.rowcount == 1
+    return bool(cursor.rowcount == 1)
 
 
 def fail_command(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     command_id: str,
     last_error: str,
     retryable: bool = True,
 ) -> None:
-    conn.execute(
+    db.conn.execute(
         """
         UPDATE commands
            SET status = 'failed',
                retryable = ?,
                last_error = ?,
                updated_at = ?
-         WHERE id = ?
+         WHERE id = ? AND repository_id = ?
         """,
-        (1 if retryable else 0, last_error, _now(), command_id),
+        (1 if retryable else 0, last_error, _now(), command_id, db.repository_id),
     )
 
 
 def reap_stale_commands(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     now_epoch: int,
     max_attempts: int = 3,
@@ -177,20 +187,21 @@ def reap_stale_commands(
     """Reclaim expired in-flight commands.
 
     Retryable commands go back to ``pending`` until ``max_attempts`` is
-    reached. Exhausted or non-retryable commands become ``failed``; the
+    reached. Exhausted or non-retryable commands become ``failed``. The
     supervisor is responsible for emitting escalation events for returned
     ``failed`` ids.
     """
+    conn = db.conn
     rows = conn.execute(
         """
         SELECT id, retryable, attempt_count
           FROM commands
-         WHERE status = 'in_flight'
+         WHERE repository_id = ? AND status = 'in_flight'
            AND lease_expires_at IS NOT NULL
            AND lease_expires_at <= ?
          ORDER BY updated_at, id
         """,
-        (now_epoch,),
+        (db.repository_id, now_epoch),
     ).fetchall()
     retried: list[str] = []
     failed: list[str] = []
@@ -200,7 +211,7 @@ def reap_stale_commands(
         # attempt_count already counts attempts made: claim_next_command does
         # attempt_count + 1 at lease time, so a command with attempt_count == N
         # has been dispatched N times. Re-pending leaves the count untouched and
-        # lets the next claim increment it; comparing attempts-used against
+        # lets the next claim increment it. Comparing attempts-used against
         # max_attempts here (rather than a pre-incremented value) is what allows
         # the full max_attempts dispatches instead of one fewer.
         attempts_used = int(row["attempt_count"] or 0)
@@ -212,9 +223,9 @@ def reap_stale_commands(
                        claimed_by = NULL,
                        lease_expires_at = NULL,
                        updated_at = ?
-                 WHERE id = ?
+                 WHERE id = ? AND repository_id = ?
                 """,
-                (now, command_id),
+                (now, command_id, db.repository_id),
             )
             retried.append(command_id)
             continue
@@ -226,16 +237,16 @@ def reap_stale_commands(
                    lease_expires_at = NULL,
                    last_error = COALESCE(last_error, 'command lease expired'),
                    updated_at = ?
-             WHERE id = ?
+             WHERE id = ? AND repository_id = ?
             """,
-            (now, command_id),
+            (now, command_id, db.repository_id),
         )
         failed.append(command_id)
     return {"retried": retried, "failed": failed}
 
 
 def upsert_worker_heartbeat(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     worker_id: str,
     run_id: str,
@@ -245,41 +256,41 @@ def upsert_worker_heartbeat(
 ) -> None:
     now = _now()
     payload_json = json.dumps(payload or {}, default=str)
-    conn.execute(
+    db.conn.execute(
         """
         INSERT INTO worker_heartbeats(
-            worker_id, run_id, role, ticket_id, last_heartbeat_at, payload_json
+            repository_id, worker_id, run_id, role, ticket_id, last_heartbeat_at, payload_json
         )
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(worker_id) DO UPDATE SET
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(repository_id, worker_id) DO UPDATE SET
             run_id = excluded.run_id,
             role = excluded.role,
             ticket_id = excluded.ticket_id,
             last_heartbeat_at = excluded.last_heartbeat_at,
             payload_json = excluded.payload_json
         """,
-        (worker_id, run_id, role, ticket_id, now, payload_json),
+        (db.repository_id, worker_id, run_id, role, ticket_id, now, payload_json),
     )
 
 
-def get_command_status(conn: sqlite3.Connection, command_id: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT status, result_json, last_error, updated_at FROM commands WHERE id = ?",
-        (command_id,),
+def get_command_status(db: RepoDb, command_id: str) -> dict[str, Any] | None:
+    row = db.conn.execute(
+        "SELECT status, result_json, last_error, updated_at FROM commands WHERE id = ? AND repository_id = ?",
+        (command_id, db.repository_id),
     ).fetchone()
     return dict(row) if row else None
 
 
-def get_worker_heartbeat(conn: sqlite3.Connection, worker_id: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT * FROM worker_heartbeats WHERE worker_id = ?",
-        (worker_id,),
+def get_worker_heartbeat(db: RepoDb, worker_id: str) -> dict[str, Any] | None:
+    row = db.conn.execute(
+        "SELECT * FROM worker_heartbeats WHERE worker_id = ? AND repository_id = ?",
+        (worker_id, db.repository_id),
     ).fetchone()
     return dict(row) if row else None
 
 
 def insert_command_event(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     command_id: str,
     run_id: str,
@@ -302,10 +313,11 @@ def insert_command_event(
     ts: str | None = None,
     schema_version: int = 1,
 ) -> int:
-    conn.execute("BEGIN")
+    conn = db.conn
+    conn.execute("BEGIN IMMEDIATE")
     try:
         enqueue_command(
-            conn,
+            db,
             command_id=command_id,
             run_id=run_id,
             agent_id=agent_id,

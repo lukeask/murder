@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from murder.state.persistence import plans as dbmod
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.markdown_loop import MarkdownSyncLoop
 from murder.state.storage.paths import deprecated_plans_dir, plan_md, plans_dir
 from murder.work.plans.parser import parse, render, write
@@ -32,7 +33,7 @@ class PlanSync(MarkdownSyncLoop):
     def __init__(
         self,
         repo_root: Path,
-        db,
+        db: RepoDb,
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
@@ -78,9 +79,10 @@ class PlanSync(MarkdownSyncLoop):
         if dbmod.get_plan_row(self.db, new_name) is not None:
             raise ValueError(f"plan already exists: {new_name}")
 
-        related = self.db.execute(
-            "SELECT ticket_id FROM plan_related_tickets WHERE plan_name = ? ORDER BY ticket_id",
-            (old_name,),
+        related = self.db.conn.execute(
+            "SELECT ticket_id FROM plan_related_tickets "
+            "WHERE repository_id = ? AND plan_name = ? ORDER BY ticket_id",
+            (self.db.repository_id, old_name),
         ).fetchall()
         related_tickets = [str(r["ticket_id"]) for r in related]
         old_path = self.repo_root / str(row["materialized_path"])
@@ -101,7 +103,7 @@ class PlanSync(MarkdownSyncLoop):
         rendered = render(plan)
         rendered_hash = content_hash(rendered)
 
-        with self.db:
+        with self.db.conn:
             dbmod.rename_plan(
                 self.db,
                 old_name,
@@ -113,13 +115,13 @@ class PlanSync(MarkdownSyncLoop):
                 old_path.unlink()
             raw = new_path.read_text(encoding="utf-8")
             file_hash = content_hash(raw)
-            self.db.execute(
+            self.db.conn.execute(
                 """
                 UPDATE plans
                    SET status = ?, updated_at = ?, body = ?, frontmatter_json = ?,
                        body_hash = ?, file_hash = ?, materialized_path = ?,
                        sync_state = 'synced', parse_error = NULL
-                 WHERE name = ?
+                 WHERE repository_id = ? AND name = ?
                 """,
                 (
                     plan.status.value,
@@ -129,6 +131,7 @@ class PlanSync(MarkdownSyncLoop):
                     rendered_hash,
                     file_hash,
                     materialized_path,
+                    self.db.repository_id,
                     new_name,
                 ),
             )
@@ -140,9 +143,10 @@ class PlanSync(MarkdownSyncLoop):
         if row is None:
             raise KeyError(name)
 
-        related = self.db.execute(
-            "SELECT ticket_id FROM plan_related_tickets WHERE plan_name = ? ORDER BY ticket_id",
-            (name,),
+        related = self.db.conn.execute(
+            "SELECT ticket_id FROM plan_related_tickets "
+            "WHERE repository_id = ? AND plan_name = ? ORDER BY ticket_id",
+            (self.db.repository_id, name),
         ).fetchall()
         old_path = self.repo_root / str(row["materialized_path"])
         if old_path.exists():
@@ -175,7 +179,7 @@ class PlanSync(MarkdownSyncLoop):
             old_path.unlink()
         raw = dest.read_text(encoding="utf-8")
         h = content_hash(raw)
-        with self.db:
+        with self.db.conn:
             row = dbmod.deprecate_plan(
                 self.db,
                 name,
@@ -248,9 +252,10 @@ class PlanSync(MarkdownSyncLoop):
             )
 
     def materialize_row(self, row: dict[str, object]) -> Path:
-        related = self.db.execute(
-            "SELECT ticket_id FROM plan_related_tickets WHERE plan_name = ? ORDER BY ticket_id",
-            (row["name"],),
+        related = self.db.conn.execute(
+            "SELECT ticket_id FROM plan_related_tickets "
+            "WHERE repository_id = ? AND plan_name = ? ORDER BY ticket_id",
+            (self.db.repository_id, row["name"]),
         ).fetchall()
         row = {**row, "_related_rows": related}
         plan = plan_from_row(row)
@@ -261,19 +266,19 @@ class PlanSync(MarkdownSyncLoop):
         # both in the rendered frontmatter and in the DB, so a missing-file
         # regeneration on startup does not mass-restamp untouched plans. We
         # therefore neither bump ``plan.updated_at`` nor route through
-        # ``mark_plan_sync_state`` (which always stamps ``_now()``); the single
+        # ``mark_plan_sync_state`` (which always stamps ``_now()``). The single
         # UPDATE below sets sync state and hashes while leaving ``updated_at``.
         write(path, plan)
         raw = path.read_text(encoding="utf-8")
         h = content_hash(raw)
-        self.db.execute(
+        self.db.conn.execute(
             """
             UPDATE plans
                SET sync_state = 'synced', parse_error = NULL,
                    file_hash = ?, body_hash = ?
-             WHERE name = ?
+             WHERE repository_id = ? AND name = ?
             """,
-            (h, h, plan.name),
+            (h, h, self.db.repository_id, plan.name),
         )
         return path
 

@@ -31,6 +31,7 @@ from murder.facts.contracts import (
     fact_payload_from_storage,
 )
 from murder.facts.log import append_fact
+from murder.state.persistence.connection import Connection, RepoDb
 from murder.work.workflows.runtime import (
     ActivityFinishedSignal,
     ActivityWait,
@@ -92,11 +93,12 @@ class TerminalWorkflowTransitionError(WorkflowPersistenceError):
 
 
 def create_workflow_run(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     run: WorkflowRunRecord,
     *,
     waits: Sequence[WaitSpec] = (),
 ) -> None:
+    conn = db.conn
     """Insert an authoritative run and its initial waits atomically."""
 
     if run.status == WorkflowStatus.WAITING and not waits:
@@ -116,13 +118,14 @@ def create_workflow_run(
         conn.execute(
             """
             INSERT INTO workflow_runs(
-                workflow_id, definition_name, definition_version, status,
+                repository_id, workflow_id, definition_name, definition_version, status,
                 revision, state_json, created_at, updated_at, started_by_json,
                 correlation_json, terminal_reason, parent_ticket_id,
                 definition_json, stage_map_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                db.repository_id,
                 str(run.workflow_id),
                 run.definition_name,
                 run.definition_version,
@@ -140,7 +143,7 @@ def create_workflow_run(
             ),
         )
         _insert_waits(
-            conn,
+            db,
             workflow_id=run.workflow_id,
             waits=waits,
             created_at=run.created_at,
@@ -152,7 +155,7 @@ def create_workflow_run(
             status=run.status.value,
         )
         _append_workflow_fact(
-            conn,
+            db,
             workflow=run,
             revision=run.revision,
             fact_id=uuid5(
@@ -165,55 +168,59 @@ def create_workflow_run(
         )
 
 
-def get_workflow_run(
-    conn: sqlite3.Connection, workflow_or_parent_id: UUID | str
-) -> WorkflowRunRecord | None:
+def get_workflow_run(db: RepoDb, workflow_or_parent_id: UUID | str) -> WorkflowRunRecord | None:
+    conn = db.conn
     """Load by UUID identity, or by legacy parent ticket id during migration."""
 
     key = str(workflow_or_parent_id)
     row = conn.execute(
         """
         SELECT * FROM workflow_runs
-        WHERE workflow_id = ? OR parent_ticket_id = ?
+        WHERE repository_id = ? AND (workflow_id = ? OR parent_ticket_id = ?)
         LIMIT 1
         """,
-        (key, key),
+        (db.repository_id, key, key),
     ).fetchone()
     return _run_record(row) if row is not None else None
 
 
-def require_workflow_run(conn: sqlite3.Connection, workflow_id: UUID) -> WorkflowRunRecord:
-    run = get_workflow_run(conn, workflow_id)
+def require_workflow_run(db: RepoDb, workflow_id: UUID) -> WorkflowRunRecord:
+    run = get_workflow_run(db, workflow_id)
     if run is None:
         raise WorkflowNotFoundError(f"workflow {workflow_id} does not exist")
     return run
 
 
-def list_workflow_runs(conn: sqlite3.Connection) -> list[WorkflowRunRecord]:
-    rows = conn.execute("SELECT * FROM workflow_runs ORDER BY created_at, workflow_id").fetchall()
+def list_workflow_runs(db: RepoDb) -> list[WorkflowRunRecord]:
+    conn = db.conn
+    rows = conn.execute(
+        "SELECT * FROM workflow_runs WHERE repository_id = ? ORDER BY created_at, workflow_id",
+        (db.repository_id,),
+    ).fetchall()
     return [_run_record(row) for row in rows]
 
 
 def list_workflow_waits(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     workflow_id: UUID,
     *,
     include_satisfied: bool = True,
 ) -> list[WorkflowWaitRecord]:
+    conn = db.conn
     predicate = "" if include_satisfied else " AND satisfied_at IS NULL"
     rows = conn.execute(
         f"""
         SELECT * FROM workflow_waits
-        WHERE workflow_id = ?{predicate}
+        WHERE repository_id = ? AND workflow_id = ?{predicate}
         ORDER BY created_at, wait_id
         """,
-        (str(workflow_id),),
+        (db.repository_id, str(workflow_id)),
     ).fetchall()
     return [_wait_record(row) for row in rows]
 
 
 def enqueue_workflow_signal(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     deduplication_key: str,
@@ -221,6 +228,7 @@ def enqueue_workflow_signal(
     created_at: datetime | None = None,
     signal_id: UUID | None = None,
 ) -> WorkflowSignalRecord:
+    conn = db.conn
     """Create an addressed inbox record idempotently.
 
     Reusing a deduplication key with the identical payload returns the original
@@ -235,14 +243,14 @@ def enqueue_workflow_signal(
     payload_json = _json(_SIGNAL_ADAPTER.dump_python(payload, mode="json"))
 
     with _transaction(conn, "enqueue_workflow_signal"):
-        if get_workflow_run(conn, workflow_id) is None:
+        if get_workflow_run(db, workflow_id) is None:
             raise WorkflowNotFoundError(f"workflow {workflow_id} does not exist")
         existing = conn.execute(
             """
             SELECT * FROM workflow_signals
-            WHERE workflow_id = ? AND deduplication_key = ?
+            WHERE repository_id = ? AND workflow_id = ? AND deduplication_key = ?
             """,
-            (str(workflow_id), deduplication_key),
+            (db.repository_id, str(workflow_id), deduplication_key),
         ).fetchone()
         if existing is not None:
             record = _signal_record(existing)
@@ -255,11 +263,12 @@ def enqueue_workflow_signal(
         conn.execute(
             """
             INSERT INTO workflow_signals(
-                signal_id, workflow_id, deduplication_key, created_at,
+                repository_id, signal_id, workflow_id, deduplication_key, created_at,
                 payload_json, consumed_at, consumed_at_revision
-            ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
             """,
             (
+                db.repository_id,
                 str(candidate_id),
                 str(workflow_id),
                 deduplication_key,
@@ -270,9 +279,9 @@ def enqueue_workflow_signal(
 
         # A signal marks matching current waits satisfied, but does not consume
         # itself and does not imply that a state transition occurred.
-        for wait in list_workflow_waits(conn, workflow_id, include_satisfied=False):
+        for wait in list_workflow_waits(db, workflow_id, include_satisfied=False):
             if _signal_satisfies_wait(
-                conn,
+                db,
                 workflow_id=workflow_id,
                 payload=payload,
                 wait=wait.spec,
@@ -281,52 +290,55 @@ def enqueue_workflow_signal(
                     """
                     UPDATE workflow_waits
                     SET satisfied_at = ?, satisfied_by_signal_id = ?
-                    WHERE wait_id = ? AND satisfied_at IS NULL
+                    WHERE wait_id = ? AND repository_id = ? AND satisfied_at IS NULL
                     """,
                     (
                         _datetime_text(timestamp),
                         str(candidate_id),
                         str(wait.wait_id),
+                        db.repository_id,
                     ),
                 )
 
-    created_record = get_workflow_signal(conn, candidate_id)
+    created_record = get_workflow_signal(db, candidate_id)
     assert created_record is not None
     return created_record
 
 
-def get_workflow_signal(conn: sqlite3.Connection, signal_id: UUID) -> WorkflowSignalRecord | None:
+def get_workflow_signal(db: RepoDb, signal_id: UUID) -> WorkflowSignalRecord | None:
+    conn = db.conn
     row = conn.execute(
-        "SELECT * FROM workflow_signals WHERE signal_id = ?",
-        (str(signal_id),),
+        "SELECT * FROM workflow_signals WHERE signal_id = ? AND repository_id = ?",
+        (str(signal_id), db.repository_id),
     ).fetchone()
     return _signal_record(row) if row is not None else None
 
 
 def list_workflow_signals(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     workflow_id: UUID,
     *,
     include_consumed: bool = False,
     limit: int = 100,
 ) -> list[WorkflowSignalRecord]:
+    conn = db.conn
     if limit < 1:
         raise ValueError("limit must be positive")
     predicate = "" if include_consumed else " AND consumed_at IS NULL"
     rows = conn.execute(
         f"""
         SELECT * FROM workflow_signals
-        WHERE workflow_id = ?{predicate}
+        WHERE repository_id = ? AND workflow_id = ?{predicate}
         ORDER BY created_at, signal_id
         LIMIT ?
         """,
-        (str(workflow_id), limit),
+        (db.repository_id, str(workflow_id), limit),
     ).fetchall()
     return [_signal_record(row) for row in rows]
 
 
 def load_workflow_decision_input(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     workflow_id: UUID,
     *,
     now: datetime | None = None,
@@ -335,11 +347,11 @@ def load_workflow_decision_input(
     """Load one finite, current decision batch without replay."""
 
     return WorkflowDecisionInput(
-        run=require_workflow_run(conn, workflow_id),
-        waits=tuple(list_workflow_waits(conn, workflow_id)),
+        run=require_workflow_run(db, workflow_id),
+        waits=tuple(list_workflow_waits(db, workflow_id)),
         signals=tuple(
             list_workflow_signals(
-                conn,
+                db,
                 workflow_id,
                 include_consumed=False,
                 limit=signal_limit,
@@ -350,12 +362,13 @@ def load_workflow_decision_input(
 
 
 def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     plan: WorkflowTransitionPlan,
     applied_at: datetime | None = None,
 ) -> WorkflowRunRecord:
+    conn = db.conn
     """Atomically apply one pure workflow decision.
 
     The revision check, selected signal consumption, state replacement, wait
@@ -382,8 +395,8 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
     new_revision = plan.state.expected_revision + 1
     with _transaction(conn, "apply_workflow_transition", immediate=True):
         row = conn.execute(
-            "SELECT * FROM workflow_runs WHERE workflow_id = ?",
-            (str(workflow_id),),
+            "SELECT * FROM workflow_runs WHERE workflow_id = ? AND repository_id = ?",
+            (str(workflow_id), db.repository_id),
         ).fetchone()
         if row is None:
             raise WorkflowNotFoundError(f"workflow {workflow_id} does not exist")
@@ -420,9 +433,9 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
                 f"""
                 SELECT signal_id, workflow_id, consumed_at
                 FROM workflow_signals
-                WHERE signal_id IN ({placeholders})
+                WHERE repository_id = ? AND signal_id IN ({placeholders})
                 """,
-                tuple(str(signal_id) for signal_id in plan.consume_signal_ids),
+                (db.repository_id, *(str(signal_id) for signal_id in plan.consume_signal_ids)),
             ).fetchall()
             if len(signal_rows) != len(plan.consume_signal_ids):
                 raise SignalConsumptionError("one or more selected signals do not exist")
@@ -438,11 +451,12 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
                 f"""
                 UPDATE workflow_signals
                 SET consumed_at = ?, consumed_at_revision = ?
-                WHERE signal_id IN ({placeholders})
+                WHERE repository_id = ? AND signal_id IN ({placeholders})
                 """,
                 (
                     _datetime_text(timestamp),
                     new_revision,
+                    db.repository_id,
                     *(str(signal_id) for signal_id in plan.consume_signal_ids),
                 ),
             )
@@ -452,7 +466,7 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
             UPDATE workflow_runs
             SET status = ?, revision = ?, state_json = ?, updated_at = ?,
                 terminal_reason = ?
-            WHERE workflow_id = ? AND revision = ?
+            WHERE workflow_id = ? AND repository_id = ? AND revision = ?
             """,
             (
                 plan.state.status.value,
@@ -461,12 +475,13 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
                 _datetime_text(timestamp),
                 plan.state.terminal_reason,
                 str(workflow_id),
+                db.repository_id,
                 plan.state.expected_revision,
             ),
         )
         if updated.rowcount != 1:
             # Defensive even though BEGIN IMMEDIATE serializes other writers.
-            current = require_workflow_run(conn, workflow_id)
+            current = require_workflow_run(db, workflow_id)
             raise StaleWorkflowRevisionError(
                 workflow_id,
                 plan.state.expected_revision,
@@ -474,13 +489,13 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
             )
 
         # The old decision set (including briefly satisfied waits) is replaced
-        # as a unit; no absent-task or in-memory-future semantics remain.
+        # as a unit. No absent-task or in-memory-future semantics remain.
         conn.execute(
-            "DELETE FROM workflow_waits WHERE workflow_id = ?",
-            (str(workflow_id),),
+            "DELETE FROM workflow_waits WHERE workflow_id = ? AND repository_id = ?",
+            (str(workflow_id), db.repository_id),
         )
         _insert_waits(
-            conn,
+            db,
             workflow_id=workflow_id,
             waits=plan.replace_waits,
             created_at=timestamp,
@@ -491,14 +506,14 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
             )
 
             insert_activity_requests(
-                conn,
+                db,
                 workflow_id=workflow_id,
                 workflow_revision=new_revision,
                 drafts=plan.activities,
                 created_at=timestamp,
             )
         _validate_activity_wait_references(
-            conn,
+            db,
             workflow_id=workflow_id,
             waits=plan.replace_waits,
         )
@@ -508,32 +523,32 @@ def apply_transition_plan(  # noqa: PLR0912 - closed transactional invariants
             )
 
             insert_approval_requests(
-                conn,
+                db,
                 workflow_id=workflow_id,
                 workflow_revision=new_revision,
                 drafts=plan.approvals,
                 created_at=timestamp,
             )
         _append_transition_outbox(
-            conn,
+            db,
             workflow_id=workflow_id,
             revision=new_revision,
             plan=plan,
             created_at=timestamp,
         )
         _append_transition_facts(
-            conn,
+            db,
             workflow=_run_record(row),
             revision=new_revision,
             plan=plan,
             created_at=timestamp,
         )
 
-    return require_workflow_run(conn, workflow_id)
+    return require_workflow_run(db, workflow_id)
 
 
 def apply_workflow_state_migration(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     expected_revision: int,
@@ -541,6 +556,7 @@ def apply_workflow_state_migration(
     migration_name: str,
     migrated_at: datetime | None = None,
 ) -> WorkflowStateMigrationRecord:
+    conn = db.conn
     """Replace a state schema explicitly and record the compatibility boundary."""
 
     if not migration_name:
@@ -548,7 +564,7 @@ def apply_workflow_state_migration(
     timestamp = _aware(migrated_at)
     migration_id = uuid4()
     with _transaction(conn, "migrate_workflow_state", immediate=True):
-        current = require_workflow_run(conn, workflow_id)
+        current = require_workflow_run(db, workflow_id)
         if current.revision != expected_revision:
             raise StaleWorkflowRevisionError(
                 workflow_id,
@@ -568,29 +584,31 @@ def apply_workflow_state_migration(
             """
             UPDATE workflow_runs
             SET revision = ?, state_json = ?, updated_at = ?
-            WHERE workflow_id = ? AND revision = ?
+            WHERE workflow_id = ? AND repository_id = ? AND revision = ?
             """,
             (
                 to_revision,
                 _json(target_state.model_dump(mode="json")),
                 _datetime_text(timestamp),
                 str(workflow_id),
+                db.repository_id,
                 expected_revision,
             ),
         )
         if updated.rowcount != 1:
-            actual = require_workflow_run(conn, workflow_id).revision
+            actual = require_workflow_run(db, workflow_id).revision
             raise StaleWorkflowRevisionError(workflow_id, expected_revision, actual)
         conn.execute(
             """
             INSERT INTO workflow_state_migrations(
-                migration_id, workflow_id, migration_name,
+                repository_id, migration_id, workflow_id, migration_name,
                 from_schema_name, from_schema_version,
                 to_schema_name, to_schema_version,
                 from_revision, to_revision, migrated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                db.repository_id,
                 str(migration_id),
                 str(workflow_id),
                 migration_name,
@@ -613,7 +631,7 @@ def apply_workflow_state_migration(
             revision=to_revision,
         )
         _append_workflow_fact(
-            conn,
+            db,
             workflow=current,
             revision=to_revision,
             fact_id=uuid5(
@@ -639,22 +657,28 @@ def apply_workflow_state_migration(
 
 
 def list_workflow_state_migrations(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     workflow_id: UUID,
 ) -> tuple[WorkflowStateMigrationRecord, ...]:
+    conn = db.conn
     rows = conn.execute(
         """
         SELECT * FROM workflow_state_migrations
-        WHERE workflow_id = ?
+        WHERE workflow_id = ? AND repository_id = ?
         ORDER BY to_revision
         """,
-        (str(workflow_id),),
+        (str(workflow_id), db.repository_id),
     ).fetchall()
-    return tuple(WorkflowStateMigrationRecord.model_validate(dict(row)) for row in rows)
+    return tuple(
+        WorkflowStateMigrationRecord.model_validate(
+            {key: row[key] for key in WorkflowStateMigrationRecord.model_fields}
+        )
+        for row in rows
+    )
 
 
 def _append_transition_outbox(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     revision: int,
@@ -664,17 +688,19 @@ def _append_transition_outbox(
     # Feature tables are now authoritative for activities and approvals, while
     # facts append directly to the retained fact log. Keep the compatibility
     # table readable, but create no second dispatch surface.
+    conn = db.conn
     batches: tuple[tuple[str, Sequence[WorkflowContract]], ...] = ()
     for kind, drafts in batches:
         for ordinal, draft in enumerate(drafts):
             conn.execute(
                 """
                 INSERT INTO workflow_transition_outbox(
-                    outbox_id, workflow_id, workflow_revision, kind, ordinal,
+                    repository_id, outbox_id, workflow_id, workflow_revision, kind, ordinal,
                     payload_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    db.repository_id,
                     str(uuid4()),
                     str(workflow_id),
                     revision,
@@ -687,7 +713,7 @@ def _append_transition_outbox(
 
 
 def _append_transition_facts(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow: WorkflowRunRecord,
     revision: int,
@@ -708,7 +734,7 @@ def _append_transition_facts(
         revision=revision,
     )
     _append_workflow_fact(
-        conn,
+        db,
         workflow=workflow,
         revision=revision,
         fact_id=uuid5(
@@ -731,7 +757,7 @@ def _append_transition_facts(
             else workflow_aggregate
         )
         _append_workflow_fact(
-            conn,
+            db,
             workflow=workflow,
             revision=revision,
             fact_id=uuid5(
@@ -745,7 +771,7 @@ def _append_transition_facts(
 
 
 def _append_workflow_fact(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow: WorkflowRunRecord,
     revision: int,
@@ -756,7 +782,7 @@ def _append_workflow_fact(
     invalidate: bool = False,
 ) -> None:
     append_fact(
-        conn,
+        db,
         RetainedFactDraft(
             fact_id=fact_id,
             occurred_at=occurred_at,
@@ -786,21 +812,23 @@ def _append_workflow_fact(
 
 
 def _insert_waits(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     waits: Sequence[WaitSpec],
     created_at: datetime,
 ) -> None:
+    conn = db.conn
     for spec in waits:
         conn.execute(
             """
             INSERT INTO workflow_waits(
-                wait_id, workflow_id, created_at, spec_json,
+                repository_id, wait_id, workflow_id, created_at, spec_json,
                 satisfied_at, satisfied_by_signal_id
-            ) VALUES (?, ?, ?, ?, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
             """,
             (
+                db.repository_id,
                 str(uuid4()),
                 str(workflow_id),
                 _datetime_text(created_at),
@@ -810,11 +838,12 @@ def _insert_waits(
 
 
 def _validate_activity_wait_references(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     waits: Sequence[WaitSpec],
 ) -> None:
+    conn = db.conn
     referenced: set[UUID] = set()
     for wait in waits:
         if isinstance(wait, ActivityWait):
@@ -823,8 +852,8 @@ def _validate_activity_wait_references(
             referenced.update(wait.activity_ids)
     for activity_id in referenced:
         row = conn.execute(
-            "SELECT workflow_id FROM activities WHERE activity_id = ?",
-            (str(activity_id),),
+            "SELECT workflow_id FROM activities WHERE activity_id = ? AND repository_id = ?",
+            (str(activity_id), db.repository_id),
         ).fetchone()
         if row is None or str(row["workflow_id"]) != str(workflow_id):
             raise ValueError(
@@ -833,12 +862,13 @@ def _validate_activity_wait_references(
 
 
 def _signal_satisfies_wait(  # noqa: PLR0911 - one return per closed wait variant
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     payload: WorkflowSignalPayload,
     wait: WaitSpec,
 ) -> bool:
+    conn = db.conn
     if isinstance(wait, ActivityWait) and isinstance(payload, ActivityFinishedSignal):
         return wait.activity_id == payload.activity_id
     if isinstance(wait, ApprovalWait) and isinstance(payload, ApprovalResolvedSignal):
@@ -856,9 +886,9 @@ def _signal_satisfies_wait(  # noqa: PLR0911 - one return per closed wait varian
             """
             SELECT payload_json
             FROM workflow_signals
-            WHERE workflow_id = ?
+            WHERE workflow_id = ? AND repository_id = ?
             """,
-            (str(workflow_id),),
+            (str(workflow_id), db.repository_id),
         ).fetchall()
         finished_ids: set[UUID] = set()
         for row in rows:
@@ -944,14 +974,14 @@ def _datetime_text(value: datetime) -> str:
 
 @contextmanager
 def _transaction(
-    conn: sqlite3.Connection,
+    conn: Connection,
     name: str,
     *,
     immediate: bool = False,
 ) -> Iterator[None]:
     """Transaction that remains atomic when called inside a larger transaction."""
 
-    if conn.in_transaction:
+    if getattr(conn, "in_transaction", False):
         savepoint = f"murder_{name}"
         conn.execute(f"SAVEPOINT {savepoint}")
         try:

@@ -170,14 +170,14 @@ def _refresh_token(refresh_token: str) -> str | None:
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace")[:500]
         LOGGER.warning(
-            "Cursor token refresh failed: HTTP %s; body=%s; re-auth may be required",
+            "Cursor token refresh failed: HTTP %s. body=%s. Re-auth may be required",
             exc.code,
             body,
             exc_info=True,
         )
         return None
     except Exception:
-        LOGGER.warning("Cursor token refresh failed; re-auth may be required", exc_info=True)
+        LOGGER.warning("Cursor token refresh failed. Re-auth may be required", exc_info=True)
         return None
 
     value = data.get("access_token") or data.get("accessToken")
@@ -185,7 +185,7 @@ def _refresh_token(refresh_token: str) -> str | None:
         return str(value)
     if data.get("shouldLogout"):
         raise CursorNotAuthenticatedError(
-            "Cursor refresh rejected session; re-authenticate Cursor"
+            "Cursor refresh rejected session. Re-authenticate Cursor"
         )
     LOGGER.warning("Cursor token refresh returned no access_token")
     return None
@@ -248,17 +248,17 @@ def get_access_token(*, force_refresh: bool = False) -> str:
         if soft:
             soft.sort(key=lambda item: item[1], reverse=True)
             LOGGER.warning(
-                "Cursor access token unrefreshed but not yet expired; using %s",
+                "Cursor access token unrefreshed but not yet expired. Using %s",
                 soft[0][0].source,
             )
             return soft[0][0].access  # type: ignore[return-value]
 
     if rejected_session:
         raise CursorNotAuthenticatedError(
-            "Cursor refresh rejected session; re-authenticate Cursor"
+            "Cursor refresh rejected session. Re-authenticate Cursor"
         )
     raise CursorNotAuthenticatedError(
-        "Cursor access token expired and could not be refreshed; re-authenticate Cursor"
+        "Cursor access token expired and could not be refreshed. Re-authenticate Cursor"
     )
 
 

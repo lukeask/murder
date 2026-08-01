@@ -97,7 +97,7 @@ def _build_client(feature: str = "codebase_file_summary") -> APIClient | None:
             if inner is not None:
                 return _ModelPinnedClient(inner, tier.model)
     except Exception:  # pragma: no cover - defensive; never block startup
-        LOGGER.exception("codebase map tier resolution failed; using auto-free")
+        LOGGER.exception("codebase map tier resolution failed. Using auto-free")
 
     # Fallback: the built-in free pool.
     return AutoFreeClient.build_default()
@@ -107,7 +107,7 @@ class CodebaseMapWorker(Worker):
     def __init__(self, *, interval_s: float = MAP_INTERVAL_S) -> None:
         super().__init__(WorkerSpec(name=WorkerName.CODEBASE_MAP, heartbeat_s=interval_s))
         self._interval = interval_s
-        # Resolved on first tick; ``False`` once we've decided no client exists
+        # Resolved on first tick. ``False`` once we have decided no client exists
         # (logged once, then idle forever). ``None`` = not yet resolved.
         self._summarizer: Any | None = None
         self._disabled = False
@@ -144,7 +144,7 @@ class CodebaseMapWorker(Worker):
 
             summarizer = self._ensure_summarizer()
             if summarizer is None:
-                continue  # disabled; idle (but keep honoring stop_event)
+                continue  # disabled. Idle (but keep honoring stop_event)
 
             try:
                 # Per-file content-hash reconcile: cheap (zero model calls) when

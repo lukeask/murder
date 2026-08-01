@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from murder.llm.harness_control.app_server.client import AppServerClient
 from murder.llm.harness_control.app_server.connection import AppServerConnection
@@ -16,6 +17,7 @@ from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSes
 from murder.llm.harnesses import get as get_harness
 from murder.llm.harnesses.models import HarnessStartSpec
 from murder.runtime.terminal import tmux
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.schema import init_db
 
 LIVE_MODEL_DISCOVERY_HARNESSES = frozenset({"codex", "cursor", "antigravity"})
@@ -51,6 +53,7 @@ async def probe_live_models(
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     init_db(connection)
+    db = RepoDb(connection, str(uuid4()))
     try:
         adapter = get_harness(harness_kind)
         started = await asyncio.wait_for(
@@ -64,7 +67,7 @@ async def probe_live_models(
         control = VerifiedHarnessControlSession.from_tmux(
             harness_kind=harness_kind,
             terminal_session=session,
-            connection=connection,
+            db=db,
             persistence_session_id=f"live-model-probe:{session}",
         )
         result = await asyncio.wait_for(

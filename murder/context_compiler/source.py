@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 class SourceReadError(ValueError):
-    """Raised when a source path cannot be read safely or decoded."""
+    """Raised when the reader cannot read or decode a source path safely."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,9 +48,9 @@ def resolve_worktree_path(worktree_root: Path, relative_path: str) -> Path:
         raise SourceReadError("path must be a non-empty relative path")
     candidate = Path(relative_path)
     if candidate.is_absolute():
-        raise SourceReadError(f"absolute paths are rejected: {relative_path!r}")
+        raise SourceReadError(f"reject absolute paths: {relative_path!r}")
     if ".." in candidate.parts:
-        raise SourceReadError(f"path traversal is rejected: {relative_path!r}")
+        raise SourceReadError(f"reject path traversal: {relative_path!r}")
 
     root = worktree_root.resolve()
     resolved = (root / candidate).resolve()

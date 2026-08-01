@@ -3,9 +3,406 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4, uuid5
+
+from murder.state.persistence.connection import DB_ERRORS, execute_script
+
+if TYPE_CHECKING:
+    from murder.state.persistence.connection import Connection
+
+
+# A deliberately boring value for callers that predate repository-aware
+# persistence. It keeps an in-place upgrade lossless. Startup code replaces it
+# with the repository identity before the database is ever shared.
+_LEGACY_REPOSITORY_ID = "00000000-0000-0000-0000-000000000000"
+
+
+_PARTITIONED_TABLES = (
+    "runs", "tickets", "ticket_deps", "checklist", "check_results",
+    "completion_attempts", "agents",
+    "structured_decisions", "retained_facts", "projection_inputs", "commands",
+    "worker_heartbeats", "escalations", "plans", "plan_revisions",
+    "plan_related_tickets", "notes", "note_revisions", "reports",
+    "report_revisions", "notetaker_context", "notes_entries", "agent_messages",
+    "conversations", "conversation_blocks", "conversation_chunk_summaries",
+    "chunk_summary_blocks", "harness_usage_snapshots", "harness_control_frames",
+    "harness_control_evidence", "harness_control_observations",
+    "harness_control_semantic_events", "harness_control_operations",
+    "harness_control_actions", "harness_control_effects",
+    "harness_control_decisions", "harness_usage_probe_sessions", "schedule_queue",
+    "scheduler_state", "scheduler_params", "scheduler_steering",
+    "scheduler_decision_cache", "harness_models", "map_summaries",
+    "history_status", "workflow_runs", "workflow_state_migrations",
+    "workflow_signals", "workflow_waits", "activities", "activity_reservations",
+    "activity_reservation_locks", "activity_results", "workflow_triggers",
+    "trigger_firings", "trigger_cursors", "trigger_manual_pending",
+    "workflow_transition_outbox", "harness_sessions", "session_writer_fences",
+    "writer_leases", "writer_lease_audit_facts", "permission_policy_decisions",
+    "permission_approval_evidence", "permission_approval_requests",
+    "permission_authorization_grants", "permission_authorization_uses",
+    "permission_grant_revocations", "permission_safety_reviews",
+)
+
+
+def _migrate_repository_partition(conn: Connection, repository_id: str | None = None) -> None:
+    """Add the shared-database partition to every murder.db table.
+
+    This migration is intentionally additive for an existing per-repository
+    database: all of its rows belong to the supplied repository (or the stable
+    legacy partition), and UUID/integer primary keys are left untouched.  The
+    later merge can therefore copy rows without changing references.
+    """
+    partition = repository_id or _LEGACY_REPOSITORY_ID
+    escaped_partition = partition.replace("'", "''")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS repositories (
+            repository_id TEXT PRIMARY KEY,
+            root_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL
+        )
+        """
+    )
+    existing = {
+        str(row["name"])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    staged_tables = {
+        table
+        for table in _PARTITIONED_TABLES
+        if f"{table}__pre_partition" in existing
+    }
+    ticket_sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
+    ).fetchone()
+    ticket_sql = "" if ticket_sql_row is None else str(ticket_sql_row["sql"])
+    singleton_has_legacy_id = any(
+        table in existing
+        and "id" in {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+        for table in ("notetaker_context", "scheduler_state")
+    )
+    needs_rebuild = bool(staged_tables) or singleton_has_legacy_id or any(
+        table in existing
+        and "repository_id" not in {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+        for table in _PARTITIONED_TABLES
+    ) or "PRIMARY KEY (repository_id, id)" not in ticket_sql
+
+    if needs_rebuild:
+        _rebuild_partitioned_schema(conn, existing, escaped_partition)
+        existing = {
+            str(row["name"])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+
+    for table in _PARTITIONED_TABLES:
+        if table not in existing:
+            continue
+        columns = {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+        if "repository_id" not in columns:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN repository_id TEXT NOT NULL "
+                f"DEFAULT '{escaped_partition}'"
+            )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_repository_id "
+            f"ON {table}(repository_id)"
+        )
+
+    # These indexes are the conflict targets used by repository-aware DAOs.
+    # Existing per-repository primary keys stay global where the report requires
+    # that (UUIDs and integer rowids). Human keys become partition-local.
+    for name, table, index_columns in (
+        ("idx_tickets_repository_id", "tickets", "repository_id, id"),
+        ("idx_plans_repository_name", "plans", "repository_id, name"),
+        ("idx_notes_repository_name", "notes", "repository_id, name"),
+        ("idx_reports_repository_name", "reports", "repository_id, name"),
+        ("idx_commands_repository_idempotency", "commands", "repository_id, idempotency_key"),
+        ("idx_activities_repository_idempotency", "activities", "repository_id, idempotency_key"),
+        ("idx_workflow_runs_repository_ticket", "workflow_runs", "repository_id, parent_ticket_id"),
+        (
+            "idx_scheduler_params_repository_key",
+            "scheduler_params",
+            "repository_id, harness, window_key",
+        ),
+        (
+            "idx_scheduler_cache_repository_key",
+            "scheduler_decision_cache",
+            "repository_id, harness, window_key",
+        ),
+        ("idx_map_summaries_repository_key", "map_summaries", "repository_id, path, commit_sha"),
+    ):
+        if table in existing:
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table}({index_columns})"
+            )
+
+
+def _rebuild_partitioned_schema(  # noqa: PLR0912
+    conn: Connection, existing: set[str], escaped_partition: str
+) -> None:
+    """Recreate known murder tables so old global human keys can be replaced.
+
+    SQLite cannot alter a primary key, UNIQUE constraint, or foreign key in
+    place.  Renaming the complete known murder schema first avoids a mixture of
+    old and new references during the copy.  This runs once: the rebuilt target
+    carries ``repository_id`` on every table and the ticket key is composite.
+    """
+    from murder.permissions.persistence import ensure_permission_schema  # noqa: PLC0415
+    from murder.runtime.sessions.persistence import ensure_session_schema  # noqa: PLC0415
+    from murder.state.persistence.schema import SCHEMA_SQL  # noqa: PLC0415
+
+    staged_tables = {
+        table
+        for table in _PARTITIONED_TABLES
+        if f"{table}__pre_partition" in existing
+    }
+    # A process running the pre-v2 migration could die after one or more
+    # autocommitted renames. On restart SCHEMA_SQL creates empty replacement
+    # tables beside those staged sources. Treat the staged table as
+    # authoritative and discard only its (possibly partially copied) target.
+    # A normal table without a staged peer is also a valid source: it is either
+    # an old table the interrupted rename loop had not reached, or a completed
+    # target whose staged source was already dropped. Rebuilding either one is
+    # lossless and avoids trying to infer crash phase from otherwise identical
+    # repository-aware schemas.
+    source_tables = [
+        table
+        for table in _PARTITIONED_TABLES
+        if table in existing or table in staged_tables
+    ]
+    target_schema = SCHEMA_SQL.replace("PRAGMA foreign_keys = ON;", "")
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for table in source_tables:
+            source = f"{table}__pre_partition"
+            if table in staged_tables:
+                if table in existing:
+                    conn.execute(f"DROP TABLE {table}")
+            else:
+                conn.execute(f"ALTER TABLE {table} RENAME TO {source}")
+        execute_script(conn, target_schema)
+        ensure_session_schema(conn)
+        ensure_permission_schema(conn)
+        # Several UUID-keyed tables intentionally keep their original PK DDL.
+        # Add the partition while every new target table is still empty so the
+        # NOT NULL constraint needs no unsafe legacy default.
+        for table in source_tables:
+            new_column_names = {
+                str(row["name"])
+                for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            if "repository_id" not in new_column_names:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN repository_id TEXT NOT NULL"
+                )
+        for table in source_tables:
+            source = f"{table}__pre_partition"
+            old_columns = [
+                str(row["name"])
+                for row in conn.execute(f"PRAGMA table_info({source})")
+            ]
+            new_columns = [
+                str(row["name"])
+                for row in conn.execute(f"PRAGMA table_info({table})")
+            ]
+            insert_columns = [column for column in new_columns if column in old_columns]
+            select_columns = list(insert_columns)
+            if table == "plans" and "sync_state" in insert_columns:
+                sync_index = insert_columns.index("sync_state")
+                select_columns[sync_index] = (
+                    "CASE WHEN sync_state IN ('synced','parse_error') "
+                    "THEN sync_state ELSE 'synced' END"
+                )
+            if "repository_id" in new_columns and "repository_id" not in old_columns:
+                insert_columns.append("repository_id")
+                select_columns.append(f"'{escaped_partition}'")
+            if insert_columns:
+                conn.execute(
+                    f"INSERT INTO {table} ({', '.join(insert_columns)}) "
+                    f"SELECT {', '.join(select_columns)} FROM {source}"
+                )
+        for table in reversed(source_tables):
+            conn.execute(f"DROP TABLE {table}__pre_partition")
+        # Dropping a renamed source also drops its indexes/triggers.  Re-run the
+        # feature DDL to restore every named index and immutable-log trigger.
+        execute_script(conn, target_schema)
+        ensure_session_schema(conn)
+        ensure_permission_schema(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _primary_key_columns(conn: Connection, table: str) -> tuple[str, ...]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return tuple(
+        str(row["name"])
+        for row in sorted(rows, key=lambda row: int(row["pk"]))
+        if int(row["pk"])
+    )
+
+
+def _migrate_partition_local_deterministic_ids(conn: Connection) -> None:
+    """Make deterministic runtime identities reusable in every repository.
+
+    Crow/planner ids and their conversation ids are derived from human ticket
+    and plan names, so they are not UUIDs. The first partition migration added
+    ``repository_id`` but accidentally retained their old global constraints.
+    Heartbeats and history overlays had the same shape, making their new
+    repository-aware UPSERT conflict targets invalid.
+    """
+    desired = {
+        "agents": ("repository_id", "agent_id"),
+        "worker_heartbeats": ("repository_id", "worker_id"),
+        "agent_messages": ("repository_id", "agent_id", "ordinal"),
+        "conversations": ("repository_id", "conversation_id"),
+        "history_status": ("repository_id", "item_id"),
+    }
+    existing = {
+        str(row["name"])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    if all(
+        table not in existing or _primary_key_columns(conn, table) == key
+        for table, key in desired.items()
+    ):
+        return
+
+    from murder.state.persistence.schema import SCHEMA_SQL  # noqa: PLC0415
+
+    rebuild_order = (
+        "conversation_blocks",
+        "conversation_chunk_summaries",
+        "conversations",
+        "agent_messages",
+        "worker_heartbeats",
+        "history_status",
+        "agents",
+    )
+    tables = [table for table in rebuild_order if table in existing]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for table in tables:
+            conn.execute(f"ALTER TABLE {table} RENAME TO {table}__pre_local_identity")
+        execute_script(
+            conn,
+            """
+            CREATE TABLE agents (
+                repository_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN
+                    ('collaborator','notetaker','crow_handler','crow','planner','planning_handler')),
+                ticket_id TEXT, session TEXT, harness TEXT, model TEXT, worktree_path TEXT,
+                status TEXT NOT NULL CHECK (status IN
+                    ('idle','running','blocked','escalating','done','failed','dead')),
+                start_commit TEXT, started_at TEXT NOT NULL, last_heartbeat_at TEXT, pid INTEGER,
+                PRIMARY KEY (repository_id, agent_id),
+                FOREIGN KEY (repository_id, ticket_id)
+                    REFERENCES tickets(repository_id, id) ON DELETE SET NULL
+            );
+            CREATE TABLE worker_heartbeats (
+                repository_id TEXT NOT NULL,
+                worker_id TEXT NOT NULL,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+                role TEXT, ticket_id TEXT, last_heartbeat_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY (repository_id, worker_id)
+            );
+            CREATE TABLE agent_messages (
+                repository_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
+                body TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                PRIMARY KEY (repository_id, agent_id, ordinal)
+            );
+            CREATE TABLE conversations (
+                repository_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                harness TEXT, model TEXT, harness_session_id TEXT, live_state TEXT,
+                queued_message TEXT,
+                status TEXT NOT NULL DEFAULT 'in_progress'
+                    CHECK (status IN ('in_progress','complete','stale')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (repository_id, conversation_id)
+            );
+            CREATE TABLE conversation_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN (
+                    'user','assistant_intermediate','assistant_final','tool_call','plan_update',
+                    'agent_event','choice_prompt','notice')),
+                payload_json TEXT NOT NULL,
+                sealed INTEGER NOT NULL DEFAULT 0,
+                service_received_at TEXT NOT NULL,
+                UNIQUE (repository_id, conversation_id, ordinal),
+                FOREIGN KEY (repository_id, conversation_id)
+                    REFERENCES conversations(repository_id, conversation_id) ON DELETE CASCADE
+            );
+            CREATE TABLE conversation_chunk_summaries (
+                summary_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                chunk_idx INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (repository_id, conversation_id, chunk_idx),
+                FOREIGN KEY (repository_id, conversation_id)
+                    REFERENCES conversations(repository_id, conversation_id) ON DELETE CASCADE
+            );
+            CREATE TABLE history_status (
+                repository_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                status_note TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (repository_id, item_id)
+            );
+            """,
+        )
+        for table in reversed(tables):
+            source = f"{table}__pre_local_identity"
+            columns = [
+                str(row["name"])
+                for row in conn.execute(f"PRAGMA table_info({source})")
+            ]
+            quoted = ", ".join(columns)
+            conn.execute(
+                f"INSERT INTO {table} ({quoted}) SELECT {quoted} FROM {source}"
+            )
+        for table in tables:
+            conn.execute(f"DROP TABLE {table}__pre_local_identity")
+        execute_script(conn, SCHEMA_SQL.replace("PRAGMA foreign_keys = ON;", ""))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _now() -> str:
@@ -13,7 +410,7 @@ def _now() -> str:
 
 
 def _executescript_fk_off(
-    conn: sqlite3.Connection, body: str, *, legacy_alter_table: bool = False
+    conn: Connection, body: str, *, legacy_alter_table: bool = False
 ) -> None:
     """Run a table-recreation ``executescript`` with FK enforcement disabled.
 
@@ -31,7 +428,7 @@ def _executescript_fk_off(
     if legacy_alter_table:
         conn.execute("PRAGMA legacy_alter_table = ON")
     try:
-        conn.executescript(body)
+        execute_script(conn, body)
     finally:
         if legacy_alter_table:
             conn.execute("PRAGMA legacy_alter_table = OFF")
@@ -44,14 +441,14 @@ _LEGACY_TICKET_ORDER_COLUMN = "wa" "ve"
 _LEGACY_TICKET_ORDER_INDEX = "idx_tickets_" + _LEGACY_TICKET_ORDER_COLUMN
 
 
-def _migrate_ticket_last_error(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_last_error(conn: Connection) -> None:
     """Add last_error TEXT column to tickets for scheduler retry display."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
     if "last_error" not in cols:
         conn.execute("ALTER TABLE tickets ADD COLUMN last_error TEXT")
 
 
-def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_archived_status(conn: Connection) -> None:
     """Add 'archived' to the tickets status CHECK constraint via table recreation."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
@@ -102,7 +499,7 @@ def _migrate_ticket_archived_status(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_draft_status(conn: Connection) -> None:
     """Add 'draft' to the tickets status CHECK constraint via table recreation."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
@@ -153,7 +550,7 @@ def _migrate_ticket_draft_status(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_ticket_worktree(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_worktree(conn: Connection) -> None:
     """Add per-ticket worktree selection."""
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
@@ -165,7 +562,7 @@ def _migrate_ticket_worktree(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tickets ADD COLUMN worktree TEXT")
 
 
-def _migrate_ticket_parent(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_parent(conn: Connection) -> None:
     """Add the parent->child ticket linkage column (subtickets)."""
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
@@ -177,7 +574,7 @@ def _migrate_ticket_parent(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tickets ADD COLUMN parent_ticket_id TEXT")
 
 
-def _migrate_ticket_drop_legacy_order(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_drop_legacy_order(conn: Connection) -> None:
     """Drop the legacy ticket ordering column via table recreation."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
@@ -247,7 +644,7 @@ def _migrate_ticket_drop_legacy_order(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
-def _migrate_ticket_drop_skills(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_drop_skills(conn: Connection) -> None:
     """Drop the hallucinated ticket_skills edge table."""
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ticket_skills'"
@@ -256,7 +653,7 @@ def _migrate_ticket_drop_skills(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE ticket_skills")
 
 
-def _migrate_notes_identity_status(conn: sqlite3.Connection) -> None:
+def _migrate_notes_identity_status(conn: Connection) -> None:
     """Add UUID-backed identity and retirement state to notes."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(notes)").fetchall()}
     if {"id", "status", "retired_at"} <= cols:
@@ -316,7 +713,7 @@ def _migrate_notes_identity_status(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
-def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
+def _migrate_agents_notetaker_role(conn: Connection) -> None:
     """Add 'notetaker' to the agents.role CHECK (planning notetaker agent)."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
@@ -353,7 +750,7 @@ def _migrate_agents_notetaker_role(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_drop_legacy_events(conn: sqlite3.Connection) -> None:
+def _migrate_drop_legacy_events(conn: Connection) -> None:
     """Remove the pre-application-transport generic event stream.
 
     Its mixed payloads were never a valid source of feature state and cannot
@@ -364,7 +761,7 @@ def _migrate_drop_legacy_events(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS events")
 
 
-def _migrate_fact_log(conn: sqlite3.Connection) -> None:
+def _migrate_fact_log(conn: Connection) -> None:
     """Add the immutable retained-fact and projection-input boundary.
 
     This deliberately does not backfill legacy generic events: those rows mix
@@ -372,7 +769,7 @@ def _migrate_fact_log(conn: sqlite3.Connection) -> None:
     promoting them would invent fact semantics after the event.
     """
 
-    conn.executescript(
+    execute_script(conn,
         """
         CREATE TABLE IF NOT EXISTS retained_facts (
             sequence            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -451,7 +848,7 @@ def _migrate_fact_log(conn: sqlite3.Connection) -> None:
             legacy_alter_table=True,
         )
 
-    conn.executescript(
+    execute_script(conn,
         """
         CREATE TABLE IF NOT EXISTS projection_inputs (
             sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -475,28 +872,28 @@ def _migrate_fact_log(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_agents_worktree_path(conn: sqlite3.Connection) -> None:
+def _migrate_agents_worktree_path(conn: Connection) -> None:
     """Track the execution worktree used by an agent session."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
     if "worktree_path" not in cols:
         conn.execute("ALTER TABLE agents ADD COLUMN worktree_path TEXT")
 
 
-def _migrate_agents_model(conn: sqlite3.Connection) -> None:
+def _migrate_agents_model(conn: Connection) -> None:
     """Persist the startup model requested for each agent session."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
     if "model" not in cols:
         conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
 
 
-def _migrate_agents_harness(conn: sqlite3.Connection) -> None:
+def _migrate_agents_harness(conn: Connection) -> None:
     """Persist the harness kind on agents so rogue crows keep parser identity."""
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
     if "harness" not in cols:
         conn.execute("ALTER TABLE agents ADD COLUMN harness TEXT")
 
 
-def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:
+def _migrate_ticket_metadata_columns(conn: Connection) -> None:
     """Add additive ticket metadata/scheduling columns for file sync."""
     ticket_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tickets)").fetchall()}
     migrations: tuple[tuple[str, str], ...] = (
@@ -519,7 +916,7 @@ def _migrate_ticket_metadata_columns(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_role_names(conn: sqlite3.Connection) -> None:
+def _migrate_role_names(conn: Connection) -> None:
     """Rename augur→crow_handler and monkey→crow in the agents table."""
     conn.execute("UPDATE agents SET role = 'crow_handler' WHERE role = 'augur'")
     conn.execute("UPDATE agents SET role = 'crow' WHERE role = 'monkey'")
@@ -533,7 +930,7 @@ def _migrate_role_names(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
+def _migrate_agents_failed_status(conn: Connection) -> None:
     """Allow the agent state machine to persist startup/runtime failures."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'"
@@ -570,7 +967,7 @@ def _migrate_agents_failed_status(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_completion_tables(conn: sqlite3.Connection) -> None:
+def _migrate_completion_tables(conn: Connection) -> None:
     """Add check_results and completion_attempts tables for the completion coordinator."""
     existing = {
         row["name"]
@@ -602,7 +999,7 @@ def _migrate_completion_tables(conn: sqlite3.Connection) -> None:
         )
 
 
-def _migrate_drop_sentinel(conn: sqlite3.Connection) -> None:
+def _migrate_drop_sentinel(conn: Connection) -> None:
     """Remove deceased sentinel role and its unused persistence table."""
     conn.execute("DROP TABLE IF EXISTS sentinel_state")
 
@@ -643,8 +1040,8 @@ def _migrate_drop_sentinel(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
-    """Drop bidirectional-sync columns from plans; narrow sync_state CHECK.
+def _migrate_plans_single_master(conn: Connection) -> None:
+    """Drop bidirectional-sync columns from plans. Narrow sync_state CHECK.
 
     Idempotent: no-op once the new schema is in place.
     """
@@ -658,8 +1055,7 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
         conn,
         """
         BEGIN;
-        ALTER TABLE plans RENAME TO plans_old_single_master_migration;
-        CREATE TABLE plans (
+        CREATE TABLE plans_new_single_master_migration (
             name              TEXT PRIMARY KEY,
             status            TEXT NOT NULL CHECK (status IN ('draft','accepted','superseded')),
             created_at        TEXT NOT NULL,
@@ -674,7 +1070,8 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
                               CHECK (sync_state IN ('synced','parse_error')),
             parse_error       TEXT
         );
-        INSERT INTO plans (name,status,created_at,updated_at,body,frontmatter_json,
+        INSERT INTO plans_new_single_master_migration (
+                           name,status,created_at,updated_at,body,frontmatter_json,
                            body_hash,file_hash,materialized_path,revision_count,
                            sync_state,parse_error)
         SELECT name,status,created_at,updated_at,body,frontmatter_json,
@@ -682,16 +1079,16 @@ def _migrate_plans_single_master(conn: sqlite3.Connection) -> None:
                CASE WHEN sync_state IN ('synced','parse_error') THEN sync_state
                     ELSE 'synced' END,
                parse_error
-          FROM plans_old_single_master_migration;
-        DROP TABLE plans_old_single_master_migration;
+          FROM plans;
+        DROP TABLE plans;
+        ALTER TABLE plans_new_single_master_migration RENAME TO plans;
         CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
         COMMIT;
         """,
-        legacy_alter_table=True,
     )
 
 
-def _migrate_repair_plans_dangling_fk(conn: sqlite3.Connection) -> None:
+def _migrate_repair_plans_dangling_fk(conn: Connection) -> None:
     """Repair child tables whose FK still references the migration temp table.
 
     A historical bug in ``_migrate_plans_single_master`` renamed ``plans`` without
@@ -705,7 +1102,7 @@ def _migrate_repair_plans_dangling_fk(conn: sqlite3.Connection) -> None:
     (FK → ``plans(name)``), preserving all existing rows. It is idempotent and a
     no-op once no dangling reference remains.
     """
-    # Only consider the known child tables; the LIKE match would otherwise also
+    # Only consider the known child tables. The LIKE match would otherwise also
     # match the temp table's own CREATE statement if a prior migration was
     # interrupted before the DROP.
     affected = [
@@ -778,7 +1175,7 @@ def _migrate_repair_plans_dangling_fk(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
-def _migrate_drop_ticket_write_set(conn: sqlite3.Connection) -> None:
+def _migrate_drop_ticket_write_set(conn: Connection) -> None:
     """Drop the ticket_write_set table (write_set concept removed)."""
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ticket_write_set'"
@@ -788,11 +1185,11 @@ def _migrate_drop_ticket_write_set(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE ticket_write_set")
 
 
-def _migrate_conversation_queued_message(conn: sqlite3.Connection) -> None:
+def _migrate_conversation_queued_message(conn: Connection) -> None:
     """Add conversations.queued_message (busy-crow chat held for idle delivery).
 
     Idempotent: no-ops when the column already exists (fresh DBs get it from
-    SCHEMA_SQL; this handles DBs created before the column landed).
+    SCHEMA_SQL. This handles DBs created before the column landed).
     """
     existing = conn.execute(
         "SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'queued_message'"
@@ -801,18 +1198,18 @@ def _migrate_conversation_queued_message(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE conversations ADD COLUMN queued_message TEXT")
 
 
-def _migrate_map_summaries(conn: sqlite3.Connection) -> None:
+def _migrate_map_summaries(conn: Connection) -> None:
     """Add the map_summaries table (codebase-map history, t060).
 
-    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
-    this migration handles existing DBs created before t060 landed.
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs.
+    This migration handles existing DBs created before t060 landed.
     """
     existing = {
         row["name"]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "map_summaries" not in existing:
-        conn.executescript(
+        execute_script(conn,
             """
             CREATE TABLE map_summaries (
                 path        TEXT NOT NULL,
@@ -831,18 +1228,18 @@ def _migrate_map_summaries(conn: sqlite3.Connection) -> None:
         )
 
 
-def _migrate_scheduler_steering(conn: sqlite3.Connection) -> None:
+def _migrate_scheduler_steering(conn: Connection) -> None:
     """Add the scheduler_steering table (RT5 per-harness usage-window steering).
 
-    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
-    this migration handles existing DBs created before RT5 landed.
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs.
+    This migration handles existing DBs created before RT5 landed.
     """
     existing = {
         row["name"]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "scheduler_steering" not in existing:
-        conn.executescript(
+        execute_script(conn,
             """
             CREATE TABLE scheduler_steering (
                 harness    TEXT PRIMARY KEY,
@@ -853,18 +1250,18 @@ def _migrate_scheduler_steering(conn: sqlite3.Connection) -> None:
         )
 
 
-def _migrate_history_status(conn: sqlite3.Connection) -> None:
+def _migrate_history_status(conn: Connection) -> None:
     """Add the history_status overlay table (history view, v0).
 
-    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
-    this migration handles existing DBs created before the history view landed.
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs.
+    This migration handles existing DBs created before the history view landed.
     """
     existing = {
         row["name"]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "history_status" not in existing:
-        conn.executescript(
+        execute_script(conn,
             """
             CREATE TABLE history_status (
                 item_id     TEXT PRIMARY KEY,
@@ -876,12 +1273,12 @@ def _migrate_history_status(conn: sqlite3.Connection) -> None:
         )
 
 
-def _migrate_runs_advanced_log_path(conn: sqlite3.Connection) -> None:
+def _migrate_runs_advanced_log_path(conn: Connection) -> None:
     """Add the nullable runs.advanced_log_path pointer (Phase 2, Step 2.9).
 
     The main DB stores ONLY the pointer to the advanced flight-recorder DB,
     never the bulky records themselves. Idempotent: the CREATE TABLE in
-    SCHEMA_SQL covers fresh DBs; this handles DBs created before the column.
+    SCHEMA_SQL covers fresh DBs. This handles DBs created before the column.
     """
     existing = conn.execute(
         "SELECT 1 FROM pragma_table_info('runs') WHERE name = 'advanced_log_path'"
@@ -890,12 +1287,12 @@ def _migrate_runs_advanced_log_path(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE runs ADD COLUMN advanced_log_path TEXT")
 
 
-def _migrate_workflow_runs(conn: sqlite3.Connection) -> None:
+def _migrate_workflow_runs(conn: Connection) -> None:
     """Forward/backfill the legacy ticket-derived workflow table.
 
     Legacy rows receive deterministic UUID identities so rerunning a partially
     deployed migration converges.  Ticket statuses are consulted exactly once
-    to seed a current state document; after migration they are a materialized
+    to seed a current state document. After migration they are a materialized
     compatibility view and never authoritative workflow state.
     """
 
@@ -1032,7 +1429,7 @@ def _migrate_workflow_runs(conn: sqlite3.Connection) -> None:
 _WORKFLOW_MIGRATION_NAMESPACE = UUID("14d74d42-b45a-5abc-a6d3-129f19127868")
 
 
-def _create_workflow_runtime_tables(conn: sqlite3.Connection) -> None:
+def _create_workflow_runtime_tables(conn: Connection) -> None:
     ddl = """
         CREATE TABLE IF NOT EXISTS workflow_runs (
             workflow_id       TEXT PRIMARY KEY,
@@ -1124,15 +1521,15 @@ def _json_object(value: object) -> dict[str, object]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _legacy_ticket_row(conn: sqlite3.Connection, ticket_id: str) -> sqlite3.Row | None:
+def _legacy_ticket_row(conn: Connection, ticket_id: str):  # type: ignore[no-untyped-def]
     row = conn.execute(
         "SELECT status, attempts, last_error FROM tickets WHERE id = ?",
         (ticket_id,),
     ).fetchone()
-    return row if isinstance(row, sqlite3.Row) else None
+    return row
 
 
-def _legacy_stage_status(conn: sqlite3.Connection, ticket_id: str) -> str:
+def _legacy_stage_status(conn: Connection, ticket_id: str) -> str:
     row = _legacy_ticket_row(conn, ticket_id)
     if row is None:
         return "blocked"
@@ -1148,12 +1545,12 @@ def _legacy_stage_status(conn: sqlite3.Connection, ticket_id: str) -> str:
     }.get(str(row["status"]), "blocked")
 
 
-def _legacy_ticket_attempts(conn: sqlite3.Connection, ticket_id: str) -> int:
+def _legacy_ticket_attempts(conn: Connection, ticket_id: str) -> int:
     row = _legacy_ticket_row(conn, ticket_id)
     return max(0, int(row["attempts"])) if row is not None else 0
 
 
-def _legacy_ticket_error(conn: sqlite3.Connection, ticket_id: str) -> str | None:
+def _legacy_ticket_error(conn: Connection, ticket_id: str) -> str | None:
     row = _legacy_ticket_row(conn, ticket_id)
     if row is None or row["last_error"] is None:
         return None
@@ -1176,10 +1573,10 @@ def _aware_timestamp(value: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
-def current_schema_marker(conn: sqlite3.Connection) -> str:
+def current_schema_marker(conn: Connection) -> str:
     """Return a defensible main-DB schema/migration version string.
 
-    There is no single integer schema version in murder.db; the closest stable
+    There is no single integer schema version in murder.db. The closest stable
     markers are the retained-fact table and the additive
     ``runs.advanced_log_path`` pointer. The advanced log's
     ``session_info`` row records this so a captured session can be tied back to
@@ -1193,7 +1590,7 @@ def current_schema_marker(conn: sqlite3.Connection) -> str:
             ).fetchone()
             is not None
         )
-    except sqlite3.Error:
+    except DB_ERRORS:
         fact_table = False
     try:
         has_ptr = (
@@ -1202,23 +1599,23 @@ def current_schema_marker(conn: sqlite3.Connection) -> str:
             ).fetchone()
             is not None
         )
-    except sqlite3.Error:
+    except DB_ERRORS:
         has_ptr = False
     return f"retained_facts.v1={fact_table};runs.advanced_log_path={has_ptr}"
 
 
-def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
+def _migrate_conversation_store(conn: Connection) -> None:
     """Add conversations + conversation_blocks tables (Phase 1.b JSON store).
 
-    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs;
-    this migration handles existing DBs that ran init_db before 1.b landed.
+    Idempotent: the CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs.
+    This migration handles existing DBs that ran init_db before 1.b landed.
     """
     existing = {
         row["name"]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "conversations" not in existing:
-        conn.executescript(
+        execute_script(conn,
             """
             CREATE TABLE conversations (
                 conversation_id    TEXT PRIMARY KEY,
@@ -1238,7 +1635,7 @@ def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
             """
         )
     if "conversation_blocks" not in existing:
-        conn.executescript(
+        execute_script(conn,
             """
             CREATE TABLE conversation_blocks (
                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1266,7 +1663,7 @@ def _migrate_conversation_store(conn: sqlite3.Connection) -> None:
         )
 
 
-def _migrate_conversation_chunk_summaries(conn: sqlite3.Connection) -> None:
+def _migrate_conversation_chunk_summaries(conn: Connection) -> None:
     """Add the Condensed-view chunk-summary tables + drop vestigial `condensed`.
 
     TUIchat Phase 4. The single `conversations.condensed` column cannot hold an
@@ -1278,7 +1675,7 @@ def _migrate_conversation_chunk_summaries(conn: sqlite3.Connection) -> None:
 
     The old single column is now vestigial and dropped in the same migration.
 
-    Idempotent: CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs; this
+    Idempotent: CREATE TABLE IF NOT EXISTS in SCHEMA_SQL handles fresh DBs. This
     handles DBs created before Phase 4 landed. The column drop is guarded on the
     column actually existing.  This is a Condensed-only schema change — Verbose
     keeps its no-schema-change guarantee.
@@ -1288,7 +1685,7 @@ def _migrate_conversation_chunk_summaries(conn: sqlite3.Connection) -> None:
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "conversation_chunk_summaries" not in existing:
-        conn.executescript(
+        execute_script(conn,
             """
             CREATE TABLE conversation_chunk_summaries (
                 summary_id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1304,7 +1701,7 @@ def _migrate_conversation_chunk_summaries(conn: sqlite3.Connection) -> None:
             """
         )
     if "chunk_summary_blocks" not in existing:
-        conn.executescript(
+        execute_script(conn,
             """
             CREATE TABLE chunk_summary_blocks (
                 summary_id  INTEGER NOT NULL
@@ -1319,8 +1716,8 @@ def _migrate_conversation_chunk_summaries(conn: sqlite3.Connection) -> None:
         )
 
     # Drop the now-vestigial single `condensed` column. ALTER TABLE DROP COLUMN
-    # is supported on SQLite >= 3.35 (2021); guarded on the column existing so
-    # this is a no-op on fresh DBs (built from the current SCHEMA_SQL without it).
+    # is supported on SQLite >= 3.35 (2021). The migration guards on the column
+    # existing so this is a no-op on fresh DBs (built from the current SCHEMA_SQL without it).
     has_condensed = conn.execute(
         "SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'condensed'"
     ).fetchone()

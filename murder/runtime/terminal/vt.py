@@ -257,7 +257,7 @@ class VtEmulator:
             self._index()
             self.x = 0
         elif byte == ord("H"):
-            # Horizontal tab stop is not externally visible in a keyframe;
+            # Horizontal tab stop is not externally visible in a keyframe.
             # default tab stops remain every eight columns.
             return
         elif byte == ord("="):

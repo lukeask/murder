@@ -38,7 +38,7 @@ def register(host: ServiceHost) -> None:
         # unauthenticated client, so the bound is unconditional. 32 MiB
         # decoded is generous for a pasted clipboard image.
         _MAX_IMAGE_BYTES = 32 * 1024 * 1024
-        # base64 is 4/3 the size of the decoded bytes; reject early.
+        # base64 is 4/3 the size of the decoded bytes. Reject early.
         if len(data_b64) > (_MAX_IMAGE_BYTES * 4) // 3 + 16:
             return ImageUploadResult(
                 ok=False, error="image too large", error_code="image_too_large"

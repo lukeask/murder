@@ -115,7 +115,7 @@ class AnthropicClient(APIClient):
                     wait = backoff
                     backoff *= 2
                 else:
-                    LOGGER.warning("anthropic rate-limited; honoring Retry-After=%.1fs", wait)
+                    LOGGER.warning("anthropic rate-limited. Honoring Retry-After=%.1fs", wait)
                 await asyncio.sleep(wait)
         assert last_exc is not None
         raise last_exc

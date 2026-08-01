@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import sqlite3
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import contextmanager
@@ -20,11 +20,13 @@ from murder.facts.contracts import (
     RetainedFactRecord,
     fact_payload_storage,
 )
+from murder.state.persistence.connection import Connection, RepoDb
 
 FACT_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS retained_facts (
     sequence            INTEGER PRIMARY KEY AUTOINCREMENT,
     fact_id             TEXT NOT NULL UNIQUE,
+    repository_id       TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     kind                TEXT NOT NULL,
     schema_version      INTEGER NOT NULL CHECK (schema_version >= 1),
     occurred_at         TEXT NOT NULL,
@@ -55,6 +57,7 @@ END;
 CREATE TABLE IF NOT EXISTS projection_inputs (
     sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
     input_id        TEXT NOT NULL UNIQUE,
+    repository_id  TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     source_fact_id  TEXT REFERENCES retained_facts(fact_id) ON DELETE RESTRICT,
     projection      TEXT NOT NULL,
     subject_key     TEXT NOT NULL,
@@ -69,7 +72,7 @@ BEFORE UPDATE ON projection_inputs
 BEGIN
     SELECT RAISE(ABORT, 'projection inputs are immutable');
 END;
-"""
+""".replace(" DEFAULT '00000000-0000-0000-0000-000000000000'", "")
 
 
 class FactLogError(RuntimeError):
@@ -77,11 +80,11 @@ class FactLogError(RuntimeError):
 
 
 class FactIdentityConflictError(FactLogError):
-    """A fact id was reused for different immutable content."""
+    """The code reused a fact id for different immutable content."""
 
 
 class ReplayGapError(FactLogError):
-    """A retained cursor can no longer be replayed."""
+    """The retained cursor is outside replay history."""
 
 
 class FactLog:
@@ -93,17 +96,16 @@ class FactLog:
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         *,
         poll_interval_s: float = 0.05,
         retention_min_records: int = 20_000,
         retention_max_age_days: int = 7,
     ) -> None:
-        self._connection = connection
+        self._db = db
         self._poll_interval_s = poll_interval_s
         self._retention_min_records = retention_min_records
         self._retention_max_age = timedelta(days=retention_max_age_days)
-        ensure_fact_schema(connection)
 
     def append(
         self,
@@ -113,17 +115,17 @@ class FactLog:
         recorded_at: datetime | None = None,
     ) -> tuple[RetainedFactRecord, tuple[ProjectionInputRecord, ...]]:
         return append_fact(
-            self._connection,
+            self._db,
             draft,
             projection_inputs=projection_inputs,
             recorded_at=recorded_at,
         )
 
     def watermark(self) -> int:
-        return _watermark(self._connection, "retained_facts")
+        return _watermark(self._db, "retained_facts")
 
     def is_cursor_retained(self, cursor: int) -> bool:
-        return _cursor_retained(self._connection, "retained_facts", cursor)
+        return _cursor_retained(self._db, "retained_facts", cursor)
 
     def replay(
         self,
@@ -133,7 +135,7 @@ class FactLog:
         until_sequence: int | None = None,
     ) -> tuple[RetainedFactRecord, ...]:
         return replay_facts(
-            self._connection,
+            self._db,
             after_sequence=after_sequence,
             kinds=kinds,
             until_sequence=until_sequence,
@@ -156,27 +158,31 @@ class FactLog:
                 await asyncio.sleep(self._poll_interval_s)
 
     def prune(self, *, now: datetime | None = None) -> int:
-        overage = _record_overage(self._connection, "retained_facts", self._retention_min_records)
+        overage = _record_overage(self._db, "retained_facts", self._retention_min_records)
         if overage <= 0:
             return 0
         cutoff = ((now or datetime.now(timezone.utc)) - self._retention_max_age).isoformat(
             timespec="seconds"
         )
-        rows = self._connection.execute(
+        rows = self._db.conn.execute(
             """
             SELECT f.fact_id FROM retained_facts AS f
-            WHERE f.recorded_at < ?
-              AND NOT EXISTS (SELECT 1 FROM projection_inputs AS p WHERE p.source_fact_id = f.fact_id)
+            WHERE f.repository_id = ? AND f.recorded_at < ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM projection_inputs AS p
+                  WHERE p.repository_id = f.repository_id AND p.source_fact_id = f.fact_id
+              )
             ORDER BY f.sequence ASC LIMIT ?
             """,
-            (cutoff, overage),
+            (self._db.repository_id, cutoff, overage),
         ).fetchall()
         ids = [str(row["fact_id"]) for row in rows]
         if not ids:
             return 0
         placeholders = ",".join("?" for _ in ids)
-        result = self._connection.execute(
-            f"DELETE FROM retained_facts WHERE fact_id IN ({placeholders})", ids
+        result = self._db.conn.execute(
+            f"DELETE FROM retained_facts WHERE repository_id = ? AND fact_id IN ({placeholders})",
+            (self._db.repository_id, *ids),
         )
         return int(result.rowcount or 0)
 
@@ -186,35 +192,45 @@ class ProjectionInputLog:
 
     def __init__(
         self,
-        connection: sqlite3.Connection,
+        db: RepoDb,
         *,
         poll_interval_s: float = 0.05,
         retention_min_records: int = 20_000,
         retention_max_age_days: int = 7,
     ) -> None:
-        self._connection = connection
+        self._db = db
         self._poll_interval_s = poll_interval_s
         self._retention_min_records = retention_min_records
         self._retention_max_age = timedelta(days=retention_max_age_days)
-        ensure_fact_schema(connection)
 
     def append(self, draft: ProjectionInputDraft) -> ProjectionInputRecord:
-        return append_projection_input(self._connection, draft)
+        return append_projection_input(self._db, draft)
 
     def watermark(self) -> int:
-        return _watermark(self._connection, "projection_inputs")
+        return _watermark(self._db, "projection_inputs")
 
     def is_cursor_retained(self, cursor: int) -> bool:
-        return _cursor_retained(self._connection, "projection_inputs", cursor)
+        return _cursor_retained(self._db, "projection_inputs", cursor)
 
     def replay(
-        self, *, after_sequence: int, projections: frozenset[str], until_sequence: int | None = None,
+        self,
+        *,
+        after_sequence: int,
+        projections: frozenset[str],
+        until_sequence: int | None = None,
         limit: int = 1000,
     ) -> tuple[ProjectionInputRecord, ...]:
-        return replay_projection_inputs(self._connection, projections=projections,
-            after_sequence=after_sequence, until_sequence=until_sequence, limit=limit)
+        return replay_projection_inputs(
+            self._db,
+            projections=projections,
+            after_sequence=after_sequence,
+            until_sequence=until_sequence,
+            limit=limit,
+        )
 
-    async def tail(self, *, after_sequence: int, projections: frozenset[str]) -> AsyncIterator[ProjectionInputRecord]:
+    async def tail(
+        self, *, after_sequence: int, projections: frozenset[str]
+    ) -> AsyncIterator[ProjectionInputRecord]:
         cursor = after_sequence
         while True:
             if not self.is_cursor_retained(cursor):
@@ -229,21 +245,23 @@ class ProjectionInputLog:
                 await asyncio.sleep(self._poll_interval_s)
 
     def prune(self, *, now: datetime | None = None) -> int:
-        overage = _record_overage(self._connection, "projection_inputs", self._retention_min_records)
+        overage = _record_overage(self._db, "projection_inputs", self._retention_min_records)
         if overage <= 0:
             return 0
         cutoff = ((now or datetime.now(timezone.utc)) - self._retention_max_age).isoformat(
             timespec="seconds"
         )
-        result = self._connection.execute(
-            "DELETE FROM projection_inputs WHERE sequence IN (SELECT sequence FROM projection_inputs WHERE created_at < ? ORDER BY sequence ASC LIMIT ?)",
-            (cutoff, overage),
+        result = self._db.conn.execute(
+            "DELETE FROM projection_inputs WHERE repository_id = ? AND sequence IN "
+            "(SELECT sequence FROM projection_inputs WHERE repository_id = ? "
+            "AND created_at < ? ORDER BY sequence ASC LIMIT ?)",
+            (self._db.repository_id, self._db.repository_id, cutoff, overage),
         )
         return int(result.rowcount or 0)
 
 
 def append_fact(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     draft: RetainedFactDraft,
     *,
     projection_inputs: Sequence[ProjectionInputDraft] = (),
@@ -257,22 +275,24 @@ def append_fact(
     the whole operation cannot create duplicate invalidations.
     """
 
+    conn = db.conn
+    repository_id = db.repository_id
     timestamp = _aware(recorded_at)
     with _savepoint(conn):
-        existing = _fact_row(conn, draft.fact_id)
+        existing = _fact_row(db, draft.fact_id)
         if existing is None:
             aggregate = draft.aggregate
             conn.execute(
                 """
                 INSERT INTO retained_facts(
-                    fact_id, kind, schema_version, occurred_at, recorded_at,
+                    fact_id, repository_id, kind, schema_version, occurred_at, recorded_at,
                     aggregate_kind, aggregate_id, aggregate_revision,
                     actor_kind, actor_id, correlation_id, causation_id, trace_id,
                     payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(draft.fact_id),
+                    str(draft.fact_id), repository_id,
                     draft.kind,
                     draft.schema_version,
                     _datetime_text(draft.occurred_at),
@@ -288,7 +308,7 @@ def append_fact(
                     _json(fact_payload_storage(draft.payload)),
                 ),
             )
-            existing = _fact_row(conn, draft.fact_id)
+            existing = _fact_row(db, draft.fact_id)
             assert existing is not None
         elif not _same_fact(existing, draft):
             raise FactIdentityConflictError(
@@ -299,12 +319,13 @@ def append_fact(
             conn.execute(
                 """
                 INSERT INTO projection_inputs(
-                    input_id, source_fact_id, projection, subject_key, generation, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    input_id, repository_id, source_fact_id, projection, subject_key,
+                    generation, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
                 """,
                 (
-                    str(item.input_id),
+                    str(item.input_id), repository_id,
                     str(draft.fact_id),
                     item.projection,
                     item.subject_key,
@@ -321,43 +342,47 @@ def append_fact(
                 SELECT sequence, input_id, source_fact_id, projection, subject_key,
                        generation, created_at
                 FROM projection_inputs
-                WHERE source_fact_id = ?
+                WHERE repository_id = ? AND source_fact_id = ?
                 ORDER BY sequence
                 """,
-                (str(draft.fact_id),),
+                (repository_id, str(draft.fact_id)),
             ).fetchall()
         )
     return fact, inputs
 
 
-def ensure_fact_schema(conn: sqlite3.Connection) -> None:
+def ensure_fact_schema(conn: Connection) -> None:
     """Create the append-only boundary without committing an outer transaction."""
 
-    # Named rows remain tuple-compatible for feature DAOs sharing the handle.
-    conn.row_factory = sqlite3.Row
+    # Keep pyturso's mapping row type. Sqlite connections need a mapping factory.
+    if isinstance(conn, sqlite3.Connection):
+        conn.row_factory = sqlite3.Row
     for statement in _schema_statements(FACT_SCHEMA_SQL):
         conn.execute(statement)
 
 
 def append_projection_input(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     draft: ProjectionInputDraft,
     *,
     created_at: datetime | None = None,
 ) -> ProjectionInputRecord:
     """Append a durable invalidation without manufacturing a public fact."""
 
+    conn = db.conn
+    repository_id = db.repository_id
     timestamp = _aware(created_at)
     with _savepoint(conn):
         conn.execute(
             """
             INSERT INTO projection_inputs(
-                input_id, source_fact_id, projection, subject_key, generation, created_at
-            ) VALUES (?, NULL, ?, ?, ?, ?)
+                input_id, repository_id, source_fact_id, projection, subject_key,
+                generation, created_at
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?)
             ON CONFLICT(input_id) DO NOTHING
             """,
             (
-                str(draft.input_id),
+                str(draft.input_id), repository_id,
                 draft.projection,
                 draft.subject_key,
                 draft.generation,
@@ -369,9 +394,9 @@ def append_projection_input(
             SELECT sequence, input_id, source_fact_id, projection, subject_key,
                    generation, created_at
               FROM projection_inputs
-             WHERE input_id = ?
+             WHERE repository_id = ? AND input_id = ?
             """,
-            (str(draft.input_id),),
+            (repository_id, str(draft.input_id)),
         ).fetchone()
         assert row is not None
         record = _projection_record(row)
@@ -386,13 +411,13 @@ def append_projection_input(
     return record
 
 
-def get_fact(conn: sqlite3.Connection, fact_id: UUID) -> RetainedFactRecord | None:
-    row = _fact_row(conn, fact_id)
+def get_fact(db: RepoDb, fact_id: UUID) -> RetainedFactRecord | None:
+    row = _fact_row(db, fact_id)
     return None if row is None else _record_from_row(row)
 
 
 def replay_facts(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     after_sequence: int = 0,
     kind: str | None = None,
@@ -407,7 +432,7 @@ def replay_facts(
     if kind is not None and kinds:
         raise ValueError("kind and kinds are mutually exclusive")
     predicates: list[str] = []
-    parameters: list[object] = [after_sequence]
+    parameters: list[object] = [db.repository_id, after_sequence]
     if kind is not None:
         predicates.append("kind = ?")
         parameters.append(kind)
@@ -422,11 +447,11 @@ def replay_facts(
         parameters.append(until_sequence)
     predicate = "".join(f" AND {item}" for item in predicates)
     parameters.append(limit)
-    rows = conn.execute(
+    rows = db.conn.execute(
         f"""
         SELECT *
         FROM retained_facts
-        WHERE sequence > ?{predicate}
+        WHERE repository_id = ? AND sequence > ?{predicate}
         ORDER BY sequence
         LIMIT ?
         """,
@@ -436,7 +461,7 @@ def replay_facts(
 
 
 def replay_projection_inputs(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     projection: str | None = None,
     projections: frozenset[str] = frozenset(),
@@ -453,7 +478,7 @@ def replay_projection_inputs(
     if limit < 1:
         raise ValueError("limit must be positive")
     predicates = ["sequence > ?"]
-    parameters: list[object] = [after_sequence]
+    parameters: list[object] = [db.repository_id, after_sequence]
     if projection is not None:
         predicates.append("projection = ?")
         parameters.append(projection)
@@ -467,12 +492,12 @@ def replay_projection_inputs(
         predicates.append("sequence <= ?")
         parameters.append(until_sequence)
     parameters.append(limit)
-    rows = conn.execute(
+    rows = db.conn.execute(
         f"""
         SELECT sequence, input_id, source_fact_id, projection, subject_key,
                generation, created_at
         FROM projection_inputs
-        WHERE {" AND ".join(predicates)}
+        WHERE repository_id = ? AND {" AND ".join(predicates)}
         ORDER BY sequence
         LIMIT ?
         """,
@@ -481,10 +506,10 @@ def replay_projection_inputs(
     return tuple(_projection_record(row) for row in rows)
 
 
-def _fact_row(conn: sqlite3.Connection, fact_id: UUID) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM retained_facts WHERE fact_id = ?",
-        (str(fact_id),),
+def _fact_row(db: RepoDb, fact_id: UUID) -> sqlite3.Row | None:
+    return db.conn.execute(
+        "SELECT * FROM retained_facts WHERE repository_id = ? AND fact_id = ?",
+        (db.repository_id, str(fact_id)),
     ).fetchone()
 
 
@@ -553,7 +578,17 @@ def _projection_record(row: sqlite3.Row) -> ProjectionInputRecord:
 
 
 @contextmanager
-def _savepoint(conn: sqlite3.Connection) -> Iterator[None]:
+def _savepoint(conn: Connection) -> Iterator[None]:
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+        return
     name = f"append_fact_{uuid4().hex}"
     conn.execute(f"SAVEPOINT {name}")
     try:
@@ -615,22 +650,31 @@ def _schema_statements(script: str) -> Iterator[str]:
         yield "\n".join(statement)
 
 
-def _watermark(connection: sqlite3.Connection, table: str) -> int:
-    row = connection.execute(f"SELECT COALESCE(MAX(sequence), 0) AS max_sequence FROM {table}").fetchone()
+def _watermark(db: RepoDb, table: str) -> int:
+    row = db.conn.execute(
+        f"SELECT COALESCE(MAX(sequence), 0) AS max_sequence FROM {table} WHERE repository_id = ?",
+        (db.repository_id,),
+    ).fetchone()
     return int(row["max_sequence"] if row is not None else 0)
 
 
-def _cursor_retained(connection: sqlite3.Connection, table: str, cursor: int) -> bool:
-    if cursor < 0 or cursor > _watermark(connection, table):
+def _cursor_retained(db: RepoDb, table: str, cursor: int) -> bool:
+    if cursor < 0 or cursor > _watermark(db, table):
         return False
-    row = connection.execute(f"SELECT MIN(sequence) AS min_sequence FROM {table}").fetchone()
+    row = db.conn.execute(
+        f"SELECT MIN(sequence) AS min_sequence FROM {table} WHERE repository_id = ?",
+        (db.repository_id,),
+    ).fetchone()
     if row is None or row["min_sequence"] is None:
         return cursor == 0
     return cursor >= int(row["min_sequence"]) - 1
 
 
-def _record_overage(connection: sqlite3.Connection, table: str, minimum: int) -> int:
-    row = connection.execute(f"SELECT COUNT(*) AS n_records FROM {table}").fetchone()
+def _record_overage(db: RepoDb, table: str, minimum: int) -> int:
+    row = db.conn.execute(
+        f"SELECT COUNT(*) AS n_records FROM {table} WHERE repository_id = ?",
+        (db.repository_id,),
+    ).fetchone()
     return int(row["n_records"] if row is not None else 0) - minimum
 
 

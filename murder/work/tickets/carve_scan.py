@@ -25,8 +25,8 @@ as *bare indented YAML* rather than inside a ```yaml fence. The scanner is
 therefore tolerant of BOTH shapes: it first reaps every fenced block, then
 sweeps the remaining text for unfenced indented carve forms detected by their
 shape (an ``id:`` line accompanied by ``title:`` and ``write_set:``). The fenced
-path is unchanged and remains authoritative; the unfenced sweep only fills the
-gaps the fences didn't already cover.
+path is unchanged and remains authoritative. The unfenced sweep only fills the
+gaps the fences did not already cover.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ import yaml
 
 from murder.llm.harnesses.parsing import strip_ui_chrome
 
-# Fenced ```yaml ... ``` block. The info-string may be `yaml` or `yml`; tolerate
+# Fenced ```yaml ... ``` block. The info-string may be `yaml` or `yml`. Tolerate
 # trailing whitespace and a missing language tag is NOT matched (a bare ``` block
 # is too ambiguous to treat as a carve form).
 _YAML_FENCE_RE = re.compile(
@@ -51,7 +51,7 @@ _YAML_FENCE_RE = re.compile(
 # non-empty scalar value. The leading-whitespace group is captured so we can
 # bound the block by indentation (the form's body is indented >= the ``id:``
 # line). A YAML comment after the value (``# e.g. t014``) is tolerated by the
-# parser, so we don't strip it here.
+# parser, so we do not strip it here.
 _CARVE_ID_LINE_RE = re.compile(r"^(?P<indent>[ \t]*)id:[ \t]+\S.*$")
 
 # Sibling keys that, together with ``id:``, identify the carve form's shape.
@@ -64,7 +64,7 @@ def _looks_like_carve_block(block: str) -> bool:
 
 
 def _parse_carve_block(body: str, forms: list[dict[str, Any]]) -> bool:
-    """Parse one candidate block; append to ``forms`` if it is a carve form.
+    """Parse one candidate block. Append to ``forms`` if it is a carve form.
 
     Returns True iff a form was appended.
     """
@@ -139,15 +139,15 @@ def detect_carve_forms(pane_text: str) -> list[dict[str, Any]]:
 
     A block qualifies as a carve form when it parses to a mapping with a
     non-empty string ``id``. Both fenced (```yaml) and bare indented forms are
-    accepted; malformed YAML / non-mapping / id-less blocks are skipped silently
-    (the pane is noisy; only real carve forms are returned). Order follows
+    accepted. Malformed YAML, non-mapping, and id-less blocks are skipped silently
+    (the pane is noisy. Only real carve forms are returned). Order follows
     appearance in the pane.
     """
     clean = strip_ui_chrome(pane_text)
     forms: list[dict[str, Any]] = []
 
     # 1. Fenced ```yaml blocks (authoritative, unchanged). Blank out each matched
-    #    span so the unfenced sweep below can't re-detect the same form.
+    #    span so the unfenced sweep below cannot re-detect the same form.
     leftover_parts: list[str] = []
     last = 0
     for match in _YAML_FENCE_RE.finditer(clean):

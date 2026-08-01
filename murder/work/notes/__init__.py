@@ -16,16 +16,16 @@ import hashlib
 import json
 import logging
 import re
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from murder.llm.clients.base import APIClient
 from murder.config import NotetakerConfig
+from murder.llm.clients.base import APIClient
+from murder.llm.prompts import load as _load_prompt
 from murder.state.persistence import notes as notes_db
 from murder.state.persistence import notetaker as notetaker_db
-from murder.llm.prompts import load as _load_prompt
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import note_md, notes_dir
 
@@ -67,9 +67,9 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _record_revision(conn: sqlite3.Connection, name: str, body: str, *, source: str) -> None:
+def _record_revision(db: RepoDb, name: str, body: str, *, source: str) -> None:
     notes_db.insert_note_revision(
-        conn,
+        db,
         name,
         source=source,
         body=body,
@@ -77,9 +77,9 @@ def _record_revision(conn: sqlite3.Connection, name: str, body: str, *, source: 
     )
 
 
-def ensure_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> dict[str, Any]:
+def ensure_note(db: RepoDb, repo_root: Path, name: str) -> dict[str, Any]:
     """Return note row for `name`, importing existing files without clobbering."""
-    row = notes_db.get_note(conn, name)
+    row = notes_db.get_note(db, name)
     rel = _rel_path(repo_root, name)
     path = repo_root / rel
     if row is not None:
@@ -88,23 +88,23 @@ def ensure_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> dict[st
         return row
     if path.exists():
         body = path.read_text(encoding="utf-8")
-        notes_db.upsert_note(conn, name, body=body, materialized_path=rel)
-        _record_revision(conn, name, body, source="bootstrap")
+        notes_db.upsert_note(db, name, body=body, materialized_path=rel)
+        _record_revision(db, name, body, source="bootstrap")
     else:
         body = ""
-        notes_db.upsert_note(conn, name, body=body, materialized_path=rel)
+        notes_db.upsert_note(db, name, body=body, materialized_path=rel)
         atomic_write_text(path, body)
-        _record_revision(conn, name, body, source="bootstrap")
-    return notes_db.get_note(conn, name) or {"name": name, "body": body, "materialized_path": rel}
+        _record_revision(db, name, body, source="bootstrap")
+    return notes_db.get_note(db, name) or {"name": name, "body": body, "materialized_path": rel}
 
 
-def read_note(conn: sqlite3.Connection, name: str) -> str:
-    row = notes_db.get_note(conn, name)
+def read_note(db: RepoDb, name: str) -> str:
+    row = notes_db.get_note(db, name)
     return str(row["body"]) if row else ""
 
 
 def write_note(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     name: str,
     body: str,
@@ -112,17 +112,17 @@ def write_note(
     source: str = "agent",
 ) -> None:
     """Replace the body of note `name` in the DB and re-materialize its file."""
-    existing = notes_db.get_note(conn, name)
+    existing = notes_db.get_note(db, name)
     old_body = str(existing["body"]) if existing is not None else None
     rel = _rel_path(repo_root, name)
-    notes_db.upsert_note(conn, name, body=body, materialized_path=rel)
+    notes_db.upsert_note(db, name, body=body, materialized_path=rel)
     atomic_write_text(repo_root / rel, body)
     if old_body != body:
-        _record_revision(conn, name, body, source=source)
+        _record_revision(db, name, body, source=source)
 
 
 def create_timestamped_note(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     body: str,
     *,
@@ -133,19 +133,19 @@ def create_timestamped_note(
     base = timestamp_name(now)
     name = base
     i = 2
-    while notes_db.get_note(conn, name) is not None or note_md(repo_root, name).exists():
+    while notes_db.get_note(db, name) is not None or note_md(repo_root, name).exists():
         name = f"{base}-{i}"
         i += 1
     rel = _rel_path(repo_root, name)
     text = body.rstrip() + "\n"
     atomic_write_text(repo_root / rel, text)
-    notes_db.upsert_note(conn, name, body=text, materialized_path=rel)
-    _record_revision(conn, name, text, source=source)
+    notes_db.upsert_note(db, name, body=text, materialized_path=rel)
+    _record_revision(db, name, text, source=source)
     return name
 
 
 def active_note_name_exists(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     name: str,
     *,
@@ -153,7 +153,7 @@ def active_note_name_exists(
 ) -> bool:
     if name == exclude:
         return False
-    row = notes_db.get_note(conn, name)
+    row = notes_db.get_note(db, name)
     if row is not None and str(row.get("status", "active")) == "active":
         return True
     path = note_md(repo_root, name)
@@ -161,7 +161,7 @@ def active_note_name_exists(
 
 
 def rename_note(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     old_name: str,
     new_name: str,
@@ -169,9 +169,9 @@ def rename_note(
     """Rename an active note file and DB row, preserving the DB UUID identity."""
     if old_name == new_name:
         return old_name
-    if active_note_name_exists(conn, repo_root, new_name, exclude=old_name):
+    if active_note_name_exists(db, repo_root, new_name, exclude=old_name):
         raise FileExistsError(f"note already exists: {new_name}")
-    row = notes_db.get_note(conn, old_name)
+    row = notes_db.get_note(db, old_name)
     if row is None:
         raise FileNotFoundError(f"note not found: {old_name}")
     old_path = repo_root / str(row["materialized_path"])
@@ -184,7 +184,7 @@ def rename_note(
     else:
         atomic_write_text(new_path, str(row["body"]))
     notes_db.rename_note(
-        conn,
+        db,
         old_name,
         new_name,
         materialized_path=str(new_path.relative_to(repo_root)),
@@ -192,9 +192,9 @@ def rename_note(
     return new_name
 
 
-def retire_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> Path:
+def retire_note(db: RepoDb, repo_root: Path, name: str) -> Path:
     """Move an active note out of the sidebar into `.murder/notes/retired_notes/`."""
-    row = notes_db.get_note(conn, name)
+    row = notes_db.get_note(db, name)
     if row is None:
         raise FileNotFoundError(f"note not found: {name}")
     old_path = repo_root / str(row["materialized_path"])
@@ -217,18 +217,18 @@ def retire_note(conn: sqlite3.Connection, repo_root: Path, name: str) -> Path:
     else:
         atomic_write_text(dest, str(row["body"]))
     notes_db.mark_note_retired(
-        conn,
+        db,
         name,
         materialized_path=str(dest.relative_to(repo_root)),
     )
     return dest
 
 
-def latest_prior_note(conn: sqlite3.Connection, exclude: str) -> tuple[str, str] | None:
+def latest_prior_note(db: RepoDb, exclude: str) -> tuple[str, str] | None:
     """The most recently-named non-empty note other than `exclude`, as (name, body)."""
-    for row in notes_db.list_notes(conn):
+    for row in notes_db.list_notes(db):
         if row["name"] != exclude and row["size"]:
-            full = notes_db.get_note(conn, row["name"])
+            full = notes_db.get_note(db, row["name"])
             if full:
                 return row["name"], str(full["body"])
     return None
@@ -292,7 +292,7 @@ def capture_metadata_fields(blob: dict[str, Any]) -> dict[str, str]:
 def normalized_capture_fields(blob: dict[str, Any]) -> tuple[str, str, str]:
     """Parse a capture blob into ``(cleaned, short_vers, title)``.
 
-    NOTE: currently has no in-tree callers (possibly dead); retained for
+    NOTE: currently has no in-tree callers (possibly dead). Retained for
     compatibility.
     """
     cleaned = blob.get("cleaned")
@@ -384,7 +384,7 @@ async def llm_normalized_capture(
 def create_durable_capture(
     *,
     repo_root: Path,
-    conn: sqlite3.Connection,
+    db: RepoDb,
     raw: str,
 ) -> dict[str, Any]:
     """Synchronously create the note file + DB rows before any LLM call."""
@@ -393,9 +393,9 @@ def create_durable_capture(
         raise ValueError("empty capture")
     initial_short = _fallback_short_vers(body)
     entry_id = notetaker_db.insert_notes_entry(
-        conn, raw=body, cleaned=body, short_vers=initial_short
+        db, raw=body, cleaned=body, short_vers=initial_short
     )
-    note_name = create_timestamped_note(conn, repo_root, body, source="agent")
+    note_name = create_timestamped_note(db, repo_root, body, source="agent")
     return {
         "entry_id": entry_id,
         "note_name": note_name,
@@ -406,7 +406,7 @@ def create_durable_capture(
 
 
 def _collision_safe_name(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     base: str,
     *,
@@ -414,7 +414,7 @@ def _collision_safe_name(
 ) -> str:
     name = base
     i = 2
-    while active_note_name_exists(conn, repo_root, name, exclude=exclude):
+    while active_note_name_exists(db, repo_root, name, exclude=exclude):
         name = f"{base}-{i}"
         i += 1
     return name
@@ -423,7 +423,7 @@ def _collision_safe_name(
 async def resolve_capture_note(
     *,
     repo_root: Path,
-    conn: sqlite3.Connection,
+    db: RepoDb,
     raw: str,
     entry_id: int,
     note_name: str,
@@ -440,13 +440,13 @@ async def resolve_capture_note(
     body = raw.strip()
     if title is not None and title.strip():
         short_vers = _fallback_short_vers(body.splitlines()[0] if body else body)
-        notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
+        notetaker_db.update_notes_entry_short_vers(db, entry_id, short_vers)
         resolved_name = note_name
         slug = _slugify_title(title)
         if slug:
-            target = _collision_safe_name(conn, repo_root, slug, exclude=note_name)
+            target = _collision_safe_name(db, repo_root, slug, exclude=note_name)
             if target != note_name:
-                resolved_name = rename_note(conn, repo_root, note_name, target)
+                resolved_name = rename_note(db, repo_root, note_name, target)
         return {
             "entry_id": entry_id,
             "note_name": resolved_name,
@@ -463,16 +463,16 @@ async def resolve_capture_note(
             config=config,
         )
     except Exception as exc:
-        # The note is already durably saved under its timestamp name; an LLM
+        # The note is already durably saved under its timestamp name. An LLM
         # API failure must never lose it. Keep the timestamped name and a
         # cheap first-line short_vers instead of propagating the error.
         LOGGER.warning(
-            "notetaker auto-name failed; keeping timestamped note %s: %s",
+            "notetaker auto-name failed. Keeping timestamped note %s: %s",
             note_name,
             exc,
         )
         short_vers = _fallback_short_vers(body.splitlines()[0] if body else body)
-        notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
+        notetaker_db.update_notes_entry_short_vers(db, entry_id, short_vers)
         return {
             "entry_id": entry_id,
             "note_name": note_name,
@@ -481,13 +481,13 @@ async def resolve_capture_note(
             "reply": short_vers,
         }
     short_vers = meta["short_vers"]
-    notetaker_db.update_notes_entry_short_vers(conn, entry_id, short_vers)
+    notetaker_db.update_notes_entry_short_vers(db, entry_id, short_vers)
 
     resolved_name = note_name
     title = meta["one_or_two_word_title"]
     slug = _slugify_title(title)
     if slug:
-        if active_note_name_exists(conn, repo_root, slug, exclude=note_name):
+        if active_note_name_exists(db, repo_root, slug, exclude=note_name):
             try:
                 retry = await llm_capture_metadata(
                     raw=body,
@@ -497,7 +497,7 @@ async def resolve_capture_note(
                     avoid_titles=(title, slug),
                 )
             except Exception as exc:
-                # Collision retry is best-effort; fall back to a numbered
+                # Collision retry is best-effort. Fall back to a numbered
                 # suffix on the original slug rather than failing the capture.
                 LOGGER.warning(
                     "notetaker title-collision retry failed for %s: %s",
@@ -510,12 +510,12 @@ async def resolve_capture_note(
                 if retry_slug:
                     short_vers = retry["short_vers"]
                     notetaker_db.update_notes_entry_short_vers(
-                        conn, entry_id, short_vers
+                        db, entry_id, short_vers
                     )
                     slug = retry_slug
-        target = _collision_safe_name(conn, repo_root, slug, exclude=note_name)
+        target = _collision_safe_name(db, repo_root, slug, exclude=note_name)
         if target != note_name:
-            resolved_name = rename_note(conn, repo_root, note_name, target)
+            resolved_name = rename_note(db, repo_root, note_name, target)
 
     return {
         "entry_id": entry_id,
@@ -529,7 +529,7 @@ async def resolve_capture_note(
 async def submit_capture(
     *,
     repo_root: Path,
-    conn: sqlite3.Connection,
+    db: RepoDb,
     raw: str,
     client: APIClient | None,
     config: NotetakerConfig,
@@ -543,23 +543,23 @@ async def submit_capture(
         raise ValueError("empty capture")
 
     if note_name is None:
-        created = create_durable_capture(repo_root=repo_root, conn=conn, raw=body)
+        created = create_durable_capture(repo_root=repo_root, db=db, raw=body)
         note_name = str(created["note_name"])
         entry_id = int(created["entry_id"])
     else:
         initial_short = _fallback_short_vers(body)
         if entry_id is None:
             entry_id = notetaker_db.insert_notes_entry(
-                conn, raw=body, cleaned=body, short_vers=initial_short
+                db, raw=body, cleaned=body, short_vers=initial_short
             )
-        if notes_db.get_note(conn, note_name) is None:
-            write_note(conn, repo_root, note_name, body.rstrip() + "\n", source="agent")
+        if notes_db.get_note(db, note_name) is None:
+            write_note(db, repo_root, note_name, body.rstrip() + "\n", source="agent")
         else:
-            note_body = read_note(conn, note_name).rstrip()
+            note_body = read_note(db, note_name).rstrip()
             merged = f"{note_body}\n\n{body}\n".lstrip()
             if merged.strip() != note_body.strip():
                 write_note(
-                    conn,
+                    db,
                     repo_root,
                     note_name,
                     merged.rstrip() + "\n",
@@ -568,7 +568,7 @@ async def submit_capture(
 
     return await resolve_capture_note(
         repo_root=repo_root,
-        conn=conn,
+        db=db,
         raw=body,
         entry_id=int(entry_id),
         note_name=note_name,

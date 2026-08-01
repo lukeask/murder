@@ -17,6 +17,7 @@ from murder.app.protocol.read_models import (
     UsageGaugeSummary,
     UsageResetEvent,
 )
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.usage_status import UsageStatusSnapshot
 
 LOGGER = logging.getLogger(__name__)
@@ -32,17 +33,23 @@ _PERIOD_MINUTES: dict[tuple[str, str], float] = {
     ("antigravity", "Claude and GPT Models"): 7 * 24 * 60.0,
 }
 _PROVIDER_ORDER = ("claude_code", "codex", "cursor", "antigravity")
+_RESET_HIGH_PCT = 30.0
+_RESET_LOW_PCT = 5.0
 
 
 def build_schedule_snapshot(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     as_of: datetime,
     invalidation_key: str,
 ) -> ScheduleSnapshot:
-    mode_row = conn.execute("SELECT mode FROM scheduler_state WHERE id = 1").fetchone()
+    conn = db.conn
+    repository_id = db.repository_id
+    mode_row = conn.execute(
+        "SELECT mode FROM scheduler_state WHERE repository_id = ?", (repository_id,)
+    ).fetchone()
     scheduler_mode = str(mode_row["mode"]) if mode_row is not None else "manual"
-    mode_rationale = _crow_rationale(conn) if scheduler_mode == "crow_magic" else ""
+    mode_rationale = _crow_rationale(db) if scheduler_mode == "crow_magic" else ""
 
     decisions = tuple(
         SchedulerDecisionSummary(
@@ -52,7 +59,9 @@ def build_schedule_snapshot(
             kicked_ticket_id=str(r["kicked_ticket_id"]) if r["kicked_ticket_id"] else None,
         )
         for r in conn.execute(
-            "SELECT harness, decision, rationale, kicked_ticket_id FROM scheduler_decision_cache"
+            "SELECT harness, decision, rationale, kicked_ticket_id FROM scheduler_decision_cache "
+            "WHERE repository_id = ?",
+            (repository_id,),
         ).fetchall()
     )
 
@@ -63,7 +72,8 @@ def build_schedule_snapshot(
                     SELECT dep.id AS pending_dep_id
                       FROM ticket_deps AS d
                       JOIN tickets AS dep ON dep.id = d.depends_on_id
-                     WHERE d.ticket_id = t.id
+                     WHERE d.repository_id = t.repository_id AND d.ticket_id = t.id
+                       AND dep.repository_id = t.repository_id
                        AND dep.status NOT IN ('done', 'archived')
                      ORDER BY dep.id
                    )
@@ -78,9 +88,11 @@ def build_schedule_snapshot(
                    t.metadata_conflict_reason, t.parent_ticket_id,
                    {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
-             WHERE t.status IN ('planned', 'ready', 'in_progress', 'blocked', 'failed')
+             WHERE t.repository_id = ?
+               AND t.status IN ('planned', 'ready', 'in_progress', 'blocked', 'failed')
              ORDER BY datetime(t.updated_at) DESC, t.id
-            """
+            """,
+            (repository_id,),
         ).fetchall()
     )
     recent_done = _ticket_rows(
@@ -92,10 +104,11 @@ def build_schedule_snapshot(
                    t.metadata_conflict_reason, t.parent_ticket_id,
                    {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
-             WHERE t.status = 'done'
+             WHERE t.repository_id = ? AND t.status = 'done'
              ORDER BY datetime(t.updated_at) DESC, t.id
              LIMIT 6
-            """
+            """,
+            (repository_id,),
         ).fetchall()
     )
     archived = _ticket_rows(
@@ -107,16 +120,19 @@ def build_schedule_snapshot(
                    t.metadata_conflict_reason, t.parent_ticket_id,
                    {pending_deps_subq} AS pending_dep_ids
               FROM tickets AS t
-             WHERE t.status = 'archived'
+             WHERE t.repository_id = ? AND t.status = 'archived'
              ORDER BY datetime(t.updated_at) DESC, t.id
              LIMIT 20
-            """
+            """,
+            (repository_id,),
         ).fetchall()
     )
 
-    usage_gauges = tuple(_load_gauges(conn))
+    usage_gauges = tuple(_load_gauges(db))
     harness_rows = conn.execute(
-        "SELECT DISTINCT harness FROM harness_usage_snapshots ORDER BY harness"
+        "SELECT DISTINCT harness FROM harness_usage_snapshots "
+        "WHERE repository_id = ? ORDER BY harness",
+        (repository_id,),
     ).fetchall()
     calendar_harnesses = tuple(str(r["harness"]) for r in harness_rows) or ("default",)
     running_agents = tuple(
@@ -130,9 +146,10 @@ def build_schedule_snapshot(
             """
             SELECT a.agent_id, a.ticket_id, a.started_at, t.harness
               FROM agents a
-              JOIN tickets t ON t.id = a.ticket_id
-             WHERE a.status = 'running'
-            """
+              JOIN tickets t ON t.repository_id = a.repository_id AND t.id = a.ticket_id
+             WHERE a.repository_id = ? AND a.status = 'running'
+            """,
+            (repository_id,),
         ).fetchall()
     )
     scheduled_tickets = tuple(
@@ -145,9 +162,10 @@ def build_schedule_snapshot(
             """
             SELECT id AS ticket_id, schedule_at, harness
               FROM tickets
-             WHERE schedule_at IS NOT NULL
+             WHERE repository_id = ? AND schedule_at IS NOT NULL
                AND status IN ('planned', 'ready', 'blocked')
-            """
+            """,
+            (repository_id,),
         ).fetchall()
     )
 
@@ -224,13 +242,18 @@ def _last_update_label(row: sqlite3.Row) -> str:
     return "content"
 
 
-def _crow_rationale(conn: sqlite3.Connection) -> str:
+def _crow_rationale(db: RepoDb) -> str:
+    conn = db.conn
     dec_rows = conn.execute(
         "SELECT harness, window_key, decision, rationale"
-        " FROM scheduler_decision_cache ORDER BY updated_at DESC"
+        " FROM scheduler_decision_cache WHERE repository_id = ? ORDER BY updated_at DESC",
+        (db.repository_id,),
     ).fetchall()
     if not dec_rows:
-        snap_n = conn.execute("SELECT COUNT(*) AS n FROM harness_usage_snapshots").fetchone()["n"]
+        snap_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM harness_usage_snapshots WHERE repository_id = ?",
+            (db.repository_id,),
+        ).fetchone()["n"]
         if snap_n == 0:
             return "no usage snapshots — press r in Usage to fetch"
         return "evaluating…"
@@ -247,7 +270,8 @@ def _crow_rationale(conn: sqlite3.Connection) -> str:
     return f"holding: {labels}"
 
 
-def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
+def _load_gauges(db: RepoDb) -> list[UsageGaugeSummary]:
+    conn = db.conn
     snap_rows = conn.execute(
         """
         SELECT s.harness, s.status_json, s.fetched_at
@@ -255,17 +279,23 @@ def _load_gauges(conn: sqlite3.Connection) -> list[UsageGaugeSummary]:
           JOIN (
                 SELECT harness, MAX(fetched_at) AS fetched_at
                   FROM harness_usage_snapshots
+                 WHERE repository_id = ?
                  GROUP BY harness
                ) latest
             ON latest.harness = s.harness
            AND latest.fetched_at = s.fetched_at
+         WHERE s.repository_id = ?
          ORDER BY s.harness
-        """
+        """,
+        (db.repository_id, db.repository_id),
     ).fetchall()
-    # RT5: per-harness steering (auto/pause/prefer). Loaded once; coerce any
+    # RT5: per-harness steering (auto/pause/prefer). Loaded once. Coerce any
     # unknown value to 'auto' (fail-soft, matching the worker's _load_steering).
     steering_map: dict[str, str] = {}
-    for s_row in conn.execute("SELECT harness, steering FROM scheduler_steering").fetchall():
+    for s_row in conn.execute(
+        "SELECT harness, steering FROM scheduler_steering WHERE repository_id = ?",
+        (db.repository_id,),
+    ).fetchall():
         val = str(s_row["steering"])
         steering_map[str(s_row["harness"])] = val if val in {"auto", "pause", "prefer"} else "auto"
     now = datetime.now(timezone.utc)
@@ -318,7 +348,7 @@ _SPARK_BARS = "▁▂▃▄▅▆▇█"
 
 
 def build_usage_gauge_drill_in(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     harness: str,
     window_key: str,
@@ -327,22 +357,22 @@ def build_usage_gauge_drill_in(
     return UsageGaugeDrillInSnapshot(
         harness=harness,
         window_key=window_key,
-        sparkline=_spark_history(conn, harness, window_key),
-        recent_resets=tuple(_recent_reset_events(conn, harness, window_key)),
-        burn_rows=tuple(_burn_attribution(conn, harness, t_period_minutes)),
+        sparkline=_spark_history(db, harness, window_key),
+        recent_resets=tuple(_recent_reset_events(db, harness, window_key)),
+        burn_rows=tuple(_burn_attribution(db, harness, t_period_minutes)),
     )
 
 
-def _spark_history(conn: sqlite3.Connection, harness: str, window_key: str) -> str:
-    rows = conn.execute(
+def _spark_history(db: RepoDb, harness: str, window_key: str) -> str:
+    rows = db.conn.execute(
         """
         SELECT date(fetched_at) AS day, status_json
           FROM harness_usage_snapshots
-         WHERE harness = ?
+         WHERE repository_id = ? AND harness = ?
            AND fetched_at >= datetime('now', '-14 days')
          ORDER BY fetched_at
         """,
-        (harness,),
+        (db.repository_id, harness),
     ).fetchall()
     by_day: dict[str, list[float]] = {}
     for row in rows:
@@ -367,16 +397,16 @@ def _spark_history(conn: sqlite3.Connection, harness: str, window_key: str) -> s
 
 
 def _recent_reset_events(
-    conn: sqlite3.Connection, harness: str, window_key: str, days: int = 14
+    db: RepoDb, harness: str, window_key: str, days: int = 14
 ) -> list[UsageResetEvent]:
-    rows = conn.execute(
+    rows = db.conn.execute(
         """
         SELECT fetched_at, status_json FROM harness_usage_snapshots
-         WHERE harness = ?
+         WHERE repository_id = ? AND harness = ?
            AND fetched_at >= datetime('now', '-' || ? || ' days')
          ORDER BY fetched_at ASC
         """,
-        (harness, days),
+        (db.repository_id, harness, days),
     ).fetchall()
     resets: list[UsageResetEvent] = []
     for i in range(1, len(rows)):
@@ -388,7 +418,7 @@ def _recent_reset_events(
         prev_pct = prev.percent_for(window_key)
         if curr_pct is None or prev_pct is None:
             continue
-        if prev_pct >= 30.0 and curr_pct <= 5.0:
+        if prev_pct >= _RESET_HIGH_PCT and curr_pct <= _RESET_LOW_PCT:
             resets.append(
                 UsageResetEvent(
                     reset_at=str(rows[i]["fetched_at"]),
@@ -409,8 +439,8 @@ SELECT
          )) * 1440 AS INTEGER
     ) AS active_minutes
   FROM agents a
-  JOIN tickets t ON t.id = a.ticket_id
- WHERE t.harness = ?
+  JOIN tickets t ON t.repository_id = a.repository_id AND t.id = a.ticket_id
+ WHERE a.repository_id = ? AND t.harness = ?
    AND COALESCE(a.last_heartbeat_at, ?) > ?
 GROUP BY t.id, t.title
 HAVING active_minutes > 0
@@ -420,16 +450,16 @@ LIMIT 10
 
 
 def _burn_attribution(
-    conn: sqlite3.Connection, harness: str, t_period_minutes: float
+    db: RepoDb, harness: str, t_period_minutes: float
 ) -> list[UsageBurnRow]:
     if t_period_minutes <= 0:
         return []
     now = datetime.now(timezone.utc)
     window_start = (now - timedelta(minutes=t_period_minutes)).isoformat()
     now_str = now.isoformat()
-    rows = conn.execute(
+    rows = db.conn.execute(
         _BURN_SQL,
-        (now_str, window_start, window_start, harness, now_str, window_start),
+        (now_str, window_start, window_start, db.repository_id, harness, now_str, window_start),
     ).fetchall()
     return [
         UsageBurnRow(

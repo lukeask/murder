@@ -24,7 +24,7 @@ class BriefContext:
 
 @dataclass(frozen=True)
 class Block:
-    heading: str | None  # None = raw text; str = injected as "## {heading}"
+    heading: str | None  # None = raw text. str = injected as "## {heading}"
     text: str
 
 

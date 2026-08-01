@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -10,11 +9,12 @@ from murder.app.protocol.requests import CommandName
 from murder.app.protocol.session_control import SampleHarnessUsageParams
 from murder.app.service.application import ApplicationRegistrar
 from murder.app.service.usage_sampling import sample_usage
+from murder.state.persistence.connection import RepoDb
 
 
 class UsageEffects(Protocol):
     repo_root: Path
-    db: sqlite3.Connection | None
+    db: RepoDb | None
 
 
 def register(app: ApplicationRegistrar, effects: UsageEffects) -> None:

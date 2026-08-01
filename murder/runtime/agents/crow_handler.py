@@ -74,7 +74,7 @@ class CrowHandler(Daemon):
         # transcript we record that fact here so completion still fires even if
         # the marker later scrolls out of the captured pane window. The latch is
         # set when the marker is first observed and drives a single completion
-        # run; `_completion_in_flight` blocks a re-entrant double-fire and
+        # run. ``_completion_in_flight`` blocks a re-entrant double-fire.
         # `_resolved_pane_hash` records the pane we last evaluated so a reprompt
         # retry only re-fires once the crow produces fresh output (idempotency —
         # see `_maybe_complete`).
@@ -84,7 +84,7 @@ class CrowHandler(Daemon):
         self._resolved_pane_hash: str | None = None
         self._log_path: Path | None = None
         self._terminal_failure = False
-        # Set by a tick that detects a terminal ticket; the loop honours it and
+        # Set by a tick that detects a terminal ticket. The loop honours it and
         # finalizes after returning, rather than cancelling its own poll task
         # mid-tick via a fire-and-forget create_task(self.stop()).
         self._stop_requested = False
@@ -155,7 +155,7 @@ class CrowHandler(Daemon):
             if self._terminal_failure:
                 await self._finalize_after_tick_failure()
             elif self._stop_requested:
-                # We are running *inside* the poll task; clear the handle so
+                # We are running inside the poll task. Clear the handle so
                 # super().stop() does not try to cancel-and-await the task we're
                 # in (a self-await deadlock). The loop has already exited.
                 self._poll_task = None
@@ -163,7 +163,7 @@ class CrowHandler(Daemon):
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         # kill_session=False exists to preserve an *interactive harness* session
-        # for reattach; this handler's session is only a disposable `tail -f`
+        # for reattach. This handler's session is only a disposable `tail -f`
         # log pane, so we always tear it down regardless of the flag.
         del kill_session
         from murder.runtime.terminal import tmux
@@ -192,7 +192,7 @@ class CrowHandler(Daemon):
             raise RuntimeError(f"no live crow for ticket {self.ticket_id}")
         interrupted = await crow.interrupt_verified_generation()
         if not interrupted:
-            raise RuntimeError("crow interruption was not verified")
+            raise RuntimeError("the runtime did not verify crow interruption")
 
     def _fire_idle_callbacks_if_idle(self) -> None:
         if not self._idle_cached:
@@ -244,7 +244,7 @@ class CrowHandler(Daemon):
         self._last_pane_hash = h
 
         # Fast: DONE detection via a latch. detect_done() scans the assistant
-        # transcript projected from the captured pane; the marker can scroll out
+        # transcript projected from the captured pane. The marker can scroll out
         # of a later capture, so once we have *ever* seen it we latch the fact
         # and drive completion off the latch — not off the current pane window.
         # This is intentionally NOT gated on pane-hash change or idle state: a
@@ -255,7 +255,7 @@ class CrowHandler(Daemon):
             await self._maybe_complete(h)
             return
 
-        # Slow: orchestration (time-gated; asks/notes are not idempotent at 5Hz)
+        # Slow: orchestration (time-gated. Asks and notes are not idempotent at 5Hz)
         now = time.monotonic()
         if now - self._last_orchestration_t >= self.config.poll_interval_s:
             self._last_orchestration_t = now
@@ -394,7 +394,7 @@ class CrowHandler(Daemon):
         if self._completion_in_flight or self._completion_succeeded:
             return
         if pane_hash == self._resolved_pane_hash:
-            # Same DONE we already evaluated and reprompted on; wait for the crow
+            # Same DONE we already evaluated and reprompted on. Wait for the crow
             # to produce new output before re-running checks.
             return
         # Promotability guard: on reattach the latch can fire off a `>>> DONE`

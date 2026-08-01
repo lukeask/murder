@@ -18,7 +18,7 @@ class TicketSummary:
     status: TicketStatus
     harness: str | None
     model: str | None
-    # Parent ticket id for subticket linkage; None for a top-level ticket.
+    # Parent ticket id for subticket linkage. None for a top-level ticket.
     # Sourced from the tickets.parent_ticket_id column (analogous to PlanSummary.parent,
     # which derives from frontmatter — tickets store the parent as a real column).
     parent: str | None = None
@@ -37,11 +37,11 @@ class TicketDetailSnapshot:
     status: TicketStatus
     # Unified frontmatter-stripped markdown body the C8 editor renders and edits.
     # Carries the `# Checklist` `[ ]`/`[x]` lines the editor toggles (newui-inktui C8,
-    # lines 164-167: "Ticket = frontmatter + body"; "Checklist rides in the body").
+    # lines 164-167: "Ticket = frontmatter + body". "Checklist rides in the body".
     body: str
     checklist: tuple[ChecklistItem, ...]
     # Display-only frontmatter header fields the C8 editor shows above the body
-    # (line 244: harness+model are display-only; deps/worktree round out the header).
+    # (line 244: harness+model are display-only. deps/worktree round out the header).
     # Sourced from the ticket record (frontmatter persisted in the tickets table /
     # ticket_deps). `worktree`/`harness`/`model` are nullable when the ticket omits them.
     deps: tuple[str, ...]
@@ -49,7 +49,7 @@ class TicketDetailSnapshot:
     model: str | None
     worktree: str | None
     # Runtime state delivered alongside the doc (DB-only per line 165). The editor shows
-    # status; schedule_at backs the free-form schedule input (line 245).
+    # status. schedule_at backs the free-form schedule input (line 245).
     schedule_at: str | None
     as_of: datetime
     invalidation_key: str
@@ -114,9 +114,9 @@ class PlanSummary:
     sync_state: str
     # C11 plans panel render inputs (newui-inktui line 169 + C11 row 423):
     #  - `parent`: parent plan's NAME (matched against another row) for 4-space
-    #    indentation; null/absent for a top-level plan. Sourced from the plan's
+    #    indentation. null/absent for a top-level plan. Sourced from the plan's
     #    frontmatter `parent` key (the only non-derived parent metadata the store
-    #    holds); null when unset.
+    #    holds). null when unset.
     #  - `updated_at`: recency timestamp driving the effective-recency ordering.
     #  - `char_count`: plan body size shown in the row.
     parent: str | None = None
@@ -226,7 +226,7 @@ class ScheduleTicketRow:
     # Dep ids that are NOT yet satisfied (status not in done/archived) — the
     # "waiting-on-dependency" glyph signal. Empty tuple = all deps satisfied / no deps.
     pending_dep_ids: tuple[str, ...]
-    # Parent ticket id for the subtree/subticket glyph; None for a top-level ticket.
+    # Parent ticket id for the subtree/subticket glyph. None for a top-level ticket.
     parent: str | None = None
 
     def __post_init__(self) -> None:
@@ -358,7 +358,7 @@ class ConversationSummary:
     live_state: str | None
     # Ordered rolling chunk summaries (Condensed view). Replaces the old single
     # `condensed` scalar — that column was dropped (TUIchat Phase 4). Empty when
-    # no chunk has been summarized yet (the view falls back to Verbose).
+    # no chunk is summarized yet (the view falls back to Verbose).
     chunk_summaries: tuple[ConversationChunkSummary, ...]
     queued_message: str | None
     status: str

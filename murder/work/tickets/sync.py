@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.tickets import invalidate_ticket_schedule
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.markdown_loop import MarkdownSyncLoop
@@ -20,7 +21,7 @@ from murder.work.tickets.render import render_ticket_frontmatter
 from murder.work.tickets.status import TicketStatus
 
 # (path, parse_error) -> deliver a fix-message to the owning agent. Injected by
-# the runtime; pure parsing/DB code never reaches the bus directly.
+# the runtime. Pure parsing/DB code never reaches the bus directly.
 ParseErrorNotifier = Callable[[Path, str], Awaitable[None]]
 
 # Accept legacy `t007`, slug-style `T01-scaffold`, and numeric-prefix `01-msg-types`.
@@ -34,13 +35,13 @@ def content_hash(text: str) -> str:
 
 def reconcile_ticket_md(
     *,
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: str | Path,
     ticket_id: str,
 ) -> None:
     """Synchronously reconcile one unified ticket markdown file into the database."""
     root = Path(repo_root)
-    TicketSync(root, conn).reconcile_path(ticket_md(root, ticket_id))
+    TicketSync(root, db).reconcile_path(ticket_md(root, ticket_id))
 
 
 class TicketSync(MarkdownSyncLoop):
@@ -49,7 +50,7 @@ class TicketSync(MarkdownSyncLoop):
     def __init__(
         self,
         repo_root: Path,
-        db: sqlite3.Connection,
+        db: RepoDb,
         *,
         poll_s: float = 1.5,
         debounce_s: float = 0.75,
@@ -64,7 +65,7 @@ class TicketSync(MarkdownSyncLoop):
         self._materialize_missing_md()
         # `reconcile_all` is the startup/shutdown bulk pass, not an edit-watch.
         # Suppress notification here so idle malformed files don't re-prompt the
-        # owning agent every run; only `reconcile_file` (a debounced, observed
+        # owning agent every run. Only `reconcile_file` (a debounced, observed
         # change) notifies.
         for path in self.scan_paths():
             self.reconcile_path(path)
@@ -112,7 +113,7 @@ class TicketSync(MarkdownSyncLoop):
             return parsed.parse_error
 
         rel = str(path.relative_to(self.repo_root))
-        self.db.execute("BEGIN")
+        self.db.conn.execute("BEGIN IMMEDIATE")
         try:
             if self._ticket_exists(ticket_id):
                 self._update_ticket_from_parsed(ticket_id, parsed)
@@ -120,7 +121,7 @@ class TicketSync(MarkdownSyncLoop):
                 self._insert_ticket_from_parsed(ticket_id, parsed)
             self._replace_deps(ticket_id, parsed.deps)
             self._sync_checklist(ticket_id, parsed.checklist)
-            invalidate_ticket_schedule(conn=self.db, ticket_id=ticket_id, operation="markdown")
+            invalidate_ticket_schedule(db=self.db, ticket_id=ticket_id, operation="markdown")
             self._mark_sync_state(
                 ticket_id,
                 "synced",
@@ -128,9 +129,9 @@ class TicketSync(MarkdownSyncLoop):
                 metadata_hash=content_hash(render_ticket_frontmatter(parsed) + parsed.body),
                 materialized_path=rel,
             )
-            self.db.execute("COMMIT")
+            self.db.conn.execute("COMMIT")
         except Exception:
-            self.db.execute("ROLLBACK")
+            self.db.conn.execute("ROLLBACK")
             raise
         return None
 
@@ -156,7 +157,10 @@ class TicketSync(MarkdownSyncLoop):
         return path
 
     def _materialize_missing_md(self) -> None:
-        rows = self.db.execute("SELECT * FROM tickets ORDER BY id").fetchall()
+        rows = self.db.conn.execute(
+            "SELECT * FROM tickets WHERE repository_id = ? ORDER BY id",
+            (self.db.repository_id,),
+        ).fetchall()
         for row in rows:
             ticket_id = str(row["id"])
             if not _TICKET_ID_RE.fullmatch(ticket_id):
@@ -166,7 +170,10 @@ class TicketSync(MarkdownSyncLoop):
                 self.materialize_row(row)
 
     def _materialize_ticket_id(self, ticket_id: str) -> None:
-        row = self.db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+        row = self.db.conn.execute(
+            "SELECT * FROM tickets WHERE repository_id = ? AND id = ?",
+            (self.db.repository_id, ticket_id),
+        ).fetchone()
         if row is not None:
             self.materialize_row(row)
 
@@ -174,14 +181,16 @@ class TicketSync(MarkdownSyncLoop):
         ticket_id = str(row["id"])
         deps = [
             str(r["depends_on_id"])
-            for r in self.db.execute(
-                "SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ? ORDER BY depends_on_id",
-                (ticket_id,),
+            for r in self.db.conn.execute(
+                "SELECT depends_on_id FROM ticket_deps "
+                "WHERE repository_id = ? AND ticket_id = ? ORDER BY depends_on_id",
+                (self.db.repository_id, ticket_id),
             ).fetchall()
         ]
-        checklist = self.db.execute(
-            "SELECT text, done FROM checklist WHERE ticket_id = ? ORDER BY ord, id",
-            (ticket_id,),
+        checklist = self.db.conn.execute(
+            "SELECT text, done FROM checklist "
+            "WHERE repository_id = ? AND ticket_id = ? ORDER BY ord, id",
+            (self.db.repository_id, ticket_id),
         ).fetchall()
         frontmatter = render_ticket_frontmatter(
             {
@@ -200,7 +209,10 @@ class TicketSync(MarkdownSyncLoop):
         return frontmatter + "\n".join(body_lines).rstrip() + "\n"
 
     def _ticket_exists(self, ticket_id: str) -> bool:
-        row = self.db.execute("SELECT 1 FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+        row = self.db.conn.execute(
+            "SELECT 1 FROM tickets WHERE repository_id = ? AND id = ?",
+            (self.db.repository_id, ticket_id),
+        ).fetchone()
         return row is not None
 
     def _stored_sync_state(self, ticket_id: str) -> tuple[str | None, str | None]:
@@ -209,9 +221,10 @@ class TicketSync(MarkdownSyncLoop):
         Both are ``None`` when the ticket row does not exist yet, which makes
         the warm-boot skip guard fall through to the full insert path.
         """
-        row = self.db.execute(
-            "SELECT metadata_file_hash, metadata_sync_state FROM tickets WHERE id = ?",
-            (ticket_id,),
+        row = self.db.conn.execute(
+            "SELECT metadata_file_hash, metadata_sync_state FROM tickets "
+            "WHERE repository_id = ? AND id = ?",
+            (self.db.repository_id, ticket_id),
         ).fetchone()
         if row is None:
             return None, None
@@ -219,15 +232,16 @@ class TicketSync(MarkdownSyncLoop):
 
     def _insert_ticket_from_parsed(self, ticket_id: str, parsed: ParsedTicket) -> None:
         now = _now()
-        self.db.execute(
+        self.db.conn.execute(
             """
             INSERT INTO tickets(
-                id, title, status, harness, model, worktree, parent_ticket_id,
+                repository_id, id, title, status, harness, model, worktree, parent_ticket_id,
                 attempts, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
             (
+                self.db.repository_id,
                 ticket_id,
                 parsed.title or ticket_id,
                 TicketStatus.PLANNED.value,
@@ -268,12 +282,12 @@ class TicketSync(MarkdownSyncLoop):
         # the md's back: the workflow materializer renders `parent:` INTO the
         # stage `.md` (see _write_stage_ticket) before this reconcile runs, and
         # _render_row echoes the column back out, so the round-trip is closed.
-        self.db.execute(
+        self.db.conn.execute(
             """
             UPDATE tickets
                SET title = ?, harness = ?, model = ?, worktree = ?,
                    parent_ticket_id = ?, updated_at = ?
-             WHERE id = ?
+             WHERE repository_id = ? AND id = ?
             """,
             (
                 parsed.title or ticket_id,
@@ -282,16 +296,21 @@ class TicketSync(MarkdownSyncLoop):
                 parsed.worktree,
                 parsed.parent,
                 _now(),
+                self.db.repository_id,
                 ticket_id,
             ),
         )
 
     def _replace_deps(self, ticket_id: str, deps: list[str]) -> None:
-        self.db.execute("DELETE FROM ticket_deps WHERE ticket_id = ?", (ticket_id,))
+        self.db.conn.execute(
+            "DELETE FROM ticket_deps WHERE repository_id = ? AND ticket_id = ?",
+            (self.db.repository_id, ticket_id),
+        )
         for dep in deps:
-            self.db.execute(
-                "INSERT OR IGNORE INTO ticket_deps(ticket_id, depends_on_id) VALUES (?, ?)",
-                (ticket_id, dep),
+            self.db.conn.execute(
+                "INSERT OR IGNORE INTO ticket_deps(repository_id, ticket_id, depends_on_id) "
+                "VALUES (?, ?, ?)",
+                (self.db.repository_id, ticket_id, dep),
             )
 
     def _sync_checklist(
@@ -299,9 +318,10 @@ class TicketSync(MarkdownSyncLoop):
         ticket_id: str,
         checklist: list[TicketChecklistItem],
     ) -> None:
-        existing_rows = self.db.execute(
-            "SELECT id, text, done, done_at FROM checklist WHERE ticket_id = ? ORDER BY ord, id",
-            (ticket_id,),
+        existing_rows = self.db.conn.execute(
+            "SELECT id, text, done, done_at FROM checklist "
+            "WHERE repository_id = ? AND ticket_id = ? ORDER BY ord, id",
+            (self.db.repository_id, ticket_id),
         ).fetchall()
         by_text: dict[str, deque[sqlite3.Row]] = defaultdict(deque)
         for row in existing_rows:
@@ -313,36 +333,40 @@ class TicketSync(MarkdownSyncLoop):
             done = 1 if item.done else 0
             done_at = _done_at_for(item.done, existing)
             if existing is None:
-                self.db.execute(
+                self.db.conn.execute(
                     """
-                    INSERT INTO checklist(ticket_id, ord, text, done, done_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO checklist(repository_id, ticket_id, ord, text, done, done_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (ticket_id, ord_, item.text, done, done_at),
+                    (self.db.repository_id, ticket_id, ord_, item.text, done, done_at),
                 )
-                last_id = self.db.execute("SELECT last_insert_rowid() AS id").fetchone()
+                last_id = self.db.conn.execute("SELECT last_insert_rowid() AS id").fetchone()
                 kept_ids.add(int(last_id["id"]))
                 continue
 
             item_id = int(existing["id"])
             kept_ids.add(item_id)
-            self.db.execute(
+            self.db.conn.execute(
                 """
                 UPDATE checklist
                    SET ord = ?, text = ?, done = ?, done_at = ?
-                 WHERE id = ?
+                 WHERE repository_id = ? AND id = ?
                 """,
-                (ord_, item.text, done, done_at, item_id),
+                (ord_, item.text, done, done_at, self.db.repository_id, item_id),
             )
 
         if kept_ids:
             placeholders = ",".join("?" for _ in kept_ids)
-            self.db.execute(
-                f"DELETE FROM checklist WHERE ticket_id = ? AND id NOT IN ({placeholders})",
-                (ticket_id, *kept_ids),
+            self.db.conn.execute(
+                "DELETE FROM checklist WHERE repository_id = ? AND ticket_id = ? "
+                f"AND id NOT IN ({placeholders})",
+                (self.db.repository_id, ticket_id, *kept_ids),
             )
         else:
-            self.db.execute("DELETE FROM checklist WHERE ticket_id = ?", (ticket_id,))
+            self.db.conn.execute(
+                "DELETE FROM checklist WHERE repository_id = ? AND ticket_id = ?",
+                (self.db.repository_id, ticket_id),
+            )
 
     def _mark_sync_state(
         self,
@@ -379,9 +403,9 @@ class TicketSync(MarkdownSyncLoop):
             values.append(parse_error)
         assignments.append("updated_at = ?")
         values.append(_now())
-        values.append(ticket_id)
-        self.db.execute(
-            f"UPDATE tickets SET {', '.join(assignments)} WHERE id = ?",
+        values.extend((self.db.repository_id, ticket_id))
+        self.db.conn.execute(
+            f"UPDATE tickets SET {', '.join(assignments)} WHERE repository_id = ? AND id = ?",
             tuple(values),
         )
 

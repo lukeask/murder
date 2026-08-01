@@ -1,4 +1,4 @@
-"""Orchestration: spawn/kill agents; ready computation."""
+"""Orchestration: spawn and kill agents. Ready computation."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import logging
 import re
-import sqlite3
 from typing import Any
 from uuid import uuid4
 
@@ -14,58 +13,64 @@ _TNUM_RE = re.compile(r"^t(\d+)$")
 
 LOGGER = logging.getLogger(__name__)
 
-from murder.state.persistence.tickets import (
-    get_ticket as _db_get_ticket,
-    compute_ready as _db_compute_ready,
-)
-from murder.state.persistence.agents import (
-    upsert_agent as _db_upsert_agent,
-    get_active_agent_by_role as _db_get_active_agent_by_role,
-    set_agent_status as _db_set_agent_status,
-)
-from murder.runtime.agents.types import AgentRole, AgentStatus
-from murder.runtime.agents.crow_handler import CrowHandler
-from murder.runtime.agents.planning_handler import PlanningHandler
-from murder.runtime.orchestration.events import StatusChangeEvent
-from murder.work.tickets.status import TicketStatus
-from murder.llm.direct import resolve_direct_role_client
+from murder.app.service.runtime_scope import OrchestratorHost
 from murder.config import (
     Config,
 )
+from murder.llm.direct import resolve_direct_role_client
 from murder.llm.harnesses import get as get_harness
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
-from murder.runtime.terminal import tmux
-from murder.runtime.terminal.session_names import format_session_name
-from murder.work.tickets import lifecycle
-
+from murder.llm.harnesses.models import HarnessStartSpec
 from murder.runtime.agents.crow import CrowAgent
+from murder.runtime.agents.crow_handler import CrowHandler
+from murder.runtime.agents.planning_handler import PlanningHandler
 from murder.runtime.agents.runner import spawn_agent
 from murder.runtime.agents.sessions import AgentScope, AgentSpec
-from murder.llm.harnesses.models import HarnessStartSpec
-from murder.verdict.completion import CheckRegistry, CompletionCoordinator
-from murder.runtime.orchestration.ticket_ops import TicketOps
+from murder.runtime.agents.types import AgentRole, AgentStatus
+from murder.runtime.orchestration.agent_ops import AgentOps
+from murder.runtime.orchestration.brief_service import BriefService
+from murder.runtime.orchestration.events import StatusChangeEvent
+from murder.runtime.orchestration.harness_config import HarnessConfigurator
 from murder.runtime.orchestration.history_ops import HistoryOps
 from murder.runtime.orchestration.note_ops import NoteOps
 from murder.runtime.orchestration.plan_ops import PlanOps
-from murder.runtime.orchestration.agent_ops import AgentOps
-from murder.runtime.orchestration.harness_config import HarnessConfigurator
+from murder.runtime.orchestration.ticket_ops import TicketOps
 from murder.runtime.orchestration.worktree_provisioner import WorktreeProvisioner
-from murder.runtime.orchestration.brief_service import BriefService
-from murder.app.service.runtime_scope import OrchestratorHost
-
+from murder.runtime.terminal import tmux
+from murder.runtime.terminal.session_names import format_session_name
+from murder.state.persistence.agents import (
+    get_active_agent_by_role as _db_get_active_agent_by_role,
+)
+from murder.state.persistence.agents import (
+    set_agent_status as _db_set_agent_status,
+)
+from murder.state.persistence.agents import (
+    upsert_agent as _db_upsert_agent,
+)
+from murder.state.persistence.connection import RepoDb
+from murder.state.persistence.tickets import (
+    compute_ready as _db_compute_ready,
+)
+from murder.state.persistence.tickets import (
+    get_ticket as _db_get_ticket,
+)
+from murder.verdict.completion import CheckRegistry, CompletionCoordinator
 from murder.verdict.escalations.service import EscalationService
+from murder.work.tickets import lifecycle
+from murder.work.tickets.status import TicketStatus
+
 from .outcome import TicketOutcomeService
 
 
-def _get_plan_for_ticket(conn: sqlite3.Connection, ticket_id: str) -> str | None:
+def _get_plan_for_ticket(db: RepoDb, ticket_id: str) -> str | None:
     """Return the plan_name for a ticket, or None if not in any plan."""
-    has_plan_tickets = conn.execute(
+    has_plan_tickets = db.conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'plan_tickets'"
     ).fetchone()
     table = "plan_tickets" if has_plan_tickets is not None else "plan_related_tickets"
-    row = conn.execute(
-        f"SELECT plan_name FROM {table} WHERE ticket_id = ? LIMIT 1",
-        (ticket_id,),
+    row = db.conn.execute(
+        f"SELECT plan_name FROM {table} WHERE repository_id = ? AND ticket_id = ? LIMIT 1",
+        (db.repository_id, ticket_id),
     ).fetchone()
     return str(row["plan_name"]) if row else None
 
@@ -80,12 +85,12 @@ def _rogue_slug(name: str | None) -> str:
 
 def _harness_prefix(harness_kind: str) -> str:
     """Short harness label for rogue agent IDs (e.g. 'claude', 'codex')."""
-    first_word = harness_kind.split("_")[0].split("-")[0].lower()
+    first_word = harness_kind.split("_", maxsplit=1)[0].split("-", maxsplit=1)[0].lower()
     return first_word[:8] or "rogue"
 
 
 # Re-exported from the pure-util module so existing backend callers keep
-# importing it from here; renderer-agnostic clients import the util directly.
+# Import it from here. Renderer-agnostic clients import the util directly.
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id  # noqa: E402, F401
 
 
@@ -146,7 +151,7 @@ class Orchestrator:
     def _escalations(self) -> EscalationService:
         assert self.rt.db is not None
         return EscalationService(
-            conn=self.rt.db,
+            db=self.rt.db,
             repo_root=self.rt.repo_root,
             events=self.rt.orchestration_events,
             run_id=self.rt.run_id,
@@ -157,7 +162,7 @@ class Orchestrator:
     def _outcomes(self) -> TicketOutcomeService:
         assert self.rt.db is not None
         return TicketOutcomeService(
-            conn=self.rt.db,
+            db=self.rt.db,
             repo_root=self.rt.repo_root,
             escalations=self._escalations(),
             emit_status=self._emit_ticket_status,
@@ -183,10 +188,10 @@ class Orchestrator:
             if row is None:
                 continue
             ticket_status = str(row.get("status") or "")
-            running = conn.execute(
-                "SELECT 1 FROM agents WHERE ticket_id = ? AND role IN ('crow','crow_handler') "
+            running = conn.conn.execute(
+                "SELECT 1 FROM agents WHERE repository_id = ? AND ticket_id = ? AND role IN ('crow','crow_handler') "
                 "AND status IN ('running','idle')",
-                (tid,),
+                (conn.repository_id, tid),
             ).fetchone()
             if running is not None:
                 if ticket_status == TicketStatus.IN_PROGRESS.value:
@@ -300,7 +305,7 @@ class Orchestrator:
         # at boot. If kickoff has already claimed this ticket — a live crow handler
         # is registered, or the ticket has already moved out of in_progress — a
         # second reattach would bind a duplicate CrowAgent against the same pane.
-        # Bail idempotently; the existing handler owns DONE.
+        # Bail idempotently. The existing handler owns DONE.
         from murder.state.persistence.tickets import get_ticket_status as _get_ticket_status
 
         if self.rt.get_crow_handler(ticket_id) is not None:
@@ -330,7 +335,7 @@ class Orchestrator:
         self.rt.register_agent(agent)
         agent.status = AgentStatus.RUNNING
         self.rt.sync_agent(agent)
-        # Fresh producer state; reattach resumes transcript projection from the
+        # Fresh producer state. Reattach resumes transcript projection from the
         # current pane scrollback rather than the original startup state.
         agent.start_conversation()
         await self.spawn_crow_handler(ticket_id, crow_session)
@@ -455,7 +460,7 @@ class Orchestrator:
                 raise RuntimeError(message)
             # Rogues bypass CrowAgent.start(), so they must bind the same
             # verified observer/controller/actuator explicitly after tmux
-            # startup.  The old first-send gate was a procedural workaround;
+            # startup. The old first-send gate was a procedural workaround.
             # verified prompt delivery waits for current composer evidence.
             await agent.initialize_verified_harness_control()
             model_result = await agent.select_verified_model(startup_model, startup_effort)
@@ -520,13 +525,13 @@ class Orchestrator:
         db = self.rt.db
         if db is None:
             return {"ok": False, "error": "resume unavailable: no database"}
-        row = db.execute(
+        row = db.conn.execute(
             """
             SELECT harness, harness_session_id, status
               FROM conversations
-             WHERE conversation_id = ?
+             WHERE repository_id = ? AND conversation_id = ?
             """,
-            (cid,),
+            (db.repository_id, cid),
         ).fetchone()
         if row is None:
             return {"ok": False, "error": f"no conversation {cid}"}
@@ -540,7 +545,7 @@ class Orchestrator:
             )
             return {"ok": False, "error": reason}
         # A live crow for this conversation means resume would fork a second copy
-        # of the same session; bail with a friendly message instead.
+        # of the same session. Bail with a friendly message instead.
         existing = self.rt.get_agent(cid)
         if existing is not None and await self._agent_is_live(existing):
             return {"ok": False, "error": "a session is already running for this conversation"}
@@ -585,7 +590,7 @@ class Orchestrator:
         spawning the agent + its handler if needed."""
         assert self.rt.db is not None
         agent_id = f"planner-{plan_name}"
-        # setdefault keeps the get-or-create atomic; never insert an await
+        # setdefault keeps the get-or-create atomic. Never insert an await
         # between resolving the lock and acquiring it, or two coroutines could
         # each create a distinct Lock and defeat the mutual exclusion.
         lock = self._planner_spawn_locks.setdefault(plan_name, asyncio.Lock())
@@ -623,7 +628,7 @@ class Orchestrator:
             # and seed the new session. For now we always spawn fresh.
             # Readiness gate: don't hand the handler a session that hasn't
             # materialized yet. The handler's first capture_pane against a
-            # not-yet-live session is exactly the boot pane-lag that escalates;
+            # not-yet-live session is exactly the boot pane-lag that escalates.
             # wait briefly for the tmux session to exist first. The handler also
             # carries its own startup grace, so this is best-effort, not a hard
             # barrier — we proceed after the timeout regardless.
@@ -805,8 +810,8 @@ class Orchestrator:
             # Persisted in the DB by a prior daemon but absent from this process's
             # registry (service restart): kill any orphaned tmux session so the
             # upcoming create_session doesn't raise "already exists", then mark dead.
-            row = self.rt.db.execute(
-                "SELECT session FROM agents WHERE agent_id = ?", (agent_id,)
+            row = self.rt.db.conn.execute(
+                "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self.rt.db.repository_id, agent_id)
             ).fetchone()
             if row and row["session"] and await tmux.session_exists(row["session"]):
                 with contextlib.suppress(Exception):
@@ -826,8 +831,8 @@ class Orchestrator:
                 # Agent in DB but not in registry (e.g. service restart with
                 # keep-sessions-alive). Kill the orphaned tmux session so the
                 # upcoming create_session call doesn't raise "already exists".
-                row = self.rt.db.execute(
-                    "SELECT session FROM agents WHERE agent_id = ?", (agent_id,)
+                row = self.rt.db.conn.execute(
+                    "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self.rt.db.repository_id, agent_id)
                 ).fetchone()
                 if row and row["session"] and await tmux.session_exists(row["session"]):
                     with contextlib.suppress(Exception):
@@ -874,9 +879,9 @@ class Orchestrator:
             if agent is not None:
                 live_harness = str(getattr(getattr(agent, "harness", None), "kind", "") or "")
             else:
-                row = self.rt.db.execute(
-                    "SELECT harness FROM agents WHERE agent_id = ?",
-                    (agent_id,),
+                row = self.rt.db.conn.execute(
+                    "SELECT harness FROM agents WHERE repository_id = ? AND agent_id = ?",
+                    (self.rt.db.repository_id, agent_id),
                 ).fetchone()
                 live_harness = str(row["harness"]) if row and row["harness"] else None
         if live_harness == current_harness:

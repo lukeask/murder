@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING
 from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.events import EscalationEvent
 from murder.state.persistence import escalations as dbmod
+from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.records import EscalationRecord
 from murder.state.storage.filesystem import atomic_write_text
 from murder.state.storage.paths import escalation_md
@@ -26,7 +26,7 @@ def _clamp_severity(severity: int) -> int:
 class EscalationService:
     """Insert escalation rows, optional markdown bodies, and notifications."""
 
-    conn: sqlite3.Connection
+    db: RepoDb
     repo_root: Path
     events: OrchestrationEventSink | None = None
     run_id: str | None = None
@@ -43,7 +43,7 @@ class EscalationService:
     ) -> int:
         sev = _clamp_severity(severity)
         eid = dbmod.insert_escalation(
-            self.conn,
+            self.db,
             ticket_id=ticket_id,
             severity=sev,
             reason=reason,
@@ -63,7 +63,7 @@ class EscalationService:
     ) -> tuple[int, Path]:
         sev = _clamp_severity(severity)
         eid = dbmod.insert_escalation(
-            self.conn,
+            self.db,
             ticket_id=ticket_id,
             severity=sev,
             reason=reason,
@@ -71,9 +71,9 @@ class EscalationService:
         )
         path = escalation_md(self.repo_root, eid)
         atomic_write_text(path, body)
-        self.conn.execute(
-            "UPDATE escalations SET body_path = ? WHERE id = ?",
-            (str(path), eid),
+        self.db.conn.execute(
+            "UPDATE escalations SET body_path = ? WHERE repository_id = ? AND id = ?",
+            (str(path), self.db.repository_id, eid),
         )
         await self._publish(ticket_id=ticket_id, reason=reason, severity=sev, to="collaborator")
         return eid, path
@@ -89,10 +89,10 @@ class EscalationService:
         return await self.escalate_to_user(reason, severity=2, ticket_id=None)
 
     def list_active(self, recipient: str | None = None) -> list[EscalationRecord]:
-        return dbmod.list_pending_escalations(self.conn, recipient)
+        return dbmod.list_pending_escalations(self.db, recipient)
 
     def resolve(self, escalation_id: int) -> None:
-        dbmod.resolve_escalation(self.conn, escalation_id)
+        dbmod.resolve_escalation(self.db, escalation_id)
 
     async def _publish(
         self,

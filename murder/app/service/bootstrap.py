@@ -39,7 +39,7 @@ async def start_supervisor_workers(
     )
     cmd_dispatcher = (
         CommandDispatcher(
-            conn=runtime.db,
+            db=runtime.db,
             repo_root=repo_root,
             events=events,
             advanced_log=runtime.advanced_log,

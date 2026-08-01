@@ -7,7 +7,7 @@ and delegates execution to the verified capability on the owning agent.
 
 Permission observations are also bridged into ``murder.permissions`` so policy
 decisions and approval records exist alongside the bus events that drive client
-UX. Harness adapters do not execute tools; proofs issued here are for
+UX. Harness adapters do not execute tools. Proofs issued here are for
 Murder-owned enforcement boundaries.
 """
 
@@ -265,7 +265,7 @@ class StructuredDecisionRouter:
                 ),
             )
         except PermissionDeniedError:
-            # Deny records evidence then raises; that is the intended outcome.
+            # Deny records evidence then raises. That is the intended outcome.
             return
 
     async def respond(self, body: dict[str, Any]) -> dict[str, object]:  # noqa: PLR0911
@@ -322,11 +322,11 @@ class StructuredDecisionRouter:
     async def _resume_recorded_responses(self, agent: Any, snapshot: ObservationSnapshot) -> None:
         """Start decisions recorded before a crash when no operation exists yet."""
 
-        rows = self._host.db.execute(
+        rows = self._host.db.conn.execute(
             "SELECT decision_request_id, decision_kind, request_identity, response_json "
-            "FROM structured_decisions WHERE agent_id = ? AND response_json IS NOT NULL "
+            "FROM structured_decisions WHERE repository_id = ? AND agent_id = ? AND response_json IS NOT NULL "
             "ORDER BY created_at, decision_request_id",
-            (agent.id,),
+            (self._host.db.repository_id, agent.id),
         ).fetchall()
         for row in rows:
             request_id = str(row["decision_request_id"] or "")
@@ -356,46 +356,46 @@ class StructuredDecisionRouter:
 
     def _operation_exists(self, operation_id: str) -> bool:
         return (
-            self._host.db.execute(
-                "SELECT 1 FROM harness_control_operations WHERE operation_id = ?",
-                (operation_id,),
+            self._host.db.conn.execute(
+                "SELECT 1 FROM harness_control_operations WHERE repository_id = ? AND operation_id = ?",
+                (self._host.db.repository_id, operation_id),
             ).fetchone()
             is not None
         )
 
     def _has_any_occurrence(self, agent_id: str, kind: str, identity: str) -> bool:
-        row = self._host.db.execute(
+        row = self._host.db.conn.execute(
             "SELECT 1 FROM structured_decisions "
-            "WHERE agent_id = ? AND decision_kind = ? AND request_identity = ? LIMIT 1",
-            (agent_id, kind, identity),
+            "WHERE repository_id = ? AND agent_id = ? AND decision_kind = ? AND request_identity = ? LIMIT 1",
+            (self._host.db.repository_id, agent_id, kind, identity),
         ).fetchone()
         return row is not None
 
     def _has_kind_history(self, agent_id: str, kind: str) -> bool:
         return (
-            self._host.db.execute(
+            self._host.db.conn.execute(
                 "SELECT 1 FROM structured_decisions "
-                "WHERE agent_id = ? AND decision_kind = ? LIMIT 1",
-                (agent_id, kind),
+                "WHERE repository_id = ? AND agent_id = ? AND decision_kind = ? LIMIT 1",
+                (self._host.db.repository_id, agent_id, kind),
             ).fetchone()
             is not None
         )
 
     def _response_exists(self, request_id: str) -> bool:
         return (
-            self._host.db.execute(
+            self._host.db.conn.execute(
                 "SELECT 1 FROM structured_decisions "
-                "WHERE decision_request_id = ? AND response_json IS NOT NULL LIMIT 1",
-                (request_id,),
+                "WHERE repository_id = ? AND decision_request_id = ? AND response_json IS NOT NULL LIMIT 1",
+                (self._host.db.repository_id, request_id),
             ).fetchone()
             is not None
         )
 
     def _load_request(self, request_id: str) -> dict[str, Any] | None:
-        row = self._host.db.execute(
+        row = self._host.db.conn.execute(
             "SELECT agent_id, decision_kind, request_identity, request_json "
-            "FROM structured_decisions WHERE decision_request_id = ?",
-            (request_id,),
+            "FROM structured_decisions WHERE repository_id = ? AND decision_request_id = ?",
+            (self._host.db.repository_id, request_id),
         ).fetchone()
         if row is None:
             return None
@@ -415,11 +415,12 @@ class StructuredDecisionRouter:
         request_identity: str,
         request: dict[str, object],
     ) -> None:
-        self._host.db.execute(
+        self._host.db.conn.execute(
             "INSERT OR IGNORE INTO structured_decisions "
-            "(decision_request_id, agent_id, decision_kind, request_identity, request_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(repository_id, decision_request_id, agent_id, decision_kind, request_identity, request_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
+                self._host.db.repository_id,
                 request_id,
                 agent_id,
                 decision_kind,
@@ -428,24 +429,25 @@ class StructuredDecisionRouter:
                 datetime.now(timezone.utc).isoformat(timespec="microseconds"),
             ),
         )
-        self._host.db.commit()
+        self._host.db.conn.commit()
 
     def _record_response(
         self, request_id: str, *, response: dict[str, Any], decided_by: str
     ) -> None:
-        cursor = self._host.db.execute(
+        cursor = self._host.db.conn.execute(
             "UPDATE structured_decisions SET response_json = ?, decided_by = ?, responded_at = ? "
-            "WHERE decision_request_id = ? AND response_json IS NULL",
+            "WHERE repository_id = ? AND decision_request_id = ? AND response_json IS NULL",
             (
                 json.dumps(response, sort_keys=True, separators=(",", ":")),
                 decided_by,
                 datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+                self._host.db.repository_id,
                 request_id,
             ),
         )
         if cursor.rowcount != 1:
-            raise RuntimeError(f"decision response lost its identity binding: {request_id}")
-        self._host.db.commit()
+            raise RuntimeError(f"decision response lost identity binding: {request_id}")
+        self._host.db.conn.commit()
 
     @staticmethod
     def _current_identity(kind: str, snapshot: ObservationSnapshot) -> str | None:

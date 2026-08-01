@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import re
-import sqlite3
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID, uuid4
 
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.paths import worktrees_dir
 
 _SAFE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -164,7 +165,7 @@ def list_murder_worktrees_sync(repo_root: Path) -> list[WorktreeEntry]:
 
 
 async def _branch_at_path(repo_root: Path, path: Path) -> str | None:
-    """Return the branch checked out at ``path``, or None if git doesn't know it."""
+    """Return the branch checked out at ``path``, or None if git does not know it."""
 
     target = path.resolve()
     for entry in await list_git_worktrees(repo_root):
@@ -177,7 +178,7 @@ async def ensure_worktree(
     repo_root: Path,
     ref: WorktreeRef,
     *,
-    permission_connection: sqlite3.Connection | None = None,
+    permission_connection: RepoDb | None = None,
 ) -> WorktreeRef:
     """Create or reuse a git worktree at ``ref.path`` on ``ref.branch``."""
 
@@ -231,8 +232,6 @@ async def ensure_worktree(
                 return ref
         raise WorktreeError(err.strip() or f"git worktree add failed for {ref.path}")
 
-    from uuid import NAMESPACE_URL, uuid4, uuid5  # noqa: PLC0415
-
     from murder.permissions import (  # noqa: PLC0415
         GitOperation,
         LocalServicePermissionPolicy,
@@ -252,7 +251,7 @@ async def ensure_worktree(
     )
     enforcer = SideEffectEnforcer(service)
     principal = PermissionPrincipal(kind="service", id="worktree-provisioner")
-    repository_id = uuid5(NAMESPACE_URL, f"murder:repository:{repo_root.resolve()}")
+    repository_id = UUID(permission_connection.repository_id)
 
     async def run_add(
         effect: Callable[[], Awaitable[tuple[int, str, str]]],
@@ -281,7 +280,7 @@ async def ensure_worktree_for_branch(
     repo_root: Path,
     branch_name: str,
     *,
-    permission_connection: sqlite3.Connection | None = None,
+    permission_connection: RepoDb | None = None,
 ) -> WorktreeRef:
     """Create or reuse the flat worktree for ``branch_name``.
 
@@ -298,31 +297,31 @@ async def ensure_worktree_for_branch(
 
 
 async def prune_terminal_crow_worktree(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     repo_root: Path,
     ticket_id: str,
 ) -> bool:
     """Prune a finished crow's worktree using the path stored at spawn time.
 
-    The path is the durable source of truth (``agents.worktree_path``); if no
+    The path is the durable source of truth (``agents.worktree_path``). If no
     crow ever recorded one, there is nothing to prune.
     """
 
-    row = conn.execute(
+    row = db.conn.execute(
         """
         SELECT worktree_path
           FROM agents
-         WHERE role = 'crow' AND ticket_id = ?
+         WHERE repository_id = ? AND role = 'crow' AND ticket_id = ?
          ORDER BY started_at DESC
          LIMIT 1
         """,
-        (ticket_id,),
+        (db.repository_id, ticket_id),
     ).fetchone()
     if row is not None and row["worktree_path"]:
         return await prune_worktree_path(
             repo_root,
             row["worktree_path"],
-            permission_connection=conn,
+            permission_connection=db,
         )
     return False
 
@@ -331,15 +330,13 @@ async def prune_worktree_path(
     repo_root: Path,
     worktree_path: str | Path,
     *,
-    permission_connection: sqlite3.Connection,
+    permission_connection: RepoDb,
 ) -> bool:
     path = Path(worktree_path)
     if not path.is_absolute():
         path = repo_root / path
     if not path.exists():
         return False
-    from uuid import NAMESPACE_URL, uuid4, uuid5  # noqa: PLC0415
-
     from murder.permissions import (  # noqa: PLC0415
         GitOperation,
         LocalServicePermissionPolicy,
@@ -356,7 +353,7 @@ async def prune_worktree_path(
     operation = GitOperation(
         operation_id=uuid4(),
         principal=PermissionPrincipal(kind="service", id="worktree-pruner"),
-        repository_id=uuid5(NAMESPACE_URL, f"murder:repository:{repo_root.resolve()}"),
+        repository_id=UUID(permission_connection.repository_id),
         action="worktree_remove",
         arguments=(relative_path,),
         worktree_path=relative_path,

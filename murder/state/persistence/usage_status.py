@@ -2,7 +2,7 @@
 
 The snapshot payload is the json-serialized :class:`HarnessUsageStatus` (see
 ``insert_harness_usage_snapshot``). Both the scheduler worker and the service-side
-schedule snapshot read it; routing every reader through this one parser keeps the
+schedule snapshot read it. Routing every reader through this one parser keeps the
 payload shape in a single place rather than duplicated across consumers (which
 would drift the day the shape changes).
 """
@@ -43,7 +43,7 @@ class UsageStatusSnapshot:
 
     @classmethod
     def from_json(cls, status_json: Any) -> UsageStatusSnapshot | None:
-        """Parse a `status_json` string, or return None when it isn't usable."""
+        """Parse a `status_json` string, or return None when it is not usable."""
         try:
             payload = json.loads(status_json)
         except (TypeError, ValueError):

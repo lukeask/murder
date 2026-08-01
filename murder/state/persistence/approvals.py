@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
@@ -31,23 +30,25 @@ from murder.permissions.contracts import (
     operation_digest,
 )
 from murder.permissions.persistence import PermissionStore, ensure_permission_schema
+from murder.state.persistence.connection import Connection, RepoDb
 from murder.work.workflows.runtime import ApprovalRequestDraft, ApprovalResolvedSignal
 
 _SHA256_HEX_LENGTH = 64
 
 
 def insert_approval_requests(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     workflow_id: UUID,
     workflow_revision: int,
     drafts: Sequence[ApprovalRequestDraft],
     created_at: datetime,
 ) -> tuple[ApprovalRequest, ...]:
+    conn = db.conn
     """Persist policy decisions and approval requests in the transition transaction."""
 
-    ensure_permission_schema(conn)
-    store = PermissionStore(conn)
+    ensure_permission_schema(conn)  # type: ignore[arg-type]
+    store = PermissionStore(db)
     records = []
     for draft in drafts:
         if len(draft.operation_digest) != _SHA256_HEX_LENGTH:
@@ -90,8 +91,8 @@ def insert_approval_requests(
     return tuple(records)
 
 
-def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
-    conn: sqlite3.Connection,
+def resolve_approval_request(  # noqa: PLR0912, PLR0915 - transactional invariants
+    db: RepoDb,
     *,
     workflow_id: UUID,
     approval_id: UUID,
@@ -106,20 +107,21 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
     PermissionGrant | None,
     AuthorizationProof | None,
 ]:
+    conn = db.conn
     """Resolve policy and atomically grant, signal, and append an audit fact."""
 
     from murder.state.persistence.workflow_runs import (  # noqa: PLC0415
         enqueue_workflow_signal,
     )
 
-    ensure_permission_schema(conn)
+    ensure_permission_schema(conn)  # type: ignore[arg-type]
     with _transaction(conn, immediate=True):
         row = conn.execute(
             """
             SELECT payload_json FROM permission_approval_requests
-            WHERE approval_id = ? AND workflow_id = ?
+            WHERE approval_id = ? AND repository_id = ? AND workflow_id = ?
             """,
-            (str(approval_id), str(workflow_id)),
+            (str(approval_id), db.repository_id, str(workflow_id)),
         ).fetchone()
         if row is None:
             raise ValueError(f"approval {approval_id} does not exist for workflow {workflow_id}")
@@ -133,9 +135,9 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
         run = conn.execute(
             """
             SELECT status, revision FROM workflow_runs
-            WHERE workflow_id = ?
+            WHERE workflow_id = ? AND repository_id = ?
             """,
-            (str(workflow_id),),
+            (str(workflow_id), db.repository_id),
         ).fetchone()
         if run is None:
             raise ValueError(f"workflow {workflow_id} does not exist")
@@ -143,7 +145,7 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
             raise ValueError("current workflow revision does not match approval")
         if str(run["status"]) != "waiting":
             raise ValueError("workflow is not waiting for approval")
-        if not _has_active_approval_wait(conn, workflow_id, approval_id):
+        if not _has_active_approval_wait(db, workflow_id, approval_id):
             raise ValueError("workflow has no active wait for approval")
         if (
             request.grant_scope.expires_at is not None
@@ -152,9 +154,7 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
             raise ValueError("approval request has expired")
         reviewer_kind = _reviewer_kind(reviewer)
         if reviewer_kind not in request.required_reviewers:
-            raise ValueError(
-                f"reviewer kind {reviewer_kind!r} is not eligible for approval"
-            )
+            raise ValueError(f"reviewer kind {reviewer_kind!r} is not eligible for approval")
         raw_operation = request.payload.get("operation")
         operation = None
         if isinstance(raw_operation, dict):
@@ -171,9 +171,9 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
             rationale=rationale,
             decided_at=decided_at,
         )
-        store = PermissionStore(conn)
+        store = PermissionStore(db)
         store.save_approval(decision)
-        decisions = _approval_decisions(conn, approval_id)
+        decisions = _approval_decisions(db, approval_id)
         status = _resolve_status(request, decisions)
         grant = None
         authorization = None
@@ -209,9 +209,7 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
             else:
                 operation_types = request.grant_scope.operation_types
                 if not operation_types:
-                    raise ValueError(
-                        "approval request has no operation type for authorization"
-                    )
+                    raise ValueError("approval request has no operation type for authorization")
                 authorization = AuthorizationProof(
                     authorization_id=uuid4(),
                     grant_id=grant.grant_id,
@@ -229,7 +227,7 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
             """
             UPDATE permission_approval_requests
             SET status = ?, payload_json = ?
-            WHERE approval_id = ? AND status = 'pending'
+            WHERE approval_id = ? AND repository_id = ? AND status = 'pending'
             """,
             (
                 status,
@@ -238,14 +236,14 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
-                str(approval_id),
+                str(approval_id), db.repository_id,
             ),
         )
         if conn.execute("SELECT changes()").fetchone()[0] != 1:
             raise ValueError("approval resolution lost a concurrent update")
         if status in {"approved", "denied"}:
             enqueue_workflow_signal(
-                conn,
+                db,
                 workflow_id=workflow_id,
                 deduplication_key=f"approval:{approval_id}",
                 payload=ApprovalResolvedSignal(
@@ -255,7 +253,7 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
                 created_at=decided_at,
             )
             append_fact(
-                conn,
+                db,
                 RetainedFactDraft(
                     fact_id=uuid5(
                         NAMESPACE_URL,
@@ -293,7 +291,7 @@ def resolve_approval_request(  # noqa: PLR0912 - transactional invariants
 
 
 def resolve_standalone_approval_request(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     *,
     approval_id: UUID,
     expected_operation_digest: str,
@@ -306,16 +304,17 @@ def resolve_standalone_approval_request(
     PermissionGrant | None,
     AuthorizationProof | None,
 ]:
+    conn = db.conn
     """Resolve a non-workflow approval from persisted evidence only."""
 
-    ensure_permission_schema(conn)
+    ensure_permission_schema(conn)  # type: ignore[arg-type]
     with _transaction(conn, immediate=True):
         row = conn.execute(
             """
             SELECT payload_json FROM permission_approval_requests
-            WHERE approval_id = ? AND workflow_id IS NULL
+            WHERE approval_id = ? AND repository_id = ? AND workflow_id IS NULL
             """,
-            (str(approval_id),),
+            (str(approval_id), db.repository_id),
         ).fetchone()
         if row is None:
             raise ValueError(f"standalone approval {approval_id} does not exist")
@@ -328,9 +327,7 @@ def resolve_standalone_approval_request(
             raise ValueError("approval request has expired")
         reviewer_kind = _reviewer_kind(reviewer)
         if reviewer_kind not in request.required_reviewers:
-            raise ValueError(
-                f"reviewer kind {reviewer_kind!r} is not eligible for approval"
-            )
+            raise ValueError(f"reviewer kind {reviewer_kind!r} is not eligible for approval")
         raw_operation = request.payload.get("operation")
         if not isinstance(raw_operation, dict):
             raise ValueError("approval request does not contain its proposed operation")
@@ -347,9 +344,9 @@ def resolve_standalone_approval_request(
             rationale=rationale,
             decided_at=decided_at,
         )
-        store = PermissionStore(conn)
+        store = PermissionStore(db)
         store.save_approval(decision)
-        status = _resolve_status(request, _approval_decisions(conn, approval_id))
+        status = _resolve_status(request, _approval_decisions(db, approval_id))
         grant = None
         authorization = None
         if status == "approved":
@@ -386,7 +383,7 @@ def resolve_standalone_approval_request(
             """
             UPDATE permission_approval_requests
             SET status = ?, payload_json = ?
-            WHERE approval_id = ? AND status = 'pending'
+            WHERE approval_id = ? AND repository_id = ? AND status = 'pending'
             """,
             (
                 status,
@@ -395,14 +392,14 @@ def resolve_standalone_approval_request(
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
-                str(approval_id),
+                str(approval_id), db.repository_id,
             ),
         )
         if conn.execute("SELECT changes()").fetchone()[0] != 1:
             raise ValueError("approval resolution lost a concurrent update")
         if status in {"approved", "denied"}:
             append_fact(
-                conn,
+                db,
                 RetainedFactDraft(
                     fact_id=uuid5(
                         NAMESPACE_URL,
@@ -414,9 +411,7 @@ def resolve_standalone_approval_request(
                         id=request.policy_decision_id,
                     ),
                     actor=fact_actor(reviewer),
-                    correlation=FactCorrelation(
-                        correlation_id=decision.decision_id
-                    ),
+                    correlation=FactCorrelation(correlation_id=decision.decision_id),
                     payload=PrivateFactPayload(
                         kind="permission.approval.resolved",
                         data={
@@ -441,15 +436,16 @@ def resolve_standalone_approval_request(
 
 
 def _approval_decisions(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     approval_id: UUID,
 ) -> tuple[ApprovalDecisionRecord, ...]:
+    conn = db.conn
     rows = conn.execute(
         """
         SELECT payload_json FROM permission_approval_evidence
-        WHERE approval_id = ? ORDER BY decided_at, decision_id
+        WHERE approval_id = ? AND repository_id = ? ORDER BY decided_at, decision_id
         """,
-        (str(approval_id),),
+        (str(approval_id), db.repository_id),
     ).fetchall()
     return tuple(ApprovalDecisionRecord.model_validate_json(row[0]) for row in rows)
 
@@ -478,34 +474,32 @@ def _reviewer_kind(reviewer: PermissionPrincipal) -> str:
 
 
 def _has_active_approval_wait(
-    conn: sqlite3.Connection,
+    db: RepoDb,
     workflow_id: UUID,
     approval_id: UUID,
 ) -> bool:
+    conn = db.conn
     rows = conn.execute(
         """
         SELECT spec_json FROM workflow_waits
-        WHERE workflow_id = ? AND satisfied_at IS NULL
+        WHERE workflow_id = ? AND repository_id = ? AND satisfied_at IS NULL
         """,
-        (str(workflow_id),),
+        (str(workflow_id), db.repository_id),
     ).fetchall()
     for row in rows:
         payload = json.loads(row["spec_json"])
-        if (
-            payload.get("type") == "approval"
-            and payload.get("approval_id") == str(approval_id)
-        ):
+        if payload.get("type") == "approval" and payload.get("approval_id") == str(approval_id):
             return True
     return False
 
 
 @contextmanager
 def _transaction(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     immediate: bool,
 ) -> Iterator[None]:
-    if conn.in_transaction:
+    if getattr(conn, "in_transaction", False):
         savepoint = f"resolve_approval_{uuid4().hex}"
         conn.execute(f"SAVEPOINT {savepoint}")
         try:

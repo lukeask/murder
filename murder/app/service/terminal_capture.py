@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from uuid import UUID
 
 from murder.runtime.terminal import tmux
+from murder.state.persistence.connection import RepoDb
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class CapturedTerminalFrame:
 
 
 async def capture_persisted_tmux_frame(
-    db: sqlite3.Connection,
+    db: RepoDb,
     session_id: UUID,
 ) -> CapturedTerminalFrame:
     """Capture a tmux viewport for one persisted harness session.
@@ -25,13 +25,13 @@ async def capture_persisted_tmux_frame(
     Application clients address a terminal by ``harness_sessions.session_id``.
     They never address a transient agent id or a tmux name directly.
     """
-    row = db.execute(
+    row = db.conn.execute(
         """
         SELECT transport, transport_ref
         FROM harness_sessions
-        WHERE session_id = ?
+        WHERE session_id = ? AND repository_id = ?
         """,
-        (str(session_id),),
+        (str(session_id), db.repository_id),
     ).fetchone()
     if row is None:
         raise ValueError(f"persisted session {session_id} does not exist")

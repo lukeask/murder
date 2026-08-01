@@ -229,7 +229,7 @@ class SetThemesResult(ApplicationModel):
 
 
 class ImportThemeParams(ApplicationModel):
-    """Wire field ``json`` is the theme document; Python attr avoids BaseModel shadowing."""
+    """Wire field ``json`` is the theme document. Python attr avoids BaseModel shadowing."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

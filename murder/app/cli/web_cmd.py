@@ -29,7 +29,7 @@ def _service_url() -> str:
 
 @web_app.command("up")
 def cmd_web_up() -> None:
-    """Ensure the service is running and print its browser URL."""
+    """Make sure the service is running and print its browser URL."""
 
     repo = _repo_root()
     asyncio.run(_ensure_supervisor_started(repo, lock_path(repo)))
@@ -38,6 +38,6 @@ def cmd_web_up() -> None:
 
 @web_app.command("down")
 def cmd_web_down() -> None:
-    """Browser delivery is part of the service; use ``murder down`` instead."""
+    """Browser delivery is part of the service. Use ``murder down`` instead."""
 
-    raise typer.BadParameter("the browser endpoint belongs to the service; run `murder down`")
+    raise typer.BadParameter("the browser endpoint belongs to the service. Run `murder down`.")
