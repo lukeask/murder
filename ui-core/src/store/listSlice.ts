@@ -1,29 +1,23 @@
 /**
- * Generic list-slice mechanics — the factory the four domain quads (roster, notes, reports,
- * tickets) share instead of copy-pasting ~80% byte-identical slice/action code.
+ * Generic list-slice mechanics — the factory the domain quads (roster, notes, reports,
+ * tickets, …) share instead of copy-pasting ~80% byte-identical slice/action code.
  *
  * Every domain slice in this app is the same shape: a `{ rows, status, error }` triple, fed by a
  * single typed projection query, ref-swapping *only* its own key after a projection invalidation
- * invalidation (the granularity contract — see `./store.ts`). The ONLY things that differ per
- * domain are: the row type, the slice key, the RPC method name, and the DTO→rows projection. This
- * module captures everything else exactly once.
+ * (the granularity contract — see `./store.ts`). Domains differ in: the row type, the slice key(s),
+ * the RPC method name, and the DTO→state projection. This module captures everything else once.
  *
  * What lives here (rule 4: framework-/transport-agnostic — no Ink, no React, no socket):
  *  - {@link ListState} / {@link initialListState}: the shared state shape + its idle boot value.
  *  - {@link createListSlice}: the trivial Zustand `StateCreator` that seeds one slice key.
  *  - {@link createRefreshAction}: the shared `refresh()` mechanics — loading → rpc → project →
- *    ready, with rejections routed into the slice's `error` field (never thrown past the action).
+ *    ready, with rejections routed into the slice `error` field (never thrown past the action).
+ *    Supports single-slice and multi-slice sources via one `seq`/drain implementation: `project`
+ *    returns a multi-slice patch and the caller declares which keys participate in loading/error.
  *
- * The projection (`project`) is the per-domain injection point. Roster's `.sessions.map(...)` and
- * tickets' active+recent_done+archived 3-bucket flatten both live in their own `project` closures —
- * the generic never special-cases a domain; it just calls the injected fn (the rule-of-three fix
- * keeps the divergence as data, not as a branch in here).
- *
- * To add slice X: copy the three roster files (`rosterSlice.ts`/`rosterActions.ts` +
- * `rosterSelectors.ts`). The slice/action files are now ~thin shells over this factory — you only
- * supply X's row type, RPC method + reply type, and the `project` fn; all the loading/error/
- * ref-swap mechanics come from here unchanged. See `rosterSlice.ts`/`rosterActions.ts` for the
- * canonical example and `store.ts` for the (still ≈5 additive edits) composition wiring.
+ * The projection (`project`) is the per-domain injection point. Roster's snapshot projection and
+ * schedule's tickets+usage multi-slice patch both live in their own modules — the generic never
+ * special-cases a domain; it just calls the injected fn.
  */
 
 import type { StateCreator, StoreApi } from 'zustand';
@@ -63,37 +57,56 @@ export function createListSlice<Key extends keyof AppStore & string, Row>(
   return () => ({ [key]: initial }) as Record<Key, ListState<Row>>;
 }
 
+/** Slice keys that use {@link ListState} and can participate in the shared refresh lifecycle. */
+export type ListSliceKey = {
+  [K in keyof AppStore]: AppStore[K] extends ListState<infer _Row> ? K : never;
+}[keyof AppStore];
+
+export interface RefreshOptions {
+  /**
+   * Which of the configured keys show `loading` for this call. Defaults to all configured keys.
+   * Use a subset when a write workflow (e.g. usage sample) must not flicker sibling slices.
+   */
+  readonly loadingKeys?: readonly ListSliceKey[];
+}
+
+/** Build a single-slice ready patch from projected rows — the common single-source case. */
+export function listReadyPatch<Key extends ListSliceKey, Row>(
+  key: Key,
+  rows: readonly Row[],
+): Pick<AppStore, Key> {
+  return {
+    [key]: { rows, status: 'ready', error: null },
+  } as unknown as Pick<AppStore, Key>;
+}
+
 /**
- * Build the shared `refresh()` action for one list slice. The single bus caller for that domain
- * (rule 3): it ref-swaps the slice to `loading`, issues one RPC, projects the reply into rows via
- * the injected `project` fn, and ref-swaps the slice to `ready` (or `error` on rejection — never
- * thrown past the action, so the invalidation loop in `store.ts` stays fire-and-forget).
+ * Build the shared `refresh()` action for one or more list slices fed by the same query.
+ * The single bus caller for that source (rule 3): it ref-swaps participating slices to `loading`,
+ * issues one RPC, projects the reply into a multi-slice patch via the injected `project` fn, and
+ * applies the patch in one `setState` (or routes the error into every configured key — never thrown
+ * past the action, so the invalidation loop in `store.ts` stays fire-and-forget).
  *
- * @param key     the slice's top-level key in {@link AppStore} (also the `setState` target).
- * @param method  the read RPC method name (a key of the {@link RpcMethods} registry).
- * @param project the per-domain DTO→rows projection. This is the divergence injection point:
- *                roster maps `.sessions`, tickets flattens its three buckets, here it's just called.
+ * @param keys    slice keys that participate in loading and error lifecycle for this source.
+ * @param method  the read RPC method name.
+ * @param project the per-domain DTO→patch projection. May update one or many slices.
  *
  * The dynamic-key writes below need one localized cast: TypeScript can't prove
  * `{ [key]: ListState<Row> }` is assignable to `Partial<AppStore>` for an arbitrary generic `key`,
- * even though every `AppStore[Key]` is a `ListState<…>` by construction. The cast is contained to
+ * even though every list slice is a `ListState<…>` by construction. The cast is contained to
  * this helper and commented — it is the price of not branching per-domain.
  */
-export function createRefreshAction<
-  Key extends keyof AppStore & string,
-  Method extends QueryMethod,
-  Row,
->(
+export function createRefreshAction<Method extends QueryMethod>(
   bus: ApplicationClient,
   store: StoreApi<AppStore>,
   config: {
-    readonly key: Key;
+    readonly keys: readonly ListSliceKey[];
     readonly method: Method;
-    readonly project: (reply: QueryResult<Method>) => readonly Row[];
+    readonly project: (reply: QueryResult<Method>) => Partial<AppStore>;
   },
-): { refresh(): Promise<void> } {
-  const { key, method, project } = config;
-  // Per-slice request token: a burst of projection invalidations (or a reconnect re-prime)
+): { refresh(options?: RefreshOptions): Promise<void> } {
+  const { keys, method, project } = config;
+  // Per-source request token: a burst of projection invalidations (or a reconnect re-prime)
   // can fire `refresh()` repeatedly with no ordering guarantee on the RPCs. Without this guard an
   // OLDER reply that resolves last would overwrite a newer one's rows as `ready` (stale clobber).
   // Each call bumps `seq`; a reply only applies if it is still the latest when the RPC settles.
@@ -111,7 +124,7 @@ export function createRefreshAction<
       try {
         for (;;) {
           // Macrotask deferral: collapses sync bursts AND back-to-back WS `pub` frames that each
-          // schedule their own turn — a subscription replay storm becomes one RPC per slice.
+          // schedule their own turn — a subscription replay storm becomes one RPC per source.
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 0);
           });
@@ -124,9 +137,8 @@ export function createRefreshAction<
             if (token !== seq) {
               continue;
             }
-            const rows = project(reply);
-            const next: ListState<Row> = { rows, status: 'ready', error: null };
-            store.setState({ [key]: next } as unknown as Partial<AppStore>);
+            const patch = project(reply);
+            store.setState(patch);
             return;
           } catch (error: unknown) {
             if (token !== seq) {
@@ -134,10 +146,16 @@ export function createRefreshAction<
             }
             const message = error instanceof Error ? error.message : String(error);
             store.setState((state) => {
-              const current = state[key] as ListState<Row>;
-              return {
-                [key]: { ...current, status: 'error', error: message },
-              } as unknown as Partial<AppStore>;
+              const next: Partial<AppStore> = {};
+              for (const key of keys) {
+                const current = state[key] as ListState<unknown>;
+                (next as Record<string, ListState<unknown>>)[key] = {
+                  ...current,
+                  status: 'error',
+                  error: message,
+                };
+              }
+              return next;
             });
             return;
           }
@@ -150,16 +168,20 @@ export function createRefreshAction<
   }
 
   return {
-    async refresh(): Promise<void> {
+    async refresh(options?: RefreshOptions): Promise<void> {
       seq++;
-      // Mark loading by ref-swapping ONLY this slice — sibling slices keep their identity. When rows
-      // already exist, keep `ready` so the UI does not flash a loading overlay over live data.
+      const markKeys = options?.loadingKeys ?? keys;
+      // Mark loading by ref-swapping ONLY the participating slices — siblings keep their identity.
+      // When rows already exist, keep `ready` so the UI does not flash a loading overlay over live data.
       store.setState((state) => {
-        const current = state[key] as ListState<Row>;
-        const status =
-          current.status === 'idle' || current.rows.length === 0 ? 'loading' : current.status;
-        // Localized cast: the generic key defeats `Partial<AppStore>` inference (see fn docstring).
-        return { [key]: { ...current, status } } as unknown as Partial<AppStore>;
+        const next: Partial<AppStore> = {};
+        for (const key of markKeys) {
+          const current = state[key] as ListState<unknown>;
+          const status =
+            current.status === 'idle' || current.rows.length === 0 ? 'loading' : current.status;
+          (next as Record<string, ListState<unknown>>)[key] = { ...current, status };
+        }
+        return next;
       });
       await drain();
     },

@@ -121,12 +121,28 @@ describe('createAppStore — projection hydration', () => {
     const fake = new FakeApplicationClient();
     fake.stubQuery('schedule.get', {
       invalidation_key: 'schedule-1',
-      active_tickets: [],
+      active_tickets: [
+        {
+          id: 'T-1',
+          title: 'One',
+          status: 'ready',
+          last_update_at: '2026-01-01T00:00:00Z',
+          last_update_label: 'up',
+          pending_dep_ids: [],
+        },
+      ],
       recent_done_tickets: [],
       archived_tickets: [],
-      usage_gauges: [],
+      usage_gauges: [
+        {
+          harness: 'codex',
+          window_key: '5h',
+          pct: 12,
+          t_until_reset_minutes: 30,
+        },
+      ],
     });
-    const { dispose } = createAppStore(fake);
+    const { store, dispose } = createAppStore(fake);
     await flush();
 
     fake.emitInvalidation({
@@ -138,7 +154,183 @@ describe('createAppStore — projection hydration', () => {
     });
     await flush();
 
-    expect(fake.queryCalls.map((call) => call.name)).toEqual(['schedule.get', 'schedule.get']);
+    expect(fake.queryCalls.map((call) => call.name)).toEqual(['schedule.get']);
+    expect(store.getState().tickets.rows).toHaveLength(1);
+    expect(store.getState().tickets.rows[0]?.id).toBe('T-1');
+    expect(store.getState().usage.rows).toHaveLength(1);
+    expect(store.getState().usage.rows[0]?.harness).toBe('codex');
+    expect(store.getState().tickets.status).toBe('ready');
+    expect(store.getState().usage.status).toBe('ready');
+    dispose();
+  });
+
+  it('coalesces repeated schedule invalidations into one query', async () => {
+    const fake = new FakeApplicationClient();
+    fake.stubQuery('schedule.get', {
+      invalidation_key: 'schedule-1',
+      active_tickets: [
+        {
+          id: 'T-1',
+          title: 'One',
+          status: 'ready',
+          last_update_at: '2026-01-01T00:00:00Z',
+          last_update_label: 'up',
+          pending_dep_ids: [],
+        },
+      ],
+      recent_done_tickets: [],
+      archived_tickets: [],
+      usage_gauges: [],
+    });
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    fake.emitInvalidation({
+      type: 'projection.invalidate',
+      projection: 'schedule',
+      subject_key: 'schedule',
+      generation: 1,
+      source_fact_id: null,
+    });
+    fake.emitInvalidation({
+      type: 'projection.invalidate',
+      projection: 'schedule',
+      subject_key: 'schedule',
+      generation: 2,
+      source_fact_id: null,
+    });
+    fake.emitInvalidation({
+      type: 'projection.invalidate',
+      projection: 'schedule',
+      subject_key: 'schedule',
+      generation: 3,
+      source_fact_id: null,
+    });
+    await flush();
+    await flush();
+
+    expect(fake.queryCalls.map((call) => call.name)).toEqual(['schedule.get']);
+    expect(store.getState().tickets.rows[0]?.id).toBe('T-1');
+    dispose();
+  });
+
+  it('hydration and refresh produce equal rows from equal schedule replies', async () => {
+    const schedule = {
+      invalidation_key: 'schedule-1',
+      active_tickets: [
+        {
+          id: 'T-1',
+          title: 'One',
+          status: 'ready',
+          last_update_at: '2026-01-01T00:00:00Z',
+          last_update_label: 'up',
+          pending_dep_ids: [],
+        },
+      ],
+      recent_done_tickets: [],
+      archived_tickets: [],
+      usage_gauges: [
+        {
+          harness: 'codex',
+          window_key: '5h',
+          pct: 12,
+          t_until_reset_minutes: 30,
+        },
+      ],
+    };
+    const fake = new FakeApplicationClient();
+    fake.stubHydrate({
+      snapshots: { schedule },
+      cursor: 1,
+      mode: 'cold',
+    });
+    fake.stubQuery('schedule.get', schedule);
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    const hydratedTickets = store.getState().tickets.rows;
+    const hydratedUsage = store.getState().usage.rows;
+
+    await store.getState().actions.tickets.refresh();
+    expect(store.getState().tickets.rows).toEqual(hydratedTickets);
+    expect(store.getState().usage.rows).toEqual(hydratedUsage);
+    dispose();
+  });
+
+  it('a usage-scoped refresh does not disturb ticket loading state', async () => {
+    const fake = new FakeApplicationClient();
+    fake.stubQuery('schedule.get', {
+      invalidation_key: 'schedule-1',
+      active_tickets: [],
+      recent_done_tickets: [],
+      archived_tickets: [],
+      usage_gauges: [
+        {
+          harness: 'codex',
+          window_key: '5h',
+          pct: 1,
+          t_until_reset_minutes: 1,
+        },
+      ],
+    });
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    store.setState({
+      tickets: {
+        rows: [
+          {
+            id: 'T-1',
+            title: 'One',
+            status: 'ready',
+            lastUpdateAt: '2026-01-01T00:00:00Z',
+            lastUpdateLabel: 'up',
+            scheduleAt: null,
+            harness: null,
+            model: null,
+            pendingDepIds: [],
+            parent: null,
+          },
+        ],
+        status: 'ready',
+        error: null,
+      },
+    });
+    const ticketsBefore = store.getState().tickets;
+
+    let resolveReply: ((value: unknown) => void) | undefined;
+    fake.stubQuery(
+      'schedule.get',
+      () =>
+        new Promise((resolve) => {
+          resolveReply = resolve;
+        }),
+    );
+
+    // Same loadingKeys scoping sample()/setSteering use after a successful write.
+    const pending = store.getState().actions.usage.refresh({ loadingKeys: ['usage'] });
+    await flush();
+
+    expect(store.getState().tickets).toBe(ticketsBefore);
+    expect(store.getState().tickets.status).toBe('ready');
+
+    resolveReply?.({
+      invalidation_key: 'schedule-2',
+      active_tickets: [],
+      recent_done_tickets: [],
+      archived_tickets: [],
+      usage_gauges: [
+        {
+          harness: 'codex',
+          window_key: '5h',
+          pct: 50,
+          t_until_reset_minutes: 2,
+        },
+      ],
+    });
+    await pending;
+    expect(store.getState().usage.rows[0]?.pct).toBe(50);
+    expect(store.getState().tickets.status).toBe('ready');
     dispose();
   });
 });

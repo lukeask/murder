@@ -1,44 +1,19 @@
 /**
- * Usage actions — the *only* code that calls the bus for usage gauge data (rule 3).
+ * Usage actions — the *only* code that calls the bus for usage gauge data (rule 3), via the shared
+ * schedule refresh for reads, plus write workflows for sample/steering.
  *
- * A thin shell over the shared {@link createRefreshAction} factory (`../listSlice.js`), exactly
- * like the roster reference (`../roster/rosterActions.js`). The loading→ready/error lifecycle +
- * ref-swap-only-this-key mechanics come from the factory; this file supplies only the per-domain
- * pieces: the RPC method and the DTO→rows `project` fn.
- *
- * Usage has NO dedicated RPC on the live bus — the gauges are embedded in the LIVE
- * `state.schedule_snapshot` reply (`ScheduleSnapshot.usage_gauges`). This slice therefore calls the
- * same `state.schedule_snapshot` method as the tickets slice and projects `usage_gauges`. The RPC
- * key + its reply type (`ScheduleSnapshotReply`/`ScheduleUsageGaugeDto`) are declared ONCE in
- * `../tickets/ticketsActions.ts`; this file imports the gauge type and never re-declares the key.
+ * Usage has NO dedicated RPC — gauges are embedded in `schedule.get`. {@link refresh} is an alias
+ * of the shared schedule refresh. {@link sample} and {@link setSteering} remain command workflows
+ * that call the shared refresh after a successful write; writes stay out of scheduleProjection.
  */
 
 import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
-import { asQueryResult } from '../../application/resultCast.js';
-// `state.schedule_snapshot` is declared once, by the tickets slice; usage consumes its reply type
-// and the `ScheduleUsageGaugeDto` shape without re-declaring the key (a second `declare module`
-// augmentation with a different `result` would be a TS 2717 collision). Usage data is embedded in
-// the schedule snapshot's `usage_gauges` — there is no separate usage RPC on the live bus.
 import { submitCommand } from '../commandSubmit.js';
-import { createRefreshAction } from '../listSlice.js';
+import type { RefreshOptions } from '../listSlice.js';
 import type { AppStore } from '../store.js';
-import type { ScheduleSnapshotReply, ScheduleUsageGaugeDto } from '../tickets/ticketsActions.js';
+import { createScheduleRefresh, type ScheduleRefresh } from '../tickets/scheduleRefresh.js';
 import { toastStore } from '../toast/toastStore.js';
-import type { UsageRow } from './usageSlice.js';
-
-/** Project one wire gauge into the slice's row. Pure: single DTO→domain mapping point. */
-function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
-  return {
-    harness: dto.harness,
-    windowKey: dto.window_key,
-    pct: dto.pct,
-    tUntilResetMinutes: dto.t_until_reset_minutes,
-    tPeriodMinutes: dto.t_period_minutes ?? 0,
-    steering: dto.steering ?? 'auto',
-    fetchedAt: dto.fetched_at ?? null,
-  };
-}
 
 /**
  * The usage actions, bound to one `ApplicationClient` + store handle. Returned to `../store.ts`, which
@@ -46,16 +21,16 @@ function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
  */
 export interface UsageActions {
   /**
-   * Re-pull the usage gauges and ref-swap *only* the `usage` slice. The sole bus caller for
-   * usage data. Idempotent; concurrent calls are last-write (latest reply wins). Rejections
-   * land in `usage.error` — never thrown past the action (the invalidation loop stays
-   * fire-and-forget).
+   * Re-pull the schedule snapshot and update usage (and tickets) via the shared schedule refresh.
+   * Alias of the shared refresh — no separate request state. Pass `loadingKeys: ['usage']` after a
+   * usage write so the ticket list does not flicker.
    */
-  refresh(): Promise<void>;
+  refresh(options?: RefreshOptions): Promise<void>;
   /**
    * Ask the backend usage-probe worker to collect fresh harness snapshots, then re-pull the gauges.
    * This is intentionally separate from `refresh()`: refresh is read-only, sample mutates the
-   * snapshot table via the worker command path.
+   * snapshot table via the worker command path. Loading is scoped to `usage` so the ticket list
+   * does not flicker.
    */
   sample(): Promise<void>;
   /**
@@ -63,24 +38,25 @@ export interface UsageActions {
    * `scheduler.set_steering` command on the `scheduler` worker, then refetch (belt-and-braces:
    * the backend also emits a `queue_row` invalidation). Errors route into `usage.error` like a
    * failed refresh — never thrown past the action (the keypress handler stays fire-and-forget).
+   * Preserves the existing error asymmetry vs sample: sets only `error`, not `status: 'error'`.
    */
   setSteering(harness: string, steering: string): Promise<void>;
 }
 
-export function createUsageActions(bus: ApplicationClient, store: StoreApi<AppStore>): UsageActions {
-  const { refresh } = createRefreshAction(bus, store, {
-    key: 'usage',
-    method: 'schedule.get',
-    project: (reply) =>
-      asQueryResult<'schedule.get', ScheduleSnapshotReply>(reply).usage_gauges.map(toUsageRow),
-  });
+export function createUsageActions(
+  bus: ApplicationClient,
+  store: StoreApi<AppStore>,
+  scheduleRefresh?: ScheduleRefresh,
+): UsageActions {
+  const shared = scheduleRefresh ?? createScheduleRefresh(bus, store);
   return {
-    refresh,
+    refresh: (options) => shared.refresh(options),
     async sample(): Promise<void> {
-      store.setState((s) => ({ usage: { ...s.usage, status: 'loading', error: null } }));
+      // Do not manage usage.status here — scope loading to usage via the shared refresh so tickets
+      // stay undisturbed.
       try {
         await submitCommand(bus, 'state.harness_usage.sample', { trigger: 'manual_refresh' });
-        await refresh();
+        await shared.refresh({ loadingKeys: ['usage'] });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         store.setState((s) => ({ usage: { ...s.usage, status: 'error', error: message } }));
@@ -92,9 +68,10 @@ export function createUsageActions(bus: ApplicationClient, store: StoreApi<AppSt
     async setSteering(harness: string, steering: string): Promise<void> {
       try {
         await submitCommand(bus, 'scheduler.set_steering', { harness, steering });
-        await refresh();
+        await shared.refresh({ loadingKeys: ['usage'] });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // Error asymmetry preserved: setSteering sets only `error`, not status:'error'.
         store.setState((s) => ({ usage: { ...s.usage, error: message } }));
         // Also surface a toast: `usage.error` is not reliably rendered by a view, and steering is a
         // keypress-driven write — a silent failure would leave the user thinking it took effect.

@@ -17,7 +17,7 @@ import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { asQueryResult } from '../../application/resultCast.js';
 import { submitCommand } from '../commandSubmit.js';
-import { createRefreshAction } from '../listSlice.js';
+import { createRefreshAction, listReadyPatch } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { HistoryRow, HistoryState } from './historySlice.js';
@@ -80,10 +80,13 @@ export interface HistoryActions {
 
 export function createHistoryActions(bus: ApplicationClient, store: StoreApi<AppStore>): HistoryActions {
   const { refresh } = createRefreshAction(bus, store, {
-    key: 'history',
+    keys: ['history'],
     method: 'history.list',
     project: (reply) =>
-      asQueryResult<'history.list', HistorySnapshotReply>(reply).items.map(toHistoryRow),
+      listReadyPatch(
+        'history',
+        asQueryResult<'history.list', HistorySnapshotReply>(reply).items.map(toHistoryRow),
+      ),
   });
 
   return {

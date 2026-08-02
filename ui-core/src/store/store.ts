@@ -83,9 +83,9 @@ import {
   initialReportsState,
   type ReportsState,
 } from './reports/reportsSlice.js';
-import type { CrowSessionDto, CrowSnapshotReply } from './roster/rosterActions.js';
+import type { CrowSnapshotReply } from './roster/rosterActions.js';
 import { createRosterActions, type RosterActions } from './roster/rosterActions.js';
-import type { RosterRow } from './roster/rosterSlice.js';
+import { projectRosterSnapshot } from './roster/rosterProjection.js';
 import { createRosterSlice, initialRosterState, type RosterState } from './roster/rosterSlice.js';
 import type { SettingsWire } from './settings/settingsActions.js';
 import { createSettingsActions, type SettingsActions } from './settings/settingsActions.js';
@@ -115,13 +115,10 @@ import {
   initialTicketDetailState,
   type TicketDetailState,
 } from './ticketDetail/ticketDetailSlice.js';
-import type {
-  ScheduleSnapshotReply,
-  ScheduleUsageGaugeDto,
-  TicketDto,
-} from './tickets/ticketsActions.js';
+import { projectScheduleSnapshot } from './tickets/scheduleProjection.js';
+import { createScheduleRefresh } from './tickets/scheduleRefresh.js';
+import type { ScheduleSnapshotReply } from './tickets/ticketsActions.js';
 import { createTicketsActions, type TicketsActions } from './tickets/ticketsActions.js';
-import type { TicketRow } from './tickets/ticketsSlice.js';
 import {
   createTicketsSlice,
   initialTicketsState,
@@ -134,7 +131,6 @@ import {
   type TransitState,
 } from './transit/transitSlice.js';
 import { createUsageActions, type UsageActions } from './usage/usageActions.js';
-import type { UsageRow } from './usage/usageSlice.js';
 import { createUsageSlice, initialUsageState, type UsageState } from './usage/usageSlice.js';
 import {
   createWorkflowRunsActions,
@@ -262,15 +258,17 @@ export function createAppStore(bus: ApplicationClient): {
   }));
 
   // 2. Actions: bound to the bus + the live handle. This is the only place the bus is wired in.
+  // Schedule refresh is created once so tickets.refresh and usage.refresh share one seq/drain.
+  const scheduleRefresh = createScheduleRefresh(bus, store);
   const actions: AppActions = {
     roster: createRosterActions(bus, store),
     plans: createPlansActions(bus, store),
     notes: createNotesActions(bus, store),
     reports: createReportsActions(bus, store),
-    tickets: createTicketsActions(bus, store),
+    tickets: createTicketsActions(bus, store, scheduleRefresh),
     history: createHistoryActions(bus, store),
     transit: createTransitActions(bus, store),
-    usage: createUsageActions(bus, store),
+    usage: createUsageActions(bus, store, scheduleRefresh),
     ticketDetail: createTicketDetailActions(bus, store),
     conversations: createConversationsActions(bus, store),
     favorites: createFavoritesActions(bus, store),
@@ -396,8 +394,9 @@ function routeProjectionInvalidation(
       void actions.roster.refresh();
       return;
     case 'schedule':
+      // One shared schedule refresh — tickets.refresh and usage.refresh are aliases of the same
+      // seq/drain; do not issue two schedule.get queries.
       void actions.tickets.refresh();
-      void actions.usage.refresh();
       return;
     case 'favorites':
       void actions.favorites.load();
@@ -430,19 +429,19 @@ function routeProjectionInvalidation(
 }
 
 function applyHydrateSnapshots(store: AppStoreApi, snapshots: HydrateSnapshots): void {
+  // Hydration vs refresh unwrap boundary:
+  // - Hydration unwraps `{ ok, value }` read envelopes via snapshotAs/unwrapHydrateSnapshotValue,
+  //   writes `ready` directly, and has no seq guard. No loading states during cold hydration.
+  // - Refresh unwraps via `asQueryResult` and runs the loading lifecycle through createRefreshAction.
+  // Both paths then call the same pure projection with the same reply shape.
   const crow = snapshotAs<CrowSnapshotReply>(snapshots, 'roster');
   if (crow !== undefined) {
-    store.setState({
-      roster: { rows: crow.sessions.map(toRosterRow), status: 'ready', error: null },
-    });
+    store.setState(projectRosterSnapshot(crow));
   }
 
   const schedule = snapshotAs<ScheduleSnapshotReply>(snapshots, 'schedule');
   if (schedule !== undefined) {
-    store.setState({
-      tickets: { rows: projectTickets(schedule), status: 'ready', error: null },
-      usage: { rows: schedule.usage_gauges.map(toUsageRow), status: 'ready', error: null },
-    });
+    store.setState(projectScheduleSnapshot(schedule));
   }
 
   const conversations = snapshotAs<ConversationsSnapshotReply>(snapshots, 'conversations');
@@ -522,57 +521,6 @@ function unwrapHydrateSnapshotValue(value: unknown): unknown {
     return (value as { ok: true; value: unknown }).value;
   }
   return value;
-}
-
-function toRosterRow(session: CrowSessionDto): RosterRow {
-  return {
-    agentId: session.agent_id,
-    role: session.role,
-    ticketId: session.ticket_id ?? null,
-    ticketTitle: session.ticket_title ?? null,
-    harness: session.harness ?? null,
-    model: session.model ?? null,
-    status: session.status,
-    session: session.display_name ?? null,
-    ...(session.session_id == null ? {} : { sessionId: session.session_id }),
-    worktreePath: session.worktree_path ?? null,
-    lastSeen: session.last_seen ?? null,
-    openEscalations: session.open_escalations ?? 0,
-    maxSeverity: session.max_severity ?? 0,
-  };
-}
-
-function projectTickets(reply: ScheduleSnapshotReply): readonly TicketRow[] {
-  return [...reply.active_tickets, ...reply.recent_done_tickets, ...reply.archived_tickets].map(
-    toTicketRow,
-  );
-}
-
-function toTicketRow(dto: TicketDto): TicketRow {
-  return {
-    id: dto.id,
-    title: dto.title,
-    status: dto.status,
-    lastUpdateAt: dto.last_update_at,
-    lastUpdateLabel: dto.last_update_label,
-    scheduleAt: dto.schedule_at ?? null,
-    harness: dto.harness ?? null,
-    model: dto.model ?? null,
-    pendingDepIds: dto.pending_dep_ids,
-    parent: dto.parent ?? null,
-  };
-}
-
-function toUsageRow(dto: ScheduleUsageGaugeDto): UsageRow {
-  return {
-    harness: dto.harness,
-    windowKey: dto.window_key,
-    pct: dto.pct,
-    tUntilResetMinutes: dto.t_until_reset_minutes,
-    tPeriodMinutes: dto.t_period_minutes ?? 0,
-    steering: dto.steering ?? 'auto',
-    fetchedAt: dto.fetched_at ?? null,
-  };
 }
 
 function applySettingsWire(prev: SettingsState, wire: SettingsWire | undefined): SettingsState {

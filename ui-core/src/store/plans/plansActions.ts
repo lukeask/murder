@@ -16,7 +16,7 @@ import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { asQueryResult } from '../../application/resultCast.js';
 import { createSpawnActions, plannerSpawnParams } from '../dialogs/spawnActions.js';
-import { createRefreshAction } from '../listSlice.js';
+import { createRefreshAction, listReadyPatch } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import { toastStore } from '../toast/toastStore.js';
 import type { PlanRow } from './plansSlice.js';
@@ -81,9 +81,13 @@ export function createPlansActions(bus: ApplicationClient, store: StoreApi<AppSt
   const spawn = createSpawnActions(bus, store);
   return {
     ...createRefreshAction(bus, store, {
-      key: 'plans',
+      keys: ['plans'],
       method: 'plans.list',
-      project: (reply) => asQueryResult<'plans.list', PlansSnapshotReply>(reply).plans.map(toPlanRow),
+      project: (reply) =>
+        listReadyPatch(
+          'plans',
+          asQueryResult<'plans.list', PlansSnapshotReply>(reply).plans.map(toPlanRow),
+        ),
     }),
     async spawnPlanner(name: string): Promise<void> {
       try {

@@ -8,14 +8,8 @@
  * web/phone client reuses unchanged: no Ink, no terminal, no socket — just `ApplicationClient` + the store.
  *
  * The loading→ready/error lifecycle + ref-swap-only-this-key mechanics now come from the shared
- * {@link createRefreshAction} factory in `../listSlice.js` — this file supplies only the three
- * per-domain pieces: the query name (+ its reply type, declared below), and the DTO→rows
- * `project` fn. That projection is the divergence injection point; the generic never special-cases
- * a domain.
- *
- * Copy this file to add slice X: swap the query name + its reply shape (the `declare module` block),
- * swap the projection, and pass X's slice key + method + project to `createRefreshAction`. The
- * augmentation block is how a feature declares its typed result for a generated query name.
+ * {@link createRefreshAction} factory in `../listSlice.js` — this file supplies the query name and
+ * delegates DTO→state conversion to {@link projectRosterSnapshot}.
  */
 
 import type { StoreApi } from 'zustand';
@@ -23,7 +17,7 @@ import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { submitCommand } from '../commandSubmit.js';
 import { createRefreshAction } from '../listSlice.js';
 import type { AppStore } from '../store.js';
-import type { RosterRow } from './rosterSlice.js';
+import { projectRosterSnapshot } from './rosterProjection.js';
 
 /**
  * The crow-roster query and its reply shape, declared here via TypeScript declaration merging.
@@ -81,26 +75,6 @@ export interface CrowSessionDto {
   max_severity?: number;
 }
 
-/** Project one wire session into the slice's row. Pure: the single place the DTO→domain mapping
- * lives, so a field rename on the wire is fixed once. No filtering/sorting — that is the selector. */
-function toRosterRow(session: CrowSessionDto): RosterRow {
-  return {
-    agentId: session.agent_id,
-    role: session.role,
-    ticketId: session.ticket_id ?? null,
-    ticketTitle: session.ticket_title ?? null,
-    harness: session.harness ?? null,
-    model: session.model ?? null,
-    status: session.status,
-    session: session.display_name ?? null,
-    ...(session.session_id == null ? {} : { sessionId: session.session_id }),
-    worktreePath: session.worktree_path ?? null,
-    lastSeen: session.last_seen ?? null,
-    openEscalations: session.open_escalations ?? 0,
-    maxSeverity: session.max_severity ?? 0,
-  };
-}
-
 /**
  * The roster's actions, bound to one `ApplicationClient` + store handle. Returned to `../store.ts`, which
  * hangs them off the store so components dispatch `store.getState().actions.roster.refresh()` (or,
@@ -129,9 +103,9 @@ export interface RosterActions {
 export function createRosterActions(bus: ApplicationClient, store: StoreApi<AppStore>): RosterActions {
   return {
     ...createRefreshAction(bus, store, {
-      key: 'roster',
+      keys: ['roster'],
       method: 'roster.get',
-      project: (reply) => reply.sessions.map(toRosterRow),
+      project: (reply) => projectRosterSnapshot(reply as CrowSnapshotReply),
     }),
     async resetCrow(ticketId: string): Promise<void> {
       await submitCommand(bus, 'crow.reset', { ticket_id: ticketId });

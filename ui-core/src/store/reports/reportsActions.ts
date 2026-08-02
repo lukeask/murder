@@ -15,7 +15,7 @@
 import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { asQueryResult } from '../../application/resultCast.js';
-import { createRefreshAction } from '../listSlice.js';
+import { createRefreshAction, listReadyPatch } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import type { ReportRow } from './reportsSlice.js';
 
@@ -65,9 +65,12 @@ export interface ReportsActions {
 
 export function createReportsActions(bus: ApplicationClient, store: StoreApi<AppStore>): ReportsActions {
   return createRefreshAction(bus, store, {
-    key: 'reports',
+    keys: ['reports'],
     method: 'reports.list',
     project: (reply) =>
-      asQueryResult<'reports.list', ReportsSnapshotReply>(reply).reports.map(toReportRow),
+      listReadyPatch(
+        'reports',
+        asQueryResult<'reports.list', ReportsSnapshotReply>(reply).reports.map(toReportRow),
+      ),
   });
 }

@@ -16,7 +16,7 @@
 import type { StoreApi } from 'zustand';
 import type { ApplicationClient } from '../../application/ApplicationClient.js';
 import { asQueryResult } from '../../application/resultCast.js';
-import { createRefreshAction } from '../listSlice.js';
+import { createRefreshAction, listReadyPatch } from '../listSlice.js';
 import type { AppStore } from '../store.js';
 import type { NoteRow } from './notesSlice.js';
 
@@ -70,8 +70,12 @@ export interface NotesActions {
 
 export function createNotesActions(bus: ApplicationClient, store: StoreApi<AppStore>): NotesActions {
   return createRefreshAction(bus, store, {
-    key: 'notes',
+    keys: ['notes'],
     method: 'notes.list',
-    project: (reply) => asQueryResult<'notes.list', NotesSnapshotReply>(reply).notes.map(toNoteRow),
+    project: (reply) =>
+      listReadyPatch(
+        'notes',
+        asQueryResult<'notes.list', NotesSnapshotReply>(reply).notes.map(toNoteRow),
+      ),
   });
 }
