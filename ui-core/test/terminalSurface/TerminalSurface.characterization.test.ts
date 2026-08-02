@@ -501,7 +501,8 @@ describe('TerminalSurfaceStore characterization', () => {
       const duringSync = store.getSnapshot();
       expect(duringSync.version).toBe(versionBefore);
       expect(duringSync.modes.synchronizedUpdates).toBe(false);
-      expect(rowText(duringSync.cells[0] ?? [])).toBe('A     ');
+      // Published snapshot stays frozen while DEC 2026 defers; live buffer already has 'A'.
+      expect(rowText(duringSync.cells[0] ?? [])).toBe('      ');
       expect(store.exportState().modes.synchronizedUpdates).toBe(true);
       expect(rowText(store.exportState().primary.cells[0] ?? [])).toBe('A     ');
 
@@ -624,6 +625,48 @@ describe('TerminalSurfaceStore characterization', () => {
       const row = store.exportState().primary.cells[0] ?? [];
       expect(row[0]).toMatchObject({ text: '界', width: 2 });
       expect(row[1]).toMatchObject({ text: '', width: 0, continuation: true });
+    });
+  });
+
+  describe('snapshot stability (copy-on-write rows)', () => {
+    it('keeps an old snapshot unchanged after further cell updates', () => {
+      const store = new TerminalSurfaceStore();
+      store.resize(6, 2);
+      ingestVt(store, 1, 'HELLO');
+      const old = store.getSnapshot();
+      const oldRow0 = old.cells[0];
+      const oldText = rowText(old.cells[0] ?? []);
+      const oldVersions = [...old.rowVersions];
+      const oldDirty = old.dirtyRows;
+
+      ingestVt(store, 2, '\rWORLD!');
+      const next = store.getSnapshot();
+
+      expect(rowText(old.cells[0] ?? [])).toBe(oldText);
+      expect(old.cells[0]).toBe(oldRow0);
+      expect(old.rowVersions).toEqual(oldVersions);
+      expect(old.dirtyRows).toEqual(oldDirty);
+      expect(rowText(next.cells[0] ?? [])).toBe('WORLD!');
+      expect(next.cells[0]).not.toBe(old.cells[0]);
+      expect(next.rowVersions).toBeDefined();
+      expect(next.dirtyRows === null || Array.isArray(next.dirtyRows)).toBe(true);
+    });
+
+    it('keeps an old snapshot unchanged inside a synchronized-update bracket', () => {
+      const store = new TerminalSurfaceStore();
+      store.resize(6, 1);
+      ingestVt(store, 1, 'BASE');
+      const old = store.getSnapshot();
+      const oldText = rowText(old.cells[0] ?? []);
+
+      ingestVt(store, 2, '\u001b[?2026h\rXXXX');
+      expect(rowText(old.cells[0] ?? [])).toBe(oldText);
+      expect(store.getSnapshot()).toBe(old);
+      expect(rowText(store.exportState().primary.cells[0] ?? [])).toBe('XXXX  ');
+
+      ingestVt(store, 3, '\u001b[?2026l');
+      expect(rowText(old.cells[0] ?? [])).toBe(oldText);
+      expect(rowText(store.getSnapshot().cells[0] ?? [])).toBe('XXXX  ');
     });
   });
 });

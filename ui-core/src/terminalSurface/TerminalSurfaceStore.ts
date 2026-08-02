@@ -137,6 +137,8 @@ export class TerminalSurfaceStore {
   private synchronousDepth = 0;
   private deferredNotify = false;
   private keyframeRequired = false;
+  /** Rows cloned for mutation since the last published snapshot (copy-on-write batch). */
+  private cowRows = new Set<number>();
   private readonly listeners = new Set<() => void>();
   private snapshot: TerminalGridSnapshot = this.makeSnapshot();
 
@@ -581,13 +583,12 @@ export class TerminalSurfaceStore {
     const width = charWidth(char);
     const buffer = this.active;
     if (width === 0) {
-      const row = buffer.cells[buffer.cursor.y];
+      const row = this.mutableRow(buffer.cursor.y);
       let priorX = Math.max(0, buffer.cursor.x - 1);
-      while (priorX > 0 && row?.[priorX]?.continuation) priorX -= 1;
-      const prior = row?.[priorX];
+      while (priorX > 0 && row[priorX]?.continuation) priorX -= 1;
+      const prior = row[priorX];
       if (prior !== undefined) {
         prior.text += char;
-        this.mark(buffer.cursor.y);
       }
       return;
     }
@@ -604,8 +605,7 @@ export class TerminalSurfaceStore {
     }
     if (this.modes.insert) this.insertChars(width);
     const x = buffer.cursor.x;
-    const row = buffer.cells[buffer.cursor.y];
-    if (row === undefined) return;
+    const row = this.mutableRow(buffer.cursor.y);
     this.clearOverlap(row, x);
     if (width === 2) this.clearOverlap(row, x + 1);
     row[x] = { text: char, width, continuation: false, ...this.attrs };
@@ -618,7 +618,6 @@ export class TerminalSurfaceStore {
         fg: this.attrs.fg,
         bg: this.attrs.bg,
       };
-    this.mark(buffer.cursor.y);
     const next = x + width;
     buffer.cursor = { ...buffer.cursor, x: Math.min(this.columns - 1, next) };
     buffer.wrapPending = next >= this.columns;
@@ -701,45 +700,37 @@ export class TerminalSurfaceStore {
     }
   }
   private eraseLine(mode: number): void {
-    const row = this.active.cells[this.active.cursor.y];
-    if (row === undefined) return;
+    const row = this.mutableRow(this.active.cursor.y);
     const start = mode === 0 ? this.active.cursor.x : 0;
     const end = mode === 1 ? this.active.cursor.x : this.columns - 1;
     this.clearOverlap(row, start);
     this.clearOverlap(row, end);
     for (let x = start; x <= end; x += 1) row[x] = blankCell();
     this.repairWideCells(row);
-    this.mark(this.active.cursor.y);
   }
   private eraseChars(amount: number): void {
-    const row = this.active.cells[this.active.cursor.y];
-    if (row === undefined) return;
+    const row = this.mutableRow(this.active.cursor.y);
     const end = Math.min(this.columns, this.active.cursor.x + amount);
     this.clearOverlap(row, this.active.cursor.x);
     if (end > this.active.cursor.x) this.clearOverlap(row, end - 1);
     for (let x = this.active.cursor.x; x < end; x += 1) row[x] = blankCell();
     this.repairWideCells(row);
-    this.mark(this.active.cursor.y);
   }
   private insertChars(amount: number): void {
-    const row = this.active.cells[this.active.cursor.y];
-    if (row === undefined) return;
+    const row = this.mutableRow(this.active.cursor.y);
     this.clearOverlap(row, this.active.cursor.x);
     row.splice(this.active.cursor.x, 0, ...Array.from({ length: amount }, blankCell));
     row.length = this.columns;
     this.repairWideCells(row);
-    this.mark(this.active.cursor.y);
   }
   private deleteChars(amount: number): void {
-    const row = this.active.cells[this.active.cursor.y];
-    if (row === undefined) return;
+    const row = this.mutableRow(this.active.cursor.y);
     this.clearOverlap(row, this.active.cursor.x);
     if (this.active.cursor.x + amount < this.columns)
       this.clearOverlap(row, this.active.cursor.x + amount);
     row.splice(this.active.cursor.x, amount);
     while (row.length < this.columns) row.push(blankCell());
     this.repairWideCells(row);
-    this.mark(this.active.cursor.y);
   }
   private insertLines(amount: number): void {
     const b = this.active;
@@ -848,6 +839,32 @@ export class TerminalSurfaceStore {
       }
     }
   }
+  /**
+   * Copy-on-write row accessor: clone each changed row at most once per publication batch, then
+   * mark it dirty. Never clones the whole grid per character. Callers that mutate cells must go
+   * through this (put, erase family, insert/delete chars). Scroll paths splice whole row arrays
+   * and already replace references.
+   */
+  private mutableRow(y: number): TerminalCell[] {
+    const buffer = this.active;
+    const existing = buffer.cells[y];
+    if (existing === undefined) {
+      const created = blankRow(this.columns);
+      buffer.cells[y] = created;
+      this.cowRows.add(y);
+      this.mark(y);
+      return created;
+    }
+    if (!this.cowRows.has(y)) {
+      const cloned = existing.map(cloneCell);
+      buffer.cells[y] = cloned;
+      this.cowRows.add(y);
+      this.mark(y);
+      return cloned;
+    }
+    this.mark(y);
+    return existing;
+  }
   private mark(y: number): void {
     this.dirty.add(y);
     this.rowVersions[y] = (this.rowVersions[y] ?? 0) + 1;
@@ -866,12 +883,15 @@ export class TerminalSurfaceStore {
     for (const listener of this.listeners) listener();
     this.dirty.clear();
     this.wholeDirty = false;
+    this.cowRows.clear();
   }
   private makeSnapshot(): TerminalGridSnapshot {
     return {
       columns: this.columns,
       rows: this.rows,
-      cells: this.active.cells,
+      // Shallow-copy the outer row array so scroll splices on the live buffer cannot reshape
+      // a published snapshot. Row contents are protected by mutableRow copy-on-write.
+      cells: this.active.cells.slice(),
       cursor: {
         ...this.active.cursor,
         visible: this.active.cursor.visible && this.modes.cursorVisible,
