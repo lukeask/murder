@@ -20,29 +20,75 @@ _LEGACY_REPOSITORY_ID = "00000000-0000-0000-0000-000000000000"
 
 
 _PARTITIONED_TABLES = (
-    "runs", "tickets", "ticket_deps", "checklist", "check_results",
-    "completion_attempts", "agents",
-    "structured_decisions", "retained_facts", "projection_inputs", "commands",
-    "worker_heartbeats", "escalations", "plans", "plan_revisions",
-    "plan_related_tickets", "notes", "note_revisions", "reports",
-    "report_revisions", "notetaker_context", "notes_entries", "agent_messages",
-    "conversations", "conversation_blocks", "conversation_chunk_summaries",
-    "chunk_summary_blocks", "harness_usage_snapshots", "harness_control_frames",
-    "harness_control_evidence", "harness_control_observations",
-    "harness_control_semantic_events", "harness_control_operations",
-    "harness_control_actions", "harness_control_effects",
-    "harness_control_decisions", "harness_usage_probe_sessions", "schedule_queue",
-    "scheduler_state", "scheduler_params", "scheduler_steering",
-    "scheduler_decision_cache", "harness_models", "map_summaries",
-    "history_status", "workflow_runs", "workflow_state_migrations",
-    "workflow_signals", "workflow_waits", "activities", "activity_reservations",
-    "activity_reservation_locks", "activity_results", "workflow_triggers",
-    "trigger_firings", "trigger_cursors", "trigger_manual_pending",
-    "workflow_transition_outbox", "harness_sessions", "session_writer_fences",
-    "writer_leases", "writer_lease_audit_facts", "permission_policy_decisions",
-    "permission_approval_evidence", "permission_approval_requests",
-    "permission_authorization_grants", "permission_authorization_uses",
-    "permission_grant_revocations", "permission_safety_reviews",
+    "runs",
+    "tickets",
+    "ticket_deps",
+    "checklist",
+    "check_results",
+    "completion_attempts",
+    "agents",
+    "structured_decisions",
+    "retained_facts",
+    "projection_inputs",
+    "commands",
+    "worker_heartbeats",
+    "escalations",
+    "plans",
+    "plan_revisions",
+    "plan_related_tickets",
+    "notes",
+    "note_revisions",
+    "reports",
+    "report_revisions",
+    "notetaker_context",
+    "notes_entries",
+    "agent_messages",
+    "conversations",
+    "conversation_blocks",
+    "conversation_chunk_summaries",
+    "chunk_summary_blocks",
+    "harness_usage_snapshots",
+    "harness_control_frames",
+    "harness_control_evidence",
+    "harness_control_observations",
+    "harness_control_semantic_events",
+    "harness_control_operations",
+    "harness_control_actions",
+    "harness_control_effects",
+    "harness_control_decisions",
+    "harness_usage_probe_sessions",
+    "schedule_queue",
+    "scheduler_state",
+    "scheduler_params",
+    "scheduler_steering",
+    "scheduler_decision_cache",
+    "harness_models",
+    "map_summaries",
+    "history_status",
+    "workflow_runs",
+    "workflow_state_migrations",
+    "workflow_signals",
+    "workflow_waits",
+    "activities",
+    "activity_reservations",
+    "activity_reservation_locks",
+    "activity_results",
+    "workflow_triggers",
+    "trigger_firings",
+    "trigger_cursors",
+    "trigger_manual_pending",
+    "workflow_transition_outbox",
+    "harness_sessions",
+    "session_writer_fences",
+    "writer_leases",
+    "writer_lease_audit_facts",
+    "permission_policy_decisions",
+    "permission_approval_evidence",
+    "permission_approval_requests",
+    "permission_authorization_grants",
+    "permission_authorization_uses",
+    "permission_grant_revocations",
+    "permission_safety_reviews",
 )
 
 
@@ -71,9 +117,7 @@ def _migrate_repository_partition(conn: Connection, repository_id: str | None = 
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     staged_tables = {
-        table
-        for table in _PARTITIONED_TABLES
-        if f"{table}__pre_partition" in existing
+        table for table in _PARTITIONED_TABLES if f"{table}__pre_partition" in existing
     }
     ticket_sql_row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tickets'"
@@ -81,20 +125,20 @@ def _migrate_repository_partition(conn: Connection, repository_id: str | None = 
     ticket_sql = "" if ticket_sql_row is None else str(ticket_sql_row["sql"])
     singleton_has_legacy_id = any(
         table in existing
-        and "id" in {
-            str(row["name"])
-            for row in conn.execute(f"PRAGMA table_info({table})")
-        }
+        and "id" in {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
         for table in ("notetaker_context", "scheduler_state")
     )
-    needs_rebuild = bool(staged_tables) or singleton_has_legacy_id or any(
-        table in existing
-        and "repository_id" not in {
-            str(row["name"])
-            for row in conn.execute(f"PRAGMA table_info({table})")
-        }
-        for table in _PARTITIONED_TABLES
-    ) or "PRIMARY KEY (repository_id, id)" not in ticket_sql
+    needs_rebuild = (
+        bool(staged_tables)
+        or singleton_has_legacy_id
+        or any(
+            table in existing
+            and "repository_id"
+            not in {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+            for table in _PARTITIONED_TABLES
+        )
+        or "PRIMARY KEY (repository_id, id)" not in ticket_sql
+    )
 
     if needs_rebuild:
         _rebuild_partitioned_schema(conn, existing, escaped_partition)
@@ -106,18 +150,14 @@ def _migrate_repository_partition(conn: Connection, repository_id: str | None = 
     for table in _PARTITIONED_TABLES:
         if table not in existing:
             continue
-        columns = {
-            str(row["name"])
-            for row in conn.execute(f"PRAGMA table_info({table})")
-        }
+        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
         if "repository_id" not in columns:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN repository_id TEXT NOT NULL "
                 f"DEFAULT '{escaped_partition}'"
             )
         conn.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_{table}_repository_id "
-            f"ON {table}(repository_id)"
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_repository_id ON {table}(repository_id)"
         )
 
     # These indexes are the conflict targets used by repository-aware DAOs.
@@ -144,9 +184,7 @@ def _migrate_repository_partition(conn: Connection, repository_id: str | None = 
         ("idx_map_summaries_repository_key", "map_summaries", "repository_id, path, commit_sha"),
     ):
         if table in existing:
-            conn.execute(
-                f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table}({index_columns})"
-            )
+            conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table}({index_columns})")
 
 
 def _rebuild_partitioned_schema(  # noqa: PLR0912
@@ -164,9 +202,7 @@ def _rebuild_partitioned_schema(  # noqa: PLR0912
     from murder.state.persistence.schema import SCHEMA_SQL  # noqa: PLC0415
 
     staged_tables = {
-        table
-        for table in _PARTITIONED_TABLES
-        if f"{table}__pre_partition" in existing
+        table for table in _PARTITIONED_TABLES if f"{table}__pre_partition" in existing
     }
     # A process running the pre-v2 migration could die after one or more
     # autocommitted renames. On restart SCHEMA_SQL creates empty replacement
@@ -178,9 +214,7 @@ def _rebuild_partitioned_schema(  # noqa: PLR0912
     # lossless and avoids trying to infer crash phase from otherwise identical
     # repository-aware schemas.
     source_tables = [
-        table
-        for table in _PARTITIONED_TABLES
-        if table in existing or table in staged_tables
+        table for table in _PARTITIONED_TABLES if table in existing or table in staged_tables
     ]
     target_schema = SCHEMA_SQL.replace("PRAGMA foreign_keys = ON;", "")
     conn.execute("PRAGMA foreign_keys = OFF")
@@ -201,23 +235,14 @@ def _rebuild_partitioned_schema(  # noqa: PLR0912
         # NOT NULL constraint needs no unsafe legacy default.
         for table in source_tables:
             new_column_names = {
-                str(row["name"])
-                for row in conn.execute(f"PRAGMA table_info({table})")
+                str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")
             }
             if "repository_id" not in new_column_names:
-                conn.execute(
-                    f"ALTER TABLE {table} ADD COLUMN repository_id TEXT NOT NULL"
-                )
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN repository_id TEXT NOT NULL")
         for table in source_tables:
             source = f"{table}__pre_partition"
-            old_columns = [
-                str(row["name"])
-                for row in conn.execute(f"PRAGMA table_info({source})")
-            ]
-            new_columns = [
-                str(row["name"])
-                for row in conn.execute(f"PRAGMA table_info({table})")
-            ]
+            old_columns = [str(row["name"]) for row in conn.execute(f"PRAGMA table_info({source})")]
+            new_columns = [str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")]
             insert_columns = [column for column in new_columns if column in old_columns]
             select_columns = list(insert_columns)
             if table == "plans" and "sync_state" in insert_columns:
@@ -252,9 +277,7 @@ def _rebuild_partitioned_schema(  # noqa: PLR0912
 def _primary_key_columns(conn: Connection, table: str) -> tuple[str, ...]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return tuple(
-        str(row["name"])
-        for row in sorted(rows, key=lambda row: int(row["pk"]))
-        if int(row["pk"])
+        str(row["name"]) for row in sorted(rows, key=lambda row: int(row["pk"])) if int(row["pk"])
     )
 
 
@@ -385,14 +408,9 @@ def _migrate_partition_local_deterministic_ids(conn: Connection) -> None:
         )
         for table in reversed(tables):
             source = f"{table}__pre_local_identity"
-            columns = [
-                str(row["name"])
-                for row in conn.execute(f"PRAGMA table_info({source})")
-            ]
+            columns = [str(row["name"]) for row in conn.execute(f"PRAGMA table_info({source})")]
             quoted = ", ".join(columns)
-            conn.execute(
-                f"INSERT INTO {table} ({quoted}) SELECT {quoted} FROM {source}"
-            )
+            conn.execute(f"INSERT INTO {table} ({quoted}) SELECT {quoted} FROM {source}")
         for table in tables:
             conn.execute(f"DROP TABLE {table}__pre_local_identity")
         execute_script(conn, SCHEMA_SQL.replace("PRAGMA foreign_keys = ON;", ""))
@@ -409,9 +427,7 @@ def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
-def _executescript_fk_off(
-    conn: Connection, body: str, *, legacy_alter_table: bool = False
-) -> None:
+def _executescript_fk_off(conn: Connection, body: str, *, legacy_alter_table: bool = False) -> None:
     """Run a table-recreation ``executescript`` with FK enforcement disabled.
 
     ``foreign_keys`` is a connection-global pragma. The earlier pattern embedded
@@ -435,9 +451,9 @@ def _executescript_fk_off(
         conn.execute("PRAGMA foreign_keys = ON")
 
 
-_LEGACY_PLAN_MATERIALIZED_HASH_COLUMN = "last_" "materialized_" "hash"
-_LEGACY_PLAN_CONFLICT_COLUMN = "conflict" "_reason"
-_LEGACY_TICKET_ORDER_COLUMN = "wa" "ve"
+_LEGACY_PLAN_MATERIALIZED_HASH_COLUMN = "last_materialized_hash"
+_LEGACY_PLAN_CONFLICT_COLUMN = "conflict_reason"
+_LEGACY_TICKET_ORDER_COLUMN = "wave"
 _LEGACY_TICKET_ORDER_INDEX = "idx_tickets_" + _LEGACY_TICKET_ORDER_COLUMN
 
 
@@ -769,7 +785,8 @@ def _migrate_fact_log(conn: Connection) -> None:
     promoting them would invent fact semantics after the event.
     """
 
-    execute_script(conn,
+    execute_script(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS retained_facts (
             sequence            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -802,12 +819,11 @@ def _migrate_fact_log(conn: Connection) -> None:
         BEGIN
             SELECT RAISE(ABORT, 'retained facts are immutable');
         END;
-        """
+        """,
     )
 
     projection_columns = {
-        str(row["name"])
-        for row in conn.execute("PRAGMA table_info(projection_inputs)").fetchall()
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(projection_inputs)").fetchall()
     }
     if projection_columns and "input_id" not in projection_columns:
         _executescript_fk_off(
@@ -848,7 +864,8 @@ def _migrate_fact_log(conn: Connection) -> None:
             legacy_alter_table=True,
         )
 
-    execute_script(conn,
+    execute_script(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS projection_inputs (
             sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -868,8 +885,122 @@ def _migrate_fact_log(conn: Connection) -> None:
         BEGIN
             SELECT RAISE(ABORT, 'projection inputs are immutable');
         END;
-        """
+        """,
     )
+
+
+def _migrate_partition_scoped_identity_keys(conn: Connection) -> None:
+    """Scope deterministic decision and projection identities to their repository.
+
+    The initial shared-database migration retained these old global constraints:
+    ``structured_decisions.decision_request_id`` was the primary key and
+    ``projection_inputs.input_id`` was unique. Both ids are deliberately
+    deterministic in normal producers, so equal local agent/ticket state in
+    two repositories could make one partition silently suppress the other's
+    durable record. Rebuild the two independent tables to preserve all rows
+    while making the repository key part of each identity.
+    """
+    existing = {
+        str(row["name"])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    }
+    if not {"structured_decisions", "projection_inputs"} <= existing:
+        return
+    if (
+        _primary_key_columns(conn, "structured_decisions")
+        == ("repository_id", "decision_request_id")
+        and _has_unique_key(conn, "projection_inputs", ("repository_id", "input_id"))
+        and not _has_unique_key(conn, "projection_inputs", ("input_id",))
+    ):
+        return
+
+    _executescript_fk_off(
+        conn,
+        """
+        BEGIN;
+        DROP TRIGGER IF EXISTS projection_inputs_no_update;
+        DROP INDEX IF EXISTS idx_projection_inputs_projection_sequence;
+        DROP INDEX IF EXISTS idx_structured_decisions_agent_kind_identity;
+        DROP INDEX IF EXISTS idx_structured_decisions_agent_response;
+        ALTER TABLE structured_decisions RENAME TO structured_decisions__pre_partition_identity;
+        ALTER TABLE projection_inputs RENAME TO projection_inputs__pre_partition_identity;
+
+        CREATE TABLE structured_decisions (
+            repository_id       TEXT NOT NULL,
+            decision_request_id TEXT NOT NULL,
+            agent_id            TEXT NOT NULL,
+            decision_kind       TEXT NOT NULL CHECK (decision_kind IN ('question', 'permission')),
+            request_identity    TEXT NOT NULL,
+            request_json        TEXT NOT NULL,
+            response_json       TEXT,
+            decided_by          TEXT,
+            created_at          TEXT NOT NULL,
+            responded_at        TEXT,
+            CHECK ((response_json IS NULL) = (decided_by IS NULL)),
+            CHECK ((response_json IS NULL) = (responded_at IS NULL)),
+            PRIMARY KEY (repository_id, decision_request_id)
+        );
+        INSERT INTO structured_decisions(
+            repository_id, decision_request_id, agent_id, decision_kind,
+            request_identity, request_json, response_json, decided_by,
+            created_at, responded_at
+        )
+        SELECT repository_id, decision_request_id, agent_id, decision_kind,
+               request_identity, request_json, response_json, decided_by,
+               created_at, responded_at
+          FROM structured_decisions__pre_partition_identity;
+        DROP TABLE structured_decisions__pre_partition_identity;
+
+        CREATE TABLE projection_inputs (
+            sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository_id   TEXT NOT NULL,
+            input_id        TEXT NOT NULL,
+            source_fact_id  TEXT REFERENCES retained_facts(fact_id) ON DELETE RESTRICT,
+            projection      TEXT NOT NULL,
+            subject_key     TEXT NOT NULL,
+            generation      INTEGER NOT NULL CHECK (generation >= 0),
+            created_at      TEXT NOT NULL,
+            UNIQUE (repository_id, input_id),
+            UNIQUE (source_fact_id, projection, subject_key, generation)
+        );
+        INSERT INTO projection_inputs(
+            sequence, repository_id, input_id, source_fact_id, projection,
+            subject_key, generation, created_at
+        )
+        SELECT sequence, repository_id, input_id, source_fact_id, projection,
+               subject_key, generation, created_at
+          FROM projection_inputs__pre_partition_identity;
+        DROP TABLE projection_inputs__pre_partition_identity;
+
+        CREATE INDEX idx_structured_decisions_agent_kind_identity
+            ON structured_decisions(repository_id, agent_id, decision_kind, request_identity);
+        CREATE INDEX idx_structured_decisions_agent_response
+            ON structured_decisions(repository_id, agent_id, response_json);
+        CREATE INDEX idx_projection_inputs_projection_sequence
+            ON projection_inputs(repository_id, projection, sequence);
+        CREATE TRIGGER projection_inputs_no_update
+        BEFORE UPDATE ON projection_inputs
+        BEGIN
+            SELECT RAISE(ABORT, 'projection inputs are immutable');
+        END;
+        COMMIT;
+        """,
+        legacy_alter_table=True,
+    )
+
+
+def _has_unique_key(conn: Connection, table: str, columns: tuple[str, ...]) -> bool:
+    """Return whether ``table`` has a unique index with exactly ``columns``."""
+    for index in conn.execute(f"PRAGMA index_list({table})").fetchall():
+        if not int(index["unique"]):
+            continue
+        name = str(index["name"])
+        index_columns = tuple(
+            str(row["name"]) for row in conn.execute(f"PRAGMA index_info({name})").fetchall()
+        )
+        if index_columns == columns:
+            return True
+    return False
 
 
 def _migrate_agents_worktree_path(conn: Connection) -> None:
@@ -1209,7 +1340,8 @@ def _migrate_map_summaries(conn: Connection) -> None:
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "map_summaries" not in existing:
-        execute_script(conn,
+        execute_script(
+            conn,
             """
             CREATE TABLE map_summaries (
                 path        TEXT NOT NULL,
@@ -1224,7 +1356,7 @@ def _migrate_map_summaries(conn: Connection) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_map_summaries_commit
                 ON map_summaries(commit_sha);
-            """
+            """,
         )
 
 
@@ -1239,14 +1371,15 @@ def _migrate_scheduler_steering(conn: Connection) -> None:
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "scheduler_steering" not in existing:
-        execute_script(conn,
+        execute_script(
+            conn,
             """
             CREATE TABLE scheduler_steering (
                 harness    TEXT PRIMARY KEY,
                 steering   TEXT NOT NULL CHECK(steering IN ('auto','pause','prefer')),
                 updated_at TEXT NOT NULL
             );
-            """
+            """,
         )
 
 
@@ -1261,7 +1394,8 @@ def _migrate_history_status(conn: Connection) -> None:
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "history_status" not in existing:
-        execute_script(conn,
+        execute_script(
+            conn,
             """
             CREATE TABLE history_status (
                 item_id     TEXT PRIMARY KEY,
@@ -1269,7 +1403,7 @@ def _migrate_history_status(conn: Connection) -> None:
                 status_note TEXT,
                 updated_at  TEXT NOT NULL
             );
-            """
+            """,
         )
 
 
@@ -1615,7 +1749,8 @@ def _migrate_conversation_store(conn: Connection) -> None:
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "conversations" not in existing:
-        execute_script(conn,
+        execute_script(
+            conn,
             """
             CREATE TABLE conversations (
                 conversation_id    TEXT PRIMARY KEY,
@@ -1632,10 +1767,11 @@ def _migrate_conversation_store(conn: Connection) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_conversations_agent ON conversations(agent_id);
             CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
-            """
+            """,
         )
     if "conversation_blocks" not in existing:
-        execute_script(conn,
+        execute_script(
+            conn,
             """
             CREATE TABLE conversation_blocks (
                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1659,7 +1795,7 @@ def _migrate_conversation_store(conn: Connection) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_conversation_blocks_conv
                 ON conversation_blocks(conversation_id, ordinal);
-            """
+            """,
         )
 
 
@@ -1685,7 +1821,8 @@ def _migrate_conversation_chunk_summaries(conn: Connection) -> None:
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     if "conversation_chunk_summaries" not in existing:
-        execute_script(conn,
+        execute_script(
+            conn,
             """
             CREATE TABLE conversation_chunk_summaries (
                 summary_id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1698,10 +1835,11 @@ def _migrate_conversation_chunk_summaries(conn: Connection) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_chunk_summaries_conv
                 ON conversation_chunk_summaries(conversation_id, chunk_idx);
-            """
+            """,
         )
     if "chunk_summary_blocks" not in existing:
-        execute_script(conn,
+        execute_script(
+            conn,
             """
             CREATE TABLE chunk_summary_blocks (
                 summary_id  INTEGER NOT NULL
@@ -1712,7 +1850,7 @@ def _migrate_conversation_chunk_summaries(conn: Connection) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_chunk_summary_blocks_summary
                 ON chunk_summary_blocks(summary_id);
-            """
+            """,
         )
 
     # Drop the now-vestigial single `condensed` column. ALTER TABLE DROP COLUMN

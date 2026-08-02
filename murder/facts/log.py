@@ -56,17 +56,18 @@ BEGIN
 END;
 CREATE TABLE IF NOT EXISTS projection_inputs (
     sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
-    input_id        TEXT NOT NULL UNIQUE,
     repository_id  TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    input_id        TEXT NOT NULL,
     source_fact_id  TEXT REFERENCES retained_facts(fact_id) ON DELETE RESTRICT,
     projection      TEXT NOT NULL,
     subject_key     TEXT NOT NULL,
     generation      INTEGER NOT NULL CHECK (generation >= 0),
     created_at      TEXT NOT NULL,
+    UNIQUE (repository_id, input_id),
     UNIQUE (source_fact_id, projection, subject_key, generation)
 );
 CREATE INDEX IF NOT EXISTS idx_projection_inputs_projection_sequence
-    ON projection_inputs(projection, sequence);
+    ON projection_inputs(repository_id, projection, sequence);
 CREATE TRIGGER IF NOT EXISTS projection_inputs_no_update
 BEFORE UPDATE ON projection_inputs
 BEGIN
@@ -292,7 +293,8 @@ def append_fact(
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(draft.fact_id), repository_id,
+                    str(draft.fact_id),
+                    repository_id,
                     draft.kind,
                     draft.schema_version,
                     _datetime_text(draft.occurred_at),
@@ -325,7 +327,8 @@ def append_fact(
                 ON CONFLICT DO NOTHING
                 """,
                 (
-                    str(item.input_id), repository_id,
+                    str(item.input_id),
+                    repository_id,
                     str(draft.fact_id),
                     item.projection,
                     item.subject_key,
@@ -379,10 +382,11 @@ def append_projection_input(
                 input_id, repository_id, source_fact_id, projection, subject_key,
                 generation, created_at
             ) VALUES (?, ?, NULL, ?, ?, ?, ?)
-            ON CONFLICT(input_id) DO NOTHING
+            ON CONFLICT(repository_id, input_id) DO NOTHING
             """,
             (
-                str(draft.input_id), repository_id,
+                str(draft.input_id),
+                repository_id,
                 draft.projection,
                 draft.subject_key,
                 draft.generation,
@@ -566,9 +570,7 @@ def _projection_record(row: sqlite3.Row) -> ProjectionInputRecord:
         sequence=int(row["sequence"]),
         input_id=UUID(str(row["input_id"])),
         source_fact_id=(
-            None
-            if row["source_fact_id"] is None
-            else UUID(str(row["source_fact_id"]))
+            None if row["source_fact_id"] is None else UUID(str(row["source_fact_id"]))
         ),
         projection=str(row["projection"]),
         subject_key=str(row["subject_key"]),
@@ -640,9 +642,7 @@ def _schema_statements(script: str) -> Iterator[str]:
         if stripped.startswith("CREATE TRIGGER"):
             in_trigger = True
         statement.append(line)
-        if (in_trigger and stripped == "END;") or (
-            not in_trigger and stripped.endswith(";")
-        ):
+        if (in_trigger and stripped == "END;") or (not in_trigger and stripped.endswith(";")):
             yield "\n".join(statement)
             statement = []
             in_trigger = False

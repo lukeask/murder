@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
@@ -33,28 +34,74 @@ INTEGER_PK_TABLES = {
 # Parent-before-child order. Missing feature tables are skipped, allowing old
 # databases from any release in the migration chain to be imported.
 COPY_ORDER = (
-    "runs", "tickets", "ticket_deps", "checklist", "check_results",
-    "completion_attempts", "agents",
-    "structured_decisions", "retained_facts", "projection_inputs", "commands",
-    "worker_heartbeats", "escalations", "plans", "plan_revisions",
-    "plan_related_tickets", "notes", "note_revisions", "reports",
-    "report_revisions", "notetaker_context", "notes_entries", "agent_messages",
-    "conversations", "conversation_blocks", "conversation_chunk_summaries",
-    "chunk_summary_blocks", "harness_usage_snapshots", "harness_control_frames",
-    "harness_control_evidence", "harness_control_observations",
-    "harness_control_semantic_events", "harness_control_operations",
-    "harness_control_actions", "harness_control_effects", "harness_control_decisions",
-    "harness_usage_probe_sessions", "schedule_queue", "scheduler_state",
-    "scheduler_params", "scheduler_steering", "scheduler_decision_cache",
-    "harness_models", "map_summaries", "history_status", "workflow_runs",
-    "workflow_state_migrations", "workflow_signals", "workflow_waits", "activities",
-    "activity_reservations", "activity_reservation_locks", "activity_results",
-    "workflow_triggers", "trigger_firings", "trigger_cursors",
-    "trigger_manual_pending", "workflow_transition_outbox", "harness_sessions",
-    "session_writer_fences", "writer_leases", "writer_lease_audit_facts",
-    "permission_policy_decisions", "permission_approval_evidence",
-    "permission_approval_requests", "permission_authorization_grants",
-    "permission_authorization_uses", "permission_grant_revocations",
+    "runs",
+    "tickets",
+    "ticket_deps",
+    "checklist",
+    "check_results",
+    "completion_attempts",
+    "agents",
+    "structured_decisions",
+    "retained_facts",
+    "projection_inputs",
+    "commands",
+    "worker_heartbeats",
+    "escalations",
+    "plans",
+    "plan_revisions",
+    "plan_related_tickets",
+    "notes",
+    "note_revisions",
+    "reports",
+    "report_revisions",
+    "notetaker_context",
+    "notes_entries",
+    "agent_messages",
+    "conversations",
+    "conversation_blocks",
+    "conversation_chunk_summaries",
+    "chunk_summary_blocks",
+    "harness_usage_snapshots",
+    "harness_control_frames",
+    "harness_control_evidence",
+    "harness_control_observations",
+    "harness_control_semantic_events",
+    "harness_control_operations",
+    "harness_control_actions",
+    "harness_control_effects",
+    "harness_control_decisions",
+    "harness_usage_probe_sessions",
+    "schedule_queue",
+    "scheduler_state",
+    "scheduler_params",
+    "scheduler_steering",
+    "scheduler_decision_cache",
+    "harness_models",
+    "map_summaries",
+    "history_status",
+    "workflow_runs",
+    "workflow_state_migrations",
+    "workflow_signals",
+    "workflow_waits",
+    "activities",
+    "activity_reservations",
+    "activity_reservation_locks",
+    "activity_results",
+    "workflow_triggers",
+    "trigger_firings",
+    "trigger_cursors",
+    "trigger_manual_pending",
+    "workflow_transition_outbox",
+    "harness_sessions",
+    "session_writer_fences",
+    "writer_leases",
+    "writer_lease_audit_facts",
+    "permission_policy_decisions",
+    "permission_approval_evidence",
+    "permission_approval_requests",
+    "permission_authorization_grants",
+    "permission_authorization_uses",
+    "permission_grant_revocations",
     "permission_safety_reviews",
 )
 
@@ -90,6 +137,21 @@ def _rename_legacy_files(path: Path) -> None:
             sidecar.replace(Path(str(migrated) + suffix))
 
 
+def _service_is_live(pid: int) -> bool:
+    """Conservatively determine whether a service-registry owner is live."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # We cannot safely conclude that a service owned by another user is
+        # gone, so leave its database untouched.
+        return True
+    return True
+
+
 def _copy_table(  # noqa: PLR0912, PLR0915
     target: Connection,
     source: sqlite3.Connection,
@@ -120,8 +182,7 @@ def _copy_table(  # noqa: PLR0912, PLR0915
             f'SELECT COALESCE(MAX("{integer_pk}"), 0) FROM "{table}"'
         ).fetchone()[0]
         mapping = {
-            int(row[integer_pk]): int(current) + offset
-            for offset, row in enumerate(rows, start=1)
+            int(row[integer_pk]): int(current) + offset for offset, row in enumerate(rows, start=1)
         }
         id_maps[table] = mapping
 
@@ -130,8 +191,13 @@ def _copy_table(  # noqa: PLR0912, PLR0915
         compatibility_columns = [
             column
             for column in (
-                "schema_version", "occurred_at", "recorded_at", "actor_kind",
-                "actor_id", "correlation_id", "payload_json",
+                "schema_version",
+                "occurred_at",
+                "recorded_at",
+                "actor_kind",
+                "actor_id",
+                "correlation_id",
+                "payload_json",
             )
             if column in target_columns and column not in source_columns
         ]
@@ -148,6 +214,14 @@ def _copy_table(  # noqa: PLR0912, PLR0915
 
     values: list[tuple[Any, ...]] = []
     for row in rows:
+        if table == "chunk_summary_blocks":
+            summary_id = id_maps.get("conversation_chunk_summaries", {}).get(int(row["summary_id"]))
+            block_id = id_maps.get("conversation_blocks", {}).get(int(row["block_id"]))
+            if summary_id is None or block_id is None:
+                # block_id deliberately lacks an FK. Older databases can
+                # therefore retain an attribution pointer after its block was
+                # removed; preserve the summary and skip only that pointer.
+                continue
         item: list[Any] = []
         for column in insert_columns:
             if column == "repository_id":
@@ -155,11 +229,11 @@ def _copy_table(  # noqa: PLR0912, PLR0915
             elif integer_pk == column:
                 item.append(id_maps[table][int(row[column])])
             elif table == "chunk_summary_blocks" and column == "summary_id":
-                item.append(id_maps["conversation_chunk_summaries"][int(row[column])])
+                item.append(summary_id)
             elif table == "chunk_summary_blocks" and column == "block_id":
                 # This pointer is intentionally not declared as an FK, but it
                 # still names conversation_blocks.id and must follow its remap.
-                item.append(id_maps["conversation_blocks"][int(row[column])])
+                item.append(block_id)
             elif table == "escalations" and column == "source_event_id":
                 item.append(None)
             elif table == "retained_facts" and column == "schema_version":
@@ -238,8 +312,23 @@ def merge_known_legacy_databases(
     current_repo: Path,
     explicit_repos: Iterable[Path] = (),
 ) -> list[Path]:
-    roots = {current_repo.resolve(), *(path.resolve() for path in explicit_repos)}
-    roots.update(session.repo_root.resolve() for session in list_service_sessions())
+    current_root = current_repo.resolve()
+    sessions = list_service_sessions()
+    roots = {
+        current_root,
+        *(path.resolve() for path in explicit_repos),
+        *(session.repo_root.resolve() for session in sessions),
+    }
+    # A live service may still be using its checkout-local pre-consolidation
+    # database. Never copy or rename another live service's database as a side
+    # effect of opening this repository. Stale registry entries remain eligible
+    # for the one-time migration; the current repository remains eligible too.
+    live_other_roots = {
+        session.repo_root.resolve()
+        for session in sessions
+        if session.repo_root.resolve() != current_root and _service_is_live(session.pid)
+    }
+    roots.difference_update(live_other_roots)
     merged: list[Path] = []
     for root in sorted(roots, key=str):
         if merge_legacy_database(target, root):

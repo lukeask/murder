@@ -73,12 +73,10 @@ def register(
     # These read-model handlers do blocking sqlite/git/file work and are
     # offloaded to worker threads so the application socket can keep answering
     # frontend reads during boot. They are thread-safe
-    # because ``ServiceReadModel`` opens a FRESH per-call sqlite connection
-    # (``get_db`` with ``check_same_thread=False``) — no shared connection
-    # is touched across threads.
-    host.register_application_query(
-        QueryName.SCHEDULE_GET, threaded(_state_schedule_snapshot)
-    )
+    # because ``ServiceReadModel`` opens a fresh scoped database connection for
+    # every call — no shared long-lived ``runtime.db`` connection is touched
+    # across threads.
+    host.register_application_query(QueryName.SCHEDULE_GET, threaded(_state_schedule_snapshot))
     host.register_application_query(
         QueryName.CONVERSATIONS_GET, threaded(_state_conversations_snapshot)
     )
@@ -95,6 +93,7 @@ def register(
         QueryName.HARNESS_MODELS_LIST, threaded(_state_harness_models_snapshot)
     )
     if projections is not None:
+
         def _conversations_projection() -> dict[str, object]:
             return cast(
                 dict[str, object],

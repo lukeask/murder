@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -19,9 +20,8 @@ from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
 from murder.config import Config, HarnessRoleConfig
 from murder.llm.harnesses import REGISTRY
-from murder.state.persistence.connection import open_repo_db
 from murder.state.storage.filesystem import read_lock_pid
-from murder.state.storage.paths import agents_dir, lock_path
+from murder.state.storage.paths import db_path, lock_path
 
 # Provider env vars that count as "an LLM key is configured" (Groq/Cerebras first).
 _LLM_KEY_ENV_VARS = (
@@ -160,17 +160,20 @@ def _check_api_keys() -> None:
 
 
 def _check_db(repo: Path, failures: list[str]) -> None:
-    if not agents_dir(repo).exists():
+    path = db_path(repo)
+    if not path.exists():
         _warn("no murder.db yet (run `murder init`)")
         return
     try:
-        conn = open_repo_db(repo)
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
         try:
-            pass
+            result = conn.execute("PRAGMA quick_check").fetchone()
         finally:
             conn.close()
+        if result is None or result[0] != "ok":
+            raise sqlite3.DatabaseError(f"integrity check failed: {result}")
     except Exception as e:
-        _fail(f"DB migration failed: {e}")
+        _fail(f"DB check failed: {e}")
         failures.append("db")
         return
     _ok("DB healthy")

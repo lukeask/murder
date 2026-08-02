@@ -140,7 +140,8 @@ CREATE TABLE IF NOT EXISTS agents (
 -- events.  They retain the exact identity binding required to resume an
 -- already-recorded answer after a service crash.
 CREATE TABLE IF NOT EXISTS structured_decisions (
-    decision_request_id TEXT PRIMARY KEY,
+    repository_id       TEXT NOT NULL,
+    decision_request_id TEXT NOT NULL,
     agent_id            TEXT NOT NULL,
     decision_kind       TEXT NOT NULL CHECK (decision_kind IN ('question', 'permission')),
     request_identity    TEXT NOT NULL,
@@ -150,13 +151,14 @@ CREATE TABLE IF NOT EXISTS structured_decisions (
     created_at          TEXT NOT NULL,
     responded_at        TEXT,
     CHECK ((response_json IS NULL) = (decided_by IS NULL)),
-    CHECK ((response_json IS NULL) = (responded_at IS NULL))
+    CHECK ((response_json IS NULL) = (responded_at IS NULL)),
+    PRIMARY KEY (repository_id, decision_request_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_structured_decisions_agent_kind_identity
-    ON structured_decisions(agent_id, decision_kind, request_identity);
+    ON structured_decisions(repository_id, agent_id, decision_kind, request_identity);
 CREATE INDEX IF NOT EXISTS idx_structured_decisions_agent_response
-    ON structured_decisions(agent_id, response_json);
+    ON structured_decisions(repository_id, agent_id, response_json);
 
 -- Feature-owned retained fact log.  Unlike the legacy generalized events
 -- table, rows here are immutable outcomes only: commands, addressed workflow
@@ -195,17 +197,19 @@ END;
 
 CREATE TABLE IF NOT EXISTS projection_inputs (
     sequence        INTEGER PRIMARY KEY AUTOINCREMENT,
-    input_id        TEXT NOT NULL UNIQUE,
+    repository_id   TEXT NOT NULL,
+    input_id        TEXT NOT NULL,
     source_fact_id  TEXT REFERENCES retained_facts(fact_id) ON DELETE RESTRICT,
     projection      TEXT NOT NULL,
     subject_key     TEXT NOT NULL,
     generation      INTEGER NOT NULL CHECK (generation >= 0),
     created_at      TEXT NOT NULL,
+    UNIQUE (repository_id, input_id),
     UNIQUE (source_fact_id, projection, subject_key, generation)
 );
 
 CREATE INDEX IF NOT EXISTS idx_projection_inputs_projection_sequence
-    ON projection_inputs(projection, sequence);
+    ON projection_inputs(repository_id, projection, sequence);
 
 CREATE TRIGGER IF NOT EXISTS projection_inputs_no_update
 BEFORE UPDATE ON projection_inputs
@@ -989,7 +993,7 @@ CREATE TABLE IF NOT EXISTS workflow_transition_outbox (
 # fmt: on
 
 NOTETAKER_CONTEXT_MATERIALIZED_REL = f"{MURDER_DIR_NAME}/notetakercontext.md"
-MURDER_SCHEMA_VERSION = 2
+MURDER_SCHEMA_VERSION = 3
 
 
 def _now() -> str:
@@ -1029,6 +1033,7 @@ def _init_db(conn: Connection, *, repository_id: str | None = None) -> None:
         _migrate_map_summaries,
         _migrate_notes_identity_status,
         _migrate_partition_local_deterministic_ids,
+        _migrate_partition_scoped_identity_keys,
         _migrate_plans_single_master,
         _migrate_repair_plans_dangling_fk,
         _migrate_repository_partition,
@@ -1061,6 +1066,7 @@ def _init_db(conn: Connection, *, repository_id: str | None = None) -> None:
     _migrate_partition_local_deterministic_ids(conn)
     _migrate_drop_legacy_events(conn)
     _migrate_fact_log(conn)
+    _migrate_partition_scoped_identity_keys(conn)
     _migrate_ticket_metadata_columns(conn)
     _migrate_ticket_last_error(conn)
     _migrate_agents_failed_status(conn)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from murder.app.protocol.read_models import (
@@ -56,50 +59,85 @@ class ServiceReadModel:
     """
 
     def __init__(self, db: RepoDb, repo_root: Path) -> None:
-        self.db = db
         self.repo_root = Path(repo_root)
+        self._repository_id = db.repository_id
+        database_row = db.conn.execute("PRAGMA database_list").fetchone()
+        database_file = "" if database_row is None else str(database_row[2] or "")
+        if not database_file:
+            raise RuntimeError("ServiceReadModel requires a file-backed database")
+        self._database_path = Path(database_file)
         self._keys = GenerationKeys()
-        self._work = WorkReadModel(db, self.repo_root, self._keys)
-        self._runtime = RuntimeReadModel(db, self.repo_root, self._keys)
-        self._history = HistoryReadModel(db, self.repo_root, self._keys)
-        self._transit = TransitReadModel(db, self.repo_root, self._keys)
-        self._harness = HarnessReadModel(db, self.repo_root, self._keys)
+
+    @contextmanager
+    def _read_db(self) -> Iterator[RepoDb]:
+        """Open a connection owned by one read-model call.
+
+        State handlers run these synchronous methods through ``asyncio.to_thread``.
+        The runtime's long-lived connection therefore must not cross this boundary:
+        it is concurrently used by the event-loop service and cannot safely be
+        shared by arbitrary worker threads.
+        """
+        database_uri = f"{self._database_path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(
+            database_uri,
+            uri=True,
+            isolation_level=None,
+            timeout=5.0,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")
+        try:
+            yield RepoDb(conn=conn, repository_id=self._repository_id)
+        finally:
+            conn.close()
 
     def get_plans_snapshot(self) -> PlansSnapshot:
-        return self._work.get_plans_snapshot()
+        with self._read_db() as db:
+            return WorkReadModel(db, self.repo_root, self._keys).get_plans_snapshot()
 
     def get_notes_snapshot(self) -> NotesSnapshot:
-        return self._work.get_notes_snapshot()
+        with self._read_db() as db:
+            return WorkReadModel(db, self.repo_root, self._keys).get_notes_snapshot()
 
     def get_reports_snapshot(self) -> ReportsSnapshot:
-        return self._work.get_reports_snapshot()
+        with self._read_db() as db:
+            return WorkReadModel(db, self.repo_root, self._keys).get_reports_snapshot()
 
     def get_ticket_detail(self, ticket_id: str) -> TicketDetailSnapshot:
-        return self._work.get_ticket_detail(ticket_id)
+        with self._read_db() as db:
+            return WorkReadModel(db, self.repo_root, self._keys).get_ticket_detail(ticket_id)
 
     def get_plan_display(self, name: str) -> PlanDisplaySnapshot | None:
-        return self._work.get_plan_display(name)
+        with self._read_db() as db:
+            return WorkReadModel(db, self.repo_root, self._keys).get_plan_display(name)
 
     def get_note_display(self, name: str) -> NoteDisplaySnapshot | None:
-        return self._work.get_note_display(name)
+        with self._read_db() as db:
+            return WorkReadModel(db, self.repo_root, self._keys).get_note_display(name)
 
     def get_report_display(self, name: str) -> ReportDisplaySnapshot | None:
-        return self._work.get_report_display(name)
+        with self._read_db() as db:
+            return WorkReadModel(db, self.repo_root, self._keys).get_report_display(name)
 
     def get_conversations_snapshot(self) -> ConversationsSnapshot:
-        return self._runtime.get_conversations_snapshot()
+        with self._read_db() as db:
+            return RuntimeReadModel(db, self.repo_root, self._keys).get_conversations_snapshot()
 
     def get_schedule_snapshot(self) -> ScheduleSnapshot:
-        return self._runtime.get_schedule_snapshot()
+        with self._read_db() as db:
+            return RuntimeReadModel(db, self.repo_root, self._keys).get_schedule_snapshot()
 
     def get_history_snapshot(self) -> HistorySnapshot:
-        return self._history.get_history_snapshot()
+        with self._read_db() as db:
+            return HistoryReadModel(db, self.repo_root, self._keys).get_history_snapshot()
 
     def get_transit_snapshot(self) -> TransitSnapshot:
-        return self._transit.get_transit_snapshot()
+        with self._read_db() as db:
+            return TransitReadModel(db, self.repo_root, self._keys).get_transit_snapshot()
 
     def get_harness_models_snapshot(self) -> dict[str, object]:
-        return self._harness.get_harness_models_snapshot()
+        with self._read_db() as db:
+            return HarnessReadModel(db, self.repo_root, self._keys).get_harness_models_snapshot()
 
     def invalidate(self, key: str) -> None:
         self._keys.invalidate(key)

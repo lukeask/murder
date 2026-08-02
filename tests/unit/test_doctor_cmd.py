@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -106,3 +107,39 @@ def test_no_api_key_warns_not_fails(
     out = capsys.readouterr().out
     assert "no LLM API key found" in out
     assert "doctor: all checks passed" in out
+
+
+def test_db_check_does_not_create_or_initialize_a_missing_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".murder").mkdir()
+    database = tmp_path / "config" / "murder.db"
+    monkeypatch.setattr(doctor_cmd, "db_path", lambda _repo: database)
+
+    failures: list[str] = []
+    doctor_cmd._check_db(repo, failures)
+
+    assert failures == []
+    assert not database.exists()
+    assert not database.parent.exists()
+    assert "no murder.db yet" in capsys.readouterr().out
+
+
+def test_db_check_opens_existing_database_read_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database = tmp_path / "config" / "murder.db"
+    database.parent.mkdir()
+    with sqlite3.connect(database) as conn:
+        conn.execute("CREATE TABLE doctor_probe (value TEXT)")
+    before = database.read_bytes()
+    monkeypatch.setattr(doctor_cmd, "db_path", lambda _repo: database)
+
+    failures: list[str] = []
+    doctor_cmd._check_db(tmp_path, failures)
+
+    assert failures == []
+    assert database.read_bytes() == before
+    assert "✓ DB healthy" in capsys.readouterr().out

@@ -29,9 +29,34 @@ def backup_database(source: Path | None = None, out: Path | None = None) -> Path
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         raise FileExistsError(out)
-    with sqlite3.connect(str(source)) as src, sqlite3.connect(str(out)) as dst:
+    src: sqlite3.Connection | None = None
+    dst: sqlite3.Connection | None = None
+    completed = False
+    try:
+        src = sqlite3.connect(str(source))
+        dst = sqlite3.connect(str(out))
         src.backup(dst)
-    shutil.copystat(source, out)
+        dst.close()
+        dst = None
+        shutil.copystat(source, out)
+        completed = True
+    finally:
+        # Connection context managers commit or roll back, but do not close.
+        # Close before deleting a failed destination so retry works on every
+        # platform, including those that disallow unlinking open files.
+        try:
+            if dst is not None:
+                dst.close()
+        finally:
+            try:
+                if src is not None:
+                    src.close()
+            finally:
+                if not completed:
+                    # ``backup`` may have created a partial SQLite file before
+                    # failing. It did not exist before this call, so removing
+                    # it makes retrying this exact destination safe.
+                    out.unlink(missing_ok=True)
     return out
 
 

@@ -23,7 +23,7 @@ DB_OPERATIONAL_ERRORS = (sqlite3.OperationalError, turso.OperationalError)
 
 @contextmanager
 def database_schema_lock(conn: Connection):  # type: ignore[no-untyped-def]
-    """Serialize schema migration across every repo process sharing a file."""
+    """Serialize shared-database initialization across every repo process."""
     row = conn.execute("PRAGMA database_list").fetchone()
     database_file = "" if row is None else str(row[2] or "")
     if not database_file:
@@ -156,8 +156,7 @@ def resolve_repository(conn: Connection, repo_root: Path) -> str:
             )
         else:
             conn.execute(
-                "UPDATE repositories SET root_path = ?, last_seen_at = ? "
-                "WHERE repository_id = ?",
+                "UPDATE repositories SET root_path = ?, last_seen_at = ? WHERE repository_id = ?",
                 (root, now, repository_id),
             )
         return repository_id
@@ -193,8 +192,17 @@ def open_repo_db(repo_root: Path) -> RepoDb:
         merge_known_legacy_databases,
     )
 
-    merge_known_legacy_databases(conn, repo_root)
-    db = RepoDb(conn=conn, repository_id=resolve_repository(conn, repo_root))
+    # Schema migration holds this lock independently.  Retake it for the rest
+    # of first-run setup so another process cannot observe and import the same
+    # legacy file before this process has committed its repository identity and
+    # renamed the source database.
+    with database_schema_lock(conn):
+        # See init_db: a connection that waited for another initializer may
+        # retain an old read snapshot until it rolls back.
+        conn.rollback()
+        merge_known_legacy_databases(conn, repo_root)
+        repository_id = resolve_repository(conn, repo_root)
+    db = RepoDb(conn=conn, repository_id=repository_id)
     from murder.state.persistence.notetaker import (  # noqa: PLC0415
         ensure_notetaker_context_row,
     )
