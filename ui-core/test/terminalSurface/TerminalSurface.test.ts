@@ -117,7 +117,7 @@ describe('TerminalSurfaceStore native VT stream', () => {
     expect(state.alternate.cursor).toMatchObject({ x: 6, y: 2 });
   });
 
-  it('suspends deltas at a subscription gap and exactly adopts the resync keyframe', () => {
+  it('suspends deltas after a client gap notification and exactly adopts the resync keyframe', () => {
     const sessionId = '0198b156-2dd3-70a9-bc79-fca001dc8801';
     const client = new FakeApplicationClient();
     const store = new TerminalSurfaceStore();
@@ -129,6 +129,12 @@ describe('TerminalSurfaceStore native VT stream', () => {
     client.emitTerminalUpdate(sessionId, rawChunk(2, new TextEncoder().encode('B')));
     expect(rowText(store.exportState().primary.cells[1] ?? [])).toBe('B   ');
 
+    // Gap admission is the client's job; the store only reacts to terminal.gap.
+    client.emitTerminalUpdate(sessionId, {
+      type: 'terminal.gap',
+      expected_sequence: 3,
+      next_sequence: 4,
+    });
     client.emitTerminalUpdate(sessionId, rawChunk(4, new TextEncoder().encode('X')));
     client.emitTerminalUpdate(sessionId, rawChunk(5, new TextEncoder().encode('Y')));
     expect(store.exportState().keyframeRequired).toBe(true);
@@ -143,5 +149,16 @@ describe('TerminalSurfaceStore native VT stream', () => {
     expect(rowText(resynced.primary.cells[1] ?? [])).toBe('    ');
     expect(resynced.primary.cursor).toEqual({ x: 0, y: 1, visible: true, shape: 'block' });
     detach();
+  });
+
+  it('does not reject non-consecutive chunk sequences on its own', () => {
+    const store = new TerminalSurfaceStore();
+    store.resize(4, 2);
+    store.ingest(adaptTerminalUpdate(keyframe(1, 'A')));
+    store.ingest(adaptTerminalUpdate(rawChunk(2, new TextEncoder().encode('B'))));
+    // Skip sequence 3 — without a terminal.gap, the store trusts transport order.
+    store.ingest(adaptTerminalUpdate(rawChunk(4, new TextEncoder().encode('C'))));
+    expect(store.exportState().keyframeRequired).toBe(false);
+    expect(rowText(store.exportState().primary.cells[1] ?? [])).toBe('BC  ');
   });
 });

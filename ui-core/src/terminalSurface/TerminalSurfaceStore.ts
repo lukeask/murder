@@ -130,7 +130,6 @@ export class TerminalSurfaceStore {
   private parser: ParserState = 'text';
   private csi = '';
   private decoder = new TextDecoder('utf-8');
-  private sequence: number | undefined;
   private dirty = new Set<number>();
   private wholeDirty = true;
   private version = 0;
@@ -177,24 +176,15 @@ export class TerminalSurfaceStore {
       this.publish();
       return;
     }
-    // A keyframe is an authoritative replacement and may belong to a newly
-    // selected stream whose sequence space starts below the previous one.
-    // The WebSocket dispatcher already rejects stale keyframes per stream.
+    // Trust boundary: accepted transport updates are in-order. Sequence admission and gap
+    // detection live in ApplicationWebSocketClient; the store does not re-check sequences.
     if (update.type === 'terminal.keyframe') {
-      if (update.sequence !== undefined) this.sequence = update.sequence;
       this.applyKeyframe(update);
       return;
     }
     if (update.type === 'terminal.frame' && (update.reset ?? true)) {
-      if (update.sequence !== undefined) this.sequence = update.sequence;
       this.applyFrame(update);
       return;
-    }
-    if (update.sequence !== undefined) {
-      if (this.sequence !== undefined && update.sequence > this.sequence + 1)
-        this.keyframeRequired = true;
-      if (this.sequence !== undefined && update.sequence <= this.sequence) return;
-      this.sequence = update.sequence;
     }
     if (update.type === 'terminal.frame') {
       this.applyFrame(update);
