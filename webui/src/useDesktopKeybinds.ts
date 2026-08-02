@@ -1,4 +1,8 @@
-/** Desktop keyboard shortcuts for the web cockpit (panels, chat, creation dialogs, stage chords). */
+/** Desktop keyboard shortcuts for the web cockpit (panels, chat, creation dialogs, stage chords).
+ *
+ * Out of scope for the ui-core GLOBAL_RULES refactor: this hook duplicates command knowledge as a
+ * second if-chain over raw `e.key` literals with no ResolvedBindings or GLOBAL_SCOPE. Sharing with
+ * the browser would need a normalized chord type produced before matching — a separate change. */
 
 import { useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
 import { panelForDigit } from '@murder/ui-core/input/panels.js';

@@ -12,6 +12,8 @@ import {
   type DispatchContext,
   dispatchKey,
   type GlobalHandlers,
+  MODIFIED_GLOBAL_RULES,
+  PLAIN_GLOBAL_RULES,
   type TransientMode,
 } from '@murder/ui-core/input/dispatcher.js';
 import { stageTranscriptFocusId } from '@murder/ui-core/input/focusIds.js';
@@ -507,6 +509,38 @@ describe('layer 3 — focused panel keymap', () => {
     expect(onIntent).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'panel', handled: false });
   });
+
+  it('Escape restores composer focus when the panel did not claim it', () => {
+    const h = handlers();
+    onIntent.mockClear();
+    const out = dispatchKey('', makeKey({ escape: true }), ctx('plans', h, { plans: plansKeymap }));
+    expect(onIntent).not.toHaveBeenCalled();
+    expect(h.focusChat).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'panel', handled: true, action: 'global.focusChat' });
+  });
+
+  it('Escape restores composer even when no panel keymap is registered', () => {
+    const h = handlers();
+    const out = dispatchKey('', makeKey({ escape: true }), ctx('crows', h, {}));
+    expect(h.focusChat).toHaveBeenCalledOnce();
+    expect(out).toEqual({ layer: 'panel', handled: true, action: 'global.focusChat' });
+  });
+
+  it('Escape stays with the panel when the panel keymap claims it', () => {
+    const h = handlers();
+    const dismissIntent = vi.fn();
+    const withEsc: PanelKeymap = {
+      keymap: [
+        { chord: { key: { escape: true } }, intent: 'dismiss', description: 'close' },
+        ...plansKeymap.keymap,
+      ],
+      onIntent: dismissIntent,
+    };
+    const out = dispatchKey('', makeKey({ escape: true }), ctx('plans', h, { plans: withEsc }));
+    expect(dismissIntent).toHaveBeenCalledWith('dismiss');
+    expect(h.focusChat).not.toHaveBeenCalled();
+    expect(out).toEqual({ layer: 'panel', handled: true, action: 'plans:dismiss' });
+  });
 });
 
 describe('command modifier — ctrl', () => {
@@ -696,5 +730,272 @@ describe('global.murder — ctrl+m arm + the pending confirm check', () => {
     expect(h.murderConfirm).not.toHaveBeenCalled();
     expect(h.murderCancel).not.toHaveBeenCalled();
     expect(out.layer).toBe('chat');
+  });
+});
+
+describe('GLOBAL_RULES table — precedence and decline behavior', () => {
+  const plainIds = PLAIN_GLOBAL_RULES.map((rule) => rule.id);
+  const modifiedIds = MODIFIED_GLOBAL_RULES.map((rule) => rule.id);
+
+  it('plain rules precede modified rules in the documented order', () => {
+    expect(plainIds).toEqual([
+      'global.murder',
+      'global.quickNote',
+      'global.repaint',
+      'workspace.next',
+      'workspace.prev',
+      'workspace.jump.1',
+      'workspace.jump.2',
+      'workspace.jump.3',
+      'workspace.jump.4',
+      'workspace.jump.5',
+      'workspace.jump.6',
+      'workspace.jump.7',
+      'workspace.jump.8',
+      'workspace.jump.9',
+      'global.toggleTargetGroup',
+      'global.keyHelp',
+    ]);
+    expect(modifiedIds).toEqual([
+      'global.toggleTargetPane',
+      'global.cycleTargetPrev',
+      'global.cycleTargetNext',
+      'global.focusChat',
+      'global.spawn',
+      'global.cycleChatView',
+      'global.newPlan',
+      'global.workflowEditor',
+      'global.settings',
+    ]);
+  });
+
+  it('workspace jump rules are generated from one parameterized family (nine entries)', () => {
+    const jumpRules = PLAIN_GLOBAL_RULES.filter((rule) => rule.id.startsWith('workspace.jump.'));
+    expect(jumpRules).toHaveLength(9);
+    expect(jumpRules.map((rule) => rule.id)).toEqual([
+      'workspace.jump.1',
+      'workspace.jump.2',
+      'workspace.jump.3',
+      'workspace.jump.4',
+      'workspace.jump.5',
+      'workspace.jump.6',
+      'workspace.jump.7',
+      'workspace.jump.8',
+      'workspace.jump.9',
+    ]);
+  });
+
+  it('fall-through rules are global.murder and global.spawn only', () => {
+    const fallThrough = [...PLAIN_GLOBAL_RULES, ...MODIFIED_GLOBAL_RULES]
+      .filter((rule) => rule.onDecline === 'fall-through')
+      .map((rule) => rule.id);
+    expect(fallThrough).toEqual(['global.murder', 'global.spawn']);
+  });
+
+  it('skip rules are keyHelp, toggleTargetGroup, toggleTargetPane, and chat target cycling', () => {
+    const skip = [...PLAIN_GLOBAL_RULES, ...MODIFIED_GLOBAL_RULES]
+      .filter((rule) => rule.onDecline === 'skip')
+      .map((rule) => rule.id);
+    expect(skip).toEqual([
+      'global.quickNote',
+      'global.repaint',
+      'workspace.next',
+      'workspace.prev',
+      'workspace.jump.1',
+      'workspace.jump.2',
+      'workspace.jump.3',
+      'workspace.jump.4',
+      'workspace.jump.5',
+      'workspace.jump.6',
+      'workspace.jump.7',
+      'workspace.jump.8',
+      'workspace.jump.9',
+      'global.toggleTargetGroup',
+      'global.keyHelp',
+      'global.toggleTargetPane',
+      'global.cycleTargetPrev',
+      'global.cycleTargetNext',
+      'global.focusChat',
+      'global.cycleChatView',
+      'global.newPlan',
+      'global.workflowEditor',
+      'global.settings',
+    ]);
+  });
+
+  describe('fall-through declines reach the panel layer', () => {
+    const CTRL_M = makeKey({ ctrl: true, return: true });
+
+    it('global.murder on crows falls through to the panel keymap', () => {
+      const h = handlers();
+      const onIntent = vi.fn();
+      const keymap = {
+        keymap: [{ chord: { key: { ctrl: true, return: true } }, intent: 'murder', description: 'm' }],
+        onIntent,
+      };
+      const out = dispatchKey('', CTRL_M, ctx('crows', h, { crows: keymap }));
+      expect(h.murder).not.toHaveBeenCalled();
+      expect(out.layer).toBe('panel');
+      expect(onIntent).toHaveBeenCalledWith('murder');
+    });
+
+    it('global.spawn on a list panel falls through to the panel layer (unhandled)', () => {
+      const h = handlers();
+      const out = dispatchKey('s', makeKey({ meta: true }), ctx('plans', h, {}));
+      expect(h.spawn).not.toHaveBeenCalled();
+      expect(out).toEqual({ layer: 'panel', handled: false });
+    });
+  });
+
+  describe('skip declines leave the key to layers 2 and 3', () => {
+    it('global.keyHelp while chat is focused falls to layer 2 (literal ?)', () => {
+      const h = handlers();
+      const out = dispatchKey('?', makeKey(), ctx(CHAT_FOCUS, h));
+      expect(h.keyHelp).not.toHaveBeenCalled();
+      expect(out.layer).toBe('chat');
+    });
+
+    it('global.toggleTargetGroup away from chat falls to layer 3', () => {
+      const h = handlers();
+      const out = dispatchKey('j', makeKey({ ctrl: true }), ctx('plans', h));
+      expect(h.toggleTargetGroup).not.toHaveBeenCalled();
+      expect(out).toEqual({ layer: 'panel', handled: false });
+    });
+
+    it('global.toggleTargetPane on a list panel falls to layer 3', () => {
+      const h = handlers();
+      const out = dispatchKey('w', makeKey({ meta: true }), ctx('plans', h, {}));
+      expect(h.toggleTargetPane).not.toHaveBeenCalled();
+      expect(out).toEqual({ layer: 'panel', handled: false });
+    });
+
+    it('chat target cycling chords away from chat fall to layer 3 as geometric nav', () => {
+      const h = handlers();
+      const out = dispatchKey('l', makeKey({ meta: true }), ctx('plans', h));
+      expect(h.cycleTargetNext).not.toHaveBeenCalled();
+      expect(h.navigate).toHaveBeenCalledWith('right');
+      expect(out.layer).toBe('global');
+      expect(out).toMatchObject({ handled: true });
+      expect(out).not.toHaveProperty('action');
+    });
+  });
+
+  describe('pending murder confirm and cancel', () => {
+    it('confirms on plain m while pending', () => {
+      const h = handlers();
+      h.murderPending.mockReturnValue(true);
+      const out = dispatchKey('m', makeKey(), ctx(CHAT_FOCUS, h));
+      expect(h.murderConfirm).toHaveBeenCalledOnce();
+      expect(out).toMatchObject({ layer: 'global', handled: true, action: 'global.murder' });
+    });
+
+    it('cancels on a non-confirm key then processes that key normally', () => {
+      const h = handlers();
+      h.murderPending.mockReturnValue(true);
+      const handleKey = vi.fn<ChatInputHandler['handleKey']>(() => true);
+      const context: DispatchContext = { ...ctx(CHAT_FOCUS, h), chatInput: { handleKey } };
+      const out = dispatchKey('x', makeKey(), context);
+      expect(h.murderCancel).toHaveBeenCalledOnce();
+      expect(h.murderConfirm).not.toHaveBeenCalled();
+      expect(handleKey).toHaveBeenCalledWith('x', expect.anything());
+      expect(out).toEqual({ layer: 'chat', handled: true });
+      // Same key after cancel is no longer pending — ordinary chat typing.
+      h.murderPending.mockReturnValue(false);
+      handleKey.mockClear();
+      const after = dispatchKey('x', makeKey(), context);
+      expect(h.murderCancel).toHaveBeenCalledOnce();
+      expect(handleKey).toHaveBeenCalledWith('x', expect.anything());
+      expect(after).toEqual({ layer: 'chat', handled: true });
+    });
+  });
+
+  describe('plain commands under each command modifier', () => {
+    it('ctrl+n quickNote fires under alt, ctrl, and both modifiers', () => {
+      const altH = handlers();
+      dispatchKey('n', makeKey({ ctrl: true }), ctx('plans', altH));
+      expect(altH.quickNote).toHaveBeenCalledOnce();
+
+      const ctrlH = handlers();
+      const ctrlBindings = resolveBindings('ctrl', true, {});
+      dispatchKey('n', makeKey({ ctrl: true }), ctx('plans', ctrlH, {}, null, ctrlBindings));
+      expect(ctrlH.quickNote).toHaveBeenCalledOnce();
+
+      const bothH = handlers();
+      const bothBindings = resolveBindings('both', true, {});
+      dispatchKey('n', makeKey({ ctrl: true }), ctx('plans', bothH, {}, null, bothBindings));
+      expect(bothH.quickNote).toHaveBeenCalledOnce();
+    });
+
+    it('ctrl+r repaint fires under alt, ctrl, and both modifiers', () => {
+      const altH = handlers();
+      dispatchKey('r', makeKey({ ctrl: true }), ctx('plans', altH));
+      expect(altH.repaint).toHaveBeenCalledOnce();
+
+      const ctrlH = handlers();
+      const ctrlBindings = resolveBindings('ctrl', true, {});
+      dispatchKey('r', makeKey({ ctrl: true }), ctx('plans', ctrlH, {}, null, ctrlBindings));
+      expect(ctrlH.repaint).toHaveBeenCalledOnce();
+
+      const bothH = handlers();
+      const bothBindings = resolveBindings('both', true, {});
+      dispatchKey('r', makeKey({ ctrl: true }), ctx('plans', bothH, {}, null, bothBindings));
+      expect(bothH.repaint).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('shifted workspace chords beat overlapping unshifted chords', () => {
+    const ctrlBindings = resolveBindings('ctrl', true, {});
+
+    it('ctrl+shift+j fires workspaceNext, not toggleTargetGroup', () => {
+      const h = handlers();
+      const out = dispatchKey(
+        'j',
+        makeKey({ ctrl: true, shift: true }),
+        ctx(CHAT_FOCUS, h, {}, null, ctrlBindings),
+      );
+      expect(h.workspaceNext).toHaveBeenCalledOnce();
+      expect(h.toggleTargetGroup).not.toHaveBeenCalled();
+      expect(out).toMatchObject({ action: 'workspace.next' });
+    });
+
+    it('ctrl+shift+3 fires workspaceJump(2), not panel focus', () => {
+      const h = handlers();
+      const out = dispatchKey(
+        '3',
+        makeKey({ ctrl: true, shift: true }),
+        ctx('plans', h, {}, null, ctrlBindings),
+      );
+      expect(h.workspaceJump).toHaveBeenCalledWith(2);
+      expect(h.focusPanel).not.toHaveBeenCalled();
+      expect(out).toMatchObject({ action: 'workspace.jump.3' });
+    });
+  });
+
+  describe('chat target cycling precedes geometric navigation', () => {
+    it('alt+h cycles target while chat is focused, not geometric nav', () => {
+      const h = handlers();
+      const out = dispatchKey('h', makeKey({ meta: true }), ctx(CHAT_FOCUS, h));
+      expect(h.cycleTargetPrev).toHaveBeenCalledOnce();
+      expect(h.navigate).not.toHaveBeenCalled();
+      expect(out).toMatchObject({ layer: 'global', handled: true, action: 'global.cycleTargetPrev' });
+    });
+  });
+
+  describe('panel digits and vim nav consume without an ActionId', () => {
+    it('alt+1 focuses a panel with handled:true but no action id', () => {
+      const h = handlers();
+      const out = dispatchKey('1', makeKey({ meta: true }), ctx('plans', h));
+      expect(h.focusPanel).toHaveBeenCalledWith('plans');
+      expect(out).toEqual({ layer: 'global', handled: true });
+      expect(out).not.toHaveProperty('action');
+    });
+
+    it('alt+h geometric nav has handled:true but no action id away from chat', () => {
+      const h = handlers();
+      const out = dispatchKey('h', makeKey({ meta: true }), ctx('plans', h));
+      expect(h.navigate).toHaveBeenCalledWith('left');
+      expect(out).toEqual({ layer: 'global', handled: true });
+      expect(out).not.toHaveProperty('action');
+    });
   });
 });

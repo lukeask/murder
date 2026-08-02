@@ -60,7 +60,7 @@
 import { type ActionId, DEFAULT_BINDINGS, type ResolvedBindings } from './bindings.js';
 import { CHAT_FOCUS, type FocusId } from './focusStore.js';
 import type { Direction } from './geometry.js';
-import { GLOBAL_SCOPE, inFocusScope } from './globalScope.js';
+import { GLOBAL_SCOPE, type FocusScope, inFocusScope } from './globalScope.js';
 import { matchKeymap, type Key, type PanelKeymap } from './keymap.js';
 import { type PanelId, panelForDigit } from './panels.js';
 
@@ -205,6 +205,116 @@ const VIM_NAV: Readonly<Record<string, Direction>> = {
   l: 'right',
 };
 
+/** When a matched global chord is out of scope: `fall-through` stops rule processing and lets lower
+ * layers handle the key (panel for murder/spawn); `skip` continues to later rules / the command gate. */
+export type DeclineBehavior = 'fall-through' | 'skip';
+
+/** One ordered global-chord rule. Array position is precedence; scope is derived from {@link GLOBAL_SCOPE}. */
+export interface GlobalRule {
+  readonly id: ActionId;
+  readonly scope: FocusScope;
+  readonly onDecline: DeclineBehavior;
+  run(handlers: GlobalHandlers, input: string): void;
+}
+
+function globalRule(
+  id: keyof typeof GLOBAL_SCOPE,
+  onDecline: DeclineBehavior,
+  run: GlobalRule['run'],
+): GlobalRule {
+  return { id, scope: GLOBAL_SCOPE[id], onDecline, run };
+}
+
+/** Nine `workspace.jump.<n>` rules from one parameterized family (index 0-based in the handler). */
+const WORKSPACE_JUMP_RULES: readonly GlobalRule[] = Array.from({ length: 9 }, (_, index) => {
+  const ordinal = index + 1;
+  const id = `workspace.jump.${ordinal}` as keyof typeof GLOBAL_SCOPE;
+  return globalRule(id, 'skip', (handlers) => {
+    handlers.workspaceJump?.(index);
+  });
+});
+
+/** Plain chords matched before the command-modifier gate (ctrl+n, ctrl+r, shifted workspace, etc.). */
+export const PLAIN_GLOBAL_RULES: readonly GlobalRule[] = [
+  globalRule('global.murder', 'fall-through', (handlers) => {
+    handlers.murder();
+  }),
+  globalRule('global.quickNote', 'skip', (handlers) => {
+    handlers.quickNote();
+  }),
+  globalRule('global.repaint', 'skip', (handlers) => {
+    handlers.repaint();
+  }),
+  globalRule('workspace.next', 'skip', (handlers) => {
+    handlers.workspaceNext?.();
+  }),
+  globalRule('workspace.prev', 'skip', (handlers) => {
+    handlers.workspacePrev?.();
+  }),
+  ...WORKSPACE_JUMP_RULES,
+  globalRule('global.toggleTargetGroup', 'skip', (handlers) => {
+    handlers.toggleTargetGroup?.();
+  }),
+  globalRule('global.keyHelp', 'skip', (handlers) => {
+    handlers.keyHelp();
+  }),
+];
+
+/** Command-modified named chords — after {@link ResolvedBindings.isCommandModified} gate. */
+export const MODIFIED_GLOBAL_RULES: readonly GlobalRule[] = [
+  globalRule('global.toggleTargetPane', 'skip', (handlers) => {
+    handlers.toggleTargetPane();
+  }),
+  globalRule('global.cycleTargetPrev', 'skip', (handlers) => {
+    handlers.cycleTargetPrev();
+  }),
+  globalRule('global.cycleTargetNext', 'skip', (handlers) => {
+    handlers.cycleTargetNext();
+  }),
+  globalRule('global.focusChat', 'skip', (handlers) => {
+    handlers.focusChat();
+  }),
+  globalRule('global.spawn', 'fall-through', (handlers) => {
+    handlers.spawn();
+  }),
+  globalRule('global.cycleChatView', 'skip', (handlers) => {
+    handlers.cycleChatView();
+  }),
+  globalRule('global.newPlan', 'skip', (handlers) => {
+    handlers.newPlan();
+  }),
+  globalRule('global.workflowEditor', 'skip', (handlers) => {
+    handlers.openWorkflowTemplateEditor?.();
+  }),
+  globalRule('global.settings', 'skip', (handlers) => {
+    handlers.openSettings();
+  }),
+];
+
+function tryGlobalRules(
+  rules: readonly GlobalRule[],
+  input: string,
+  key: Key,
+  handlers: GlobalHandlers,
+  focusedId: FocusId,
+  bindings: ResolvedBindings,
+): ActionId | null {
+  for (const rule of rules) {
+    if (!bindings.matches(rule.id, input, key)) {
+      continue;
+    }
+    if (!inFocusScope(rule.scope, focusedId)) {
+      if (rule.onDecline === 'fall-through') {
+        return null;
+      }
+      continue;
+    }
+    rule.run(handlers, input);
+    return rule.id;
+  }
+  return null;
+}
+
 /**
  * Try the global-chord layer. Returns the matched {@link ActionId} when a named global chord claims
  * the event, or `null` when nothing matched (digit toggles and vim nav also return `null` but set
@@ -255,145 +365,35 @@ function dispatchGlobalChord(
     handlers.murderCancel();
   }
 
-  // `global.murder` (ctrl+m, a plain chord) ARMS the confirm. Matched before the command-modifier
-  // gate (like quickNote — under a ctrl/both modifier the gate would swallow it). The crows panel is
-  // the documented decline: with `crows` focused the chord falls through to the panel keymap, which
-  // arms with its own LOCAL cursor row (rule 1 — the global layer cannot see panel cursors; the same
-  // decline-to-panel pattern as `global.spawn`'s chat-only guard).
-  if (bindings.matches('global.murder', input, key)) {
-    if (!inFocusScope(GLOBAL_SCOPE['global.murder'], focusedId)) {
-      return null; // crows focus: fall to the panel keymap, which arms with its local cursor row
-    }
-    handlers.murder();
-    return 'global.murder';
+  const plainAction = tryGlobalRules(
+    PLAIN_GLOBAL_RULES,
+    input,
+    key,
+    handlers,
+    focusedId,
+    bindings,
+  );
+  if (plainAction !== null) {
+    return plainAction;
   }
 
-  // `global.quickNote` (ctrl+n) is a `plain` chord, matched BEFORE the command-modifier gate so a
-  // `modifier=ctrl`/`both` setting can't shadow it: under those settings `isCommandModified` is true
-  // for any ctrl event, and the gate below would route ctrl+n into the digit/vim/named-command branch
-  // where it has no entry — silently swallowing it. Checking the explicit plain chord first keeps
-  // ctrl+n reaching the note capture under every modifier choice. It carries ctrl, which plain typing
-  // never does, so checking it ahead of typing is safe (same property the rest of the layer relies on).
-  if (bindings.matches('global.quickNote', input, key)) {
-    handlers.quickNote();
-    return 'global.quickNote';
-  }
-
-  // `global.repaint` (ctrl+r) forces a full terminal redraw after external screen disturbances that
-  // leave Ink's incremental line cache stale. Matched before the command-modifier gate (plain chord).
-  if (bindings.matches('global.repaint', input, key)) {
-    handlers.repaint();
-    return 'global.repaint';
-  }
-
-  // `workspace.*` shifted command chords — BEFORE any unshifted binding on the same base key
-  // (ctrl+shift+j also satisfies bare ctrl+j for `global.toggleTargetGroup`; shift+k/j likewise
-  // preempt vim nav; shift+digits preempt panel toggles). `bindings.matches` is self-filtering to
-  // the shifted chord shapes (see commandChord).
-  if (bindings.matches('workspace.next', input, key)) {
-    handlers.workspaceNext?.();
-    return 'workspace.next';
-  }
-  if (bindings.matches('workspace.prev', input, key)) {
-    handlers.workspacePrev?.();
-    return 'workspace.prev';
-  }
-  if (bindings.matches('workspace.jump.1', input, key)) {
-    handlers.workspaceJump?.(0);
-    return 'workspace.jump.1';
-  }
-  if (bindings.matches('workspace.jump.2', input, key)) {
-    handlers.workspaceJump?.(1);
-    return 'workspace.jump.2';
-  }
-  if (bindings.matches('workspace.jump.3', input, key)) {
-    handlers.workspaceJump?.(2);
-    return 'workspace.jump.3';
-  }
-  if (bindings.matches('workspace.jump.4', input, key)) {
-    handlers.workspaceJump?.(3);
-    return 'workspace.jump.4';
-  }
-  if (bindings.matches('workspace.jump.5', input, key)) {
-    handlers.workspaceJump?.(4);
-    return 'workspace.jump.5';
-  }
-  if (bindings.matches('workspace.jump.6', input, key)) {
-    handlers.workspaceJump?.(5);
-    return 'workspace.jump.6';
-  }
-  if (bindings.matches('workspace.jump.7', input, key)) {
-    handlers.workspaceJump?.(6);
-    return 'workspace.jump.7';
-  }
-  if (bindings.matches('workspace.jump.8', input, key)) {
-    handlers.workspaceJump?.(7);
-    return 'workspace.jump.8';
-  }
-  if (bindings.matches('workspace.jump.9', input, key)) {
-    handlers.workspaceJump?.(8);
-    return 'workspace.jump.9';
-  }
-
-  // `global.toggleTargetGroup` (ctrl+j, a `plain` chord) toggles the chat recipient target between
-  // locked-visible and favorite-only groups. It is chat-scoped like the other target super-chords,
-  // but it must be matched BEFORE the command-modifier gate: with the default alt modifier, ctrl+j is
-  // not command-modified, so a gate-first order makes the binding unreachable. It carries ctrl, so it
-  // cannot steal ordinary typed `j`.
-  if (
-    inFocusScope(GLOBAL_SCOPE['global.toggleTargetGroup'], focusedId) &&
-    bindings.matches('global.toggleTargetGroup', input, key)
-  ) {
-    handlers.toggleTargetGroup?.();
-    return 'global.toggleTargetGroup';
-  }
-
-  // Item 12: the keybinding help overlay (`global.keyHelp`, a *plain* `?` — no command modifier, so it
-  // is reachable in every terminal). It claims the event ONLY when chat is NOT focused, so a literal
-  // `?` typed into the chat field is never stolen (chat-focused `?` falls through to layer 2). Checked
-  // before the command-modifier gate precisely because it is a plain key, not a command chord.
-  if (
-    inFocusScope(GLOBAL_SCOPE['global.keyHelp'], focusedId) &&
-    bindings.matches('global.keyHelp', input, key)
-  ) {
-    handlers.keyHelp();
-    return 'global.keyHelp';
-  }
-
-  // The command modifier (alt by default; ctrl/both via settings) gates the whole layer. The
-  // registry knows which flag(s) qualify, so this is no longer a hardcoded `key.meta` — but the
-  // safety property is unchanged: the command modifier is never set by plain typing, so checking
-  // these first can't swallow a typed character.
+  // The command modifier (alt by default; ctrl/both via settings) gates the modified-command group.
+  // Plain chords above are matched first so ctrl+n / ctrl+r / shifted workspace chords are never
+  // shadowed by the gate.
   if (!bindings.isCommandModified(key)) {
     return null;
   }
 
-  // `global.toggleTargetPane` (command+w) toggles show/hide for the active transcript or doc pane.
-  // Chat-or-stage scope: from chat it toggles the current recipient target's transcript pane; from a
-  // Stage pane it hides the focused transcript or doc pane. Checked before the chat-only target-cycle
-  // chords so alt+w is not mistaken for geometric nav on a Stage pane.
-  if (
-    inFocusScope(GLOBAL_SCOPE['global.toggleTargetPane'], focusedId) &&
-    bindings.matches('global.toggleTargetPane', input, key)
-  ) {
-    handlers.toggleTargetPane();
-    return 'global.toggleTargetPane';
-  }
-
-  // Item 9 super-chords — chat-target cycling, active ONLY while the chat input has
-  // focus. Gated here (the chat-focus branch of the global layer), NOT as unconditional globals,
-  // because away from chat the same `alt+h`/`alt+l` are geometric panel nav (handled just below by
-  // VIM_NAV) and `alt+w` is handled above. Checked before VIM_NAV so the cycle chords win over nav while
-  // typing a message.
-  if (inFocusScope(GLOBAL_SCOPE['global.cycleTargetPrev'], focusedId)) {
-    if (bindings.matches('global.cycleTargetPrev', input, key)) {
-      handlers.cycleTargetPrev();
-      return 'global.cycleTargetPrev';
-    }
-    if (bindings.matches('global.cycleTargetNext', input, key)) {
-      handlers.cycleTargetNext();
-      return 'global.cycleTargetNext';
-    }
+  const modifiedAction = tryGlobalRules(
+    MODIFIED_GLOBAL_RULES,
+    input,
+    key,
+    handlers,
+    focusedId,
+    bindings,
+  );
+  if (modifiedAction !== null) {
+    return modifiedAction;
   }
 
   // <mod>+<n>: panel toggle/focus. `panelForDigit` returns null for reserved/unbound digits → no-op.
@@ -412,45 +412,6 @@ function dispatchGlobalChord(
     return null;
   }
 
-  // The named single-purpose app chords, matched against the resolved bindings (so a rebind or a
-  // different modifier is honoured without touching this code).
-  if (bindings.matches('global.focusChat', input, key)) {
-    // focus the chat input (was alt+f, which now stars in panels).
-    handlers.focusChat();
-    return 'global.focusChat';
-  }
-  if (bindings.matches('global.spawn', input, key)) {
-    // Spawn wizard when chat OR a Stage pane (transcript / doc) holds focus (see the fn doc);
-    // otherwise (a list panel) decline (return false → falls through to layer 3, where panels no
-    // longer bind the spawn chord, so it is unhandled). The spawn handler reads the effective focus to
-    // decide whether to include the doc file in context (doc pane → yes; transcript pane → no).
-    if (inFocusScope(GLOBAL_SCOPE['global.spawn'], focusedId)) {
-      handlers.spawn();
-      return 'global.spawn';
-    }
-    return null;
-  }
-  if (bindings.matches('global.cycleChatView', input, key)) {
-    // TUIchat-3: cycle the focused transcript pane's view (verbose → condensed → tmux). Took over `t` from
-    // the now chord-less newTicket; the old tmux chord `y` is freed/parked.
-    handlers.cycleChatView();
-    return 'global.cycleChatView';
-  }
-  if (bindings.matches('global.newPlan', input, key)) {
-    // C12: new-plan popup.
-    handlers.newPlan();
-    return 'global.newPlan';
-  }
-  if (bindings.matches('global.workflowEditor', input, key)) {
-    handlers.openWorkflowTemplateEditor?.();
-    return 'global.workflowEditor';
-  }
-  if (bindings.matches('global.settings', input, key)) {
-    // Phase 5: the settings modal. Like the other app chords it wins app-wide (it carries the
-    // command modifier, so it never swallows typing) — opens the settings modal from any focus.
-    handlers.openSettings();
-    return 'global.settings';
-  }
   return null;
 }
 
@@ -532,9 +493,19 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
   }
 
   // Layer 3 — delegate to the focused panel's declared keymap.
+  // Escape (when the panel did not claim it) restores composer focus — same contract as web
+  // `panelFocusStore.clear()` on Esc. Panels that bind Escape for a local dismiss/cancel keep that
+  // binding via the keymap match below.
+  const restoreComposerOnEscape = (): DispatchOutcome | null => {
+    if (key.escape !== true) {
+      return null;
+    }
+    ctx.handlers.focusChat();
+    return { layer: 'panel', handled: true, action: 'global.focusChat' };
+  };
   const panelKeymap = ctx.panelKeymaps[ctx.focusedId];
   if (panelKeymap === undefined) {
-    return { layer: 'panel', handled: false };
+    return restoreComposerOnEscape() ?? { layer: 'panel', handled: false };
   }
   // A coalesced printable run (fast typing over a slow pty, tmux send-keys, paste) reaches Ink as
   // ONE event whose `input` is the whole string — which a single-key chord can never match, so the
@@ -555,13 +526,13 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
       }
     }
     if (!handledAny) {
-      return { layer: 'panel', handled: false };
+      return restoreComposerOnEscape() ?? { layer: 'panel', handled: false };
     }
     return { layer: 'panel', handled: true, action: `${ctx.focusedId}:${lastIntent}` };
   }
   const intent = matchKeymap(panelKeymap.keymap, input, key);
   if (intent === null) {
-    return { layer: 'panel', handled: false };
+    return restoreComposerOnEscape() ?? { layer: 'panel', handled: false };
   }
   panelKeymap.onIntent(intent);
   return { layer: 'panel', handled: true, action: `${ctx.focusedId}:${intent}` };
