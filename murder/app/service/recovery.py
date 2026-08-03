@@ -1,8 +1,9 @@
 """Startup reconciliation: DB agent rows vs live tmux sessions.
 
 Called during Runtime.start() to detect and clean up zombie agents —
-rows that claim to be running/idle but whose tmux sessions are gone
-(TUI crash, kill -9, system reboot, etc.).
+rows that claim to be running/idle but cannot be addressed after restart
+(missing tmux pane, or a surviving pane with no in-process registry
+registration — e.g. ticketless rogue crows after ``serviced`` restart).
 
 This module is synchronous-DB-only. The caller fetches live sessions
 and passes them in so the function is easily testable without tmux.
@@ -82,8 +83,12 @@ def reconcile_agents_vs_tmux(
     """Mark zombie agents dead. Recover tickets stuck in in_progress.
 
     Algorithm:
-    1. For every non-terminal agent row, if its session name is not in
-       `live_sessions`, mark it `dead`.
+    1. For every non-terminal agent row that will not be rehydrated into the
+       in-process registry, mark it ``dead``. Ticketed crows whose tmux pane
+       survived are the only agents left alive for the reattach pass; orphan
+       panes for rogues/collaborators/handlers are queued for kill so the
+       roster never advertises a messageable agent that ``agent.message``
+       cannot address.
     2. For every ticket in `in_progress` whose crow agent is now dead (or
        never registered), transition to `failed` so kickoff_ready can
        retry once the user (or recovery) reopens it.
@@ -109,15 +114,28 @@ def reconcile_agents_vs_tmux(
             if session:
                 report.sessions_to_kill.append(session)
             continue
-        # Agents with no session (pure-coroutine roles) are managed entirely
-        # by the runtime. Skip them. They will re-register on startup.
-        if not session:
+        # Only ticketed crows with a surviving pane are reattached into the
+        # registry. Rogues (ticketless crows), collaborators, and handlers
+        # keep a live tmux pane after serviced restart but have no runtime
+        # handle — leave them in the roster as idle and agent.message fails
+        # with "no agent named …". Reap them here.
+        if (
+            row["role"] == "crow"
+            and row["ticket_id"]
+            and session
+            and session in live_sessions
+        ):
             continue
-        if session not in live_sessions:
-            _db_set_agent_status(db, row["agent_id"], "dead")
-            report.agents_marked_dead.append(row["agent_id"])
+        _db_set_agent_status(db, row["agent_id"], "dead")
+        report.agents_marked_dead.append(row["agent_id"])
+        if session and session in live_sessions:
+            report.sessions_to_kill.append(session)
 
-    _reconcile_persisted_harness_sessions(db, live_sessions, report)
+    # Treat panes we are about to kill as already gone so their harness
+    # session rows flip to lost (and writers revoke) in this same pass.
+    _reconcile_persisted_harness_sessions(
+        db, live_sessions - set(report.sessions_to_kill), report
+    )
 
     # Recover in_progress tickets whose crow agent is no longer live.
     in_progress = conn.execute(

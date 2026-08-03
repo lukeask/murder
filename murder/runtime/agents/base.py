@@ -131,6 +131,35 @@ class HarnessBackedAgent(LifecycleParticipant):
     acp_connection: Any | None = None
     # Live Claude Agent SDK connection when control backend is ``agent_sdk``.
     agent_sdk_connection: Any | None = None
+    # F11 H1 sibling: coalescing bucket for roster invalidation driven by conversation
+    # / tool activity (not crow_handler heartbeats). Rogues have no CrowHandler, so without
+    # this their ``last_seen`` freezes after the last status sync despite live transcript
+    # activity. Same ``HEARTBEAT_EMIT_BUCKET_S`` policy as crow_handler — DB write every
+    # activity tick, invalidate at most once per bucket.
+    _last_activity_roster_bucket: int | None = None
+
+    def _touch_roster_activity(self, *, force_invalidate: bool = False) -> None:
+        """Bump ``last_heartbeat_at`` (roster ``last_seen``) for live conversation activity.
+
+        ``force_invalidate=True`` always publishes a roster refresh (user-message sends are
+        rare). Otherwise invalidation is bucket-coalesced like crow_handler heartbeats so a
+        streaming assistant reply does not storm Ink's roster refetch.
+        """
+        import time
+
+        runtime = getattr(self, "runtime", None)
+        if runtime is None or runtime.db is None:
+            return
+        roster = getattr(runtime, "roster", None)
+        if roster is None:
+            return
+        from murder.state.persistence.agents import heartbeat_bucket
+
+        bucket = heartbeat_bucket(time.monotonic())
+        invalidate = force_invalidate or bucket != self._last_activity_roster_bucket
+        if invalidate:
+            self._last_activity_roster_bucket = bucket
+        roster.heartbeat_agent(runtime.db, self.id, invalidate=invalidate)
 
     async def initialize_verified_harness_control(self) -> None:
         runtime = getattr(self, "runtime", None)
@@ -599,6 +628,10 @@ class HarnessBackedAgent(LifecycleParticipant):
         projection = await self._producer.poll_document(transcript)
         await self._emit_plan_resort_if_planner(projection.changed)
         await self._route_projected_orchestration_signals(projection.changes)
+        # Roster freshness: conversation/tool projections count as activity even when
+        # status stays IDLE (rogues have no CrowHandler heartbeat loop).
+        if projection.changed:
+            self._touch_roster_activity()
         # Process-lifecycle status: reconcile agents.status (the crows-panel
         # spinner) with the harness's working↔idle signal (BUG-13).
         self._sync_lifecycle_status()
@@ -779,6 +812,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         from murder.state.persistence import conversation
 
         conversation.append_user_message(runtime.db, self.id, text)
+        self._touch_roster_activity(force_invalidate=True)
 
     async def record_user_block_event(self, text: str) -> None:
         """Record and push a ground-truth ``user`` block."""
@@ -789,6 +823,8 @@ class HarnessBackedAgent(LifecycleParticipant):
 
         block = conversation.append_user_message(runtime.db, self.id, text)
         if block is not None:
+            # User turn is authoritative activity — refresh roster last_seen immediately.
+            self._touch_roster_activity(force_invalidate=True)
             await self._publish_conversation_block(
                 "block-appended",
                 conversation.block_to_wire(block),

@@ -112,6 +112,26 @@ async def _receive_until(ws: Any, *, op: str, timeout_s: float = 2.0) -> dict[st
 
 
 @pytest.mark.asyncio
+async def test_protocol_version_mismatch_sends_version_mismatch_error(tmp_path: Path) -> None:
+    """Stale clients must receive version_mismatch (not a bare close) so they stop reconnecting."""
+    server, url, _app, db = await _start_server(tmp_path=tmp_path)
+    try:
+        async with ClientSession() as http, http.ws_connect(url) as ws:
+            await ws.send_json(
+                {
+                    "op": "client.hello",
+                    "protocol_version": APPLICATION_PROTOCOL_VERSION - 1,
+                    "client": {"client_id": "stale-client", "kind": "tui"},
+                }
+            )
+            error = await _receive_until(ws, op="error", timeout_s=2.0)
+            assert error["error"]["code"] == ErrorCode.VERSION_MISMATCH
+            assert "protocol version mismatch" in error["error"]["message"]
+    finally:
+        await _stop_server(server, db)
+
+
+@pytest.mark.asyncio
 async def test_request_reply_over_real_websocket(tmp_path: Path) -> None:
     server, url, _app, db = await _start_server(tmp_path=tmp_path)
     try:

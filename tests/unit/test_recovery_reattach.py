@@ -127,6 +127,49 @@ def test_stale_handler_already_terminal_is_idempotent():
     assert report.agents_marked_dead.count("crow_handler-t004") == 0
 
 
+def test_orphan_rogue_with_live_session_marked_dead_and_session_queued():
+    """Ticketless rogues are not reattached; a surviving pane must not stay idle.
+
+    After serviced restart the tmux pane can still exist while AgentRegistry is
+    empty, so roster.get would advertise the rogue and agent.message would
+    return "no agent named …". Reap the DB row and queue the orphan pane.
+    """
+    conn = _db()
+    session = "murder_repo_crow_cursor_rogue_website-builder"
+    _insert_agent(conn, "cursor-rogue-website-builder", "crow", "idle", session)
+
+    report = reconcile_agents_vs_tmux(conn, live_sessions={session})
+
+    assert report.crows_to_reattach == []
+    assert "cursor-rogue-website-builder" in report.agents_marked_dead
+    assert session in report.sessions_to_kill
+    status = conn.conn.execute(
+        "SELECT status FROM agents WHERE agent_id = 'cursor-rogue-website-builder'"
+    ).fetchone()["status"]
+    assert status == "dead"
+
+
+def test_orphan_collaborator_with_live_session_marked_dead():
+    conn = _db()
+    session = "murder_repo_collaborator"
+    _insert_agent(conn, "collaborator-0", "collaborator", "running", session)
+
+    report = reconcile_agents_vs_tmux(conn, live_sessions={session})
+
+    assert "collaborator-0" in report.agents_marked_dead
+    assert session in report.sessions_to_kill
+
+
+def test_null_session_live_status_marked_dead():
+    """No pane and no registry rehydration path — do not leave the row idle."""
+    conn = _db()
+    _insert_agent(conn, "crow_handler-ghost", "crow_handler", "idle", None)
+
+    report = reconcile_agents_vs_tmux(conn, live_sessions=set())
+
+    assert "crow_handler-ghost" in report.agents_marked_dead
+
+
 def test_missing_tmux_controller_session_is_lost_and_writer_revoked():
     conn = _db()
     store = SessionStore(conn)

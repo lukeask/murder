@@ -121,6 +121,21 @@ def test_installed_probe_missing_bundle_raises(repo_root: Path, monkeypatch, tmp
         _resolve_ink_entrypoint(repo_root)
 
 
+def test_packaged_inktui_bundle_protocol_version_matches_server() -> None:
+    """Editable/wheel installs serve murder/_inktui; keep it on the live wire version."""
+    import re
+
+    from importlib.resources import files
+
+    from murder.app.protocol.common import APPLICATION_PROTOCOL_VERSION
+
+    bundle = Path(str(files("murder") / "_inktui" / "index.js"))
+    assert bundle.is_file(), f"missing packaged Ink bundle at {bundle}"
+    match = re.search(r"APPLICATION_PROTOCOL_VERSION\s*=\s*(\d+)", bundle.read_text(encoding="utf-8"))
+    assert match is not None, "packaged Ink bundle does not embed APPLICATION_PROTOCOL_VERSION"
+    assert int(match.group(1)) == APPLICATION_PROTOCOL_VERSION
+
+
 # --- spawn sets the application endpoint ----------------------------------------------------------
 
 

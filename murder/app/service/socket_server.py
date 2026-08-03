@@ -605,7 +605,21 @@ class ApplicationSocketServer:
             if not isinstance(hello, ClientHello):
                 raise ValueError("first application message must be client.hello")
             if hello.protocol_version != APPLICATION_PROTOCOL_VERSION:
-                raise ValueError("application protocol version mismatch")
+                # Send before ApplicationConnection exists so stale clients can stop
+                # reconnecting (Node treats version_mismatch as permanent).
+                await ws.send_json(
+                    ErrorMessage(
+                        error={
+                            "code": ErrorCode.VERSION_MISMATCH,
+                            "message": (
+                                "application protocol version mismatch: "
+                                f"client={hello.protocol_version} "
+                                f"server={APPLICATION_PROTOCOL_VERSION}"
+                            ),
+                        }
+                    ).model_dump(mode="json")
+                )
+                return ws
             connection = ApplicationConnection(ws, hello.client.client_id)
             self._connections[connection.client_id] = connection
             await connection.send(ServerHello(server_id=self._run_id, queries=list(self._gateway.available_queries), commands=list(self._gateway.available_commands), fact_cursor=self._facts.watermark(), projection_cursor=self._inputs.watermark()))
@@ -614,8 +628,14 @@ class ApplicationSocketServer:
                     continue
                 await self._dispatch(connection, APPLICATION_WIRE_ADAPTER.validate_json(raw.data))
         except Exception as exc:
+            payload = ErrorMessage(
+                error={"code": ErrorCode.INVALID_MESSAGE, "message": str(exc)}
+            )
             if connection is not None:
-                await connection.send(ErrorMessage(error={"code": ErrorCode.INVALID_MESSAGE, "message": str(exc)}))
+                await connection.send(payload)
+            else:
+                with contextlib.suppress(Exception):
+                    await ws.send_json(payload.model_dump(mode="json"))
         finally:
             if connection is not None:
                 if self._connections.get(connection.client_id) is connection:

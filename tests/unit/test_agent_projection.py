@@ -106,6 +106,47 @@ def test_rogue_project_once_persists_assistant_reply(
     assert len(fake_tmux.calls_to("capture_pane")) == captures_before_queue
 
 
+def test_project_once_touches_roster_last_seen_on_activity(
+    fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """Conversation projection bumps roster last_seen (rogues have no CrowHandler heartbeat)."""
+    db = open_test_repo_db(tmp_path / "state.db")
+    bus = SimpleNamespace(publish=AsyncMock())
+    roster = SimpleNamespace(heartbeat_agent=MagicMock())
+    runtime = SimpleNamespace(
+        db=db,
+        orchestration_events=bus,
+        run_id="run-1",
+        sync_agent=MagicMock(),
+        roster=roster,
+    )
+    agent = CrowAgent(
+        agent_id="claude-rogue-testingpostworker",
+        ticket_id=None,
+        session="murder_test_rogue",
+        harness=ClaudeCodeAdapter(),
+        repo_root=tmp_path,
+        runtime=runtime,
+    )
+    agent.status = AgentStatus.RUNNING
+    agent.start_conversation()
+    agent._producer._summary_provider_resolved = True
+    pane = _last_frame()
+    fake_tmux.queue_pane("")
+    fake_tmux.queue_pane(pane)
+    asyncio.run(agent.initialize_verified_harness_control())
+
+    asyncio.run(agent.project_once())
+
+    roster.heartbeat_agent.assert_called()
+    assert any(
+        call.args[0] is db
+        and call.args[1] == "claude-rogue-testingpostworker"
+        and call.kwargs.get("invalidate") is True
+        for call in roster.heartbeat_agent.call_args_list
+    )
+
+
 def test_project_once_is_noop_without_producer(fake_tmux: FakeTmux, tmp_path: Path) -> None:
     """No db ⇒ no producer ⇒ project_once does not even touch the pane."""
     bus = SimpleNamespace(publish=AsyncMock())
