@@ -1,12 +1,12 @@
 /**
- * `NewTicketModal` — the `:ticket` new-ticket popup: a **modal C7M mode** that presents a title
- * field for a new ticket.
+ * `NewWorkModal` — the `:ticket` start-work popup: a **modal C7M mode** that presents a title
+ * field for new work.
  *
  * ## Launch path
  *
- * When {@link NewTicketModeOptions.preferBuiltinTicket} is set (configured harness/model defaults
+ * When {@link NewWorkModeOptions.preferBuiltinTicketWorkflow} is set (configured harness/model defaults
  * make the built-in ``ticket`` workflow runnable), submit fires ``workflow.start`` via
- * {@link DialogActions.startBuiltinTicket}. Otherwise it keeps the temporary
+ * {@link DialogActions.startBuiltinTicketWorkflow}. Otherwise it keeps the temporary
  * ``ticket.quick_create`` fallback for unconfigured planned tickets.
  *
  * This dialog stays in-TUI (rule 1 — no `$EDITOR`-blank).
@@ -44,8 +44,8 @@ const PROMPT_EDITOR_WIDTH = 54;
 // Import the dispatcher augmentation so Mode gets the `onUncaptured` field at the TS level.
 import '@murder/ui-core/input/dispatcher.js';
 
-/** Intent union for the new-ticket dialog — special key actions only. */
-type NewTicketIntent =
+/** Intent union for the new-work dialog — special key actions only. */
+type NewWorkIntent =
   | 'backspace'
   | 'deleteForward'
   | 'moveLeft'
@@ -64,7 +64,7 @@ type NewTicketIntent =
 type FocusField = 'title' | 'prompt';
 
 /** Options passed to the mode factory. */
-export interface NewTicketModeOptions {
+export interface NewWorkModeOptions {
   /** Called with the new ticket's id + title after a successful submit (fired after mode exits). */
   readonly onSubmit?: (ticketId: string, title: string) => void;
   /** Called when the dialog is dismissed without submitting (fired after mode exits). */
@@ -73,14 +73,14 @@ export interface NewTicketModeOptions {
    * When true, submit launches the built-in ``ticket`` workflow (title + optional instructions).
    * When false/omitted, falls back to ``ticket.quick_create`` (title only).
    */
-  readonly preferBuiltinTicket?: boolean;
+  readonly preferBuiltinTicketWorkflow?: boolean;
 }
 
 /** The stable mode id so a re-enter is idempotent. */
-export const NEW_TICKET_MODE_ID = 'new-ticket';
+export const NEW_WORK_MODE_ID = 'new-work';
 
 /** Mutable local state inside the mode closure. Not React state — the mode is plain data. */
-interface NewTicketState {
+interface NewWorkState {
   title: TextEditorState;
   prompt: TextEditorState;
   focus: FocusField;
@@ -88,22 +88,22 @@ interface NewTicketState {
 }
 
 /**
- * Build the new-ticket {@link Mode}. Enter via:
- * `modes.getState().enter(newTicketMode(modes, actions, {}))`.
+ * Build the new-work {@link Mode}. Enter via:
+ * `modes.getState().enter(newWorkMode(modes, actions, {}))`.
  *
  * The mode is self-dismissing: `submit` calls `modes.exit(id)` before the async RPC
  * (exit-then-act — same as ConfirmModal and NewPlanModal).
  */
-export function newTicketMode(
+export function newWorkMode(
   modes: ModeStoreApi,
   actions: DialogActions,
-  opts: NewTicketModeOptions = {},
-): Mode<NewTicketIntent> {
-  const id = NEW_TICKET_MODE_ID;
-  const preferBuiltin = opts.preferBuiltinTicket === true;
+  opts: NewWorkModeOptions = {},
+): Mode<NewWorkIntent> {
+  const id = NEW_WORK_MODE_ID;
+  const preferBuiltin = opts.preferBuiltinTicketWorkflow === true;
 
   // Mutable local state in the closure — not React state.
-  const s: NewTicketState = {
+  const s: NewWorkState = {
     title: editorAtEnd(),
     prompt: editorAtEnd(),
     focus: 'title',
@@ -127,7 +127,7 @@ export function newTicketMode(
     else s.prompt = next;
   }
 
-  const mode: Mode<NewTicketIntent> = {
+  const mode: Mode<NewWorkIntent> = {
     id,
     presentation: 'modal',
     // No pass-through: the dialog captures every key while up.
@@ -165,43 +165,43 @@ export function newTicketMode(
       // Inserts a newline in Instructions; no-op while Title is focused.
       { chord: { key: { shift: true, return: true } }, intent: 'newline', description: 'newline' },
       // Enter: submit.
-      { chord: { key: { return: true } }, intent: 'submit', description: 'create ticket' },
+      { chord: { key: { return: true } }, intent: 'submit', description: preferBuiltin ? 'start work' : 'create' },
       // Escape: dismiss.
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'cancel' },
     ],
     onIntent(intent) {
       switch (intent) {
         case 'backspace': {
-          setActiveEditor(editTicket(activeEditor(), { type: 'backspace' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'backspace' }, s.focus));
           refresh();
           break;
         }
         case 'deleteForward':
-          setActiveEditor(editTicket(activeEditor(), { type: 'deleteForward' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'deleteForward' }, s.focus));
           refresh();
           break;
         case 'moveLeft':
-          setActiveEditor(editTicket(activeEditor(), { type: 'moveLeft' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'moveLeft' }, s.focus));
           refresh();
           break;
         case 'moveRight':
-          setActiveEditor(editTicket(activeEditor(), { type: 'moveRight' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'moveRight' }, s.focus));
           refresh();
           break;
         case 'moveUp':
-          setActiveEditor(editTicket(activeEditor(), { type: 'moveVisualUp' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'moveVisualUp' }, s.focus));
           refresh();
           break;
         case 'moveDown':
-          setActiveEditor(editTicket(activeEditor(), { type: 'moveVisualDown' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'moveVisualDown' }, s.focus));
           refresh();
           break;
         case 'home':
-          setActiveEditor(editTicket(activeEditor(), { type: 'moveLineStart' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'moveLineStart' }, s.focus));
           refresh();
           break;
         case 'end':
-          setActiveEditor(editTicket(activeEditor(), { type: 'moveLineEnd' }, s.focus));
+          setActiveEditor(editField(activeEditor(), { type: 'moveLineEnd' }, s.focus));
           refresh();
           break;
         case 'deleteAll': {
@@ -223,7 +223,7 @@ export function newTicketMode(
           break;
         case 'newline': {
           if (s.focus === 'prompt') {
-            setActiveEditor(editTicket(activeEditor(), { type: 'insertNewline' }, s.focus));
+            setActiveEditor(editField(activeEditor(), { type: 'insertNewline' }, s.focus));
             refresh();
           }
           break;
@@ -241,7 +241,7 @@ export function newTicketMode(
           const title = preparedTitle.value;
           const prompt = s.prompt.text;
           const create = preferBuiltin
-            ? actions.startBuiltinTicket({ title, prompt }).then((result) => ({
+            ? actions.startBuiltinTicketWorkflow({ title, prompt }).then((result) => ({
                 ticket_id: result.ticket_id,
                 title: result.title,
               }))
@@ -290,7 +290,7 @@ export function newTicketMode(
       return true;
     },
     render: () => (
-      <NewTicketDialog
+      <NewWorkDialog
         title={s.title}
         prompt={s.prompt}
         focus={s.focus}
@@ -303,7 +303,7 @@ export function newTicketMode(
   return mode;
 }
 
-function editTicket(
+function editField(
   state: TextEditorState,
   command: import('@murder/ui-core/input/textEditor/commands.js').EditorCommand,
   focus: FocusField,
@@ -317,7 +317,7 @@ function editTicket(
 }
 
 /** The dialog's presentation — a pure function of its props (rule 1). No store/bus knowledge. */
-function NewTicketDialog({
+function NewWorkDialog({
   title,
   prompt,
   focus,
@@ -331,6 +331,7 @@ function NewTicketDialog({
   readonly showPrompt: boolean;
 }): JSX.Element {
   const theme = useTheme();
+  const heading = showPrompt ? 'Start work' : 'New work';
   return (
     <Box
       flexDirection="column"
@@ -341,7 +342,7 @@ function NewTicketDialog({
       width={60}
     >
       <Text bold color={theme.success}>
-        New Ticket
+        {heading}
       </Text>
       <Box marginTop={1} flexDirection="column">
         <Text color={theme.text}>Title:</Text>

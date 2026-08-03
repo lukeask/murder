@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PLAN_NAME_REQUIRED_ERROR,
-  TICKET_TITLE_REQUIRED_ERROR,
+  WORK_TITLE_REQUIRED_ERROR,
   prepareCreatePlan,
   prepareTicketTitle,
 } from '@murder/ui-core/create/creationPayloads.js';
@@ -51,7 +51,7 @@ describe('creation payload preparation', () => {
     expect(prepareTicketTitle('  Fix the race  ')).toEqual({ ok: true, value: 'Fix the race' });
     expect(prepareTicketTitle(' \n ')).toEqual({
       ok: false,
-      error: TICKET_TITLE_REQUIRED_ERROR,
+      error: WORK_TITLE_REQUIRED_ERROR,
     });
   });
 });

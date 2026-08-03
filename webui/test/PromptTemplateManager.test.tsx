@@ -90,7 +90,7 @@ describe('PromptTemplateManager', () => {
       bus,
       creationDialogs: {
         openSpawn: () => {},
-        openTicket: () => {},
+        openNewWork: () => {},
         openPlan: () => {},
         openReport: () => {},
         openNoteCapture: () => {},

@@ -9,7 +9,7 @@
 import { defaultModelFor } from '../../components/settings/items/harnesses.js';
 import type { SettingsState } from '../settings/settingsSlice.js';
 
-export function canLaunchBuiltinTicket(settings: SettingsState): boolean {
+export function canLaunchBuiltinTicketWorkflow(settings: SettingsState): boolean {
   const sr = settings.startupRogue;
   if (sr === null) return false;
   const harness = sr.harness.trim();

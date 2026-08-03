@@ -62,8 +62,8 @@ export interface DeferredGlobalHandlers {
   newPlan?: () => void;
   /** `alt+g` / `ctrl+g`: open the workflow template editor. */
   openWorkflowTemplateEditor?: () => void;
-  /** New-ticket handler, reachable through `:ticket`. */
-  newTicket?: () => void;
+  /** Start-work handler, reachable through `:ticket`. */
+  openNewWork?: () => void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action). Default: no-op until a later phase wires the settings
    * modal. Present now so the action's handler slot exists end-to-end (the registry already declares
    * the chord); the dispatcher does not yet route to it — it is wired when the modal lands. */
@@ -275,10 +275,10 @@ export function useRootInput(
         // TUIchat-3: cycle the focused transcript pane's view mode. Default no-op until the shell wires it
         // (App supplies the focus→agentId resolution + the cyclePaneViewMode action call).
         cycleChatView: deferred.cycleChatView ?? (() => {}),
-        // C12: newPlan / newTicket default to no-ops until the caller supplies real handlers.
+        // C12: newPlan / openNewWork default to no-ops until the caller supplies real handlers.
         newPlan: deferred.newPlan ?? (() => {}),
         openWorkflowTemplateEditor: deferred.openWorkflowTemplateEditor ?? (() => {}),
-        newTicket: deferred.newTicket ?? (() => {}),
+        openNewWork: deferred.openNewWork ?? (() => {}),
         // Phase 5: openSettings defaults to a no-op until the shell supplies the settings-modal
         // handler. The `global.settings` chord is now routed in the dispatcher, so this slot is live.
         openSettings: deferred.openSettings ?? (() => {}),

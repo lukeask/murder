@@ -19,7 +19,7 @@ import { CreationDialogsProvider, type CreationDialogsApi } from '../src/creatio
 
 const noopCreationDialogs: CreationDialogsApi = {
   openSpawn: () => {},
-  openTicket: () => {},
+  openNewWork: () => {},
   openPlan: () => {},
   openReport: () => {},
   openNoteCapture: () => {},

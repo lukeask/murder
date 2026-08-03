@@ -157,7 +157,7 @@ export function ChatInput(): React.JSX.Element {
   const store = useAppStoreApi();
   const bus = useApplicationClient();
   const { chatInput, chatHistory, chatVim } = useComposerStores();
-  const { openTicket, openHelp, openWorkflowLibrary } = useCreationDialogs();
+  const { openNewWork, openHelp, openWorkflowLibrary } = useCreationDialogs();
   const conversations = useAppStore((s) => s.conversations, shallow);
   const roster = useAppStore((s) => s.roster, shallow);
   const favorites = useAppStore((s) => s.favorites, shallow);
@@ -220,11 +220,11 @@ export function ChatInput(): React.JSX.Element {
       buildWebCommandCtx({
         store,
         bus,
-        openTicket,
+        openNewWork,
         openHelp,
         openWorkflows: (name) => openWorkflowLibrary(name),
       }),
-    [store, bus, openTicket, openHelp, openWorkflowLibrary],
+    [store, bus, openNewWork, openHelp, openWorkflowLibrary],
   );
 
   const revokeThumb = useCallback((id: string): void => {

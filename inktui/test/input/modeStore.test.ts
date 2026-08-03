@@ -111,28 +111,28 @@ describe('modeStore — focus save/restore', () => {
   });
 
   it('nested modes restore focus layer by layer (each frame remembers its own entry focus)', () => {
-    const { modes, stores } = setup(); // focus starts on tickets
-    modes.getState().enter(mode('a')); // saves tickets
+    const { modes, stores } = setup(); // focus starts on workflows
+    modes.getState().enter(mode('a')); // saves workflows
     stores.focus.getState().focus('crows'); // user moves focus under 'a'
     modes.getState().enter(mode('b')); // saves crows
     modes.getState().exit(); // pop 'b' → restore crows
     expect(stores.focus.getState().intendedId).toBe('crows');
-    modes.getState().exit(); // pop 'a' → restore tickets
+    modes.getState().exit(); // pop 'a' → restore workflows
     expect(stores.focus.getState().intendedId).toBe('workflows');
   });
 
   it('a re-entered mode keeps its ORIGINAL saved focus (does not save its own surface)', () => {
-    const { modes, stores } = setup(); // focus starts on tickets
-    modes.getState().enter(mode('a')); // saves tickets
-    modes.getState().enter(mode('b')); // saves whatever is effective now (tickets)
-    modes.getState().enter(mode('a')); // re-enter buried 'a' — must keep its original saved tickets
+    const { modes, stores } = setup(); // focus starts on workflows
+    modes.getState().enter(mode('a')); // saves workflows
+    modes.getState().enter(mode('b')); // saves whatever is effective now (workflows)
+    modes.getState().enter(mode('a')); // re-enter buried 'a' — must keep its original saved workflows
     modes.getState().exit(); // pop the re-entered 'a'
     expect(stores.focus.getState().intendedId).toBe('workflows');
   });
 
   it('exit(id) of a buried frame does NOT move live focus (only the top frame restores)', () => {
-    const { modes, stores } = setup(); // focus tickets
-    modes.getState().enter(mode('a')); // saves tickets
+    const { modes, stores } = setup(); // focus workflows
+    modes.getState().enter(mode('a')); // saves workflows
     stores.focus.getState().focus('crows');
     modes.getState().enter(mode('b')); // saves crows
     modes.getState().exit('a'); // remove buried 'a' — top 'b' still owns capture, focus unchanged

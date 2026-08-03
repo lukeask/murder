@@ -1,5 +1,5 @@
 /**
- * UsagePanel (Phase C2 DS reskin) smoke test — mirrors the TicketsPanel exemplar. Seeds a ready
+ * UsagePanel (Phase C2 DS reskin) smoke test — mirrors the WorkflowsPanel exemplar. Seeds a ready
  * `usage` slice directly to the store and asserts: the DS Panel title, the harness header, a gauge
  * meter + pct label, the DS Select steering control, and the empty hint. Data wiring (selectUsageView
  * grouping) is exercised by core; this checks the DS composition renders.

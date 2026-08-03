@@ -14,13 +14,13 @@ describe('ds/NavBar', () => {
     const { container } = render(
       <NavBar
         brand="murder"
-        items={['plans', { id: 'tickets', label: 'tickets' }]}
-        active="tickets"
+        items={['plans', { id: 'workflows', label: 'workflows' }]}
+        active="workflows"
         trailing={<span>trail</span>}
       />,
     );
     expect(container.querySelector('.mds-nav__brand')?.textContent).toBe('murder');
-    const active = screen.getByRole('button', { name: 'tickets' });
+    const active = screen.getByRole('button', { name: 'workflows' });
     expect(active.className).toContain('mds-nav__item--active');
     expect(screen.getByRole('button', { name: 'plans' }).className).not.toContain(
       'mds-nav__item--active',

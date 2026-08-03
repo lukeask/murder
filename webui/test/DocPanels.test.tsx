@@ -3,7 +3,7 @@
  * wrapper over DocListPanel, which now composes the DS Panel + ListRow. We seed the relevant `*`
  * slice directly and assert the DS chrome (`.mds-panel`, `.mds-row`), the doc name, the meta cells,
  * the pin toggle, selection wiring, and the plans-only "spawn planner" trailing action. Mirrors the
- * TicketsPanel exemplar smoke test.
+ * WorkflowsPanel exemplar smoke test.
  */
 
 import type { PlanRow } from '@murder/ui-core/store/plans/plansSlice.js';

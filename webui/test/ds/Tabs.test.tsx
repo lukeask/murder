@@ -15,9 +15,9 @@ describe('ds/Tabs', () => {
       <Tabs
         tabs={[
           { id: 'Plans', label: 'Plans' },
-          { id: 'Tickets', label: 'Tickets' },
+          { id: 'Workflows', label: 'Workflows' },
         ]}
-        value="Tickets"
+        value="Workflows"
         variant="pill"
         full
       />,
@@ -25,7 +25,7 @@ describe('ds/Tabs', () => {
     const list = container.querySelector('.mds-tabs');
     expect(list?.className).toContain('mds-tabs--pill');
     expect(list?.className).toContain('mds-tabs--full');
-    const active = screen.getByRole('tab', { name: 'Tickets' });
+    const active = screen.getByRole('tab', { name: 'Workflows' });
     expect(active.className).toContain('mds-tab--active');
     expect(active.getAttribute('aria-selected')).toBe('true');
   });

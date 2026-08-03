@@ -1,7 +1,7 @@
 """Built-in workflow templates that are always available (not user-persisted).
 
-The launch-oriented ``ticket`` template is the one-node workflow behind “new ticket”
-when configured harness/model defaults make it runnable. User registries never store
+The launch-oriented ``ticket`` template is the built-in one-node ticket workflow behind
+“start work” when configured harness/model defaults make it runnable. User registries never store
 these; they are merged into ``workflows.get`` replies and resolved by name at start.
 """
 

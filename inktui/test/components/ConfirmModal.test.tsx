@@ -50,7 +50,7 @@ function Harness({
   );
 }
 
-/** Build stores with the tickets panel focused (the focus to restore), and a confirm mode entered. */
+/** Build stores with the workflows panel focused (the focus to restore), and a confirm mode entered. */
 function setup(onChoose: (c: ConfirmChoice) => void) {
   const stores = createInputStores(['workflows'], 'workflows');
   const enter = () =>

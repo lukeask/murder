@@ -1,6 +1,6 @@
 /**
  * Creation-dialog openers — tiny React context so panel header buttons and desktop keybinds can
- * open Spawn / New Ticket / New Plan / New Report / Note capture / workflow library / prompt
+ * open Spawn / Start work / New Plan / New Report / Note capture / workflow library / prompt
  * templates / help without prop-drilling through every rail.
  */
 
@@ -11,7 +11,7 @@ export type { WorkflowEditorSource };
 
 export interface CreationDialogsApi {
   readonly openSpawn: () => void;
-  readonly openTicket: () => void;
+  readonly openNewWork: () => void;
   readonly openPlan: () => void;
   readonly openReport: () => void;
   readonly openNoteCapture: () => void;

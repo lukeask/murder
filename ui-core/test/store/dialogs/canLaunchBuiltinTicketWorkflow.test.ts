@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { canLaunchBuiltinTicket } from '@murder/ui-core/store/dialogs/canLaunchBuiltinTicket.js';
+import { canLaunchBuiltinTicketWorkflow } from '@murder/ui-core/store/dialogs/canLaunchBuiltinTicketWorkflow.js';
 import { initialSettingsState } from '@murder/ui-core/store/settings/settingsSlice.js';
 
-describe('canLaunchBuiltinTicket', () => {
+describe('canLaunchBuiltinTicketWorkflow', () => {
   it('is false when no startup rogue is configured', () => {
-    expect(canLaunchBuiltinTicket(initialSettingsState)).toBe(false);
+    expect(canLaunchBuiltinTicketWorkflow(initialSettingsState)).toBe(false);
   });
 
   it('is true when startup rogue has harness + model', () => {
     expect(
-      canLaunchBuiltinTicket({
+      canLaunchBuiltinTicketWorkflow({
         ...initialSettingsState,
         startupRogue: { harness: 'codex', model: 'gpt-5', effort: null },
       }),
@@ -18,7 +18,7 @@ describe('canLaunchBuiltinTicket', () => {
 
   it('resolves an empty model from the harness catalog default', () => {
     expect(
-      canLaunchBuiltinTicket({
+      canLaunchBuiltinTicketWorkflow({
         ...initialSettingsState,
         startupRogue: { harness: 'codex', model: '', effort: null },
       }),

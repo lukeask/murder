@@ -1,12 +1,12 @@
 /**
- * Creation dialogs — open + submit happy paths for New Ticket, New Plan, Spawn Rogue,
+ * Creation dialogs — open + submit happy paths for Start work, New Plan, Spawn Rogue,
  * New Report, and Note capture. Asserts each dialog fires the shared action command on the
  * FakeApplicationClient.
  */
 
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NewTicketDialog } from '../src/components/modals/NewTicketDialog.js';
+import { NewWorkDialog } from '../src/components/modals/NewWorkDialog.js';
 import { NewPlanDialog } from '../src/components/modals/NewPlanDialog.js';
 import { NewReportDialog } from '../src/components/modals/NewReportDialog.js';
 import { NoteCaptureDialog } from '../src/components/modals/NoteCaptureDialog.js';
@@ -19,7 +19,7 @@ afterEach(() => {
   noteCaptureStore.getState().reset();
 });
 
-describe('NewTicketDialog', () => {
+describe('NewWorkDialog', () => {
   it('submits title via ticket.quick_create when builtin ticket is unavailable', async () => {
     const { bus } = makeStore();
     bus.stubCommand('ticket.quick_create', {
@@ -28,7 +28,7 @@ describe('NewTicketDialog', () => {
       title: 'fix the bug',
     });
     const onClose = vi.fn();
-    renderWithStore(<NewTicketDialog open onClose={onClose} />, { bus });
+    renderWithStore(<NewWorkDialog open onClose={onClose} />, { bus });
 
     expect(screen.getByRole('dialog')).toBeTruthy();
     expect(screen.queryByLabelText('Instructions')).toBeNull();
@@ -54,7 +54,7 @@ describe('NewTicketDialog', () => {
       stage_ticket_ids: { work: 't-002' },
     });
     const onClose = vi.fn();
-    renderWithStore(<NewTicketDialog open onClose={onClose} />, { store, bus });
+    renderWithStore(<NewWorkDialog open onClose={onClose} />, { store, bus });
 
     expect(screen.getByLabelText('Instructions')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'ship it' } });

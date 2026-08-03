@@ -237,6 +237,8 @@ describe('selectWorkflowsPanelView', () => {
     expect(view.rows).toEqual([
       expect.objectContaining({
         kind: 'legacy-ticket-run',
+        idCell: 'Legacy',
+        titleCell: 'Standalone',
         openTicketId: 'T-solo',
         groupId: 'ticket:T-solo',
       }),

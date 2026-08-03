@@ -36,7 +36,7 @@ function noopHandlers(): GlobalHandlers {
     spawn: vi.fn(),
     cycleChatView: vi.fn(),
     newPlan: vi.fn(),
-    newTicket: vi.fn(),
+    openNewWork: vi.fn(),
     openSettings: vi.fn(),
     keyHelp: vi.fn(),
     quickNote: vi.fn(),

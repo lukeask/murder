@@ -17,8 +17,8 @@ import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 export type WebCommandCtxOptions = {
   readonly store: AppStoreApi;
   readonly bus: ApplicationClient;
-  /** Open the New Ticket dialog (`:ticket`). */
-  readonly openTicket?: () => void;
+  /** Open the start-work creation dialog (`:ticket`). */
+  readonly openNewWork?: () => void;
   /** Open help (`:help` / `?`). Defaults to a short keybind-bar toast when omitted. */
   readonly openHelp?: () => void;
   /** Open the workflow template library (`:workflows`). */
@@ -27,7 +27,7 @@ export type WebCommandCtxOptions = {
 
 /** Capability bag for `dispatchCommand` — mirrors TUI wiring without importing inktui. */
 export function buildWebCommandCtx(opts: WebCommandCtxOptions): CommandCtx {
-  const { store, bus, openTicket, openHelp, openWorkflows } = opts;
+  const { store, bus, openNewWork, openHelp, openWorkflows } = opts;
   return {
     sendKey: (agentId, key, literal, enter) => {
       void store.getState().actions.conversations.sendKey(agentId, key, literal, enter);
@@ -56,7 +56,7 @@ export function buildWebCommandCtx(opts: WebCommandCtxOptions): CommandCtx {
       store.getState().actions.conversations.setPaneViewMode(agentId, mode);
     },
     ...(openWorkflows !== undefined ? { openWorkflows } : {}),
-    ...(openTicket !== undefined ? { openTicket } : {}),
+    ...(openNewWork !== undefined ? { openNewWork } : {}),
     resolveRenameTarget: () => {
       const state = store.getState();
       const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);

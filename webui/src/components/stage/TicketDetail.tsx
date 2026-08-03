@@ -64,7 +64,7 @@ export function TicketDetail({
       className="mds-ticket"
       title={
         <span className="mds-stage-overlay__title">
-          <Tag tone="accent">ticket</Tag>
+          <Tag tone="accent">work</Tag>
           <span>{detail.ticketId}</span>
         </span>
       }

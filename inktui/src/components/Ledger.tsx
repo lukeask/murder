@@ -21,7 +21,7 @@
  *
  * ## Full-width highlight
  * The selected row's outer Box is `width="100%"` so its background/inverse spans the FULL Ledger
- * width, not just the text (TicketsPanel's alt-bg is content-width — deliberately NOT copied here).
+ * width, not just the text (WorkflowsSurface's alt-bg is content-width — deliberately NOT copied here).
  * Highlight renders ONLY when `focused`; blurred, the cursor index is remembered (the panel keeps it
  * across blur) but drawn un-highlighted, so re-focusing restores the visible selection.
  *

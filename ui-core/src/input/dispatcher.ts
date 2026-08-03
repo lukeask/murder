@@ -99,9 +99,9 @@ export interface GlobalHandlers {
   newPlan(): void;
   /** `alt+g` / `ctrl+g`: open the workflow template editor. */
   openWorkflowTemplateEditor?(): void;
-  /** New-ticket popup. CHORD-LESS since TUIchat-3 (it lost `t` to the chat-view cycle; ticket-redo
-   * rehomes it). The handler stays wired so a future chord/command can reach it. */
-  newTicket(): void;
+  /** Start-work creation dialog. CHORD-LESS since TUIchat-3 (it lost `t` to the chat-view cycle;
+   * `:ticket` rehomes it). The handler stays wired so a future chord/command can reach it. */
+  openNewWork(): void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action): open the settings modal (wired by Phase 5). */
   openSettings(): void;
   /** `ctrl+n` (the `global.quickNote` action): open the quick-note capture modal. Modifier-independent
@@ -493,19 +493,9 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
   }
 
   // Layer 3 — delegate to the focused panel's declared keymap.
-  // Escape (when the panel did not claim it) restores composer focus — same contract as web
-  // `panelFocusStore.clear()` on Esc. Panels that bind Escape for a local dismiss/cancel keep that
-  // binding via the keymap match below.
-  const restoreComposerOnEscape = (): DispatchOutcome | null => {
-    if (key.escape !== true) {
-      return null;
-    }
-    ctx.handlers.focusChat();
-    return { layer: 'panel', handled: true, action: 'global.focusChat' };
-  };
   const panelKeymap = ctx.panelKeymaps[ctx.focusedId];
   if (panelKeymap === undefined) {
-    return restoreComposerOnEscape() ?? { layer: 'panel', handled: false };
+    return { layer: 'panel', handled: false };
   }
   // A coalesced printable run (fast typing over a slow pty, tmux send-keys, paste) reaches Ink as
   // ONE event whose `input` is the whole string — which a single-key chord can never match, so the
@@ -526,13 +516,13 @@ export function dispatchKey(input: string, key: Key, ctx: DispatchContext): Disp
       }
     }
     if (!handledAny) {
-      return restoreComposerOnEscape() ?? { layer: 'panel', handled: false };
+      return { layer: 'panel', handled: false };
     }
     return { layer: 'panel', handled: true, action: `${ctx.focusedId}:${lastIntent}` };
   }
   const intent = matchKeymap(panelKeymap.keymap, input, key);
   if (intent === null) {
-    return restoreComposerOnEscape() ?? { layer: 'panel', handled: false };
+    return { layer: 'panel', handled: false };
   }
   panelKeymap.onIntent(intent);
   return { layer: 'panel', handled: true, action: `${ctx.focusedId}:${intent}` };

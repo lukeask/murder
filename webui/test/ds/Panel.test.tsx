@@ -12,11 +12,11 @@ afterEach(cleanup);
 describe('ds/Panel', () => {
   it('renders title, count pill and body children', () => {
     render(
-      <Panel title="Tickets" count={3}>
+      <Panel title="Workflows" count={3}>
         body-content
       </Panel>,
     );
-    expect(screen.getByText('Tickets').className).toContain('mds-panel__title');
+    expect(screen.getByText('Workflows').className).toContain('mds-panel__title');
     expect(screen.getByText('3').className).toContain('mds-panel__count');
     expect(screen.getByText('body-content')).toBeTruthy();
   });

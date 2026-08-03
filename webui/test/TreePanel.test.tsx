@@ -1,5 +1,5 @@
 /**
- * TreePanel (Phase C2 DS reskin) smoke test — mirrors the TicketsPanel exemplar. Seeds a ready
+ * TreePanel (Phase C2 DS reskin) smoke test — mirrors the WorkflowsPanel exemplar. Seeds a ready
  * `transit` slice (raw lanes/commits — TreePanel reads the slice directly, no selector) and asserts:
  * the DS Panel title, a lane branch name, a commit row (short sha + subject), and that clicking a
  * commit opens its detail block. Also checks the empty hint. The local selectedSha + ageLabel logic

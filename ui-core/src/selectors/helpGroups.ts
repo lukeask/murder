@@ -92,6 +92,10 @@ export function buildHelpGroups(
         description: 'toggle/focus panels',
       },
       { key: 'h/j/k/l', description: 'panel nav (with command modifier)' },
+      {
+        key: 'esc',
+        description: 'return to composer (from a focused panel)',
+      },
       ...ACTION_IDS.filter((id) => id.startsWith('global.')).map((id) => ({
         key: bindings.label(id),
         description: ACTIONS[id].description,
@@ -100,6 +104,10 @@ export function buildHelpGroups(
         key: bindings.label(id),
         description: ACTIONS[id].description,
       })),
+      {
+        key: 'Settings → modifier',
+        description: 'choose Alt (A-) and/or Ctrl (C-) for panel/nav chords',
+      },
     ],
   });
 
@@ -125,7 +133,7 @@ export function buildHelpGroups(
     entries: [
       { key: '/…', description: 'passthrough to harness' },
       { key: ':help', description: 'this overlay' },
-      { key: ':ticket', description: 'new ticket' },
+      { key: ':ticket', description: 'start work' },
       { key: ':note <text>', description: 'quick note' },
       { key: ':workflows', description: 'workflow library' },
       { key: ':rename <new>', description: 'rename rogue crow or plan' },

@@ -22,7 +22,7 @@ import { TreePanel } from './components/panels/TreePanel.js';
 import { SettingsPanel } from './components/panels/SettingsPanel.js';
 import { Stage } from './components/stage/Stage.js';
 import { ToastHost } from './components/ToastHost.js';
-import { NewTicketDialog } from './components/modals/NewTicketDialog.js';
+import { NewWorkDialog } from './components/modals/NewWorkDialog.js';
 import { NewPlanDialog } from './components/modals/NewPlanDialog.js';
 import { NewReportDialog } from './components/modals/NewReportDialog.js';
 import { NoteCaptureDialog } from './components/modals/NoteCaptureDialog.js';
@@ -82,7 +82,7 @@ const MOBILE_PRIMARY_TABS: readonly { readonly id: MobilePaneId; readonly icon: 
 
 /** Secondary panes behind the "More" sheet. */
 const MOBILE_MORE_ITEMS: readonly { readonly id: MobilePaneId; readonly icon: IconName }[] = [
-  { id: 'workflows', icon: 'ticket' },
+  { id: 'workflows', icon: 'git-branch' },
   { id: 'plans', icon: 'file-text' },
   { id: 'reports', icon: 'file-text' },
   { id: 'history', icon: 'git-branch' },
@@ -123,7 +123,7 @@ const LOAD_ON_CONNECT = ['favorites', 'themes', 'settings'] as const;
 
 type ShellDialog =
   | { readonly kind: 'spawn' }
-  | { readonly kind: 'ticket' }
+  | { readonly kind: 'newWork' }
   | { readonly kind: 'plan' }
   | { readonly kind: 'report' }
   | { readonly kind: 'note' }
@@ -153,7 +153,7 @@ export function App({ bus }: { readonly bus: ApplicationConnectionClient }): Rea
   const creationApi = useMemo(
     () => ({
       openSpawn: () => setDialog({ kind: 'spawn' }),
-      openTicket: () => setDialog({ kind: 'ticket' }),
+      openNewWork: () => setDialog({ kind: 'newWork' }),
       openPlan: () => setDialog({ kind: 'plan' }),
       openReport: () => setDialog({ kind: 'report' }),
       openNoteCapture: () => setDialog({ kind: 'note' }),
@@ -257,7 +257,7 @@ function AppShell({
       <ToastHost />
       <MurderConfirmDialog />
       {dialog?.kind === 'spawn' && <SpawnRogueDialog onClose={closeDialog} />}
-      {dialog?.kind === 'ticket' && <NewTicketDialog onClose={closeDialog} />}
+      {dialog?.kind === 'newWork' && <NewWorkDialog onClose={closeDialog} />}
       {dialog?.kind === 'plan' && <NewPlanDialog onClose={closeDialog} />}
       {dialog?.kind === 'report' && <NewReportDialog onClose={closeDialog} />}
       {dialog?.kind === 'note' && <NoteCaptureDialog onClose={closeDialog} />}

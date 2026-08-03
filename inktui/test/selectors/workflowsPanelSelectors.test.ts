@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { selectWorkflowPanelRows, selectWorkflowsPanelView } from '../../src/selectors/workflowsPanelSelectors.js';
-import type { TicketRow } from '../../src/store/tickets/ticketsSlice.js';
-import type { WorkflowRunListItem, WorkflowRunsState } from '../../src/store/workflowRuns/workflowRunsSlice.js';
-import { initialWorkflowRunsState } from '../../src/store/workflowRuns/workflowRunsSlice.js';
-import { initialTicketsState } from '../../src/store/tickets/ticketsSlice.js';
+import { selectWorkflowPanelRows, selectWorkflowsPanelView } from '@murder/ui-core/selectors/workflowsPanelSelectors.js';
+import type { TicketRow } from '@murder/ui-core/store/tickets/ticketsSlice.js';
+import type { WorkflowRunListItem, WorkflowRunsState } from '@murder/ui-core/store/workflowRuns/workflowRunsSlice.js';
+import { initialWorkflowRunsState } from '@murder/ui-core/store/workflowRuns/workflowRunsSlice.js';
+import { initialTicketsState } from '@murder/ui-core/store/tickets/ticketsSlice.js';
 
 function ticket(overrides: Partial<TicketRow> & Pick<TicketRow, 'id'>): TicketRow {
   return {

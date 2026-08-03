@@ -41,7 +41,7 @@ describe('TicketDetail (DS reskin)', () => {
     renderWithStore(<TicketDetail />, { store });
 
     expect(document.querySelector('.mds-ticket .mds-panel')).toBeTruthy();
-    expect(screen.getByText('ticket')).toBeTruthy();
+    expect(screen.getByText('work')).toBeTruthy();
     expect(screen.getByText('t001')).toBeTruthy();
     expect(screen.getByText('split orchestrator')).toBeTruthy();
     expect(screen.getByText('in_progress')).toBeTruthy();

@@ -161,7 +161,7 @@ describe('Stage multi-pane', () => {
     expect(document.querySelector('.mds-ticket')).toBeTruthy();
     expect(document.querySelectorAll('.mds-stage-pane').length).toBe(2);
     expect(document.querySelector('.mds-stage--overlay')).toBeNull();
-    expect(screen.getByLabelText('Expand ticket to full stage')).toBeTruthy();
+    expect(screen.getByLabelText('Expand detail to full stage')).toBeTruthy();
   });
 
   it('shows doc and ticket as dual side columns when both are open', () => {

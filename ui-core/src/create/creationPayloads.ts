@@ -13,8 +13,8 @@ export type PlanNaming = 'auto' | 'custom';
 /** The exact inline validation text used by both new-plan dialogs. */
 export const PLAN_NAME_REQUIRED_ERROR = 'Plan name is required (or pick "auto").';
 
-/** The exact inline validation text used by both new-ticket dialogs. */
-export const TICKET_TITLE_REQUIRED_ERROR = 'Ticket title is required.';
+/** The exact inline validation text used by both start-work creation dialogs. */
+export const WORK_TITLE_REQUIRED_ERROR = 'Title is required.';
 
 /** A pure create-workflow operation either produces a ready payload or an inline validation error. */
 export type CreatePreparationResult<T> =
@@ -64,5 +64,5 @@ export function prepareTicketTitle(title: string): CreatePreparationResult<strin
   const value = title.trim();
   return value.length > 0
     ? { ok: true, value }
-    : { ok: false, error: TICKET_TITLE_REQUIRED_ERROR };
+    : { ok: false, error: WORK_TITLE_REQUIRED_ERROR };
 }

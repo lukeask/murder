@@ -34,7 +34,7 @@ export interface QuickCreateResult {
 }
 
 /** Reply from launching the built-in one-node ``ticket`` workflow via ``workflow.start``. */
-export interface StartBuiltinTicketResult {
+export interface StartBuiltinTicketWorkflowResult {
   readonly workflow_id: string;
   readonly run_ticket_id: string;
   readonly ticket_id: string;
@@ -95,10 +95,10 @@ export interface DialogActions {
    * Prefer this when configured harness/model defaults make the template runnable;
    * fall back to {@link quickCreateTicket} for unconfigured planned tickets.
    */
-  startBuiltinTicket(args: {
+  startBuiltinTicketWorkflow(args: {
     readonly title: string;
     readonly prompt?: string;
-  }): Promise<StartBuiltinTicketResult>;
+  }): Promise<StartBuiltinTicketWorkflowResult>;
   /**
    * Fetch the next free ticket id via `ticket.next_id`.
    */
@@ -136,7 +136,7 @@ export function createDialogActions(bus: ApplicationClient): DialogActions {
       };
     },
 
-    async startBuiltinTicket(args): Promise<StartBuiltinTicketResult> {
+    async startBuiltinTicketWorkflow(args): Promise<StartBuiltinTicketWorkflowResult> {
       const title = args.title.trim();
       const reply = await bus.command('workflow.start', {
         name: 'ticket',

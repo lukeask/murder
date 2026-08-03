@@ -94,7 +94,7 @@ import {
   selectUserHistory,
 } from '@murder/ui-core/selectors/conversationsSelectors.js';
 import { submitCommand } from '@murder/ui-core/store/commandSubmit.js';
-import { canLaunchBuiltinTicket } from '@murder/ui-core/store/dialogs/canLaunchBuiltinTicket.js';
+import { canLaunchBuiltinTicketWorkflow } from '@murder/ui-core/store/dialogs/canLaunchBuiltinTicketWorkflow.js';
 import { createDialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
 import { createHarnessModelsActions } from '@murder/ui-core/store/dialogs/harnessModelsActions.js';
 import { createSpawnActions } from '@murder/ui-core/store/dialogs/spawnActions.js';
@@ -126,7 +126,7 @@ import { ChatInput } from './ChatInput.js';
 import { helpMode } from './HelpOverlay.js';
 import { newPlanMode } from './NewPlanModal.js';
 import { newReportMode } from './NewReportModal.js';
-import { newTicketMode } from './NewTicketModal.js';
+import { newWorkMode } from './NewWorkModal.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { promptTemplateManagerMode } from './PromptTemplateManagerMode.js';
 import { settingsMode } from './SettingsModal.js';
@@ -1014,21 +1014,26 @@ function Shell({
     );
   };
 
-  // `:ticket` → open the new-ticket modal. When Startup Rogue defaults make the built-in
+  // `:ticket` → open the start-work modal. When Startup Rogue defaults make the built-in
   // launch-oriented `ticket` workflow runnable, submit goes through `workflow.start`; otherwise
   // keep `ticket.quick_create` for unconfigured planned tickets.
-  const newTicketHandler = (): void => {
+  const newWorkHandler = (): void => {
     const actions = createDialogActions(bus);
-    const preferBuiltinTicket = canLaunchBuiltinTicket(appStore.getState().settings);
+    const preferBuiltinTicketWorkflow = canLaunchBuiltinTicketWorkflow(
+      appStore.getState().settings,
+    );
     modes.getState().enter(
-      newTicketMode(modes, actions, {
-        preferBuiltinTicket,
+      newWorkMode(modes, actions, {
+        preferBuiltinTicketWorkflow,
         onSubmit(_ticketId, title) {
           toastStore
             .getState()
-            .push(preferBuiltinTicket ? `ticket "${title}" started` : `ticket "${title}" created`, {
-              ttlMs: 6000,
-            });
+            .push(
+              preferBuiltinTicketWorkflow
+                ? `work "${title}" started`
+                : `planned work "${title}" created`,
+              { ttlMs: 6000 },
+            );
         },
       }),
     );
@@ -1340,7 +1345,7 @@ function Shell({
       paneScroll.emitTerminalViewport(stageTranscriptFocusId(agentId), action);
     },
     openWorkflows: openWorkflowTemplateLibraryHandler,
-    openTicket: newTicketHandler,
+    openNewWork: newWorkHandler,
     resolveRenameTarget: () => {
       const state = appStore.getState();
       const activeAgentId = selectActiveAgentId(state.conversations, state.roster, state.favorites);
@@ -1400,7 +1405,7 @@ function Shell({
       openSettings: openSettingsHandler,
       newPlan: newPlanHandler,
       openWorkflowTemplateEditor: () => openWorkflowTemplateLibraryHandler(null),
-      newTicket: newTicketHandler,
+      openNewWork: newWorkHandler,
       cycleChatView: cycleChatViewHandler,
       quickNote: quickNoteHandler,
       keyHelp: keyHelpHandler,

@@ -1,5 +1,5 @@
 /**
- * NewTicketModal tests — verifies the `alt+t` new-ticket modal mode against the C7M idiom.
+ * NewWorkModal tests — verifies the `:ticket` start-work modal mode against the C7M idiom.
  *
  * Copy recipe (mirrors ConfirmModal.test.tsx — identical harness structure):
  *  1. Build input stores with a panel focused, enter the mode imperatively.
@@ -12,7 +12,7 @@ import { render } from 'ink-testing-library';
 import type { JSX } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
-import { NEW_TICKET_MODE_ID, newTicketMode } from '../../src/components/NewTicketModal.js';
+import { NEW_WORK_MODE_ID, newWorkMode } from '../../src/components/NewWorkModal.js';
 import { Overlay } from '../../src/components/Overlay.js';
 import { InputStoresProvider } from '../../src/hooks/useInputStores.js';
 import { useRootInput } from '../../src/hooks/useRootInput.js';
@@ -50,7 +50,7 @@ function Harness({
   );
 }
 
-/** Build stores with the tickets panel focused (prior focus to restore). */
+/** Build stores with the workflows panel focused (prior focus to restore). */
 function setup() {
   const stores = createInputStores(['workflows'], 'workflows');
   const bus = new FakeApplicationClient();
@@ -60,7 +60,7 @@ function setup() {
 
   const actions = createDialogActions(bus);
   const enter = (opts = {}) =>
-    stores.modes.getState().enter(newTicketMode(stores.modes, actions, opts));
+    stores.modes.getState().enter(newWorkMode(stores.modes, actions, opts));
   return { stores, bus, actions, enter };
 }
 
@@ -70,7 +70,7 @@ function errorToasts() {
   return live.filter((t) => t.severity === 'error');
 }
 
-describe('NewTicketModal — alt+t new-ticket dialog', () => {
+describe('NewWorkModal — :ticket new-work dialog', () => {
   // The toast singleton is shared global state; reset it between cases (toastStore's own idiom).
   beforeEach(() => {
     toastStore.getState().clear();
@@ -80,17 +80,17 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     const { stores, enter } = setup();
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
-    expect(lastFrame()).not.toContain('New Ticket');
+    expect(lastFrame()).not.toContain('New work');
 
     enter();
     await tick();
-    expect(lastFrame()).toContain('New Ticket');
-    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID);
+    expect(lastFrame()).toContain('New work');
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_WORK_MODE_ID);
 
     stdin.write(ESC);
     await tick();
     expect(selectActiveMode(stores.modes)).toBeNull();
-    expect(lastFrame()).not.toContain('New Ticket');
+    expect(lastFrame()).not.toContain('New work');
     expect(stores.focus.getState().intendedId).toBe('workflows'); // prior focus restored
   });
 
@@ -158,7 +158,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     expect(onSubmit).toHaveBeenCalledWith('t-001', 'my ticket');
   });
 
-  it('preferBuiltinTicket submits via workflow.start with title+prompt args', async () => {
+  it('preferBuiltinTicketWorkflow submits via workflow.start with title+prompt args', async () => {
     const stores = createInputStores(['workflows'], 'workflows');
     const bus = new FakeApplicationClient();
     bus.stubCommand('workflow.start', {
@@ -171,10 +171,11 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     const actions = createDialogActions(bus);
     const onSubmit = vi.fn();
     stores.modes.getState().enter(
-      newTicketMode(stores.modes, actions, { preferBuiltinTicket: true, onSubmit }),
+      newWorkMode(stores.modes, actions, { preferBuiltinTicketWorkflow: true, onSubmit }),
     );
     const { lastFrame, stdin } = render(<Harness stores={stores} />);
     await tick();
+    expect(lastFrame()).toContain('Start work');
     expect(lastFrame()).toContain('Instructions:');
 
     for (const ch of 'fix bug') stdin.write(ch);
@@ -208,7 +209,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
       created_ticket_ids: ['t100', 't101'],
     });
     const actions = createDialogActions(bus);
-    const mode = newTicketMode(stores.modes, actions, { preferBuiltinTicket: true });
+    const mode = newWorkMode(stores.modes, actions, { preferBuiltinTicketWorkflow: true });
     // Regression: bare `{ return }` before `{ shift, return }` would steal Shift+Enter as submit.
     expect(matchKeymap(mode.keymap, '', makeKey({ return: true, shift: true }))).toBe('newline');
     expect(matchKeymap(mode.keymap, '', makeKey({ return: true }))).toBe('submit');
@@ -259,7 +260,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     bus.stubAllCommands(() => {
       throw new Error('rpc error [internal]: ticket create failed');
     });
-    stores.modes.getState().enter(newTicketMode(stores.modes, createDialogActions(bus), {}));
+    stores.modes.getState().enter(newWorkMode(stores.modes, createDialogActions(bus), {}));
     const { stdin } = render(<Harness stores={stores} />);
     await tick();
 
@@ -285,8 +286,8 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
 
     stdin.write('\r'); // Enter with empty title.
     await tick();
-    expect(lastFrame()).toContain('Ticket title is required');
-    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID); // still up
+    expect(lastFrame()).toContain('Title is required.');
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_WORK_MODE_ID); // still up
     expect(bus.commandCalls.length).toBe(0);
     // Field validation stays INLINE (modal open) — it must NOT also fire an error toast.
     expect(errorToasts()).toHaveLength(0);
@@ -302,7 +303,7 @@ describe('NewTicketModal — alt+t new-ticket dialog', () => {
     stdin.write('\x1b ');
     await tick();
     expect(stores.focus.getState().intendedId).toBe('workflows'); // focus unmoved
-    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_TICKET_MODE_ID); // modal still up
+    expect(selectActiveMode(stores.modes)?.id).toBe(NEW_WORK_MODE_ID); // modal still up
   });
 
   it('alt+u clears the field', async () => {

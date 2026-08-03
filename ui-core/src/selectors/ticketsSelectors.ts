@@ -9,7 +9,7 @@
  *    the component (rule 2).
  *  - Sort: by `lastUpdateAt` descending (most recently updated first, matching Python
  *    `_sort_schedule_rows`), then id for a stable tiebreak.
- *  - Column groups (per spec "Approach › Left panels › Tickets (4)"):
+ *  - Column groups: legacy flat ticket list selector (digit 4 is the workflows pane, not this view):
  *      5 column boxes, each 2 terminal lines tall (top/bottom):
  *        col 1: id (top)         / title (bottom)
  *        col 2: status (top)     / lastUpdate (bottom)

@@ -1,7 +1,7 @@
 /**
  * RosterPanel (DS reskin) renders rows off a seeded `roster` slice. We write a ready roster directly
  * to the store and assert the DS composition: the DS Panel, a ListRow per crow (with its Avatar +
- * name), the health StatusDot, the favorite star toggle, and the empty hint. Mirrors the TicketsPanel
+ * name), the health StatusDot, the favorite star toggle, and the empty hint. Mirrors the WorkflowsPanel
  * exemplar smoke test (C2). Reset for ticket-bound crows goes through a confirm dialog.
  */
 

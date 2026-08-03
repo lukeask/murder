@@ -1,7 +1,7 @@
-/** NewTicketDialog — web counterpart of inktui's NewTicketModal (`ctrl+t`). */
+/** NewWorkDialog — web counterpart of inktui's NewWorkModal (`:ticket`). */
 
 import { createDialogActions } from '@murder/ui-core/store/dialogs/dialogActions.js';
-import { canLaunchBuiltinTicket } from '@murder/ui-core/store/dialogs/canLaunchBuiltinTicket.js';
+import { canLaunchBuiltinTicketWorkflow } from '@murder/ui-core/store/dialogs/canLaunchBuiltinTicketWorkflow.js';
 import { prepareTicketTitle } from '@murder/ui-core/create/creationPayloads.js';
 import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { useId, useState } from 'react';
@@ -11,16 +11,16 @@ import { shallow } from 'zustand/shallow';
 import { Input } from '../ds/index.js';
 import { CreationDialog } from './CreationDialog.js';
 
-export interface NewTicketDialogProps {
+export interface NewWorkDialogProps {
   /** Optional while App remounts-on-open; Dialog defaults to true. */
   readonly open?: boolean;
   readonly onClose: () => void;
 }
 
-export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.JSX.Element {
+export function NewWorkDialog({ open, onClose }: NewWorkDialogProps): React.JSX.Element {
   const bus = useApplicationClient();
   const settings = useAppStore((s) => s.settings, shallow);
-  const preferBuiltin = canLaunchBuiltinTicket(settings);
+  const preferBuiltin = canLaunchBuiltinTicketWorkflow(settings);
   const promptId = useId();
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -38,7 +38,7 @@ export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.
     setError(null);
     const actions = createDialogActions(bus);
     const create = preferBuiltin
-      ? actions.startBuiltinTicket({ title: preparedTitle.value, prompt }).then((result) => ({
+      ? actions.startBuiltinTicketWorkflow({ title: preparedTitle.value, prompt }).then((result) => ({
           ticket_id: result.ticket_id,
           title: result.title,
         }))
@@ -53,8 +53,8 @@ export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.
           .getState()
           .push(
             preferBuiltin
-              ? `ticket "${result.title}" started`
-              : `ticket "${result.title}" created`,
+              ? `work "${result.title}" started`
+              : `planned work "${result.title}" created`,
             { ttlMs: 6000 },
           );
       })
@@ -69,7 +69,7 @@ export function NewTicketDialog({ open, onClose }: NewTicketDialogProps): React.
   return (
     <CreationDialog
       open={open ?? true}
-      title="New Ticket"
+      title="Start work"
       onClose={onClose}
       pending={pending}
       submitLabel={preferBuiltin ? 'Start' : 'Create'}

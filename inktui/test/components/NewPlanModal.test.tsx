@@ -34,16 +34,16 @@ async function tick(): Promise<void> {
 /** Runs the root input loop inside the providers. */
 function RootInput({
   newPlan,
-  newTicket,
+  openNewWork,
   cycleChatView,
 }: {
   readonly newPlan?: () => void;
-  readonly newTicket?: () => void;
+  readonly openNewWork?: () => void;
   readonly cycleChatView?: () => void;
 }): null {
   const deferred = {
     ...(newPlan !== undefined ? { newPlan } : {}),
-    ...(newTicket !== undefined ? { newTicket } : {}),
+    ...(openNewWork !== undefined ? { openNewWork } : {}),
     ...(cycleChatView !== undefined ? { cycleChatView } : {}),
   };
   useRootInput(deferred);
@@ -54,17 +54,17 @@ function RootInput({
 function Harness({
   stores,
   newPlan,
-  newTicket,
+  openNewWork,
   cycleChatView,
 }: {
   readonly stores: ReturnType<typeof createInputStores>;
   readonly newPlan?: () => void;
-  readonly newTicket?: () => void;
+  readonly openNewWork?: () => void;
   readonly cycleChatView?: () => void;
 }): JSX.Element {
   const rootProps = {
     ...(newPlan !== undefined ? { newPlan } : {}),
-    ...(newTicket !== undefined ? { newTicket } : {}),
+    ...(openNewWork !== undefined ? { openNewWork } : {}),
     ...(cycleChatView !== undefined ? { cycleChatView } : {}),
   };
   return (
@@ -75,7 +75,7 @@ function Harness({
   );
 }
 
-/** Build stores with tickets panel focused (the prior focus to restore). */
+/** Build stores with workflows panel focused (the prior focus to restore). */
 function setup() {
   const stores = createInputStores(['workflows'], 'workflows');
   const bus = new FakeApplicationClient();
@@ -251,19 +251,19 @@ describe('global chords — alt+p and alt+t', () => {
     expect(newPlanFn).toHaveBeenCalledOnce();
   });
 
-  it('alt+t fires cycleChatView, NOT newTicket (TUIchat-3 rebind)', async () => {
+  it('alt+t fires cycleChatView, NOT openNewWork (TUIchat-3 rebind)', async () => {
     const stores = createInputStores(['workflows'], 'workflows');
-    const newTicketFn = vi.fn();
+    const openNewWorkFn = vi.fn();
     const cycleChatViewFn = vi.fn();
     const { stdin } = render(
-      <Harness stores={stores} newTicket={newTicketFn} cycleChatView={cycleChatViewFn} />,
+      <Harness stores={stores} openNewWork={openNewWorkFn} cycleChatView={cycleChatViewFn} />,
     );
     await tick();
 
-    stdin.write('\x1bt'); // alt+t — now the chat-view cycle, no longer new-ticket
+    stdin.write('\x1bt'); // alt+t — now the chat-view cycle, no longer :ticket
     await tick();
     expect(cycleChatViewFn).toHaveBeenCalledOnce();
-    expect(newTicketFn).not.toHaveBeenCalled();
+    expect(openNewWorkFn).not.toHaveBeenCalled();
   });
 
   it('alt+p does NOT fire while the new-plan modal is up (exclusive capture)', async () => {

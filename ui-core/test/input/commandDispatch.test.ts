@@ -22,6 +22,7 @@ interface FakeCtx {
   renameRogue: Mock;
   renamePlan: Mock;
   openWorkflows: Mock;
+  openNewWork?: Mock;
   dismiss?: Mock;
 }
 
@@ -89,6 +90,23 @@ describe('dispatchCommand — : commands', () => {
     const handled = dispatchCommand(':help', AGENT, ctx);
     expect(handled).toBe(true);
     expect(ctx.openHelp).toHaveBeenCalledOnce();
+  });
+
+  it(':ticket opens start work when openNewWork is wired', () => {
+    const ctx = makeCtx();
+    ctx.openNewWork = vi.fn();
+    const handled = dispatchCommand(':ticket', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.openNewWork).toHaveBeenCalledOnce();
+  });
+
+  it(':ticket toasts when start work is unavailable', () => {
+    const ctx = makeCtx();
+    const handled = dispatchCommand(':ticket', AGENT, ctx);
+    expect(handled).toBe(true);
+    expect(ctx.pushToast).toHaveBeenCalledWith('start work is unavailable', {
+      severity: 'error',
+    });
   });
 
   it(':workflows opens the workflow template library, optionally at an exact named workflow', () => {

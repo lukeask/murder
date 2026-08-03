@@ -76,6 +76,8 @@ export interface WorkflowsPanelView {
 }
 
 const CHILD_INDENT = '    ';
+/** User-facing label for unclaimed schedule tickets (display only; row kind stays `legacy-ticket-run`). */
+const LEGACY_RUN_DISPLAY_LABEL = 'Legacy';
 const ID_WIDTH = 12;
 const TITLE_WIDTH = 28;
 const LAST_UPDATE_WIDTH = 20;
@@ -247,7 +249,7 @@ function toLegacyView(
   return {
     id: row.syntheticId,
     kind: 'legacy-ticket-run',
-    idCell: truncate(row.ticketId, ID_WIDTH),
+    idCell: truncate(LEGACY_RUN_DISPLAY_LABEL, ID_WIDTH),
     titleCell: truncate(row.title, TITLE_WIDTH),
     ...cells,
     depth: 0,

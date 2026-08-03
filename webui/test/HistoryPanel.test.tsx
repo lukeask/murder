@@ -1,7 +1,7 @@
 /**
  * HistoryPanel (DS reskin) renders rows off a seeded `history` slice. We write a ready history slice
  * directly to the store and assert the DS composition: the DS Panel + loose/all Tabs in the actions
- * slot, a ListRow per item with its status Tag, and the empty hint. Mirrors the TicketsPanel exemplar
+ * slot, a ListRow per item with its status Tag, and the empty hint. Mirrors the WorkflowsPanel exemplar
  * smoke test (C2).
  */
 

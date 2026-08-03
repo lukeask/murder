@@ -24,7 +24,7 @@
  *    `presentation: 'inlayout'`, a declared keymap for the special keys (esc/tab/return/
  *    backspace/arrows), an `onUncaptured` for printable chars + vim command letters, and a `render`
  *    thunk over a pure component.
- * 2. **Enter it** — `TicketsPanel`'s `'open'` intent calls `modes.enter(ticketEditorMode(...))`.
+ * 2. **Enter it** — `WorkflowsController`'s `'open'` intent calls `modes.enter(ticketEditorMode(...))`.
  *    This saves the current focus; the dispatcher's layer 0 captures all keys for the mode.
  * 3. **Text input via the ONE root dispatcher** — there is NO second `useInput` here. Every key the
  *    editor handles arrives through the single root dispatcher (rule 5): a matching declared chord
@@ -267,12 +267,12 @@ export function ticketEditorMode(
       if (ui.scheduleFocused) {
         return [
           { key: 'type', description: 'schedule' },
-          { key: 'esc', description: 'back to ticket' },
+          { key: 'esc', description: 'back to list' },
         ];
       }
       if (ui.vimMode === 'insert') {
         return [
-          { key: 'type', description: 'edit ticket' },
+          { key: 'type', description: 'edit body' },
           { key: 'esc', description: 'normal mode' },
         ];
       }
@@ -570,12 +570,12 @@ function EditorHeader({ frontmatter }: { readonly frontmatter: TicketFrontmatter
 // ── useTicketEditor hook ────────────────────────────────────────────────────────────────────────
 
 /**
- * Hook for `TicketsPanel` — encapsulates the editor mode lifecycle so the panel's intent handler
+ * Hook for `WorkflowsController` — encapsulates the editor mode lifecycle so the panel's intent handler
  * stays at the same level of abstraction as the rest of its keymap. Returns the `openEditor`
  * callback to bind to the `'open'` intent.
  *
  * Rule 3: `open(ticketId)` goes through the store action; `saveBody()`/`schedule()` go through the
- * store actions. The component (TicketsPanel) calls `openEditor(id)` only; this hook owns the mode
+ * store actions. The component (WorkflowsController) calls `openEditor(id)` only; this hook owns the mode
  * wiring and hands the mode factory the store handle it needs to read/mutate the body slice.
  */
 export function useTicketEditor(): (ticketId: string) => void {

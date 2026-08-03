@@ -4,7 +4,7 @@ A Vite + React 19 + TypeScript app that shares its renderer-neutral application 
 Ink UI through the root `@murder/ui-core` workspace package. The browser app owns DOM components,
 CSS, browser defaults, and browser-specific lifecycle only.
 
-The UI is a **cockpit**: header, stage (chat + terminal), and side panels (roster, tickets, docs,
+The UI is a **cockpit**: header, stage (chat + terminal), and side panels (roster, workflows, docs,
 settings, and related views) wired to the same application protocol the Ink client uses.
 
 ## Commands

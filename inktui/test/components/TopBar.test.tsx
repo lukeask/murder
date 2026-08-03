@@ -5,7 +5,7 @@
  * assert the right-pinned badge appears/omits per status.
  *
  * The singleton is reset to `'unknown'` in `beforeEach`/`afterEach` (mirroring the
- * `toastStore.getState().clear()` reset idiom in NewTicketModal.test.tsx) so cases never leak status
+ * `toastStore.getState().clear()` reset idiom in NewWorkModal.test.tsx) so cases never leak status
  * into one another.
  */
 
@@ -50,7 +50,7 @@ function frameFor(status: ConnectionStatus): string {
 /**
  * Render at a wide terminal so the right-pinned badge stays on one line. ink-testing-library hardcodes
  * a 100-col stdout, at which the full bar (labels + the long version-mismatch badge) just overflows and
- * wraps — and the truncated panel-label tails (the trailing `s`/`s`/`y` of report·s / ticket·s /
+ * wraps — and the truncated panel-label tails (the trailing `s`/`y` of report·s / workflows₄ /
  * histor·y) then interleave *into* the wrapped badge text, which no amount of whitespace/subscript
  * stripping can undo. A wide stdout reflects the real terminals this badge renders in and keeps the
  * assertion about the badge content, not Ink's wrap geometry.

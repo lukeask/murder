@@ -207,7 +207,7 @@ export const crowRows: Record<string, readonly CrowFixtureRow[]> = {
     },
     {
       id: 'ticket-17',
-      group: 'Tickets',
+      group: 'Ticket Crows',
       name: 'T-017 implementation',
       status: 'awaiting input',
       meta: 'cursor · sonnet',

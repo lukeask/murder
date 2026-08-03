@@ -34,7 +34,7 @@ interface SpyHandlers {
   readonly openWorkflowTemplateEditor: ReturnType<
     typeof vi.fn<NonNullable<GlobalHandlers['openWorkflowTemplateEditor']>>
   >;
-  readonly newTicket: ReturnType<typeof vi.fn<GlobalHandlers['newTicket']>>;
+  readonly openNewWork: ReturnType<typeof vi.fn<GlobalHandlers['openNewWork']>>;
   readonly openSettings: ReturnType<typeof vi.fn<GlobalHandlers['openSettings']>>;
   readonly quickNote: ReturnType<typeof vi.fn<GlobalHandlers['quickNote']>>;
   readonly keyHelp: ReturnType<typeof vi.fn<GlobalHandlers['keyHelp']>>;
@@ -63,7 +63,7 @@ function handlers(): SpyHandlers {
     cycleChatView: vi.fn<GlobalHandlers['cycleChatView']>(),
     newPlan: vi.fn<GlobalHandlers['newPlan']>(),
     openWorkflowTemplateEditor: vi.fn<NonNullable<GlobalHandlers['openWorkflowTemplateEditor']>>(),
-    newTicket: vi.fn<GlobalHandlers['newTicket']>(),
+    openNewWork: vi.fn<GlobalHandlers['openNewWork']>(),
     openSettings: vi.fn<GlobalHandlers['openSettings']>(),
     quickNote: vi.fn<GlobalHandlers['quickNote']>(),
     keyHelp: vi.fn<GlobalHandlers['keyHelp']>(),
@@ -294,11 +294,11 @@ describe('layer 1 — global chords', () => {
     });
   });
 
-  it('alt+t fires cycleChatView (TUIchat-3 — took over `t` from the now chord-less newTicket)', () => {
+  it('alt+t fires cycleChatView (TUIchat-3 — took over `t` from the now chord-less openNewWork)', () => {
     const h = handlers();
     const out = dispatchKey('t', makeKey({ meta: true }), ctx('plans', h));
     expect(h.cycleChatView).toHaveBeenCalledOnce();
-    expect(h.newTicket).not.toHaveBeenCalled();
+    expect(h.openNewWork).not.toHaveBeenCalled();
     expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
@@ -508,38 +508,6 @@ describe('layer 3 — focused panel keymap', () => {
     const out = dispatchKey('z', makeKey(), ctx('plans', handlers(), { plans: plansKeymap }));
     expect(onIntent).not.toHaveBeenCalled();
     expect(out).toEqual({ layer: 'panel', handled: false });
-  });
-
-  it('Escape restores composer focus when the panel did not claim it', () => {
-    const h = handlers();
-    onIntent.mockClear();
-    const out = dispatchKey('', makeKey({ escape: true }), ctx('plans', h, { plans: plansKeymap }));
-    expect(onIntent).not.toHaveBeenCalled();
-    expect(h.focusChat).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'panel', handled: true, action: 'global.focusChat' });
-  });
-
-  it('Escape restores composer even when no panel keymap is registered', () => {
-    const h = handlers();
-    const out = dispatchKey('', makeKey({ escape: true }), ctx('crows', h, {}));
-    expect(h.focusChat).toHaveBeenCalledOnce();
-    expect(out).toEqual({ layer: 'panel', handled: true, action: 'global.focusChat' });
-  });
-
-  it('Escape stays with the panel when the panel keymap claims it', () => {
-    const h = handlers();
-    const dismissIntent = vi.fn();
-    const withEsc: PanelKeymap = {
-      keymap: [
-        { chord: { key: { escape: true } }, intent: 'dismiss', description: 'close' },
-        ...plansKeymap.keymap,
-      ],
-      onIntent: dismissIntent,
-    };
-    const out = dispatchKey('', makeKey({ escape: true }), ctx('plans', h, { plans: withEsc }));
-    expect(dismissIntent).toHaveBeenCalledWith('dismiss');
-    expect(h.focusChat).not.toHaveBeenCalled();
-    expect(out).toEqual({ layer: 'panel', handled: true, action: 'plans:dismiss' });
   });
 });
 

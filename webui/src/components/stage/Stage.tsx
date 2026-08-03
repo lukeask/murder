@@ -207,7 +207,7 @@ export function Stage(): React.JSX.Element {
         layoutActions={
           <IconButton
             size="sm"
-            label="Expand ticket to full stage"
+            label="Expand detail to full stage"
             title="Expand"
             onClick={() => setTicketExpanded(true)}
           >

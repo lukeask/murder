@@ -8,7 +8,7 @@ import { scrollEdgesClassName, useScrollEdges } from '../../useScrollEdges.js';
 import { cx } from './cx.js';
 
 export interface PanelProps extends Omit<HTMLAttributes<HTMLElement>, 'title'> {
-  /** Panel title rendered on the top edge (e.g. "Plans", "Tickets"). */
+  /** Panel title rendered on the top edge (e.g. "Plans", "Workflows"). */
   title?: ReactNode;
   /** Item count shown as a small pill badge at the right of the header. */
   count?: number | string | null;

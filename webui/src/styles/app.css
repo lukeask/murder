@@ -389,7 +389,7 @@
 .app__body--mobile .stage { flex: 1; max-height: none; }
 
 /* ── Responsive tweaks ─────────────────────────────────────────────────────────────────────── */
-/* Creation dialogs (spawn / ticket / plan) — light vertical stack inside DS Dialog body. */
+/* Creation dialogs (spawn / work / plan) — light vertical stack inside DS Dialog body. */
 .creation-form {
   display: flex;
   flex-direction: column;

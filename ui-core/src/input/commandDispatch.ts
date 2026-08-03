@@ -68,8 +68,8 @@ export interface CommandCtx {
   readonly terminalViewport?: (agentId: string, action: TerminalViewportAction) => void;
   /** Open the full-screen workflow template library. The optional workflow name focuses a definition. */
   readonly openWorkflows?: (name: string | null) => void;
-  /** Open the New Ticket modal. */
-  readonly openTicket?: () => void;
+  /** Open the start-work creation dialog. */
+  readonly openNewWork?: () => void;
 }
 
 /** The rename subject resolved from chat/doc context for the single-arg `:rename <new>` form. */
@@ -121,13 +121,13 @@ type CommandHandler = (args: string, agentId: string | null, ctx: CommandCtx) =>
  * command surface. Adding a command = adding one entry here (and one Help "Commands" row).
  */
 const COMMANDS: Readonly<Record<string, CommandHandler>> = {
-  /** `:ticket` — open the New Ticket modal. */
+  /** `:ticket` — start work (built-in ticket workflow or planned fallback). */
   ticket(_args, _agentId, ctx) {
-    if (ctx.openTicket === undefined) {
-      ctx.pushToast('new ticket creation is unavailable', { severity: 'error' });
+    if (ctx.openNewWork === undefined) {
+      ctx.pushToast('start work is unavailable', { severity: 'error' });
       return;
     }
-    ctx.openTicket();
+    ctx.openNewWork();
   },
   /** `:workflows [name]` — open the workflow template library, optionally focused by exact name. */
   workflows(args, _agentId, ctx) {
