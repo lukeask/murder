@@ -320,7 +320,9 @@ export const ChatInput = memo(function ChatInput(): React.JSX.Element {
         </Box>
       ) : null}
       <PaneBorderTop
-        title={`${TRI_RIGHT} ${targetLabel}`}
+        // ▸ marks keyboard ownership of the composer. When a rail panel holds focus the border is
+        // already recessed; dropping the triangle avoids the "still targeted / editable" look.
+        title={focused ? `${TRI_RIGHT} ${targetLabel}` : targetLabel}
         backgroundColor={canvasBackgroundColor}
         borderColor={borderColor}
         titleColor={focused ? theme.active : theme.inactive}

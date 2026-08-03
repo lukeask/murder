@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "tsx --tsconfig tsconfig.dev.json src/index.tsx",
     "build": "tsc --build",
-    "bundle": "npm --prefix .. run build -w @murder/ui-core && esbuild src/index.tsx --bundle --platform=node --format=esm --target=node20 --outfile=dist/bundle/index.js --alias:react-devtools-core=./stubs/react-devtools-core.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
+    "bundle": "npm --prefix .. run build -w @murder/ui-core && esbuild src/index.tsx --bundle --platform=node --format=esm --target=node20 --outfile=dist/bundle/index.js --alias:react-devtools-core=./stubs/react-devtools-core.js --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\" && mkdir -p ../murder/_inktui && cp -f dist/bundle/index.js ../murder/_inktui/index.js",
     "typecheck": "tsc --build && tsc --noEmit -p tsconfig.test.json",
     "lint": "biome check src test",
     "lint:fix": "biome check --write src test",
