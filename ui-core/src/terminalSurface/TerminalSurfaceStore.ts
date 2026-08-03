@@ -136,8 +136,12 @@ export class TerminalSurfaceStore {
   private synchronousDepth = 0;
   private deferredNotify = false;
   private keyframeRequired = false;
-  /** Rows cloned for mutation since the last published snapshot (copy-on-write batch). */
-  private cowRows = new Set<number>();
+  /**
+   * Row *identities* owned by the live buffer since the last publish (copy-on-write batch).
+   * Track objects, not y indices: scroll and buffer switches move/replace rows at a given y, so a
+   * y-set would skip cloning a published row that scrolled into an already-"cloned" slot.
+   */
+  private cowRows = new WeakSet<TerminalCell[]>();
   private readonly listeners = new Set<() => void>();
   private snapshot: TerminalGridSnapshot = this.makeSnapshot();
 
@@ -831,9 +835,10 @@ export class TerminalSurfaceStore {
   }
   /**
    * Copy-on-write row accessor: clone each changed row at most once per publication batch, then
-   * mark it dirty. Never clones the whole grid per character. Callers that mutate cells must go
-   * through this (put, erase family, insert/delete chars). Scroll paths splice whole row arrays
-   * and already replace references.
+   * mark it dirty. Ownership is by row identity (WeakSet), not by y — so a published row that
+   * scrolls into a previously mutated slot is still cloned before write. Callers that mutate
+   * cells must go through this (put, erase family, insert/delete chars). Scroll paths splice
+   * whole row arrays and already replace references with fresh blank rows.
    */
   private mutableRow(y: number): TerminalCell[] {
     const buffer = this.active;
@@ -841,14 +846,14 @@ export class TerminalSurfaceStore {
     if (existing === undefined) {
       const created = blankRow(this.columns);
       buffer.cells[y] = created;
-      this.cowRows.add(y);
+      this.cowRows.add(created);
       this.mark(y);
       return created;
     }
-    if (!this.cowRows.has(y)) {
+    if (!this.cowRows.has(existing)) {
       const cloned = existing.map(cloneCell);
       buffer.cells[y] = cloned;
-      this.cowRows.add(y);
+      this.cowRows.add(cloned);
       this.mark(y);
       return cloned;
     }
@@ -873,7 +878,9 @@ export class TerminalSurfaceStore {
     for (const listener of this.listeners) listener();
     this.dirty.clear();
     this.wholeDirty = false;
-    this.cowRows.clear();
+    // Live rows are now shared with the published snapshot; drop ownership so the next write
+    // clones again. WeakSet has no clear() — replace the set for the next publication batch.
+    this.cowRows = new WeakSet();
   }
   private makeSnapshot(): TerminalGridSnapshot {
     return {

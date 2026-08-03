@@ -333,4 +333,74 @@ describe('createAppStore — projection hydration', () => {
     expect(store.getState().tickets.status).toBe('ready');
     dispose();
   });
+
+  it('a usage-scoped refresh failure does not mark tickets as error', async () => {
+    const fake = new FakeApplicationClient();
+    fake.stubQuery('schedule.get', {
+      invalidation_key: 'schedule-1',
+      active_tickets: [],
+      recent_done_tickets: [],
+      archived_tickets: [],
+      usage_gauges: [
+        {
+          harness: 'codex',
+          window_key: '5h',
+          pct: 1,
+          t_until_reset_minutes: 1,
+        },
+      ],
+    });
+    const { store, dispose } = createAppStore(fake);
+    await flush();
+
+    store.setState({
+      tickets: {
+        rows: [
+          {
+            id: 'T-1',
+            title: 'One',
+            status: 'ready',
+            lastUpdateAt: '2026-01-01T00:00:00Z',
+            lastUpdateLabel: 'up',
+            scheduleAt: null,
+            harness: null,
+            model: null,
+            pendingDepIds: [],
+            parent: null,
+          },
+        ],
+        status: 'ready',
+        error: null,
+      },
+      usage: {
+        rows: [
+          {
+            harness: 'codex',
+            windowKey: '5h',
+            pct: 1,
+            tUntilResetMinutes: 1,
+            steering: null,
+          },
+        ],
+        status: 'ready',
+        error: null,
+      },
+    });
+    const ticketsBefore = store.getState().tickets;
+
+    fake.stubQuery('schedule.get', () => {
+      throw new Error('schedule unavailable');
+    });
+
+    await expect(
+      store.getState().actions.usage.refresh({ loadingKeys: ['usage'] }),
+    ).resolves.toBeUndefined();
+
+    expect(store.getState().tickets).toBe(ticketsBefore);
+    expect(store.getState().tickets.status).toBe('ready');
+    expect(store.getState().tickets.error).toBeNull();
+    expect(store.getState().usage.status).toBe('error');
+    expect(store.getState().usage.error).toBe('schedule unavailable');
+    dispose();
+  });
 });

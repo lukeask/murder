@@ -19,7 +19,8 @@ export type ScheduleRefresh = {
 
 /**
  * One seq/drain for the schedule source. `project` returns a tickets+usage patch applied in one
- * `setState`. Callers may scope `loadingKeys` so a usage write does not flicker the ticket list.
+ * `setState`. Callers may scope `loadingKeys` so a usage write does not flicker or error the
+ * ticket list (same keys for loading and rejection).
  */
 export function createScheduleRefresh(
   bus: ApplicationClient,

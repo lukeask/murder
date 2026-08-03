@@ -64,8 +64,11 @@ export type ListSliceKey = {
 
 export interface RefreshOptions {
   /**
-   * Which of the configured keys show `loading` for this call. Defaults to all configured keys.
-   * Use a subset when a write workflow (e.g. usage sample) must not flicker sibling slices.
+   * Which of the configured keys participate in this call's loading **and** error lifecycle.
+   * Defaults to all configured keys. Use a subset when a write workflow (e.g. usage sample) must
+   * not disturb sibling slices — siblings stay off both the loading flash and a failed-RPC error.
+   * (Success still applies the full projection patch so siblings get fresh rows without a lifecycle
+   * transition.)
    */
   readonly loadingKeys?: readonly ListSliceKey[];
 }
@@ -84,10 +87,13 @@ export function listReadyPatch<Key extends ListSliceKey, Row>(
  * Build the shared `refresh()` action for one or more list slices fed by the same query.
  * The single bus caller for that source (rule 3): it ref-swaps participating slices to `loading`,
  * issues one RPC, projects the reply into a multi-slice patch via the injected `project` fn, and
- * applies the patch in one `setState` (or routes the error into every configured key — never thrown
- * past the action, so the invalidation loop in `store.ts` stays fire-and-forget).
+ * applies the patch in one `setState` (or routes the error into the same participating keys — never
+ * thrown past the action, so the invalidation loop in `store.ts` stays fire-and-forget).
  *
- * @param keys    slice keys that participate in loading and error lifecycle for this source.
+ * Invariant: for one drain cycle, the keys that enter `loading` are exactly the keys that receive
+ * `error` on rejection. Coalesced calls union their lifecycle keys for that cycle.
+ *
+ * @param keys    default slice keys for loading and error when a call does not pass `loadingKeys`.
  * @param method  the read RPC method name.
  * @param project the per-domain DTO→patch projection. May update one or many slices.
  *
@@ -115,6 +121,10 @@ export function createRefreshAction<Method extends QueryMethod>(
   // at a time and retries until the in-flight RPC matches the final `seq`.
   let seq = 0;
   let drainPromise: Promise<void> | null = null;
+  // Union of lifecycle keys across coalesced refresh() calls for the in-flight drain. Cleared only
+  // when a reply is applied (success or matching-token failure) so a superseded attempt cannot drop
+  // keys a newer call already registered.
+  let lifecycleKeys = new Set<ListSliceKey>();
 
   async function drain(): Promise<void> {
     if (drainPromise !== null) {
@@ -138,6 +148,7 @@ export function createRefreshAction<Method extends QueryMethod>(
               continue;
             }
             const patch = project(reply);
+            lifecycleKeys = new Set();
             store.setState(patch);
             return;
           } catch (error: unknown) {
@@ -145,9 +156,11 @@ export function createRefreshAction<Method extends QueryMethod>(
               continue;
             }
             const message = error instanceof Error ? error.message : String(error);
+            const errorKeys = [...lifecycleKeys];
+            lifecycleKeys = new Set();
             store.setState((state) => {
               const next: Partial<AppStore> = {};
-              for (const key of keys) {
+              for (const key of errorKeys) {
                 const current = state[key] as ListState<unknown>;
                 (next as Record<string, ListState<unknown>>)[key] = {
                   ...current,
@@ -171,6 +184,9 @@ export function createRefreshAction<Method extends QueryMethod>(
     async refresh(options?: RefreshOptions): Promise<void> {
       seq++;
       const markKeys = options?.loadingKeys ?? keys;
+      for (const key of markKeys) {
+        lifecycleKeys.add(key);
+      }
       // Mark loading by ref-swapping ONLY the participating slices — siblings keep their identity.
       // When rows already exist, keep `ready` so the UI does not flash a loading overlay over live data.
       store.setState((state) => {

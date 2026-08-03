@@ -598,5 +598,13 @@ export function selectBottomBar(
       description: entry.description,
       actionId: `${focused}:${entry.intent}`,
     }));
-  return [...globals, ...panelHints, helpHint];
+  // Escape restores composer when the focused panel did not claim it (dispatcher layer-3 fallback).
+  // Surfaced ahead of panel-local keys so "how do I type again?" is discoverable even when the bar
+  // is crowded (adaptive packing may drop C-space / A-space).
+  const escapeChat: BottomBarHint = {
+    key: 'esc',
+    description: 'composer',
+    actionId: 'global.focusChat',
+  };
+  return [...globals, escapeChat, ...panelHints, helpHint];
 }

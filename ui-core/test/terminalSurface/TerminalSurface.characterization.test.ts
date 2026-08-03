@@ -668,5 +668,52 @@ describe('TerminalSurfaceStore characterization', () => {
       expect(rowText(old.cells[0] ?? [])).toBe(oldText);
       expect(rowText(store.getSnapshot().cells[0] ?? [])).toBe('XXXX  ');
     });
+
+    it('clones a published row that scrolls into a previously mutated slot during sync', () => {
+      // Bug shape: mutate y=0 (marks slot owned), scroll so published y=1 lands at y=0, mutate
+      // again — y-index COW would skip cloning and corrupt the published snapshot's row 1.
+      const store = new TerminalSurfaceStore();
+      store.resize(4, 2);
+      ingestVt(store, 1, '\u001b[1;1HAAAA\u001b[2;1HBBBB');
+      const old = store.getSnapshot();
+      const publishedRow1 = old.cells[1];
+      expect(rowText(old.cells[0] ?? [])).toBe('AAAA');
+      expect(rowText(old.cells[1] ?? [])).toBe('BBBB');
+
+      // Sync on; rewrite row 0; scroll up (row 1 → row 0); rewrite the new row 0.
+      ingestVt(store, 2, '\u001b[?2026h\u001b[1;1HXXXX\u001b[S\u001b[1;1HYYYY');
+      expect(store.getSnapshot()).toBe(old);
+      expect(rowText(old.cells[0] ?? [])).toBe('AAAA');
+      expect(rowText(old.cells[1] ?? [])).toBe('BBBB');
+      expect(old.cells[1]).toBe(publishedRow1);
+      expect(rowText(store.exportState().primary.cells[0] ?? [])).toBe('YYYY');
+
+      ingestVt(store, 3, '\u001b[?2026l');
+      expect(rowText(old.cells[0] ?? [])).toBe('AAAA');
+      expect(rowText(old.cells[1] ?? [])).toBe('BBBB');
+      expect(old.cells[1]).toBe(publishedRow1);
+    });
+
+    it('clones primary rows after an alternate-buffer excursion during sync', () => {
+      // Bug shape: mutate alternate at y=0 (marks slot owned), leave alternate, mutate primary
+      // y=0 — y-index COW would skip cloning and corrupt a published primary snapshot.
+      const store = new TerminalSurfaceStore();
+      store.resize(4, 1);
+      ingestVt(store, 1, 'PRIM');
+      const old = store.getSnapshot();
+      const publishedRow0 = old.cells[0];
+      expect(rowText(old.cells[0] ?? [])).toBe('PRIM');
+
+      ingestVt(store, 2, '\u001b[?2026h\u001b[?1049h\rALT!\u001b[?1049l\rNEWO');
+      expect(store.getSnapshot()).toBe(old);
+      expect(rowText(old.cells[0] ?? [])).toBe('PRIM');
+      expect(old.cells[0]).toBe(publishedRow0);
+      expect(rowText(store.exportState().primary.cells[0] ?? [])).toBe('NEWO');
+
+      ingestVt(store, 3, '\u001b[?2026l');
+      expect(rowText(old.cells[0] ?? [])).toBe('PRIM');
+      expect(old.cells[0]).toBe(publishedRow0);
+      expect(rowText(store.getSnapshot().cells[0] ?? [])).toBe('NEWO');
+    });
   });
 });

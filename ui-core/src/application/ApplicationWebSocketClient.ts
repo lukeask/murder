@@ -1022,10 +1022,27 @@ function isProjectionInvalidation(value: unknown): value is ProjectionInvalidati
   );
 }
 
+function decodeSocketData(data: unknown): string | undefined {
+  if (typeof data === 'string') return data;
+  // Node's undici/ws stacks may deliver text frames as Buffer / Uint8Array / ArrayBuffer.
+  // Ignoring those makes handshake hang until close, which looks like a reconnect storm.
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(data)) {
+    return data.toString('utf8');
+  }
+  if (data instanceof ArrayBuffer) {
+    return new TextDecoder().decode(data);
+  }
+  if (data instanceof Uint8Array) {
+    return new TextDecoder().decode(data);
+  }
+  return undefined;
+}
+
 function parseServerMessage(data: unknown): ServerMessage | undefined {
-  if (typeof data !== 'string' || data.trim() === '') return undefined;
+  const text = decodeSocketData(data);
+  if (text === undefined || text.trim() === '') return undefined;
   try {
-    const parsed = JSON.parse(data) as { op?: unknown };
+    const parsed = JSON.parse(text) as { op?: unknown };
     return isServerOp(parsed.op) ? (parsed as ServerMessage) : undefined;
   } catch {
     return undefined;

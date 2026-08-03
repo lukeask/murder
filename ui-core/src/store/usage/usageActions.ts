@@ -23,7 +23,7 @@ export interface UsageActions {
   /**
    * Re-pull the schedule snapshot and update usage (and tickets) via the shared schedule refresh.
    * Alias of the shared refresh — no separate request state. Pass `loadingKeys: ['usage']` after a
-   * usage write so the ticket list does not flicker.
+   * usage write so the ticket list does not flicker or take a refresh-failure error.
    */
   refresh(options?: RefreshOptions): Promise<void>;
   /**

@@ -137,6 +137,28 @@ describe('ApplicationWebSocketClient', () => {
     client.close();
   });
 
+  it('accepts server.hello text frames delivered as Buffer', async () => {
+    const { client, socket } = makeClient();
+    const pending = client.connect();
+    socket.open();
+    const hello: ServerMessage = {
+      op: 'server.hello',
+      protocol_version: APPLICATION_PROTOCOL_VERSION,
+      server_id: 'buffer-hello',
+      queries: [],
+      commands: [],
+      subscriptions: [],
+      terminal_streams: true,
+      fact_cursor: 9,
+      projection_cursor: 8,
+    };
+    socket.onmessage?.({ data: Buffer.from(JSON.stringify(hello), 'utf8') });
+    await pending;
+    expect(client.getFactCursor()).toBe(9);
+    expect(client.getProjectionCursor()).toBe(8);
+    client.close();
+  });
+
   it('rejects a connection waiter when the socket closes during handshake', async () => {
     const { client, socket } = makeClient();
     const pending = client.connect();

@@ -147,9 +147,11 @@ describe('selectBottomBar', () => {
     const descriptions = hints.map((h) => h.description);
     expect(descriptions).toContain('open doc');
     expect(descriptions).toContain('star');
+    expect(descriptions).toContain('composer'); // Escape → restore composer
     // A printable chord renders its char; a key-only chord renders the special-key name.
     expect(hints.find((h) => h.description === 'open doc')?.key).toBe('o');
     expect(hints.find((h) => h.description === 'star')?.key).toBe('return');
+    expect(hints.find((h) => h.description === 'composer')?.key).toBe('esc');
     expect(hints.find((h) => h.description === 'open doc')?.actionId).toBe('plans:open');
     expect(hints.find((h) => h.description === 'star')?.actionId).toBe('plans:star');
   });
