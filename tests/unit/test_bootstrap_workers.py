@@ -30,7 +30,7 @@ def test_codebase_map_worker_registered(monkeypatch):
     runtime = SimpleNamespace(
         db=db,
         run_id="run-1",
-        get_agent=lambda *_a: None,
+        agents=SimpleNamespace(find=lambda *_a: None),
         advanced_log=object(),
         command_submitter=object(),
     )

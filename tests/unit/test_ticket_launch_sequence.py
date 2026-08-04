@@ -86,12 +86,23 @@ def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
     async def no_sleep(_: float) -> None:
         return None
 
+    async def transition(
+        agent: object,
+        *,
+        from_status: object = None,
+        to_status: AgentStatus,
+        reason: object = None,
+    ) -> None:
+        del from_status, reason
+        agent.status = to_status  # type: ignore[attr-defined]
+
     return SimpleNamespace(
         db=db,
         sessions=SessionService(db),
         orchestration_events=None,
         run_id=None,
-        sync_agent=MagicMock(),
+        record=MagicMock(),
+        transition=AsyncMock(side_effect=transition),
         verified_prompt_driver_policy=PromptDriverPolicy(
             observation_interval=timedelta(), maximum_observations=12
         ),
@@ -222,7 +233,7 @@ def test_crow_agent_start_escalates_when_enter_lacks_fresh_acknowledgment(
         asyncio.run(agent.start("ticket context", {}))
 
     assert agent.status == AgentStatus.FAILED
-    runtime.sync_agent.assert_called()
+    runtime.record.assert_called()
     enters = [args for args, _ in fake_tmux_launch.calls_to("send_keys") if args[1] == "Enter"]
     assert len(enters) == 1
 

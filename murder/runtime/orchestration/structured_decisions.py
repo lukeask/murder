@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from murder.llm.harness_control.capabilities.permissions import (
@@ -46,17 +47,9 @@ from murder.permissions import (
 )
 from murder.permissions.contracts import PROPOSED_OPERATION_ADAPTER
 from murder.runtime.orchestration.ports import OrchestrationEventSink
+from murder.state.persistence.connection import RepoDb
 
 _LOG = logging.getLogger(__name__)
-
-
-class StructuredDecisionHost(Protocol):
-    db: Any
-    orchestration_events: OrchestrationEventSink | None
-    run_id: str | None
-
-    def get_agent(self, agent_id: str) -> Any | None: ...
-
 
 DecisionKind = Literal["question", "permission"]
 
@@ -87,19 +80,26 @@ def _choice_payload(choice: Any) -> dict[str, object]:
 class StructuredDecisionRouter:
     """Identity-bound durable request/response seam for structured controls."""
 
-    def __init__(self, host: StructuredDecisionHost) -> None:
-        self._host = host
+    def __init__(
+        self,
+        *,
+        db: RepoDb,
+        events: OrchestrationEventSink,
+        run_id: str,
+        get_agent: Callable[[str], Any | None],
+    ) -> None:
+        self._db = db
+        self._events = events
+        self._run_id = run_id
+        self._get_agent = get_agent
         self._visible: dict[tuple[str, DecisionKind], str] = {}
         self._cleared: set[tuple[str, DecisionKind]] = set()
         self._permission_service: PermissionService | None = None
 
-    def _permissions(self) -> PermissionService | None:
-        db = self._host.db
-        if db is None:
-            return None
+    def _permissions(self) -> PermissionService:
         if self._permission_service is None:
             self._permission_service = PermissionService(
-                store=PermissionStore(db),
+                store=PermissionStore(self._db),
                 policy=LocalServicePermissionPolicy(),
             )
         return self._permission_service
@@ -107,8 +107,6 @@ class StructuredDecisionRouter:
     async def observe(self, agent: Any, snapshot: ObservationSnapshot) -> None:
         """Publish each currently visible normalized request exactly once."""
 
-        if self._host.db is None or self._host.run_id is None:
-            return
         await self._resume_recorded_responses(agent, snapshot)
         candidates: list[tuple[DecisionKind, str, dict[str, object]]] = []
         if snapshot.question.knowledge is Knowledge.PRESENT and snapshot.question.value is not None:
@@ -204,8 +202,6 @@ class StructuredDecisionRouter:
         """Persist a permissions-subsystem decision for the observed dialog."""
 
         service = self._permissions()
-        if service is None:
-            return
         try:
             request_harness_permission(
                 service,
@@ -235,9 +231,7 @@ class StructuredDecisionRouter:
         """Resolve a pending permissions approval when the harness answer lands."""
 
         service = self._permissions()
-        if service is None:
-            return
-        pending = PermissionStore(self._host.db).get_pending_approval_for_operation(
+        pending = PermissionStore(self._db).get_pending_approval_for_operation(
             UUID(request_id)
         )
         if pending is None:
@@ -292,7 +286,7 @@ class StructuredDecisionRouter:
         if persisted["request_identity"] != identity:
             return {"ok": False, "error": "request_identity_mismatch"}
 
-        agent = self._host.get_agent(agent_id)
+        agent = self._get_agent(agent_id)
         ingested = getattr(agent, "latest_ingested_frame", None) if agent is not None else None
         snapshot = getattr(ingested, "snapshot", None)
         if snapshot is None or self._current_identity(kind, snapshot) != identity:
@@ -322,11 +316,11 @@ class StructuredDecisionRouter:
     async def _resume_recorded_responses(self, agent: Any, snapshot: ObservationSnapshot) -> None:
         """Start decisions recorded before a crash when no operation exists yet."""
 
-        rows = self._host.db.conn.execute(
+        rows = self._db.conn.execute(
             "SELECT decision_request_id, decision_kind, request_identity, response_json "
             "FROM structured_decisions WHERE repository_id = ? AND agent_id = ? AND response_json IS NOT NULL "
             "ORDER BY created_at, decision_request_id",
-            (self._host.db.repository_id, agent.id),
+            (self._db.repository_id, agent.id),
         ).fetchall()
         for row in rows:
             request_id = str(row["decision_request_id"] or "")
@@ -356,46 +350,46 @@ class StructuredDecisionRouter:
 
     def _operation_exists(self, operation_id: str) -> bool:
         return (
-            self._host.db.conn.execute(
+            self._db.conn.execute(
                 "SELECT 1 FROM harness_control_operations WHERE repository_id = ? AND operation_id = ?",
-                (self._host.db.repository_id, operation_id),
+                (self._db.repository_id, operation_id),
             ).fetchone()
             is not None
         )
 
     def _has_any_occurrence(self, agent_id: str, kind: str, identity: str) -> bool:
-        row = self._host.db.conn.execute(
+        row = self._db.conn.execute(
             "SELECT 1 FROM structured_decisions "
             "WHERE repository_id = ? AND agent_id = ? AND decision_kind = ? AND request_identity = ? LIMIT 1",
-            (self._host.db.repository_id, agent_id, kind, identity),
+            (self._db.repository_id, agent_id, kind, identity),
         ).fetchone()
         return row is not None
 
     def _has_kind_history(self, agent_id: str, kind: str) -> bool:
         return (
-            self._host.db.conn.execute(
+            self._db.conn.execute(
                 "SELECT 1 FROM structured_decisions "
                 "WHERE repository_id = ? AND agent_id = ? AND decision_kind = ? LIMIT 1",
-                (self._host.db.repository_id, agent_id, kind),
+                (self._db.repository_id, agent_id, kind),
             ).fetchone()
             is not None
         )
 
     def _response_exists(self, request_id: str) -> bool:
         return (
-            self._host.db.conn.execute(
+            self._db.conn.execute(
                 "SELECT 1 FROM structured_decisions "
                 "WHERE repository_id = ? AND decision_request_id = ? AND response_json IS NOT NULL LIMIT 1",
-                (self._host.db.repository_id, request_id),
+                (self._db.repository_id, request_id),
             ).fetchone()
             is not None
         )
 
     def _load_request(self, request_id: str) -> dict[str, Any] | None:
-        row = self._host.db.conn.execute(
+        row = self._db.conn.execute(
             "SELECT agent_id, decision_kind, request_identity, request_json "
             "FROM structured_decisions WHERE repository_id = ? AND decision_request_id = ?",
-            (self._host.db.repository_id, request_id),
+            (self._db.repository_id, request_id),
         ).fetchone()
         if row is None:
             return None
@@ -415,12 +409,12 @@ class StructuredDecisionRouter:
         request_identity: str,
         request: dict[str, object],
     ) -> None:
-        self._host.db.conn.execute(
+        self._db.conn.execute(
             "INSERT OR IGNORE INTO structured_decisions "
             "(repository_id, decision_request_id, agent_id, decision_kind, request_identity, request_json, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                self._host.db.repository_id,
+                self._db.repository_id,
                 request_id,
                 agent_id,
                 decision_kind,
@@ -429,25 +423,25 @@ class StructuredDecisionRouter:
                 datetime.now(timezone.utc).isoformat(timespec="microseconds"),
             ),
         )
-        self._host.db.conn.commit()
+        self._db.conn.commit()
 
     def _record_response(
         self, request_id: str, *, response: dict[str, Any], decided_by: str
     ) -> None:
-        cursor = self._host.db.conn.execute(
+        cursor = self._db.conn.execute(
             "UPDATE structured_decisions SET response_json = ?, decided_by = ?, responded_at = ? "
             "WHERE repository_id = ? AND decision_request_id = ? AND response_json IS NULL",
             (
                 json.dumps(response, sort_keys=True, separators=(",", ":")),
                 decided_by,
                 datetime.now(timezone.utc).isoformat(timespec="microseconds"),
-                self._host.db.repository_id,
+                self._db.repository_id,
                 request_id,
             ),
         )
         if cursor.rowcount != 1:
             raise RuntimeError(f"decision response lost identity binding: {request_id}")
-        self._host.db.conn.commit()
+        self._db.conn.commit()
 
     @staticmethod
     def _current_identity(kind: str, snapshot: ObservationSnapshot) -> str | None:

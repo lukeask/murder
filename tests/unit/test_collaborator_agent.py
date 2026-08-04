@@ -39,16 +39,31 @@ async def _no_sleep(_: float) -> None:
     """Keep reconciliation traces deterministic without making them timing tests."""
 
 
+async def _stub_transition(
+    agent: object,
+    *,
+    from_status: object = None,
+    to_status: AgentStatus,
+    reason: object = None,
+) -> None:
+    del from_status, reason
+    agent.status = to_status  # type: ignore[attr-defined]
+
+
 def _db(tmp_path: Path) -> RepoDb:
     return open_test_repo_db(tmp_path / "state.db")
 
 
 def _runtime(conn: RepoDb, *, events: object | None = None) -> SimpleNamespace:
+    from murder.runtime.sessions.service import SessionService
+
     return SimpleNamespace(
         db=conn,
+        sessions=SessionService(conn),
         orchestration_events=events,
         run_id="run-1" if events is not None else None,
-        sync_agent=MagicMock(),
+        record=MagicMock(),
+        transition=AsyncMock(side_effect=_stub_transition),
         verified_prompt_driver_policy=PromptDriverPolicy(
             observation_interval=timedelta(), maximum_observations=12
         ),
@@ -146,7 +161,9 @@ def test_start_and_followup_use_verified_prompt_control(
         if name == "send_keys" and args[1] == "Enter"
     )
     assert any(name == "capture_pane" for name, _args, _kwargs in calls[final_enter + 1 :])
-    runtime.sync_agent.assert_called_with(agent)
+    runtime.transition.assert_awaited()
+    assert runtime.transition.await_args.args[0] is agent
+    assert runtime.transition.await_args.kwargs["to_status"] is AgentStatus.RUNNING
 
 
 def test_collaborator_send_escalates_when_enter_has_no_later_acknowledgment(
@@ -234,7 +251,7 @@ def test_record_user_block_event_publishes_conversation_block(tmp_path: Path) ->
     conn = _db(tmp_path)
     bus = SimpleNamespace(publish=AsyncMock())
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+        db=conn, orchestration_events=bus, run_id="run-1", record=MagicMock()
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -263,7 +280,7 @@ def test_stop_clean_sets_conversation_complete_without_legacy_exit_scrape(
     """Clean stop completes the conversation without unowned `/exit` input."""
     conn = _db(tmp_path)
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+        db=conn, orchestration_events=None, run_id=None, record=MagicMock()
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -293,7 +310,7 @@ def test_stop_preserve_session_leaves_conversation_in_progress(
     so next startup can mark it stale."""
     conn = _db(tmp_path)
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+        db=conn, orchestration_events=None, run_id=None, record=MagicMock()
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -320,7 +337,7 @@ def test_destructive_stop_closes_owned_backend_connections(
 ) -> None:
     conn = _db(tmp_path)
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+        db=conn, orchestration_events=None, run_id=None, record=MagicMock()
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -355,7 +372,7 @@ def test_preserved_session_keeps_owned_backend_connections_open(
 ) -> None:
     conn = _db(tmp_path)
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=None, run_id=None, sync_agent=MagicMock()
+        db=conn, orchestration_events=None, run_id=None, record=MagicMock()
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -385,7 +402,7 @@ def test_reinitialize_after_destructive_stop_creates_fresh_backend_connection(
         db=conn,
         orchestration_events=None,
         run_id=None,
-        sync_agent=MagicMock(),
+        record=MagicMock(),
         repo_root=tmp_path,
         session_controllers=None,
     )
@@ -484,7 +501,7 @@ def test_collaborator_start_failure_records_notice(tmp_path: Path) -> None:
     conn = _db(tmp_path)
     bus = SimpleNamespace(publish=AsyncMock())
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+        db=conn, orchestration_events=bus, run_id="run-1", record=MagicMock()
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -516,4 +533,4 @@ def test_collaborator_start_failure_records_notice(tmp_path: Path) -> None:
     event = bus.publish.await_args.args[0]
     assert isinstance(event, ConversationBlockEvent)
     assert event.block["kind"] == "notice"
-    runtime.sync_agent.assert_called_with(agent)
+    runtime.record.assert_called_with(agent)

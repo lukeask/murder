@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+from murder.runtime.agent_runtime import AgentRuntime
 from murder.runtime.agents.types import AgentRole
 from murder.runtime.agents.collaborator import CollaboratorAgent
 from murder.runtime.agents.crow import CrowAgent
@@ -20,16 +20,15 @@ from murder.llm.harnesses import get as get_harness
 
 from murder.runtime.agents.events import AgentEventSink, AgentStartedEvent
 from murder.runtime.agents.sessions import AgentHandle, AgentSpec
-from murder.runtime.terminal.session_names import format_session_name
-
-if TYPE_CHECKING:
-    from murder.runtime.orchestration.runtime_scope import OrchestratorHost
+from murder.runtime.terminal.session_names import SessionNamePolicy
 
 
 async def spawn_agent(
     spec: AgentSpec,
     *,
-    rt: OrchestratorHost,
+    repo_root: Path,
+    session_names: SessionNamePolicy,
+    agents: AgentRuntime,
     event_sink: AgentEventSink | None = None,
 ) -> AgentHandle:
     """Instantiate, register, and start an agent from a fully-resolved spec.
@@ -37,7 +36,7 @@ async def spawn_agent(
     The caller is responsible for business-logic setup: composing the startup
     prompt, resolving the harness kind, and checking for existing sessions.
     This function owns: create session name, instantiate the right class,
-    register with rt, start the agent, emit AgentStartedEvent, return handle.
+    register with AgentRuntime, start the agent, emit AgentStartedEvent, return handle.
 
     Raises ValueError for CROW_HANDLER (needs crow_session not in spec) and
     any unrecognised role.
@@ -50,38 +49,38 @@ async def spawn_agent(
         if not spec.harness:
             raise ValueError("CROW spec requires harness")
         ticket_id = spec.scope.ticket_id
-        session_name = format_session_name(rt, "crow", f"_{ticket_id}")
+        session_name = session_names.format("crow", f"_{ticket_id}")
         harness = get_harness(spec.harness, startup_model=spec.model, startup_effort=spec.effort)
         worktree_path = Path(spec.scope.worktree_path) if spec.scope.worktree_path else None
-        repo_root = worktree_path or rt.repo_root
+        agent_repo = worktree_path or repo_root
         agent = CrowAgent(
             agent_id=f"crow-{ticket_id}",
             ticket_id=ticket_id,
             session=session_name,
             harness=harness,
-            repo_root=repo_root,
+            repo_root=agent_repo,
             startup_model=spec.model,
             startup_effort=spec.effort,
             worktree_path=worktree_path,
             additional_workspace_dirs=tuple(
                 Path(path) for path in spec.additional_workspace_dirs
             ),
-            runtime=rt,
+            runtime=agents,
         )
 
     elif role == AgentRole.COLLABORATOR:
         if not spec.harness:
             raise ValueError("COLLABORATOR spec requires harness")
-        session_name = format_session_name(rt, "collaborator", "")
+        session_name = session_names.format("collaborator", "")
         harness = get_harness(spec.harness, startup_model=spec.model, startup_effort=spec.effort)
         agent = CollaboratorAgent(
             agent_id="collaborator-0",
             session=session_name,
             harness=harness,
-            repo_root=rt.repo_root,
+            repo_root=repo_root,
             startup_model=spec.model,
             startup_effort=spec.effort,
-            runtime=rt,
+            runtime=agents,
         )
 
     elif role == AgentRole.PLANNER:
@@ -90,17 +89,17 @@ async def spawn_agent(
         if not spec.harness:
             raise ValueError("PLANNER spec requires harness")
         plan_name = spec.scope.plan_name
-        session_name = format_session_name(rt, "planner", f"_{plan_name}")
+        session_name = session_names.format("planner", f"_{plan_name}")
         harness = get_harness(spec.harness, startup_model=spec.model, startup_effort=spec.effort)
         agent = PlanningAgent(
             agent_id=f"planner-{plan_name}",
             session=session_name,
             plan_name=plan_name,
             harness=harness,
-            repo_root=rt.repo_root,
+            repo_root=repo_root,
             startup_model=spec.model,
             startup_effort=spec.effort,
-            runtime=rt,
+            runtime=agents,
         )
 
     elif role == AgentRole.CROW_HANDLER:
@@ -111,11 +110,11 @@ async def spawn_agent(
     else:
         raise ValueError(f"spawn_agent: unsupported role {role!r}")
 
-    rt.register_agent(agent)
+    agents.register(agent)
     try:
         await agent.start(spec.startup_prompt or "", {})
     except BaseException:
-        await rt.reap(agent.id)
+        await agents.reap(agent.id)
         raise
 
     handle = AgentHandle(agent_id=agent.id, session_name=session_name, spec=spec, task=None)

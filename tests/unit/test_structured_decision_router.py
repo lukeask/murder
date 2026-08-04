@@ -29,6 +29,15 @@ from tests.support.database import open_test_repo_db
 EXPECTED_QUESTION_EXECUTIONS = 3
 
 
+def _router(runtime: SimpleNamespace) -> StructuredDecisionRouter:
+    return StructuredDecisionRouter(
+        db=runtime.db,
+        events=runtime.orchestration_events,
+        run_id=runtime.run_id,
+        get_agent=runtime.get_agent,
+    )
+
+
 @pytest.mark.asyncio
 async def test_structured_decisions_are_durable_identity_bound_and_terminal_free(  # noqa: PLR0915
     tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -106,7 +115,7 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         run_id="run-1",
         get_agent=lambda agent_id: agent if agent_id == agent.id else None,
     )
-    router = StructuredDecisionRouter(runtime)
+    router = _router(runtime)
 
     for kind, snapshot in snapshots.items():
         agent.latest_ingested_frame = SimpleNamespace(snapshot=snapshot)
@@ -139,7 +148,7 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
 
         # Publish-once is durable across router reconstruction, not merely an
         # in-memory debounce within one service lifetime.
-        await StructuredDecisionRouter(runtime).observe(agent, snapshot)
+        await _router(runtime).observe(agent, snapshot)
         assert (
             db.conn.execute(
                 "SELECT count(*) FROM structured_decisions "
@@ -223,7 +232,7 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         )
         later_revision = ObservationRevision(1, revision.capture_sequence + 10, 4)
         repeated_occurrence = replace(snapshot, revision=later_revision)
-        restarted_router = StructuredDecisionRouter(runtime)
+        restarted_router = _router(runtime)
         await restarted_router.observe(agent, absent_base)
         agent.latest_ingested_frame = SimpleNamespace(snapshot=repeated_occurrence)
         await restarted_router.observe(agent, repeated_occurrence)
@@ -276,7 +285,7 @@ async def test_structured_decisions_are_durable_identity_bound_and_terminal_free
         )
     agent.answer_verified_question.side_effect = None
     agent.answer_verified_question.return_value = True
-    await StructuredDecisionRouter(runtime).observe(agent, crash_snapshot)
+    await _router(runtime).observe(agent, crash_snapshot)
     assert agent.answer_verified_question.await_args.kwargs["operation_id"] == crash_request[
         "decision_request_id"
     ]
@@ -340,7 +349,7 @@ async def test_permission_observe_and_respond_bridge_permission_service(
         run_id="run-perm",
         get_agent=lambda agent_id: agent if agent_id == agent.id else None,
     )
-    router = StructuredDecisionRouter(runtime)
+    router = _router(runtime)
     await router.observe(agent, snapshot)
 
     row = db.conn.execute(

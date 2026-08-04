@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from murder.config import (
+    Config,
     resolve_default_crow_harness,
     resolve_default_crow_startup_effort,
     resolve_default_crow_startup_model,
 )
 from murder.llm.harnesses import get as get_harness
-
-if TYPE_CHECKING:
-    from murder.runtime.orchestration.runtime_scope import OrchestratorHost
-
 
 @dataclass(frozen=True)
 class CrowHarness:
@@ -26,15 +23,15 @@ class CrowHarness:
 class HarnessConfigurator:
     """Resolves crow harness/model/effort from config + ticket row."""
 
-    def __init__(self, rt: OrchestratorHost) -> None:
-        self.rt = rt
+    def __init__(self, *, config: Config) -> None:
+        self._config = config
 
     def resolve_crow(self, row: dict[str, Any]) -> CrowHarness:
-        kind = resolve_default_crow_harness(self.rt.config.default_crow, row)
+        kind = resolve_default_crow_harness(self._config.default_crow, row)
         return CrowHarness(
             kind,
-            resolve_default_crow_startup_model(self.rt.config.default_crow, row, kind),
-            resolve_default_crow_startup_effort(self.rt.config.default_crow, row),
+            resolve_default_crow_startup_model(self._config.default_crow, row, kind),
+            resolve_default_crow_startup_effort(self._config.default_crow, row),
         )
 
     def adapter(self, ch: CrowHarness) -> Any:

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from murder.app.service.agent_registry import AgentRegistry
 from murder.runtime.agents.base import AgentRole, AgentStatus
 from murder.runtime.orchestration.orchestrator import Orchestrator
 from murder.state.persistence import plans as plan_db
@@ -190,32 +189,27 @@ def test_plan_sync_deprecate_marks_superseded_and_hides_from_active_list(repo_ro
     assert plan_db.list_plans(conn) == []
 
 
+
 def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
     repo_root,
 ) -> None:
+    from murder.observability.advanced_log import NullAdvancedLog
+    from murder.roster.service import RosterService
+    from murder.runtime.agent_runtime import AgentRuntime
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
+    from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
+    from tests.support.orchestrator import build_test_orchestrator, default_test_config
+
     conn = _connect(repo_root)
-    registry = AgentRegistry()
-    config = SimpleNamespace(
-        project=SimpleNamespace(name="demo"),
-        runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
-    )
-
-    def sync_agent(agent) -> None:
-        upsert_agent(
-            conn,
-            agent_id=agent.id,
-            role=agent.role.value,
-            ticket_id=agent.ticket_id,
-            session=agent.session,
-            status=agent.status.value,
-        )
-
-    rt = SimpleNamespace(
+    agents = AgentRuntime(
         db=conn,
-        agents=registry,
-        config=config,
-        sync_agent=sync_agent,
-        rename_agent=registry.rename_agent,
+        roster=RosterService(conn),
+        events=InProcessOrchestrationEventSink(),
+        run_id="test-run",
+        advanced_log=NullAdvancedLog(),
+        preserve_tmux_on_close=lambda: False,
+        verified_control_factory=VerifiedControlFactory(db=conn),
+        lifecycle_events_enabled=False,
     )
     planner = SimpleNamespace(
         id="planner-old",
@@ -224,6 +218,10 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
         status=AgentStatus.RUNNING,
         session="murder_demo_planner_old",
         plan_name="old",
+        harness=SimpleNamespace(kind="codex"),
+        startup_model=None,
+        start_commit=None,
+        worktree_path=None,
         harness_session=SimpleNamespace(session="murder_demo_planner_old"),
     )
     handler = SimpleNamespace(
@@ -234,29 +232,38 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
         session="murder_demo_planning_handler_old",
         plan_name="old",
         planner_session="murder_demo_planner_old",
+        harness=SimpleNamespace(kind="codex"),
+        startup_model=None,
+        start_commit=None,
+        worktree_path=None,
     )
-    registry.register(planner)
-    registry.register(handler)
-    sync_agent(planner)
-    sync_agent(handler)
+    agents.register(planner)
+    agents.register(handler)
     conn.conn.execute(
         "INSERT INTO agent_messages(repository_id, agent_id, ordinal, role, body, captured_at) "
         "VALUES (?, 'planner-old', 0, 'user', 'hello', '2026-01-01T00:00:00')",
         (conn.repository_id,),
     )
 
-    asyncio.run(Orchestrator(rt)._retarget_plan_runtime("old", "new"))
+    orch = build_test_orchestrator(
+        repo_root=repo_root,
+        db=conn,
+        agents=agents,
+        config=default_test_config(project_name="demo"),
+    )
+    asyncio.run(orch._retarget_plan_runtime("old", "new"))
 
-    assert registry.get_agent("planner-old") is None
-    assert registry.get_agent("planner-new") is planner
+    assert agents.find("planner-old") is None
+    assert agents.find("planner-new") is planner
     assert planner.id == "planner-new"
     assert planner.plan_name == "new"
     assert planner.session == "murder_demo_planner_old"
     assert planner.harness_session.session == "murder_demo_planner_old"
-    assert registry.get_agent("planning_handler-new") is handler
+    assert agents.find("planning_handler-new") is handler
     assert handler.id == "planning_handler-new"
     assert handler.plan_name == "new"
     assert handler.planner_session == "murder_demo_planner_old"
+
     rows = conn.conn.execute(
         "SELECT agent_id, session FROM agents WHERE repository_id = ? ORDER BY agent_id",
         (conn.repository_id,),

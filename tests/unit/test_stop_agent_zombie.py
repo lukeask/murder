@@ -19,6 +19,7 @@ from murder.config import (
     ProjectConfig,
 )
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.state.persistence.connection import RepoDb
 from tests.support.database import open_test_repo_db
 
@@ -81,7 +82,7 @@ def test_stop_unregistered_rogue_kills_session_and_marks_dead(
     )
     monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.kill_session", fake_kill)
 
-    result = asyncio.run(Orchestrator(rt).stop_agent("codex-rogue-planreview"))  # type: ignore[arg-type]
+    result = asyncio.run(adapt_rt_stub(rt).stop_agent("codex-rogue-planreview"))  # type: ignore[arg-type]
 
     assert result == {"handled": True, "agent_id": "codex-rogue-planreview"}
     assert killed == ["murder_repo_crow_codex_rogue_planreview"]
@@ -119,7 +120,7 @@ def test_stop_unregistered_crow_also_reaps_handler(repo_root: Path, monkeypatch)
     )
     monkeypatch.setattr("murder.runtime.orchestration.orchestrator.tmux.kill_session", fake_kill)
 
-    result = asyncio.run(Orchestrator(rt).stop_agent("crow-t001"))  # type: ignore[arg-type]
+    result = asyncio.run(adapt_rt_stub(rt).stop_agent("crow-t001"))  # type: ignore[arg-type]
 
     assert result["handled"] is True
     rows = {
@@ -136,6 +137,6 @@ def test_stop_truly_unknown_agent_reports_real_error(repo_root: Path) -> None:
     db = open_test_repo_db(repo_root / "murder.db")
     rt = _Runtime(repo_root=repo_root, config=_config(), db=db)
 
-    result = asyncio.run(Orchestrator(rt).stop_agent("nope-rogue-ghost"))  # type: ignore[arg-type]
+    result = asyncio.run(adapt_rt_stub(rt).stop_agent("nope-rogue-ghost"))  # type: ignore[arg-type]
 
     assert result == {"ok": False, "error": "no agent named nope-rogue-ghost"}

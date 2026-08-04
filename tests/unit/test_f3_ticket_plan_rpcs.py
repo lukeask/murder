@@ -57,9 +57,9 @@ def _runtime(repo_root: Path) -> Runtime:
 
 
 def _orch(rt: Runtime):
-    from murder.runtime.orchestration.orchestrator import Orchestrator
+    from tests.support.orchestrator import adapt_rt_stub
 
-    return Orchestrator(rt)
+    return adapt_rt_stub(rt)
 
 
 # === ticket.save_body =======================================================

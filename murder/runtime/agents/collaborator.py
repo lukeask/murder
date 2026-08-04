@@ -18,7 +18,7 @@ from murder.runtime.terminal import tmux
 TRANSCRIPT_SCROLLBACK_LINES = 4000
 
 if TYPE_CHECKING:
-    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.agent_runtime import AgentRuntime
 
 # Keep the harness's own ready/idle waits comfortably under the service-level
 # spawn timeout so a slow harness surfaces its own clean failure instead of being cancelled mid-startup.
@@ -38,7 +38,7 @@ class CollaboratorAgent(HarnessBackedAgent):
         *,
         startup_model: str | None = None,
         startup_effort: str | None = None,
-        runtime: Runtime | None = None,
+        runtime: AgentRuntime | None = None,
     ) -> None:
         self.id = agent_id
         self.session = session
@@ -51,8 +51,6 @@ class CollaboratorAgent(HarnessBackedAgent):
         self.harness_session = harness.attach(session, self.repo_root)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.runtime.orchestration.events import StatusChangeEvent
-
         # Record the injected system prompt so the (markerless) transcript parser
         # can recognise and drop it instead of mislabelling its paragraphs as
         # alternating user/assistant chat turns.
@@ -97,22 +95,14 @@ class CollaboratorAgent(HarnessBackedAgent):
             )
             await self._fail_startup(message)
             raise RuntimeError(message)
-        self.status = AgentStatus.RUNNING
         if self.runtime:
-            self.runtime.sync_agent(self)
-            if self.runtime.orchestration_events and self.runtime.run_id:
-                await self.runtime.orchestration_events.publish(
-                    StatusChangeEvent(
-                        run_id=self.runtime.run_id,
-                        agent_id=self.id,
-                        role=self.role,
-                        ticket_id=None,
-                        entity="agent",
-                        entity_id=self.id,
-                        from_status=AgentStatus.IDLE.value,
-                        to_status=AgentStatus.RUNNING.value,
-                    )
-                )
+            await self.runtime.transition(
+                self,
+                from_status=AgentStatus.IDLE,
+                to_status=AgentStatus.RUNNING,
+            )
+        else:
+            self.status = AgentStatus.RUNNING
 
     async def _fail_startup(self, message: str) -> None:
         self.status = AgentStatus.FAILED
@@ -121,7 +111,7 @@ class CollaboratorAgent(HarnessBackedAgent):
             severity="error",
         )
         if self.runtime:
-            self.runtime.sync_agent(self)
+            self.runtime.record(self)
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         await self._finalize_conversation_on_stop(kill_session=kill_session, failed=failed)
@@ -137,7 +127,7 @@ class CollaboratorAgent(HarnessBackedAgent):
             await self.close_backend_connections()
         self.status = AgentStatus.FAILED if failed else AgentStatus.DONE
         if self.runtime:
-            self.runtime.sync_agent(self)
+            self.runtime.record(self)
 
     async def send(self, msg: str) -> SimpleResult[None]:
         return await self.send_verified_prompt(msg)

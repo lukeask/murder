@@ -22,7 +22,7 @@ from murder.work.tickets.status import TicketStatus
 
 if TYPE_CHECKING:
     from murder.llm.clients.base import APIClient
-    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.agent_runtime import AgentRuntime
 
 
 _LOG = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class CrowHandler(Daemon):
         config: CrowHandlerConfig,
         *,
         repo_root: Path,
-        runtime: Runtime,
+        runtime: AgentRuntime,
         outcome: TicketOutcomeService,
         coordinator: CompletionCoordinator,
         workspace_root: Path | None = None,
@@ -97,7 +97,6 @@ class CrowHandler(Daemon):
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
         from murder.runtime.terminal import tmux
-        from murder.runtime.orchestration.events import StatusChangeEvent
         from murder.state.storage.run_id_allocation import open_pane_log
 
         assert self.runtime.run_id is not None
@@ -111,21 +110,11 @@ class CrowHandler(Daemon):
             self.repo_root,
             ["tail", "-f", str(self._log_path)],
         )
-        self.status = AgentStatus.RUNNING
-        self.runtime.sync_agent(self)
-        if self.runtime.orchestration_events and self.runtime.run_id:
-            await self.runtime.orchestration_events.publish(
-                StatusChangeEvent(
-                    run_id=self.runtime.run_id,
-                    agent_id=self.id,
-                    role=self.role,
-                    ticket_id=self.ticket_id,
-                    entity="agent",
-                    entity_id=self.id,
-                    from_status=AgentStatus.IDLE.value,
-                    to_status=AgentStatus.RUNNING.value,
-                )
-            )
+        await self.runtime.transition(
+            self,
+            from_status=AgentStatus.IDLE,
+            to_status=AgentStatus.RUNNING,
+        )
 
         self._start_loop()
 
@@ -179,7 +168,7 @@ class CrowHandler(Daemon):
 
     async def send(self, msg: str) -> SimpleResult[None]:
         with log_context(agent_id=self.id):
-            crow = self.runtime.get_crow(self.ticket_id)
+            crow = self.runtime.find_crow(self.ticket_id)
             if crow is None:
                 from murder.llm.harnesses.results import fail_result
 
@@ -187,7 +176,7 @@ class CrowHandler(Daemon):
             return await crow.send(msg)
 
     async def interrupt_crow(self) -> None:
-        crow = self.runtime.get_crow(self.ticket_id)
+        crow = self.runtime.find_crow(self.ticket_id)
         if crow is None:
             raise RuntimeError(f"no live crow for ticket {self.ticket_id}")
         interrupted = await crow.interrupt_verified_generation()
@@ -223,7 +212,7 @@ class CrowHandler(Daemon):
             or self.runtime.run_id is None
         ):
             return
-        crow = self.runtime.get_crow(self.ticket_id)
+        crow = self.runtime.find_crow(self.ticket_id)
         ingested = getattr(crow, "latest_ingested_frame", None) if crow is not None else None
         pane = getattr(getattr(ingested, "frame", None), "raw_text", None)
         if not isinstance(pane, str):
@@ -328,9 +317,9 @@ class CrowHandler(Daemon):
         bucket = heartbeat_bucket(time.monotonic())
         if bucket != self._last_heartbeat_emit_bucket:
             self._last_heartbeat_emit_bucket = bucket
-            self.runtime.roster.heartbeat_agent(self.runtime.db, self.id, invalidate=True)
+            self.runtime.heartbeat(self.id, invalidate=True)
         else:
-            self.runtime.roster.heartbeat_agent(self.runtime.db, self.id, invalidate=False)
+            self.runtime.heartbeat(self.id, invalidate=False)
 
     async def observe_conversation_changes(self, changes) -> None:
         """Route ASK markers introduced by newly projected assistant text.
@@ -449,7 +438,7 @@ class CrowHandler(Daemon):
                 self._on_idle_callbacks.remove(fut)
 
     async def _handle_tick_failure(self, exc: Exception) -> None:
-        from murder.runtime.orchestration.events import ErrorEvent, StatusChangeEvent
+        from murder.runtime.orchestration.events import ErrorEvent
 
         if self._terminal_failure:
             return
@@ -468,23 +457,14 @@ class CrowHandler(Daemon):
         await self.outcome.fail_ticket(self.ticket_id, f"crow_handler tick failed: {error}")
 
         prev = self.status
-        self.status = AgentStatus.FAILED
-        self.runtime.sync_agent(self)
+        await self.runtime.transition(
+            self,
+            from_status=prev,
+            to_status=AgentStatus.FAILED,
+            reason=error,
+        )
         self._fail_idle_waiters(RuntimeError(f"crow_handler tick failed: {error}"))
         if self.runtime.orchestration_events and self.runtime.run_id:
-            await self.runtime.orchestration_events.publish(
-                StatusChangeEvent(
-                    run_id=self.runtime.run_id,
-                    agent_id=self.id,
-                    role=self.role,
-                    ticket_id=self.ticket_id,
-                    entity="agent",
-                    entity_id=self.id,
-                    from_status=prev.value,
-                    to_status=AgentStatus.FAILED.value,
-                    reason=error,
-                )
-            )
             await self.runtime.orchestration_events.publish(
                 ErrorEvent(
                     run_id=self.runtime.run_id,
@@ -507,7 +487,7 @@ class CrowHandler(Daemon):
         with contextlib.suppress(Exception):
             await tmux.kill_session(self.session)
         if self.runtime.db is not None:
-            self.runtime.sync_agent(self)
+            self.runtime.record(self)
 
     def _fail_idle_waiters(self, exc: Exception) -> None:
         for fut in self._on_idle_callbacks:

@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from murder.runtime.agent_runtime import AgentRuntime
+from murder.runtime.orchestration.ports import OrchestrationEventSink
+from murder.state.persistence.connection import RepoDb
+
 import contextlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.state.persistence.tickets import (
     apply_ticket_carve_payload as _db_apply_ticket_carve_payload,
 )
@@ -23,7 +29,6 @@ from murder.state.storage.paths import ticket_md, tickets_dir
 from murder.state.storage.worktrees import prune_terminal_crow_worktree
 from murder.work.tickets import carve, lifecycle
 from murder.work.tickets.status import TicketStatus
-
 LOGGER = logging.getLogger(__name__)
 
 _TNUM_RE = re.compile(r"^t(\d+)$")
@@ -32,20 +37,28 @@ EmitTicketStatus = Callable[[str, "str | TicketStatus", str], Awaitable[None]]
 
 
 class TicketOps:
-    """Ticket create/edit/schedule/status operations over an ``OrchestratorHost``."""
+    """Ticket create/edit/schedule/status operations."""
 
     def __init__(
         self,
-        rt: OrchestratorHost,
         *,
+        db: RepoDb,
+        repo_root: Path,
+        agents: AgentRuntime,
+        events: OrchestrationEventSink,
+        run_id: str,
         emit_ticket_status: EmitTicketStatus,
     ) -> None:
-        self.rt = rt
+        self._db = db
+        self._repo_root = repo_root
+        self.agents = agents
+        self._events = events
+        self._run_id = run_id
         self._emit_ticket_status = emit_ticket_status
 
     async def _reap_ticket_crow_agents(self, ticket_id: str) -> None:
-        await self.rt.reap(f"crow-{ticket_id}")
-        await self.rt.reap(f"crow_handler-{ticket_id}")
+        await self.agents.reap(f"crow-{ticket_id}")
+        await self.agents.reap(f"crow_handler-{ticket_id}")
 
     def next_ticket_id(self) -> str:
         """Return the next ``t<NNN>`` id, scanning DB + filesystem for the max.
@@ -54,9 +67,9 @@ class TicketOps:
         on-disk ``.md`` files so it stays consistent across the TicketSync poll
         window.
         """
-        assert self.rt.db is not None
-        db = self.rt.db
-        repo_root = self.rt.repo_root
+        assert self._db is not None
+        db = self._db
+        repo_root = self._repo_root
         max_n = 0
         for row in db.conn.execute(
             "SELECT id FROM tickets WHERE repository_id = ? AND id LIKE 't%'", (db.repository_id,)
@@ -74,16 +87,16 @@ class TicketOps:
 
     def ticket_exists(self, handle: str) -> bool:
         """True if ``handle`` names an existing ticket (DB row or on-disk ``.md``)."""
-        assert self.rt.db is not None
+        assert self._db is not None
         handle = handle.strip()
         if not handle:
             return False
-        row = self.rt.db.conn.execute(
-            "SELECT 1 FROM tickets WHERE repository_id = ? AND id = ?", (self.rt.db.repository_id, handle)
+        row = self._db.conn.execute(
+            "SELECT 1 FROM tickets WHERE repository_id = ? AND id = ?", (self._db.repository_id, handle)
         ).fetchone()
         if row is not None:
             return True
-        return ticket_md(self.rt.repo_root, handle).exists()
+        return ticket_md(self._repo_root, handle).exists()
 
     def quick_create_ticket(self, title: str) -> dict[str, Any]:
         """Create a ticket .md + insert it as PLANNED, without kicking it.
@@ -91,9 +104,9 @@ class TicketOps:
         Server-side id allocation + file write + DB insert — the authority the
         TUI's old direct ``.md`` write bypassed (V1).
         """
-        assert self.rt.db is not None
-        db = self.rt.db
-        repo_root = self.rt.repo_root
+        assert self._db is not None
+        db = self._db
+        repo_root = self._repo_root
         ticket_id = self.next_ticket_id()
 
         # Write the markdown file so the ticket sync stays consistent. Guard
@@ -119,7 +132,6 @@ class TicketOps:
         from murder.state.persistence.tickets import insert_ticket as _db_insert_ticket
         from murder.work.tickets.schema import Ticket
         from murder.work.tickets.status import TicketStatus
-
         # Naive UTC (no tzinfo) to match the rest of the ticket timestamps.
         # utcnow() is deprecated since 3.12, so derive from an aware clock.
         now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
@@ -163,8 +175,8 @@ class TicketOps:
         return {"handled": True, "ticket_id": ticket_id, "title": title}
 
     async def reopen_ticket(self, ticket_id: str) -> list[str]:
-        assert self.rt.db is not None
-        cascaded = lifecycle.reopen(self.rt.db, ticket_id)
+        assert self._db is not None
+        cascaded = lifecycle.reopen(self._db, ticket_id)
         for tid in {ticket_id, *cascaded}:
             await self._reap_ticket_crow_agents(tid)
         return list(cascaded)
@@ -178,8 +190,8 @@ class TicketOps:
         the crow and its handler, and leaves the ticket eligible for the
         scheduler's next kickoff.
         """
-        assert self.rt.db is not None
-        row = _db_get_ticket(self.rt.db, ticket_id)
+        assert self._db is not None
+        row = _db_get_ticket(self._db, ticket_id)
         if row is None:
             return {"ok": False, "error": f"ticket not found: {ticket_id}"}
         prev_str = str(row.get("status") or "planned")
@@ -192,17 +204,17 @@ class TicketOps:
         from murder.state.persistence.agents import clear_agent_session
 
         for agent_id in (f"crow-{ticket_id}", f"crow_handler-{ticket_id}"):
-            srow = self.rt.db.conn.execute(
-                "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self.rt.db.repository_id, agent_id)
+            srow = self._db.conn.execute(
+                "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self._db.repository_id, agent_id)
             ).fetchone()
             if srow is not None and srow["session"]:
                 with contextlib.suppress(Exception):
                     await tmux.kill_session(srow["session"])
-                clear_agent_session(self.rt.db, agent_id)
+                clear_agent_session(self._db, agent_id)
 
-        with self.rt.db:
-            _db_update_ticket_status(self.rt.db, ticket_id, TicketStatus.READY.value)
-            lifecycle.clear_last_error(self.rt.db, ticket_id)
+        with self._db:
+            _db_update_ticket_status(self._db, ticket_id, TicketStatus.READY.value)
+            lifecycle.clear_last_error(self._db, ticket_id)
         try:
             prev = TicketStatus(prev_str)
         except ValueError:
@@ -212,19 +224,19 @@ class TicketOps:
 
     async def retry_failed_ticket(self, ticket_id: str) -> dict[str, Any]:
         """Transition a failed ticket back to ready and clear its last_error."""
-        assert self.rt.db is not None
-        prev = lifecycle.transition(self.rt.db, ticket_id, TicketStatus.READY, reason="retry")
-        lifecycle.clear_last_error(self.rt.db, ticket_id)
+        assert self._db is not None
+        prev = lifecycle.transition(self._db, ticket_id, TicketStatus.READY, reason="retry")
+        lifecycle.clear_last_error(self._db, ticket_id)
         await self._reap_ticket_crow_agents(ticket_id)
         await self._emit_ticket_status(ticket_id, prev, TicketStatus.READY.value)
         return {"handled": True, "ticket_id": ticket_id, "prev_status": prev.value}
 
     async def set_schedule_at(self, ticket_id: str, schedule_at: str | None) -> dict[str, Any]:
         """Update the schedule_at timestamp for a ticket."""
-        assert self.rt.db is not None
+        assert self._db is not None
         from murder.state.persistence.tickets import update_ticket_schedule_at
 
-        update_ticket_schedule_at(self.rt.db, ticket_id, schedule_at)
+        update_ticket_schedule_at(self._db, ticket_id, schedule_at)
         return {"handled": True, "ticket_id": ticket_id, "schedule_at": schedule_at}
 
     async def save_ticket_body(self, ticket_id: str, body: str) -> dict[str, Any]:
@@ -239,7 +251,7 @@ class TicketOps:
         reconcile path) then reconcile it synchronously into the DB so the save
         is durable before the RPC returns, closing the 1.5 s TicketSync poll gap.
         """
-        assert self.rt.db is not None
+        assert self._db is not None
         from murder.work.tickets.parser import parse_ticket
         from murder.work.tickets.render import render_ticket_frontmatter
         from murder.work.tickets.sync import reconcile_ticket_md
@@ -247,7 +259,7 @@ class TicketOps:
         ticket_id = ticket_id.strip()
         if not ticket_id:
             raise ValueError("ticket.save_body requires ticket_id")
-        path = ticket_md(self.rt.repo_root, ticket_id)
+        path = ticket_md(self._repo_root, ticket_id)
         # Source the read-only frontmatter from the current file when present,
         # else fall back to the DB row so we never drop metadata on save.
         if path.exists():
@@ -255,15 +267,15 @@ class TicketOps:
                 parse_ticket(path.read_text(encoding="utf-8"), default_title=ticket_id)
             )
         else:
-            row = _db_get_ticket(self.rt.db, ticket_id)
+            row = _db_get_ticket(self._db, ticket_id)
             if row is None:
                 return {"ok": False, "error": f"ticket not found: {ticket_id}"}
             deps = [
                 str(r["depends_on_id"])
-                for r in self.rt.db.conn.execute(
+                for r in self._db.conn.execute(
                     "SELECT depends_on_id FROM ticket_deps WHERE repository_id = ? AND ticket_id = ? "
                     "ORDER BY depends_on_id",
-                    (self.rt.db.repository_id, ticket_id),
+                    (self._db.repository_id, ticket_id),
                 ).fetchall()
             ]
             frontmatter = render_ticket_frontmatter(
@@ -277,7 +289,7 @@ class TicketOps:
             )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(frontmatter + body.rstrip("\n") + "\n", encoding="utf-8")
-        reconcile_ticket_md(db=self.rt.db, repo_root=self.rt.repo_root, ticket_id=ticket_id)
+        reconcile_ticket_md(db=self._db, repo_root=self._repo_root, ticket_id=ticket_id)
         return {"handled": True, "ok": True, "ticket_id": ticket_id}
 
     async def schedule_ticket(self, ticket_id: str, duration: str) -> dict[str, Any]:
@@ -310,8 +322,8 @@ class TicketOps:
         self, ticket_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Update metadata fields directly without state-machine transitions."""
-        assert self.rt.db is not None
-        row = _db_get_ticket(self.rt.db, ticket_id)
+        assert self._db is not None
+        row = _db_get_ticket(self._db, ticket_id)
         if row is None:
             return {"ok": False, "error": f"ticket not found: {ticket_id}"}
         title = str(payload.get("title") or row.get("title") or "").strip()
@@ -326,13 +338,13 @@ class TicketOps:
             schedule_at = str(schedule_at).strip() or None
         deps = [str(d) for d in (payload.get("deps") or [])]
         checklist = [str(c) for c in (payload.get("checklist") or [])]
-        with self.rt.db:
-            self.rt.db.conn.execute(
+        with self._db:
+            self._db.conn.execute(
                 "UPDATE tickets SET schedule_at=? WHERE repository_id = ? AND id=?",
-                (schedule_at, self.rt.db.repository_id, ticket_id),
+                (schedule_at, self._db.repository_id, ticket_id),
             )
             _db_apply_ticket_carve_payload(
-                self.rt.db,
+                self._db,
                 ticket_id,
                 title=title,
                 harness=harness,
@@ -344,18 +356,18 @@ class TicketOps:
 
     async def force_ticket_status(self, ticket_id: str, status: str) -> dict[str, Any]:
         """Force-set ticket status regardless of current state."""
-        assert self.rt.db is not None
+        assert self._db is not None
         valid = {"planned", "ready", "in_progress", "blocked", "failed", "done", "archived"}
         if status not in valid:
             return {"ok": False, "error": f"invalid status: {status!r}"}
-        row = _db_get_ticket(self.rt.db, ticket_id)
+        row = _db_get_ticket(self._db, ticket_id)
         if row is None:
             return {"ok": False, "error": f"ticket not found: {ticket_id}"}
         prev_str = str(row.get("status") or "planned")
-        with self.rt.db:
-            _db_update_ticket_status(self.rt.db, ticket_id, status)
+        with self._db:
+            _db_update_ticket_status(self._db, ticket_id, status)
             if prev_str == "failed" and status != "failed":
-                lifecycle.clear_last_error(self.rt.db, ticket_id)
+                lifecycle.clear_last_error(self._db, ticket_id)
         try:
             prev = TicketStatus(prev_str)
         except ValueError:
@@ -367,10 +379,10 @@ class TicketOps:
             TicketStatus.ARCHIVED.value,
         ):
             await self._reap_ticket_crow_agents(ticket_id)
-            if self.rt.db is not None:
+            if self._db is not None:
                 with contextlib.suppress(Exception):
                     await prune_terminal_crow_worktree(
-                        self.rt.db, self.rt.repo_root, ticket_id
+                        self._db, self._repo_root, ticket_id
                     )
         return {"handled": True, "ok": True, "ticket_id": ticket_id, "prev_status": prev_str}
 
@@ -378,14 +390,14 @@ class TicketOps:
         self, ticket_id: str, payload: dict[str, object]
     ) -> dict[str, object]:
         """Apply carved ticket metadata from a structured ``carve`` payload."""
-        assert self.rt.db is not None
+        assert self._db is not None
         carve_body = payload.get("carve")
         try:
             if isinstance(carve_body, dict) and carve_body:
                 spec = dict(carve_body)
                 if spec.get("id") is None:
                     spec["id"] = ticket_id
-                prev = carve.apply_carve_ready_spec(self.rt.db, ticket_id, spec)
+                prev = carve.apply_carve_ready_spec(self._db, ticket_id, spec)
             else:
                 return {
                     "ok": False,

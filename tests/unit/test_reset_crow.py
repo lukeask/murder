@@ -8,6 +8,7 @@ and transitions the ticket to ready (not failed).
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from murder.runtime.orchestration.ticket_ops import TicketOps
@@ -17,8 +18,6 @@ from tests.support.database import open_test_repo_db
 
 
 def _db() -> RepoDb:
-    from pathlib import Path
-
     return open_test_repo_db(Path(":memory:"))
 
 
@@ -33,15 +32,22 @@ def _insert_ticket(
 
 
 def _ops(db: RepoDb):
-    rt = MagicMock()
-    rt.db = db
-    rt.reap = AsyncMock()
+    agents = MagicMock()
+    agents.reap = AsyncMock()
     emitted: list[tuple] = []
 
     async def _emit(ticket_id, frm, to):
         emitted.append((ticket_id, frm, to))
 
-    return TicketOps(rt, emit_ticket_status=_emit), rt, emitted
+    ops = TicketOps(
+        db=db,
+        repo_root=Path("/tmp"),
+        agents=agents,
+        events=MagicMock(),
+        run_id="test-run",
+        emit_ticket_status=_emit,
+    )
+    return ops, agents, emitted
 
 
 def test_reset_crow_from_in_progress_reaps_and_readies():

@@ -20,6 +20,7 @@ from murder.config import (
 )
 from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.state.persistence.runs import insert_run
 from murder.work import notes as notes_mod
 from tests.support.database import open_test_repo_db
@@ -48,8 +49,10 @@ def _runtime(repo_root: Path) -> Runtime:
 
 
 async def _drain(rt: Runtime) -> None:
-    if rt._emit_tasks:
-        await asyncio.gather(*list(rt._emit_tasks))
+    agents = getattr(rt, "agents", None)
+    emit_tasks = getattr(agents, "_emit_tasks", None) if agents is not None else None
+    if emit_tasks:
+        await asyncio.gather(*list(emit_tasks))
 
 
 # === Item 8: spawn_if_needed gate ============================================
@@ -57,7 +60,7 @@ async def _drain(rt: Runtime) -> None:
 
 def test_send_message_no_spawn_when_planner_not_live(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     spawned: list[str] = []
 
@@ -82,7 +85,7 @@ def test_send_message_no_spawn_when_planner_not_live(repo_root: Path) -> None:
 
 def test_send_message_spawns_when_planner_not_live_by_default(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     spawned: list[str] = []
 
@@ -101,7 +104,7 @@ def test_send_message_spawns_when_planner_not_live_by_default(repo_root: Path) -
 
 def test_send_message_delivers_to_live_planner_without_spawn(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     spawned: list[str] = []
 
@@ -121,7 +124,7 @@ def test_send_message_delivers_to_live_planner_without_spawn(repo_root: Path) ->
             sent.append(message)
 
     agent = _FakeAgent()
-    rt._agents._agents["planner-demo"] = agent  # type: ignore[attr-defined]
+    orch.agents.register(agent)
 
     async def _live(_agent) -> bool:
         return True
@@ -142,7 +145,7 @@ def test_send_message_delivers_to_live_planner_without_spawn(repo_root: Path) ->
 
 def test_create_plan_with_body_seeds_markdown(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     body = "# Custom Plan\n\nSeeded body content.\n"
     result = asyncio.run(orch.create_plan("seeded", "", body=body))
@@ -166,7 +169,7 @@ def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path, mon
         lambda cfg, user_cfg, feature, legacy_role: (None, cfg),
     )
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(
         orch.create_plan(None, "", body="A plan about refactoring the parser.", auto_name=True)
@@ -187,7 +190,7 @@ def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path, mon
 
 def test_create_plan_auto_name_uses_llm_slug(repo_root: Path, monkeypatch) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     async def _fake_meta(**kwargs):
         return {"short_vers": "x", "one_or_two_word_title": "Parser Rewrite"}
@@ -211,7 +214,7 @@ def test_create_plan_auto_name_uses_llm_slug(repo_root: Path, monkeypatch) -> No
 
 def test_submit_capture_custom_title_skips_llm(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     # No client configured -> if the LLM path were taken it would fall back; the
     # custom-title path must instead use the slugified title. Guard by failing
@@ -241,7 +244,7 @@ def test_submit_capture_custom_title_skips_llm(repo_root: Path) -> None:
 
 def test_submit_capture_blank_title_uses_llm_path(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     seen: list[dict] = []
 
@@ -264,7 +267,7 @@ def test_submit_capture_blank_title_uses_llm_path(repo_root: Path) -> None:
 
 def test_submit_capture_llm_error_keeps_timestamped_note(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     async def _boom(**kwargs):
         raise RuntimeError("LLM API error")

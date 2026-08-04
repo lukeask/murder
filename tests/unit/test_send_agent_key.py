@@ -15,6 +15,7 @@ from murder.llm.harnesses.results import fail_result, ok_result
 from murder.runtime.agents.crow import CrowAgent
 from murder.runtime.orchestration import agent_ops
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.runtime.terminal import tmux
 from murder.state.persistence.agents import get_agent_messages
 from murder.state.persistence.conversation import read_conversation_blocks
@@ -49,7 +50,7 @@ def test_send_agent_key_targets_agent_session(fake_tmux: FakeTmux, repo_root: Pa
     rt = SimpleNamespace(
         get_agent=lambda agent_id: agent if agent_id == "crow-t001" else None,
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(orch.send_agent_key("crow-t001", "Up"))
 
@@ -76,7 +77,7 @@ def test_send_agent_key_without_agent_id_ensures_collaborator(
     rt = SimpleNamespace(
         get_agent=lambda agent_id: agent if agent_id == "collaborator-1" else None,
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     async def _ensure() -> str:
         return "collaborator-1"
@@ -97,7 +98,7 @@ def test_send_agent_key_without_agent_id_ensures_collaborator(
 def test_send_agent_key_literal_text(fake_tmux: FakeTmux, repo_root: Path) -> None:
     agent, _db = _verified_agent(repo_root, "murder_demo_crow_t001")
     rt = SimpleNamespace(get_agent=lambda _agent_id: agent)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(orch.send_agent_key("crow-t001", "x", literal=True))
 
@@ -119,7 +120,7 @@ def test_send_agent_key_can_submit_enter_and_log_user_input(
         orchestration_events=None,
         run_id=None,
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     # Physical emission is forbidden until the semantic action and every
     # lowered effect are durable. This assertion runs inside the fake terminal
@@ -197,7 +198,7 @@ def test_send_agent_key_rejects_missing_verified_control() -> None:
     agent = SimpleNamespace(session="murder_demo_crow_t001")
     rt = SimpleNamespace(get_agent=lambda _agent_id: agent)
 
-    result = asyncio.run(Orchestrator(rt).send_agent_key("crow-t001", "Up"))
+    result = asyncio.run(adapt_rt_stub(rt).send_agent_key("crow-t001", "Up"))
 
     assert result == {
         "ok": False,
@@ -221,7 +222,7 @@ def test_send_agent_message_reports_delivery_failure_without_user_block(
         orchestration_events=None,
         run_id=None,
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(orch.send_agent_message("crow-t001", "hello", None))
 
@@ -255,7 +256,7 @@ def test_send_agent_message_queues_while_crow_is_still_starting(
     runtime.get_crow_handler = lambda _ticket_id: None
 
     result = asyncio.run(
-        Orchestrator(runtime).send_agent_message(
+        adapt_rt_stub(runtime).send_agent_message(
             agent.id,
             "test before startup",
             None,
@@ -300,7 +301,7 @@ def test_send_agent_message_records_user_block_after_delivery_acceptance(
         orchestration_events=None,
         run_id=None,
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(orch.send_agent_message("crow-t001", "hello", None))
 
@@ -325,7 +326,7 @@ def test_send_agent_message_persists_client_message_id_on_user_block(
         orchestration_events=None,
         run_id=None,
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(
         orch.send_agent_message(

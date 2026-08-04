@@ -1,29 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 from murder.runtime.agents.base import AgentRole
 from murder.runtime.agents.runner import spawn_agent
 from murder.runtime.agents.sessions import AgentScope, AgentSpec
-
-
-@dataclass
-class _Runtime:
-    repo_root: Path
-    event_sink: object | None = None
-
-    def __post_init__(self) -> None:
-        self.agent = None
-        self.config = SimpleNamespace(
-            project=SimpleNamespace(name="repo"),
-            runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
-        )
-
-    def register_agent(self, agent) -> None:
-        self.agent = agent
+from murder.runtime.terminal.session_names import SessionNamePolicy
+from tests.support.orchestrator import FakeAgents
 
 
 class _FakeCrow:
@@ -41,7 +25,8 @@ class _FakeCrow:
 def test_spawn_crow_uses_scope_worktree_as_repo_root(tmp_path: Path, monkeypatch) -> None:
     main_root = tmp_path / "repo"
     worktree_root = tmp_path / "repo" / ".murder" / "worktrees" / "crow" / "t001"
-    rt = _Runtime(repo_root=main_root)
+    agents = FakeAgents()
+    names = SessionNamePolicy(project_name="repo", template="murder_{project}_{role}{suffix}")
 
     monkeypatch.setattr("murder.runtime.agents.runner.CrowAgent", _FakeCrow)
     monkeypatch.setattr("murder.runtime.agents.runner.get_harness", lambda *_args, **_kw: object())
@@ -52,16 +37,26 @@ def test_spawn_crow_uses_scope_worktree_as_repo_root(tmp_path: Path, monkeypatch
         harness="codex",
     )
 
-    asyncio.run(spawn_agent(spec, rt=rt, event_sink=None))
+    asyncio.run(
+        spawn_agent(
+            spec,
+            repo_root=main_root,
+            session_names=names,
+            agents=agents,  # type: ignore[arg-type]
+            event_sink=None,
+        )
+    )
 
-    assert rt.agent is not None
-    assert rt.agent.repo_root == worktree_root
-    assert rt.agent.worktree_path == worktree_root
+    agent = agents.find("crow-t001")
+    assert agent is not None
+    assert agent.repo_root == worktree_root
+    assert agent.worktree_path == worktree_root
 
 
 def test_spawn_crow_defaults_to_runtime_repo_root(tmp_path: Path, monkeypatch) -> None:
     main_root = tmp_path / "repo"
-    rt = _Runtime(repo_root=main_root)
+    agents = FakeAgents()
+    names = SessionNamePolicy(project_name="repo", template="murder_{project}_{role}{suffix}")
 
     monkeypatch.setattr("murder.runtime.agents.runner.CrowAgent", _FakeCrow)
     monkeypatch.setattr("murder.runtime.agents.runner.get_harness", lambda *_args, **_kw: object())
@@ -72,8 +67,17 @@ def test_spawn_crow_defaults_to_runtime_repo_root(tmp_path: Path, monkeypatch) -
         harness="codex",
     )
 
-    asyncio.run(spawn_agent(spec, rt=rt, event_sink=None))
+    asyncio.run(
+        spawn_agent(
+            spec,
+            repo_root=main_root,
+            session_names=names,
+            agents=agents,  # type: ignore[arg-type]
+            event_sink=None,
+        )
+    )
 
-    assert rt.agent is not None
-    assert rt.agent.repo_root == main_root
-    assert rt.agent.worktree_path is None
+    agent = agents.find("crow-t001")
+    assert agent is not None
+    assert agent.repo_root == main_root
+    assert agent.worktree_path is None

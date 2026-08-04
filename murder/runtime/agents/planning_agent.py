@@ -18,7 +18,7 @@ from murder.llm.harnesses.results import SimpleResult
 from murder.state.storage.paths import agents_dir
 
 if TYPE_CHECKING:
-    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.agent_runtime import AgentRuntime
 
 
 class PlanningAgent(HarnessBackedAgent):
@@ -35,7 +35,7 @@ class PlanningAgent(HarnessBackedAgent):
         *,
         startup_model: str | None = None,
         startup_effort: str | None = None,
-        runtime: Runtime,
+        runtime: AgentRuntime | None = None,
     ) -> None:
         self.id = agent_id
         self.session = session
@@ -51,8 +51,6 @@ class PlanningAgent(HarnessBackedAgent):
         self.harness_session = harness.attach(session, self._cwd)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.runtime.orchestration.events import StatusChangeEvent
-
         # Record the injected system prompt so the transcript parser can drop it
         # rather than mislabel its paragraphs as chat turns (markerless harnesses).
         self.harness.system_prompt = brief
@@ -66,7 +64,7 @@ class PlanningAgent(HarnessBackedAgent):
         if not start_result.ok:
             self.status = AgentStatus.FAILED
             if self.runtime:
-                self.runtime.sync_agent(self)
+                self.runtime.record(self)
             raise TimeoutError(start_result.message or "planner harness startup failed")
 
         await self.initialize_verified_harness_control()
@@ -74,7 +72,7 @@ class PlanningAgent(HarnessBackedAgent):
         if not model_result.ok:
             self.status = AgentStatus.FAILED
             if self.runtime:
-                self.runtime.sync_agent(self)
+                self.runtime.record(self)
             raise RuntimeError(model_result.message or "verified planner model selection failed")
 
         await self._sample_live_usage_on_startup()
@@ -84,26 +82,18 @@ class PlanningAgent(HarnessBackedAgent):
             if not send_result.ok:
                 self.status = AgentStatus.FAILED
                 if self.runtime:
-                    self.runtime.sync_agent(self)
+                    self.runtime.record(self)
                 raise RuntimeError(send_result.message or "planner startup prompt failed")
-        self.status = AgentStatus.RUNNING
         # Fresh tmux session: fresh transcript and producer-owned parser state.
         self.start_conversation()
         if self.runtime:
-            self.runtime.sync_agent(self)
-            if self.runtime.orchestration_events and self.runtime.run_id:
-                await self.runtime.orchestration_events.publish(
-                    StatusChangeEvent(
-                        run_id=self.runtime.run_id,
-                        agent_id=self.id,
-                        role=self.role,
-                        ticket_id=None,
-                        entity="agent",
-                        entity_id=self.id,
-                        from_status=AgentStatus.IDLE.value,
-                        to_status=AgentStatus.RUNNING.value,
-                    )
-                )
+            await self.runtime.transition(
+                self,
+                from_status=AgentStatus.IDLE,
+                to_status=AgentStatus.RUNNING,
+            )
+        else:
+            self.status = AgentStatus.RUNNING
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         from murder.runtime.terminal import tmux
@@ -125,7 +115,7 @@ class PlanningAgent(HarnessBackedAgent):
         else:
             self.status = AgentStatus.DONE
         if self.runtime:
-            self.runtime.sync_agent(self)
+            self.runtime.record(self)
 
     async def send(self, msg: str) -> SimpleResult[None]:
         return await self.send_verified_prompt(msg)

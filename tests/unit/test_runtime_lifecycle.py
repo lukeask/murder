@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
-from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig, RuntimeConfig
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions
+from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig, RuntimeConfig
+from murder.runtime.terminal.session_names import SessionNamePolicy
 
 
 def test_kill_project_tmux_sessions_only_kills_project_prefix(monkeypatch) -> None:
@@ -24,21 +25,17 @@ def test_kill_project_tmux_sessions_only_kills_project_prefix(monkeypatch) -> No
     monkeypatch.setattr("murder.app.service.runtime_lifecycle.tmux.kill_session", _kill_session)
 
     role = HarnessRoleConfig(harness="codex")
-    scope = type(
-        "Scope",
-        (),
-        {
-            "config": Config(
-                project=ProjectConfig(name="repo"),
-                runtime=RuntimeConfig(session_name_template="murder_{project}_{role}{suffix}"),
-                collaborator=role,
-                default_crow=role,
-                crow_handler=CrowHandlerConfig(model="test-model"),
-            )
-        },
-    )()
+    session_names = SessionNamePolicy.from_config(
+        Config(
+            project=ProjectConfig(name="repo"),
+            runtime=RuntimeConfig(session_name_template="murder_{project}_{role}{suffix}"),
+            collaborator=role,
+            default_crow=role,
+            crow_handler=CrowHandlerConfig(model="test-model"),
+        )
+    )
 
-    sessions = asyncio.run(kill_project_tmux_sessions(scope))
+    sessions = asyncio.run(kill_project_tmux_sessions(session_names))
 
     assert sessions == ["murder_repo_crow_t1", "murder_repo_usage_codex"]
     assert killed == sessions

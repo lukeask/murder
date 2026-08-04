@@ -26,18 +26,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from murder.app.service.agent_registry import AgentRegistry
 from murder.app.service.document_access import DocumentAccess
 from murder.app.service.document_editor_sessions import DocumentEditorSessions, EditorSession
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
-from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
+from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.advanced_log import (
     AdvancedLogBase,
     ArtifactRefRecord,
     NullAdvancedLog,
-    StateMutationRecord,
     open_advanced_log,
     set_current_advanced_log,
 )
@@ -48,12 +46,14 @@ from murder.observability.logging_setup import (
     resolve_recorder_mode,
 )
 from murder.roster.service import RosterService
+from murder.runtime.agent_runtime import AgentRuntime
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
+from murder.runtime.agents.verified_control import VerifiedControlFactory
 from murder.runtime.orchestration.command_repository import (
     PersistingCommandSubmitter,
     SqliteCommandRepository,
 )
-from murder.runtime.orchestration.events import AgentLifecycleEvent, OrchestrationEvent
+from murder.runtime.orchestration.events import OrchestrationEvent
 from murder.runtime.orchestration.notifier import (
     InProcessOrchestrationEventSink,
     OrchestrationHandler,
@@ -64,6 +64,7 @@ from murder.runtime.orchestration.structured_decisions import StructuredDecision
 from murder.runtime.sessions import SessionService
 from murder.runtime.sessions.registry import SessionControllerRegistry
 from murder.runtime.terminal import tmux
+from murder.runtime.terminal.session_names import SessionNamePolicy
 from murder.state.persistence.activities import (
     reap_expired_claims,
     reap_expired_reservations,
@@ -88,7 +89,6 @@ from murder.work.workflows.service import WorkflowRuntime
 if TYPE_CHECKING:
     from murder.config import Config
     from murder.runtime.activity_dispatcher import ActivityDispatcher
-    from murder.runtime.agents.base import LifecycleParticipant
     from murder.runtime.trigger_dispatcher import TriggerDispatcher
     from murder.user_config import UserConfig
     from murder.work.notes.sync import NoteSync, NotetakerContextSync
@@ -126,13 +126,9 @@ class Runtime:
         self.orchestration_events: OrchestrationEventSink | None = None
         self.command_submitter: CommandSubmitter | None = None
         self.run_id: str | None = None
-        self._agents = AgentRegistry()
-        self.agents = self._agents
+        self.agents: AgentRuntime | None = None
         self.event_sink: AgentEventSink = LoggingAgentEventSink()
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        # Holds in-flight private orchestration tasks so shutdown can drain
-        # them deterministically.
-        self._emit_tasks: set[asyncio.Task[None]] = set()
         self._shutdown = asyncio.Event()
         self.harness_versions = HarnessVersionRegistry()
         self._external_stop = asyncio.Event()
@@ -155,8 +151,8 @@ class Runtime:
         # Durable observation→external-decision→verified-execution router.
         # It owns no policy and is initialized only once the persisted bus exists.
         self.structured_decisions: Any | None = None
-        self.crow_ask_router: Callable[[str | None, str, str], Awaitable[None]] | None = None
         self.roster: RosterService | None = None
+        self.session_names = SessionNamePolicy.from_config(config)
 
     @property
     def session_controllers(self) -> SessionControllerRegistry | None:
@@ -276,7 +272,6 @@ class Runtime:
             self.command_submitter = PersistingCommandSubmitter(
                 SqliteCommandRepository(self.db), orchestration_events
             )
-            self.structured_decisions = StructuredDecisionRouter(self)
             # The flight recorder is a normal bus SUBSCRIBER (plan §2.5.A): when
             # on, it captures EVERY event (filter=None) and routes each to its
             # record_family table. Registered before any sync task spawns so no
@@ -286,7 +281,26 @@ class Runtime:
                 self._recorder_sub = orchestration_events.subscribe(
                     self._record_orchestration_event
                 )
-                self._agents.on_lifecycle = self._emit_agent_lifecycle
+            assert self.db is not None and self.run_id is not None and self.roster is not None
+            verified_factory = VerifiedControlFactory(db=self.db, sessions=self.sessions)
+            self.agents = AgentRuntime(
+                db=self.db,
+                roster=self.roster,
+                events=orchestration_events,
+                run_id=self.run_id,
+                advanced_log=self.advanced_log,
+                preserve_tmux_on_close=lambda: self._external_stop.is_set(),
+                verified_control_factory=verified_factory,
+                lifecycle_events_enabled=(mode != "off"),
+            )
+            self.agents.command_submitter = self.command_submitter
+            self.agents.sessions = self.sessions
+            self.structured_decisions = StructuredDecisionRouter(
+                db=self.db,
+                events=orchestration_events,
+                run_id=self.run_id,
+                get_agent=self.agents.find,
+            )
             self._sync = FilesystemSyncSupervisor.attach(self.repo_root, self.db)
             self.plan_sync = self._sync.plan_sync
             self.note_sync = self._sync.note_sync
@@ -340,6 +354,7 @@ class Runtime:
             self.run_id = None
             self._sync = None
             self.structured_decisions = None
+            self.agents = None
             if self._lock_fd is not None:
                 with contextlib.suppress(Exception):
                     release_flock(self._lock_fd)
@@ -350,10 +365,6 @@ class Runtime:
 
     async def stop(self) -> None:
         self._shutdown.set()
-        if self._emit_tasks:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
-            self._emit_tasks.clear()
         if self._sync is not None:
             await self._sync.shutdown(self._tasks)
         for t in list(self._tasks.values()):
@@ -362,12 +373,17 @@ class Runtime:
                 await t
         self._tasks.clear()
         graceful = self._external_stop.is_set()
+        # Stop agents before closing sessions / sweeping tmux (§7.2).
+        if self.agents is not None:
+            await self.agents.close()
+            self.agents = None
         if self.sessions is not None:
             await self.sessions.close()
             self.sessions = None
-        await shutdown_live_agents(self._agents, graceful=graceful)
-        with contextlib.suppress(Exception):
-            await kill_project_tmux_sessions(self)
+        # Sweep only on authoritative stop (graceful preserves tmux end-to-end).
+        if not graceful:
+            with contextlib.suppress(Exception):
+                await kill_project_tmux_sessions(self.session_names)
         # Stop feeding the recorder, then drain + close it before the main DB.
         if self._recorder_sub is not None:
             self._recorder_sub.cancel()
@@ -409,122 +425,17 @@ class Runtime:
         """
         self.advanced_log.record_orchestration_event(event)
 
-    def _emit_agent_lifecycle(
-        self,
-        *,
-        op: str,
-        agent_id: str,
-        details: dict[str, Any] | None = None,
-        reason: str | None = None,
-    ) -> None:
-        """Schedule an ``AgentLifecycleEvent`` publish from a SYNC registry hook.
+    @property
+    def crow_ask_router(self):
+        """Compatibility: crow ask routing lives on AgentRuntime after Phase 2."""
+        if self.agents is None:
+            return None
+        return self.agents.crow_ask_router
 
-        Wired onto ``AgentRegistry.on_lifecycle`` at start so register / rename /
-        clear ride the one bus aspect into ``agent_records`` (force-stop reaches
-        this directly from agent_ops). AgentLifecycleEvent is purely forensic, so
-        gate on the recorder being on: below the ``advanced`` rung there is no
-        subscriber and the registry hook is never wired, so the only path that
-        could fire here is force-stop — which must also be a no-op when off.
-        Otherwise best-effort by contract: a no-op before the bus exists and
-        DURING shutdown — ``clear`` fires from the teardown path, and the plan
-        says emit-before-teardown or treat as best-effort rather than add a
-        hot-path duplicate write to dodge the race.
-        """
-        if (
-            self._recorder_sub is None
-            or self.orchestration_events is None
-            or self.run_id is None
-            or self._shutdown.is_set()
-        ):
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        task = loop.create_task(
-            self.orchestration_events.publish(
-                AgentLifecycleEvent(
-                    run_id=self.run_id,
-                    agent_id=agent_id,
-                    op=op,  # type: ignore[arg-type]
-                    details=details or {},
-                    reason=reason,
-                )
-            )
-        )
-        self._emit_tasks.add(task)
-        task.add_done_callback(self._emit_tasks.discard)
-
-    def sync_agent(self, agent: LifecycleParticipant) -> None:
-        """Persist an agent plus its roster invalidation as one feature operation."""
-        if self.db is None:
-            return
-        assert self.roster is not None
-        worktree_path = getattr(agent, "worktree_path", None)
-        self.roster.sync_agent(
-            self.db,
-            agent_id=agent.id,
-            role=agent.role.value,
-            ticket_id=agent.ticket_id,
-            session=agent.session,
-            harness=getattr(getattr(agent, "harness", None), "kind", None),
-            model=getattr(agent, "startup_model", None),
-            status=agent.status.value,
-            start_commit=getattr(agent, "start_commit", None),
-            worktree_path=str(worktree_path) if worktree_path is not None else None,
-            pid=None,
-        )
-        # Flight-recorder data is observational only. Roster refresh travels
-        # through the transactional feature projection input above.
-        self.advanced_log.record_state_mutation(
-            StateMutationRecord(
-                entity="agent",
-                agent_id=agent.id,
-                role=agent.role.value,
-                ticket_id=agent.ticket_id,
-                session=agent.session,
-                status=agent.status.value,
-                harness=getattr(getattr(agent, "harness", None), "kind", None),
-                model=getattr(agent, "startup_model", None),
-                worktree_path=str(worktree_path) if worktree_path is not None else None,
-            )
-        )
-
-    def register_agent(self, agent: LifecycleParticipant) -> None:
-        self._agents.register(agent, persist=self.sync_agent)
-
-    def get_agent(self, agent_id: str) -> LifecycleParticipant | None:
-        return self._agents.get_agent(agent_id)
-
-    def get_crow(self, ticket_id: str) -> LifecycleParticipant | None:
-        return self._agents.get_crow(ticket_id)
-
-    def get_crow_handler(self, ticket_id: str) -> LifecycleParticipant | None:
-        return self._agents.get_crow_handler(ticket_id)
-
-    async def reap(self, agent_id: str) -> None:
-        assert self.roster is not None
-        await self._agents.reap(
-            agent_id,
-            tasks=self._tasks,
-            db=self.db,
-            set_dead=lambda conn, agent_id, status: self.roster.set_agent_status(
-                conn, agent_id, status
-            ),
-        )
-
-    def rename_agent(
-        self,
-        old_agent_id: str,
-        new_agent_id: str,
-        *,
-        persist: Callable[[LifecycleParticipant], None] | None = None,
-    ) -> LifecycleParticipant | None:
-        return self._agents.rename_agent(old_agent_id, new_agent_id, persist=persist)
-
-    async def supervise(self, agent_id: str) -> None:
-        """Restart policy placeholder — daemons own their poll loops."""
-        return None
+    @crow_ask_router.setter
+    def crow_ask_router(self, value) -> None:
+        if self.agents is not None:
+            self.agents.crow_ask_router = value
 
     @asynccontextmanager
     async def subscription(

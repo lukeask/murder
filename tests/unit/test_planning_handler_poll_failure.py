@@ -23,7 +23,8 @@ def handler(tmp_path: Path) -> PlanningHandler:
     runtime.orchestration_events = MagicMock()
     runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
-    runtime.sync_agent = MagicMock()
+    runtime.record = MagicMock()
+    runtime.transition = AsyncMock()
     return PlanningHandler(
         agent_id="planning_handler-planX",
         session="handler-log",

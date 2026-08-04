@@ -31,8 +31,14 @@ def _last_frame() -> str:
 
 
 def _rogue(conn, bus, tmp_path: Path) -> CrowAgent:
+    from murder.runtime.sessions.service import SessionService
+
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+        db=conn,
+        sessions=SessionService(conn),
+        orchestration_events=bus,
+        run_id="run-1",
+        record=MagicMock(),
     )
     agent = CrowAgent(
         agent_id="claude-rogue-testingpostworker",
@@ -112,13 +118,15 @@ def test_project_once_touches_roster_last_seen_on_activity(
     """Conversation projection bumps roster last_seen (rogues have no CrowHandler heartbeat)."""
     db = open_test_repo_db(tmp_path / "state.db")
     bus = SimpleNamespace(publish=AsyncMock())
-    roster = SimpleNamespace(heartbeat_agent=MagicMock())
+    from murder.runtime.sessions.service import SessionService
+
     runtime = SimpleNamespace(
         db=db,
+        sessions=SessionService(db),
         orchestration_events=bus,
         run_id="run-1",
-        sync_agent=MagicMock(),
-        roster=roster,
+        record=MagicMock(),
+        heartbeat=MagicMock(),
     )
     agent = CrowAgent(
         agent_id="claude-rogue-testingpostworker",
@@ -138,12 +146,11 @@ def test_project_once_touches_roster_last_seen_on_activity(
 
     asyncio.run(agent.project_once())
 
-    roster.heartbeat_agent.assert_called()
+    runtime.heartbeat.assert_called()
     assert any(
-        call.args[0] is db
-        and call.args[1] == "claude-rogue-testingpostworker"
+        call.args[0] == "claude-rogue-testingpostworker"
         and call.kwargs.get("invalidate") is True
-        for call in roster.heartbeat_agent.call_args_list
+        for call in runtime.heartbeat.call_args_list
     )
 
 
@@ -151,7 +158,7 @@ def test_project_once_is_noop_without_producer(fake_tmux: FakeTmux, tmp_path: Pa
     """No db ⇒ no producer ⇒ project_once does not even touch the pane."""
     bus = SimpleNamespace(publish=AsyncMock())
     runtime = SimpleNamespace(
-        db=None, orchestration_events=bus, run_id="run-1", sync_agent=MagicMock()
+        db=None, orchestration_events=bus, run_id="run-1", record=MagicMock()
     )
     agent = CrowAgent(
         agent_id="claude-rogue-x",

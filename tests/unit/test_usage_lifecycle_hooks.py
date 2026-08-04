@@ -42,6 +42,16 @@ def _runtime(conn, tmp_path: Path):
     async def no_sleep(_: float) -> None:
         return None
 
+    async def transition(
+        agent: object,
+        *,
+        from_status: object = None,
+        to_status: AgentStatus,
+        reason: object = None,
+    ) -> None:
+        del from_status, reason
+        agent.status = to_status  # type: ignore[attr-defined]
+
     return SimpleNamespace(
         db=conn,
         sessions=SessionService(conn),
@@ -49,7 +59,8 @@ def _runtime(conn, tmp_path: Path):
         repo_root=tmp_path,
         orchestration_events=None,
         run_id=None,
-        sync_agent=MagicMock(),
+        record=MagicMock(),
+        transition=AsyncMock(side_effect=transition),
         verified_prompt_driver_policy=PromptDriverPolicy(
             observation_interval=timedelta(), maximum_observations=12
         ),

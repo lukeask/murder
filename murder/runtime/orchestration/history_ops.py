@@ -10,19 +10,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.state.persistence import history as history_store
+from murder.state.persistence.connection import RepoDb
 
 
 class HistoryOps:
-    """Thin wrappers over ``history_store`` keyed on an ``OrchestratorHost``."""
+    """Thin wrappers over ``history_store``."""
 
-    def __init__(self, rt: OrchestratorHost) -> None:
-        self.rt = rt
+    def __init__(self, *, db: RepoDb) -> None:
+        self._db = db
 
     async def dismiss(self, item_id: str) -> dict[str, Any]:
-        assert self.rt.db is not None
-        history_store.set_history_status(self.rt.db, item_id, "dismissed")
+        history_store.set_history_status(self._db, item_id, "dismissed")
         return {"item_id": item_id, "status": "dismissed"}
 
 

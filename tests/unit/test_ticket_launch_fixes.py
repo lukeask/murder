@@ -18,6 +18,7 @@ import pytest
 from murder.llm.harnesses.base import HarnessSession
 from murder.llm.harnesses.results import fail_result
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.state.persistence.agents import upsert_agent
 from murder.state.persistence.tickets import get_ticket_status, insert_ticket
 from murder.state.storage.paths import db_path
@@ -77,7 +78,7 @@ def test_kickoff_reaps_stale_running_agents_when_ticket_still_ready(
         sync_agent=MagicMock(),
         publish_snapshot=AsyncMock(),
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
     monkeypatch.setattr(orch, "spawn_crow", AsyncMock(return_value="crow-sess"))
     monkeypatch.setattr(orch, "spawn_crow_handler", AsyncMock())
     monkeypatch.setattr(
@@ -123,7 +124,7 @@ def test_force_ticket_status_reaps_crow_agents(repo_root: Path) -> None:
         reap=_reap,
         publish_snapshot=AsyncMock(),
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(orch.force_ticket_status("t098", "done"))
 
@@ -152,7 +153,7 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
         run_id=None,
         publish_snapshot=AsyncMock(),
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     asyncio.run(orch.set_schedule_at("t097a", "2026-05-29T09:00:00"))
 
@@ -210,7 +211,7 @@ def test_codex_rogue_reaps_session_on_startup_failure(
         publish_snapshot=AsyncMock(),
         reap=_reap,
     )
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     with pytest.raises(RuntimeError, match=error_message):
         asyncio.run(orch.spawn_rogue("codex", "gpt-5.4-mini"))

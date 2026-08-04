@@ -148,10 +148,10 @@ class HarnessBackedAgent(LifecycleParticipant):
         import time
 
         runtime = getattr(self, "runtime", None)
-        if runtime is None or runtime.db is None:
+        if runtime is None:
             return
-        roster = getattr(runtime, "roster", None)
-        if roster is None:
+        heartbeat = getattr(runtime, "heartbeat", None)
+        if not callable(heartbeat):
             return
         from murder.state.persistence.agents import heartbeat_bucket
 
@@ -159,10 +159,13 @@ class HarnessBackedAgent(LifecycleParticipant):
         invalidate = force_invalidate or bucket != self._last_activity_roster_bucket
         if invalidate:
             self._last_activity_roster_bucket = bucket
-        roster.heartbeat_agent(runtime.db, self.id, invalidate=invalidate)
+        heartbeat(self.id, invalidate=invalidate)
 
     async def initialize_verified_harness_control(self) -> None:
         runtime = getattr(self, "runtime", None)
+        if runtime is not None and hasattr(runtime, "initialize_verified_control"):
+            await runtime.initialize_verified_control(self)
+            return
         if runtime is None or runtime.db is None:
             raise RuntimeError("verified harness control requires the service persistence database")
         from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
@@ -652,7 +655,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         if not changes or self.role is not AgentRole.CROW or not self.ticket_id:
             return
         runtime = getattr(self, "runtime", None)
-        get_handler = getattr(runtime, "get_crow_handler", None)
+        get_handler = getattr(runtime, "find_crow_handler", None) or getattr(runtime, "get_crow_handler", None)
         handler = get_handler(self.ticket_id) if callable(get_handler) else None
         observe = getattr(handler, "observe_conversation_changes", None)
         if callable(observe):
@@ -686,7 +689,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         if self.status == target:
             return
         self.status = target
-        runtime.sync_agent(self)
+        runtime.record(self)
 
     async def _emit_plan_resort_if_planner(self, had_changes: bool) -> None:
         """F11 H1: emit the key-only ``plan`` re-sort invalidation, gated.
@@ -972,7 +975,7 @@ class Daemon(LifecycleParticipant):
                 await self._poll_task
             self._poll_task = None
         if getattr(self, "runtime", None) is not None and self.runtime.db is not None:
-            self.runtime.sync_agent(self)
+            self.runtime.record(self)
 
     async def send(self, msg: str) -> None:
         # Daemons do not own a conversation pane. User and crow chat goes to the

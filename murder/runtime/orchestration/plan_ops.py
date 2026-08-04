@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from murder.config import Config
+from murder.runtime.agent_runtime import AgentRuntime
+from murder.runtime.terminal.session_names import SessionNamePolicy
+from murder.state.persistence.connection import RepoDb
+from murder.user_config import UserConfig
+from murder.work.plans.sync import PlanSync
+
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.llm.direct import resolve_direct_role_client
 from murder.runtime.agents.types import AgentStatus
-from murder.runtime.terminal.session_names import format_session_name
-from murder.state.persistence.agents import (
-    rename_agent as _db_rename_agent,
-)
 from murder.state.persistence.agents import (
     set_agent_status as _db_set_agent_status,
 )
@@ -82,22 +86,34 @@ def _free_superseded_plan_name(db: Any, name: str) -> str:
 
 
 class PlanOps:
-    """Plan scaffold/rename/deprecate/create operations over an ``OrchestratorHost``."""
+    """Plan scaffold/rename/deprecate/create operations."""
 
     def __init__(
         self,
-        rt: OrchestratorHost,
         *,
+        db: RepoDb,
+        repo_root: Path,
+        agents: AgentRuntime,
+        config: Config,
+        user_config: UserConfig | None,
+        plan_sync: PlanSync | None,
+        session_names: SessionNamePolicy,
         send_agent_message: SendAgentMessage,
         planner_spawn_locks: dict[str, asyncio.Lock],
     ) -> None:
-        self.rt = rt
+        self._db = db
+        self._repo_root = repo_root
+        self.agents = agents
+        self._config = config
+        self._user_config = user_config
+        self._plan_sync = plan_sync
+        self._session_names = session_names
         self._send_agent_message = send_agent_message
         self._planner_spawn_locks = planner_spawn_locks
 
     async def scaffold_plan(self, name: str, body: str) -> dict[str, Any]:
         """Create or refresh a draft plan row and its materialized markdown."""
-        assert self.rt.db is not None
+        assert self._db is not None
         name = _validate_plan_filename_stem(name, command="plan.scaffold")
         # Naive UTC (utcnow() is deprecated since 3.12) to match plan timestamps.
         now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -110,13 +126,13 @@ class PlanOps:
             frontmatter={},
             body=body,
         )
-        path = plan_md(self.rt.repo_root, name)
-        materialized_path = str(path.relative_to(self.rt.repo_root))
+        path = plan_md(self._repo_root, name)
+        materialized_path = str(path.relative_to(self._repo_root))
         rendered = _render_plan_markdown(plan)
         content_hash = _plan_content_hash(rendered)
-        with self.rt.db:
+        with self._db:
             _db_upsert_plan(
-                self.rt.db,
+                self._db,
                 plan,
                 content_hash=content_hash,
                 materialized_path=materialized_path,
@@ -126,7 +142,7 @@ class PlanOps:
                 revision_source="db",
             )
             _write_plan_markdown(path, plan)
-        row = _db_get_plan_row(self.rt.db, name) or {}
+        row = _db_get_plan_row(self._db, name) or {}
         return {
             "handled": True,
             "name": name,
@@ -136,11 +152,11 @@ class PlanOps:
 
     async def rename_plan(self, old_name: str, new_name: str) -> dict[str, Any]:
         """Explicit first-class plan rename with live planner continuity."""
-        assert self.rt.db is not None
+        assert self._db is not None
         old_name = _validate_plan_filename_stem(old_name, command="plan.rename")
         new_name = _validate_plan_filename_stem(new_name, command="plan.rename")
         if old_name == new_name:
-            row = _db_get_plan_row(self.rt.db, old_name)
+            row = _db_get_plan_row(self._db, old_name)
             if row is None:
                 raise KeyError(old_name)
             return {
@@ -150,14 +166,14 @@ class PlanOps:
                 "materialized_path": row["materialized_path"],
                 "revision_count": row.get("revision_count"),
             }
-        if _db_get_plan_row(self.rt.db, old_name) is None:
+        if _db_get_plan_row(self._db, old_name) is None:
             raise KeyError(old_name)
-        if _db_get_plan_row(self.rt.db, new_name) is not None:
+        if _db_get_plan_row(self._db, new_name) is not None:
             raise ValueError(f"plan already exists: {new_name}")
         await self._preflight_plan_runtime_rename(old_name, new_name)
-        if self.rt.plan_sync is None:
+        if self._plan_sync is None:
             raise RuntimeError("plan sync not available")
-        row = self.rt.plan_sync.rename_plan(old_name, new_name)
+        row = self._plan_sync.rename_plan(old_name, new_name)
         await self._retarget_plan_runtime(old_name, new_name)
         return {
             "handled": True,
@@ -169,16 +185,16 @@ class PlanOps:
 
     async def deprecate_plan(self, name: str) -> dict[str, Any]:
         """Mark a plan superseded and remove it from active planning."""
-        assert self.rt.db is not None
+        assert self._db is not None
         name = _validate_plan_filename_stem(name, command="plan.deprecate")
-        if self.rt.plan_sync is None:
+        if self._plan_sync is None:
             raise RuntimeError("plan sync not available")
-        row = self.rt.plan_sync.deprecate_plan(name)
+        row = self._plan_sync.deprecate_plan(name)
         for agent_id in (f"planning_handler-{name}", f"planner-{name}"):
-            if self.rt.get_agent(agent_id) is not None:
-                await self.rt.reap(agent_id)
+            if self.agents.find(agent_id) is not None:
+                await self.agents.reap(agent_id)
             else:
-                _db_set_agent_status(self.rt.db, agent_id, AgentStatus.DEAD.value)
+                _db_set_agent_status(self._db, agent_id, AgentStatus.DEAD.value)
         return {
             "handled": True,
             "name": name,
@@ -194,51 +210,36 @@ class PlanOps:
         del old_name, new_name
 
     async def _retarget_plan_runtime(self, old_name: str, new_name: str) -> None:
-        assert self.rt.db is not None
         old_lock = self._planner_spawn_locks.pop(old_name, None)
         if old_lock is not None:
             self._planner_spawn_locks[new_name] = old_lock
 
         old_planner_id = f"planner-{old_name}"
         new_planner_id = f"planner-{new_name}"
-        old_planner_session = format_session_name(self.rt, "planner", f"_{old_name}")
-        planner = self.rt.rename_agent(old_planner_id, new_planner_id)
-        if planner is not None:
+        old_planner_session = self._session_names.format("planner", f"_{old_name}")
+        planner = None
+        if self.agents.find(old_planner_id) is not None:
+            planner = self.agents.rename(old_planner_id, new_planner_id)
             planner.session = old_planner_session
             if hasattr(planner, "plan_name"):
                 planner.plan_name = new_name
             harness_session = getattr(planner, "harness_session", None)
             if harness_session is not None:
                 harness_session.session = old_planner_session
+            self.agents.record(planner)
 
         old_handler_id = f"planning_handler-{old_name}"
         new_handler_id = f"planning_handler-{new_name}"
-        old_handler_session = format_session_name(self.rt, "planning_handler", f"_{old_name}")
-        handler = self.rt.rename_agent(old_handler_id, new_handler_id)
-        if handler is not None:
+        old_handler_session = self._session_names.format("planning_handler", f"_{old_name}")
+        handler = None
+        if self.agents.find(old_handler_id) is not None:
+            handler = self.agents.rename(old_handler_id, new_handler_id)
             handler.session = old_handler_session
             if hasattr(handler, "plan_name"):
                 handler.plan_name = new_name
             if hasattr(handler, "planner_session"):
                 handler.planner_session = old_planner_session
-
-        with self.rt.db:
-            _db_rename_agent(
-                self.rt.db,
-                old_planner_id,
-                new_planner_id,
-                session=old_planner_session,
-            )
-            _db_rename_agent(
-                self.rt.db,
-                old_handler_id,
-                new_handler_id,
-                session=old_handler_session,
-            )
-            if planner is not None:
-                self.rt.sync_agent(planner)
-            if handler is not None:
-                self.rt.sync_agent(handler)
+            self.agents.record(handler)
 
     async def _derive_plan_name(self, body: str) -> str:
         """Derive a slugified plan name from ``body`` via a one-shot mini-LLM call.
@@ -249,8 +250,8 @@ class PlanOps:
         """
         text = (body or "").strip()
         client, notetaker_cfg = resolve_direct_role_client(
-            self.rt.config.notetaker,
-            self.rt.user_cfg,
+            self._config.notetaker,
+            self._user_config,
             "plan_namer",
             "notetaker",
         )
@@ -303,7 +304,7 @@ class PlanOps:
             plan_name = await self._derive_plan_name(seed_body)
         if not plan_name:
             raise ValueError("plan.create requires plan_name")
-        assert self.rt.db is not None
+        assert self._db is not None
         # Data-integrity guard (F3b): scaffold_plan UPSERTs, so creating over an
         # existing name would silently clobber that plan's body. A *live* plan
         # owns its name — reject and never overwrite. A *superseded* plan does
@@ -312,18 +313,18 @@ class PlanOps:
         # key, preserving all its data + its deprecated-dir markdown) before the
         # scaffold INSERT. This keeps the DB constraint and the app guard in
         # exact agreement at INSERT time. Mirrors notes' status-aware guard.
-        if _db_live_plan_name_exists(self.rt.db, plan_name):
+        if _db_live_plan_name_exists(self._db, plan_name):
             raise FileExistsError(
                 f"a plan named {plan_name!r} already exists. "
                 "choose a different name or rename the existing plan"
             )
-        existing = _db_get_plan_row(self.rt.db, plan_name)
+        existing = _db_get_plan_row(self._db, plan_name)
         if existing is not None:
             # Superseded row holds the name — archive it (data fully preserved)
             # so the scaffold can take the name. Atomic with no markdown change
             # to the archived plan: rename_plan carries its materialized_path
             # through, so its deprecated-dir file is not orphaned.
-            _free_superseded_plan_name(self.rt.db, plan_name)
+            _free_superseded_plan_name(self._db, plan_name)
         scaffolded = await self.scaffold_plan(plan_name, seed_body)
         name = str(scaffolded.get("name") or plan_name)
         agent_id = f"planner-{name}" if (message or "").strip() else None

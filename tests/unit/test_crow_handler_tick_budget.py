@@ -22,7 +22,13 @@ def handler(fake_tmux, tmp_path: Path) -> CrowHandler:
     runtime.orchestration_events = MagicMock()
     runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
-    runtime.sync_agent = MagicMock()
+    runtime.record = MagicMock()
+
+    async def _transition(agent, *, from_status=None, to_status, reason=None):
+        del from_status, reason
+        agent.status = to_status
+
+    runtime.transition = AsyncMock(side_effect=_transition)
     runtime.publish_snapshot = AsyncMock()
     outcome = MagicMock(spec=TicketOutcomeService)
     outcome.fail_ticket = AsyncMock()

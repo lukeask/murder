@@ -74,7 +74,8 @@ def _make_handler(db, tmp_path: Path, coordinator) -> CrowHandler:
     runtime.db = db
     runtime.orchestration_events = InProcessOrchestrationEventSink()
     runtime.run_id = "test-run"
-    runtime.sync_agent = MagicMock()
+    runtime.record = MagicMock()
+    runtime.transition = AsyncMock()
     runtime.publish_snapshot = AsyncMock()
     return CrowHandler(
         agent_id="crow_handler-t001",

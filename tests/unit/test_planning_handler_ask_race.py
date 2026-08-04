@@ -17,8 +17,8 @@ from murder.runtime.agents.planning_handler import PlanningHandler
 
 def _handler(planner: object, crow: object | None = None) -> PlanningHandler:
     runtime = SimpleNamespace(
-        get_agent=lambda _agent_id: planner,
-        get_crow=lambda _ticket_id: crow,
+        find=lambda _agent_id: planner,
+        find_crow=lambda _ticket_id: crow,
     )
     handler = PlanningHandler(
         agent_id="planning_handler-plan",

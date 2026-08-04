@@ -29,6 +29,8 @@ MINIMUM_EVIDENCE_RECORDS = 3
 
 @pytest.fixture
 def agent(fake_tmux, tmp_path: Path) -> CrowAgent:
+    from murder.runtime.sessions.service import SessionService
+
     db = open_test_repo_db(tmp_path / "state.db")
 
     async def no_sleep(_: float) -> None:
@@ -36,10 +38,11 @@ def agent(fake_tmux, tmp_path: Path) -> CrowAgent:
 
     runtime = SimpleNamespace()
     runtime.db = db
+    runtime.sessions = SessionService(db)
     runtime.orchestration_events = MagicMock()
     runtime.orchestration_events.publish = AsyncMock()
     runtime.run_id = "test-run"
-    runtime.sync_agent = MagicMock()
+    runtime.record = MagicMock()
     runtime.verified_prompt_driver_policy = PromptDriverPolicy(
         observation_interval=timedelta(), maximum_observations=12
     )

@@ -12,7 +12,7 @@ from murder.llm.harnesses.models import HarnessStartSpec
 from murder.llm.harnesses.results import SimpleResult
 
 if TYPE_CHECKING:
-    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.agent_runtime import AgentRuntime
 
 
 class CrowAgent(HarnessBackedAgent):
@@ -30,7 +30,7 @@ class CrowAgent(HarnessBackedAgent):
         startup_effort: str | None = None,
         worktree_path: Path | None = None,
         additional_workspace_dirs: tuple[Path, ...] = (),
-        runtime: Runtime | None = None,
+        runtime: AgentRuntime | None = None,
     ) -> None:
         self.id = agent_id
         self.ticket_id = ticket_id
@@ -47,7 +47,6 @@ class CrowAgent(HarnessBackedAgent):
         self.harness_session = harness.attach(session, self.repo_root)
 
     async def start(self, brief: str, ctx: dict[str, Any]) -> None:
-        from murder.runtime.orchestration.events import StatusChangeEvent
         from murder.verdict.enforcement import git_diff
 
         # Record the injected system prompt so the transcript parser can drop it
@@ -64,7 +63,7 @@ class CrowAgent(HarnessBackedAgent):
         if not start_result.ok:
             self.status = AgentStatus.FAILED
             if self.runtime:
-                self.runtime.sync_agent(self)
+                self.runtime.record(self)
             raise TimeoutError(start_result.message or "harness startup failed")
 
         await self.initialize_verified_harness_control()
@@ -72,7 +71,7 @@ class CrowAgent(HarnessBackedAgent):
         if not model_result.ok:
             self.status = AgentStatus.FAILED
             if self.runtime:
-                self.runtime.sync_agent(self)
+                self.runtime.record(self)
             raise RuntimeError(model_result.message or "verified crow model selection failed")
 
         await self._sample_live_usage_on_startup()
@@ -85,26 +84,18 @@ class CrowAgent(HarnessBackedAgent):
         if not paste.ok:
             self.status = AgentStatus.FAILED
             if self.runtime:
-                self.runtime.sync_agent(self)
+                self.runtime.record(self)
             raise RuntimeError(paste.message or "failed to deliver startup context")
-        self.status = AgentStatus.RUNNING
         # Fresh tmux session: fresh transcript and producer-owned parser state.
         self.start_conversation()
         if self.runtime:
-            self.runtime.sync_agent(self)
-            if self.runtime.orchestration_events and self.runtime.run_id:
-                await self.runtime.orchestration_events.publish(
-                    StatusChangeEvent(
-                        run_id=self.runtime.run_id,
-                        agent_id=self.id,
-                        role=self.role,
-                        ticket_id=self.ticket_id,
-                        entity="agent",
-                        entity_id=self.id,
-                        from_status=AgentStatus.IDLE.value,
-                        to_status=AgentStatus.RUNNING.value,
-                    )
-                )
+            await self.runtime.transition(
+                self,
+                from_status=AgentStatus.IDLE,
+                to_status=AgentStatus.RUNNING,
+            )
+        else:
+            self.status = AgentStatus.RUNNING
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
         from murder.runtime.terminal import tmux
@@ -125,7 +116,7 @@ class CrowAgent(HarnessBackedAgent):
         else:
             self.status = AgentStatus.DONE
         if self.runtime:
-            self.runtime.sync_agent(self)
+            self.runtime.record(self)
 
     async def send(self, msg: str) -> SimpleResult[None]:
         return await self.send_verified_prompt(msg)

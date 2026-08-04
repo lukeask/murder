@@ -36,10 +36,12 @@ def _write_startup_rogue(harness: str, model: str, effort: str | None) -> None:
 
 def _fake_orchestrator(*, existing_agent=None, db_row=None) -> MagicMock:
     orch = MagicMock(spec=Orchestrator)
-    orch.rt = MagicMock()
-    orch.rt.get_agent = MagicMock(return_value=existing_agent)
-    orch.rt.reap = AsyncMock()
-    orch.rt.db.execute.return_value.fetchone.return_value = db_row
+    orch.agents = MagicMock()
+    orch.agents.find = MagicMock(return_value=existing_agent)
+    orch.agents.reap = AsyncMock()
+    orch._db = MagicMock()
+    orch._db.conn.execute.return_value.fetchone.return_value = db_row
+    orch._db.execute.return_value.fetchone.return_value = db_row
     orch.spawn_rogue = AsyncMock(return_value="claude-rogue-startup")
     return orch
 
@@ -74,7 +76,7 @@ def test_live_existing_rogue_is_reused_not_respawned(xdg: Path) -> None:
     # Deterministic id <prefix>-rogue-startup; no re-spawn.
     assert agent_id == "claude-rogue-startup"
     orch.spawn_rogue.assert_not_awaited()
-    orch.rt.reap.assert_not_awaited()
+    orch.agents.reap.assert_not_awaited()
 
 
 def test_dead_existing_rogue_is_reaped_then_respawned(xdg: Path) -> None:
@@ -85,5 +87,5 @@ def test_dead_existing_rogue_is_reaped_then_respawned(xdg: Path) -> None:
     import asyncio
 
     asyncio.run(Orchestrator.ensure_startup_rogue(orch))
-    orch.rt.reap.assert_awaited_once_with("claude-rogue-startup")
+    orch.agents.reap.assert_awaited_once_with("claude-rogue-startup")
     orch.spawn_rogue.assert_awaited_once_with("claude_code", "", None, name="startup")

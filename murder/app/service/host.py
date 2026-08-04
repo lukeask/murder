@@ -173,13 +173,27 @@ class ServiceHost:
     async def _start_inner(self) -> None:
         assert self.runtime is not None and self.runtime.orchestration_events is not None
         assert self.runtime.db is not None and self.runtime.run_id is not None
+        assert self.runtime.agents is not None
+        assert self.runtime.command_submitter is not None
         self.register_application_handlers()
 
         self.fact_log = FactLog(self.runtime.db)
         self.projection_input_log = ProjectionInputLog(self.runtime.db)
 
-        self.orchestrator = Orchestrator(self.runtime)
-        self.runtime.crow_ask_router = self.orchestrator.route_crow_ask
+        self.orchestrator = Orchestrator(
+            config=self.runtime.config,
+            user_config=self.runtime.user_cfg,
+            repo_root=self.runtime.repo_root,
+            db=self.runtime.db,
+            run_id=self.runtime.run_id,
+            events=self.runtime.orchestration_events,
+            commands=self.runtime.command_submitter,
+            event_sink=self.runtime.event_sink,
+            agents=self.runtime.agents,
+            session_names=self.runtime.session_names,
+            plan_sync=self.runtime.plan_sync,
+        )
+        self.runtime.agents.crow_ask_router = self.orchestrator.route_crow_ask
         # Route malformed-artifact parse errors back to the owning agent now
         # that the orchestrator (which delivers `agent.message`) exists.
         orchestrator_for_parse_errors = self.orchestrator

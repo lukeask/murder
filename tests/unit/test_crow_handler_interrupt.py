@@ -29,7 +29,8 @@ def handler(fake_tmux, tmp_path: Path) -> CrowHandler:
     runtime.db = MagicMock()
     runtime.orchestration_events = MagicMock()
     runtime.run_id = "test-run"
-    runtime.sync_agent = MagicMock()
+    runtime.record = MagicMock()
+    runtime.transition = AsyncMock()
     runtime.publish_snapshot = AsyncMock()
     outcome = MagicMock(spec=TicketOutcomeService)
     coordinator = MagicMock()
@@ -50,7 +51,7 @@ def handler(fake_tmux, tmp_path: Path) -> CrowHandler:
 def test_interrupt_crow_routes_through_verified_agent(handler, fake_tmux):
     crow = MagicMock()
     crow.interrupt_verified_generation = AsyncMock(return_value=True)
-    handler.runtime.get_crow.return_value = crow
+    handler.runtime.find_crow.return_value = crow
 
     asyncio.run(handler.interrupt_crow())
 

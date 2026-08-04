@@ -23,6 +23,7 @@ from murder.config import (
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.orchestrator_worker import OrchestratorCommandWorker
@@ -60,7 +61,7 @@ def _orch(repo_root: Path) -> Orchestrator:
         crow_handler=CrowHandlerConfig(model="test-model"),
     )
     rt = _Runtime(repo_root=repo_root, config=config, db=db)
-    return Orchestrator(rt)  # type: ignore[arg-type]
+    return adapt_rt_stub(rt)
 
 
 def test_next_ticket_id_starts_at_one(repo_root: Path) -> None:
@@ -77,7 +78,7 @@ def test_quick_create_writes_file_and_db_row(repo_root: Path) -> None:
     assert path.exists()
     assert "Fix the thing" in path.read_text()
     # DB row inserted as PLANNED.
-    row = orch.rt.db.conn.execute(  # type: ignore[union-attr]
+    row = orch._db.conn.execute(  # type: ignore[union-attr]
         "SELECT id, title, status FROM tickets WHERE id = 't001'"
     ).fetchone()
     assert row is not None

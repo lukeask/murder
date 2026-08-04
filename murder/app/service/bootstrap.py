@@ -60,7 +60,7 @@ async def start_supervisor_workers(
     await supervisor.start_worker(
         CollaboratorWorker(
             ensure_collaborator=orchestrator.ensure_collaborator,
-            get_agent=runtime.get_agent,
+            get_agent=runtime.agents.find if runtime.agents is not None else (lambda _id: None),
         )
     )
     await supervisor.start_worker(OrchestratorCommandWorker(orchestrator))

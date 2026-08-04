@@ -2,22 +2,34 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from murder.runtime.orchestration.runtime_scope import OrchestratorHost
+from murder.config import Config
+from murder.state.persistence.connection import RepoDb
+from murder.user_config import UserConfig
+
 from murder.llm.direct import resolve_direct_role_client
 from murder.work import notes as notes_mod
 
 
 class NoteOps:
-    """Thin wrappers over ``notes_mod`` keyed on an ``OrchestratorHost``."""
+    """Thin wrappers over ``notes_mod``."""
 
-    def __init__(self, rt: OrchestratorHost) -> None:
-        self.rt = rt
+    def __init__(
+        self,
+        *,
+        db: RepoDb,
+        repo_root: Path,
+        config: Config,
+        user_config: UserConfig | None,
+    ) -> None:
+        self._db = db
+        self._repo_root = repo_root
+        self._config = config
+        self._user_config = user_config
 
     async def submit_notetaker_capture(self, payload: dict[str, Any]) -> dict[str, Any]:
-        assert self.rt.db is not None
-
         raw = payload.get("raw")
         if raw is None:
             raw = payload.get("text")
@@ -33,14 +45,14 @@ class NoteOps:
             title = title.strip()
 
         client, notetaker_cfg = resolve_direct_role_client(
-            self.rt.config.notetaker,
-            self.rt.user_cfg,
+            self._config.notetaker,
+            self._user_config,
             "notetaker",
             "notetaker",
         )
         result = await notes_mod.submit_capture(
-            repo_root=self.rt.repo_root,
-            db=self.rt.db,
+            repo_root=self._repo_root,
+            db=self._db,
             raw=raw.strip(),
             client=client,
             config=notetaker_cfg,
@@ -50,14 +62,12 @@ class NoteOps:
         return result
 
     async def ensure_note(self, name: str) -> dict[str, Any]:
-        assert self.rt.db is not None
-        row = notes_mod.ensure_note(self.rt.db, self.rt.repo_root, name)
+        row = notes_mod.ensure_note(self._db, self._repo_root, name)
         return {"name": name, "materialized_path": str(row.get("materialized_path", ""))}
 
     async def retire_note(self, name: str) -> dict[str, Any]:
-        assert self.rt.db is not None
         try:
-            dest = notes_mod.retire_note(self.rt.db, self.rt.repo_root, name)
+            dest = notes_mod.retire_note(self._db, self._repo_root, name)
         except Exception as exc:
             raise ValueError(f"could not retire note: {exc}") from exc
         return {"name": name, "dest_name": dest.name}

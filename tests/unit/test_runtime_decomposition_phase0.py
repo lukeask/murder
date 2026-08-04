@@ -62,7 +62,6 @@ from murder.config import (
     ProjectConfig,
 )
 from murder.runtime.agents.types import AgentRole, AgentStatus
-from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost, OrchestratorHost
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
     Correlation,
@@ -213,93 +212,32 @@ def _write_plan(repo_root: Path, name: str = "safe") -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _host_protocol_member_names() -> frozenset[str]:
-    names: set[str] = set()
-    for base in (AgentLifecycleHost, OrchestratorHost):
-        names.update(getattr(base, "__annotations__", {}))
-        names.update(
-            name
-            for name, value in vars(base).items()
-            if not name.startswith("_") and callable(value)
-        )
-    return frozenset(names)
-
-
-# Consumer modules that reach off-protocol Runtime attributes today (§6.6).
-# Keep this list in sync with the module docstring inventory above.
-_OFF_PROTOCOL_CONSUMERS: dict[str, tuple[str, ...]] = {
-    "roster": (
-        "murder/runtime/agents/crow_handler.py",
-        "murder/runtime/agents/base.py",
-    ),
-    "plan_sync": ("murder/runtime/orchestration/plan_ops.py",),
-    "user_cfg": (
-        "murder/runtime/orchestration/plan_ops.py",
-        "murder/runtime/orchestration/note_ops.py",
-        "murder/runtime/orchestration/orchestrator.py",
-    ),
-    "crow_ask_router": ("murder/runtime/agents/crow_handler.py",),
-    "verified_prompt_driver_policy": ("murder/runtime/agents/base.py",),
-    "verified_prompt_driver_sleep": ("murder/runtime/agents/base.py",),
-}
-
-
-def test_off_protocol_runtime_attributes_absent_from_host_protocols(
-    repo_root: Path,
-) -> None:
-    """Concrete Runtime is wider than AgentLifecycleHost / OrchestratorHost.
-
-    Production consumers reach these attributes only because the object passed
-    is always Runtime. Protocol deletion without threading them is a runtime
-    failure, not a type error.
-    """
-    rt = Runtime(_config(), repo_root)
-    protocol_members = _host_protocol_member_names()
-
-    for name in _OFF_PROTOCOL_RUNTIME_ATTRS:
-        assert name not in protocol_members, f"{name} unexpectedly on a host protocol"
-
-    # Declared on Runtime today (nullable until start / host wiring).
-    assert hasattr(rt, "roster")
-    assert hasattr(rt, "plan_sync")
-    assert hasattr(rt, "user_cfg")
-    assert hasattr(rt, "crow_ask_router")
-    # Test/monkeypatch-only; not assigned in production construction.
-    assert not hasattr(rt, "verified_prompt_driver_policy")
-    assert not hasattr(rt, "verified_prompt_driver_sleep")
-
-
-def test_off_protocol_consumer_sites_still_reference_attributes() -> None:
-    """Executable inventory: consumer files still mention each off-protocol name.
-
-    Phase 2 must thread these before deleting runtime_scope protocols. If a
-    consumer drops an attribute, update this map and the module docstring.
-    """
-    repo = Path(__file__).resolve().parents[2]
-    for attr, rel_paths in _OFF_PROTOCOL_CONSUMERS.items():
-        assert rel_paths, f"{attr} has no inventoried consumers"
-        for rel in rel_paths:
-            text = (repo / rel).read_text(encoding="utf-8")
-            assert attr in text, f"{rel} no longer references off-protocol {attr!r}"
-
-
-def test_phase05_runtime_scope_lives_under_runtime_not_app() -> None:
-    """Phase 0.5: protocols relocated; no upward app.service.runtime_scope imports."""
+def test_phase2_runtime_scope_protocols_deleted() -> None:
+    """Phase 2: OrchestratorHost / AgentLifecycleHost are gone."""
     repo = Path(__file__).resolve().parents[2]
     assert not (repo / "murder/app/service/runtime_scope.py").exists()
-    assert (repo / "murder/runtime/orchestration/runtime_scope.py").is_file()
-
-    stale = "murder.app.service.runtime_scope"
+    assert not (repo / "murder/runtime/orchestration/runtime_scope.py").exists()
     runtime_root = repo / "murder" / "runtime"
     offenders: list[str] = []
     for path in runtime_root.rglob("*.py"):
-        if path.name == "runtime_scope.py":
-            # Module docstring may mention the old path as relocation history.
-            continue
         text = path.read_text(encoding="utf-8")
-        if stale in text:
+        if "OrchestratorHost" in text or "AgentLifecycleHost" in text:
             offenders.append(str(path.relative_to(repo)))
-    assert offenders == [], f"stale upward imports: {offenders}"
+    assert offenders == [], f"protocol leftovers: {offenders}"
+
+
+def test_off_protocol_seams_threaded_onto_explicit_deps() -> None:
+    """Phase 2 threaded the former off-protocol Runtime attributes."""
+    repo = Path(__file__).resolve().parents[2]
+    # heartbeat replaces roster reach-in on agent paths
+    base = (repo / "murder/runtime/agents/base.py").read_text(encoding="utf-8")
+    assert "heartbeat(" in base
+    crow = (repo / "murder/runtime/agents/crow_handler.py").read_text(encoding="utf-8")
+    assert "crow_ask_router" in crow
+    assert ".heartbeat(" in crow
+    plan = (repo / "murder/runtime/orchestration/plan_ops.py").read_text(encoding="utf-8")
+    assert "_plan_sync" in plan
+    assert "_user_config" in plan
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +357,8 @@ def test_authoritative_stop_kills_agent_sessions_and_sweeps_project_tmux(
     async def _drive() -> None:
         await rt.start()
         # In-memory only — shutdown policy does not require roster persistence.
-        rt._agents.register(agent)
+        assert rt.agents is not None
+        rt.agents.register(agent)
         # ServiceHost.stop() always clear_shutdown_signal() before runtime.stop().
         rt.clear_shutdown_signal()
         await rt.stop()
@@ -430,15 +369,10 @@ def test_authoritative_stop_kills_agent_sessions_and_sweeps_project_tmux(
     assert killed_via_sweep == ["swept"]
 
 
-def test_graceful_stop_preserves_agent_tmux_but_still_sweeps_project_sessions(
+def test_graceful_stop_preserves_agent_tmux_and_skips_project_sweep(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Latent policy split: graceful stop sets kill_session=False, yet sweep still runs.
-
-    Spec §7.2: unreachable in production because ServiceHost clears the signal
-    first; characterization pins the Runtime-level disagreement so Phase 4 can
-    make the sweep conditional.
-    """
+    """Phase 2: graceful stop preserves tmux end-to-end (no project sweep)."""
     _install_spy_sync(monkeypatch)
     killed_via_sweep: list[str] = []
 
@@ -456,7 +390,8 @@ def test_graceful_stop_preserves_agent_tmux_but_still_sweeps_project_sessions(
 
     async def _drive() -> None:
         await rt.start()
-        rt._agents.register(agent)
+        assert rt.agents is not None
+        rt.agents.register(agent)
         # Simulate signal-graceful path without going through ServiceHost.
         rt._external_stop.set()
         await rt.stop()
@@ -464,7 +399,7 @@ def test_graceful_stop_preserves_agent_tmux_but_still_sweeps_project_sessions(
     asyncio.run(_drive())
 
     assert agent.stop_calls == [{"failed": True, "kill_session": False}]
-    assert killed_via_sweep == ["swept"], "current Runtime.stop sweeps even on graceful stop"
+    assert killed_via_sweep == [], "Phase 2: graceful stop skips project tmux sweep"
 
 
 # ---------------------------------------------------------------------------
@@ -725,10 +660,11 @@ def test_register_agent_persists_roster_row(
     async def _drive() -> None:
         await rt.start()
         assert rt.db is not None
+        assert rt.agents is not None
         _insert_ticket(rt.db, "t1")
-        rt.register_agent(agent)
-        assert rt.get_agent("crow-t1") is agent
-        assert rt.get_crow("t1") is agent
+        rt.agents.register(agent)
+        assert rt.agents.find("crow-t1") is agent
+        assert rt.agents.find_crow("t1") is agent
         row = rt.db.conn.execute(
             "SELECT agent_id, role, status, ticket_id FROM agents WHERE agent_id = ?",
             ("crow-t1",),
@@ -742,52 +678,48 @@ def test_register_agent_persists_roster_row(
     asyncio.run(_drive())
 
 
-def test_register_agent_leaves_in_memory_index_when_persist_fails(
+def test_register_agent_rolls_back_index_when_persist_fails(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Current (pre-AgentRuntime) behavior: index insert precedes persist."""
+    """Phase 2: AgentRuntime.register rolls back the index on persist failure."""
     _install_spy_sync(monkeypatch)
     rt = Runtime(_config(), repo_root)
     agent = _RecordingAgent("crow-t1")
 
     async def _drive() -> None:
         await rt.start()
+        assert rt.agents is not None
         monkeypatch.setattr(
-            rt,
-            "sync_agent",
+            rt.agents,
+            "record",
             lambda _agent: (_ for _ in ()).throw(RuntimeError("persist boom")),
         )
         with pytest.raises(RuntimeError, match="persist boom"):
-            rt.register_agent(agent)
-        # Index was updated before persist failed — the rollback gap Phase 2 closes.
-        assert rt.get_agent("crow-t1") is agent
+            rt.agents.register(agent)
+        assert rt.agents.find("crow-t1") is None
         await rt.stop()
 
     asyncio.run(_drive())
 
 
-def test_rename_agent_without_persist_diverges_from_roster(
+def test_rename_agent_always_persists_roster(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """plan_ops._retarget_plan_runtime calls rename_agent without persist.
-
-    Until a later sync_agent / DB rename, in-memory keys disagree with durable
-    agent_id values — the bypass window §2.1 / §3.3 require closing.
-    """
+    """Phase 2: rename always persists — closes the plan_ops divergence window."""
     _install_spy_sync(monkeypatch)
     rt = Runtime(_config(), repo_root)
     agent = _RecordingAgent("planner-old", role=AgentRole.PLANNER, ticket_id=None)
 
     async def _drive() -> None:
         await rt.start()
-        rt.register_agent(agent)
-        renamed = rt.rename_agent("planner-old", "planner-new")  # persist=None
+        assert rt.agents is not None
+        rt.agents.register(agent)
+        renamed = rt.agents.rename("planner-old", "planner-new")
         assert renamed is agent
         assert agent.id == "planner-new"
-        assert rt.get_agent("planner-new") is agent
-        assert rt.get_agent("planner-old") is None
+        assert rt.agents.find("planner-new") is agent
+        assert rt.agents.find("planner-old") is None
         assert rt.db is not None
-        # Durable row still keyed by the old id until an explicit persist/DB rename.
         old_row = rt.db.conn.execute(
             "SELECT agent_id FROM agents WHERE agent_id = ?",
             ("planner-old",),
@@ -796,65 +728,36 @@ def test_rename_agent_without_persist_diverges_from_roster(
             "SELECT agent_id FROM agents WHERE agent_id = ?",
             ("planner-new",),
         ).fetchone()
-        assert old_row is not None
-        assert new_row is None
-        await rt.stop()
-
-    asyncio.run(_drive())
-
-
-def test_rename_agent_with_persist_updates_roster(
-    fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _install_spy_sync(monkeypatch)
-    rt = Runtime(_config(), repo_root)
-    agent = _RecordingAgent("a-old", role=AgentRole.COLLABORATOR, ticket_id=None)
-
-    async def _drive() -> None:
-        await rt.start()
-        rt.register_agent(agent)
-        rt.rename_agent("a-old", "a-new", persist=rt.sync_agent)
-        assert rt.db is not None
-        # sync_agent upserts by the agent's current id; old row remains unless
-        # a separate DB rename runs (characterize upsert, not delete-old).
-        old_row = rt.db.conn.execute(
-            "SELECT agent_id FROM agents WHERE agent_id = ?",
-            ("a-old",),
-        ).fetchone()
-        new_row = rt.db.conn.execute(
-            "SELECT agent_id, status FROM agents WHERE agent_id = ?",
-            ("a-new",),
-        ).fetchone()
-        assert old_row is not None
+        assert old_row is None
         assert new_row is not None
-        assert new_row["status"] == "running"
         await rt.stop()
 
     asyncio.run(_drive())
 
 
-def test_rename_agent_leaves_rekeyed_index_when_persist_fails(
+def test_rename_agent_rolls_back_index_when_persist_fails(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Current (pre-AgentRuntime) behavior: rekey precedes persist; no rollback."""
+    """Phase 2: AgentRuntime.rename restores identity and indexes on failure."""
     _install_spy_sync(monkeypatch)
     rt = Runtime(_config(), repo_root)
     agent = _RecordingAgent("a-old", role=AgentRole.COLLABORATOR, ticket_id=None)
 
     async def _drive() -> None:
         await rt.start()
-        rt.register_agent(agent)
-        monkeypatch.setattr(
-            rt,
-            "sync_agent",
-            lambda _agent: (_ for _ in ()).throw(RuntimeError("rename persist boom")),
-        )
+        assert rt.agents is not None
+        rt.agents.register(agent)
+        real_record = rt.agents.record
+
+        def _flaky(_agent) -> None:
+            raise RuntimeError("rename persist boom")
+
+        monkeypatch.setattr(rt.agents, "record", _flaky)
         with pytest.raises(RuntimeError, match="rename persist boom"):
-            rt.rename_agent("a-old", "a-new", persist=rt.sync_agent)
-        # Indexes already rekeyed; Phase 2 AgentRuntime.rename must roll this back.
-        assert agent.id == "a-new"
-        assert rt.get_agent("a-new") is agent
-        assert rt.get_agent("a-old") is None
+            rt.agents.rename("a-old", "a-new")
+        assert agent.id == "a-old"
+        assert rt.agents.find("a-old") is agent
+        assert rt.agents.find("a-new") is None
         await rt.stop()
 
     asyncio.run(_drive())
@@ -873,15 +776,15 @@ def test_reap_sets_dead_and_preserves_opposite_ticket_role_index(
     async def _drive() -> None:
         await rt.start()
         assert rt.db is not None
+        assert rt.agents is not None
         _insert_ticket(rt.db, "t1")
-        rt.register_agent(crow)
-        rt.register_agent(handler)
-        await rt.reap("crow-t1")
-        assert rt.get_agent("crow-t1") is None
-        assert rt.get_crow("t1") is None
-        assert rt.get_crow_handler("t1") is handler
+        rt.agents.register(crow)
+        rt.agents.register(handler)
+        await rt.agents.reap("crow-t1")
+        assert rt.agents.find("crow-t1") is None
+        assert rt.agents.find_crow("t1") is None
+        assert rt.agents.find_crow_handler("t1") is handler
         assert handler.stop_calls == []
-        # reap calls agent.stop() with no kwargs → failed=True, kill_session=True.
         assert crow.stop_calls == [{"failed": True, "kill_session": True}]
         row = rt.db.conn.execute(
             "SELECT status FROM agents WHERE agent_id = ?",

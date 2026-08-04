@@ -57,14 +57,16 @@ def _runtime(repo_root: Path) -> Runtime:
 
 
 def _orch(rt: Runtime):
-    from murder.runtime.orchestration.orchestrator import Orchestrator
+    from tests.support.orchestrator import adapt_rt_stub
 
-    return Orchestrator(rt)
+    return adapt_rt_stub(rt)
 
 
 async def _drain(rt: Runtime) -> None:
-    if rt._emit_tasks:
-        await asyncio.gather(*list(rt._emit_tasks))
+    agents = getattr(rt, "agents", None)
+    emit_tasks = getattr(agents, "_emit_tasks", None) if agents is not None else None
+    if emit_tasks:
+        await asyncio.gather(*list(emit_tasks))
 
 
 def _row(rt: Runtime, name: str):

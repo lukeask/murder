@@ -128,7 +128,7 @@ class ServiceBackgroundTasks:
         # freezes live state (and queued-message delivery) for that agent.
         warned_agents: set[str] = set()
         while True:
-            for agent in self.runtime.agents.all_agents():
+            for agent in self.runtime.agents.all() if self.runtime.agents is not None else ():
                 if not isinstance(agent, HarnessBackedAgent):
                     continue
                 try:

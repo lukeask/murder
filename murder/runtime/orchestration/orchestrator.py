@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import logging
 import re
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -13,14 +15,20 @@ _TNUM_RE = re.compile(r"^t(\d+)$")
 
 LOGGER = logging.getLogger(__name__)
 
-from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.config import (
     Config,
 )
+from murder.runtime.agent_runtime import AgentRuntime
+from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEventSink
+from murder.runtime.terminal.session_names import SessionNamePolicy
+from murder.user_config import UserConfig
+from murder.work.plans.sync import PlanSync
+
 from murder.llm.direct import resolve_direct_role_client
 from murder.llm.harnesses import get as get_harness
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.models import HarnessStartSpec
+from murder.runtime.agents.events import AgentEventSink
 from murder.runtime.agents.crow import CrowAgent
 from murder.runtime.agents.crow_handler import CrowHandler
 from murder.runtime.agents.planning_handler import PlanningHandler
@@ -37,7 +45,6 @@ from murder.runtime.orchestration.plan_ops import PlanOps
 from murder.runtime.orchestration.ticket_ops import TicketOps
 from murder.runtime.orchestration.worktree_provisioner import WorktreeProvisioner
 from murder.runtime.terminal import tmux
-from murder.runtime.terminal.session_names import format_session_name
 from murder.state.persistence.agents import (
     get_active_agent_by_role as _db_get_active_agent_by_role,
 )
@@ -117,64 +124,120 @@ class Orchestrator:
     is sequencing, not implementation.
     """
 
-    def __init__(self, rt: OrchestratorHost) -> None:
-        self.rt = rt
+    def __init__(
+        self,
+        *,
+        config: Config,
+        user_config: UserConfig | None,
+        repo_root: Path,
+        db: RepoDb,
+        run_id: str,
+        events: OrchestrationEventSink,
+        commands: CommandSubmitter,
+        event_sink: AgentEventSink,
+        agents: AgentRuntime,
+        session_names: SessionNamePolicy,
+        plan_sync: PlanSync | None = None,
+    ) -> None:
+        self._config = config
+        self._user_config = user_config
+        self._repo_root = repo_root
+        self._db = db
+        self._run_id = run_id
+        self._events = events
+        self._commands = commands
+        self._event_sink = event_sink
+        self.agents = agents
+        self._session_names = session_names
+        self._plan_sync = plan_sync
         self._planner_spawn_locks: dict[str, asyncio.Lock] = {}
         self.completion_coordinator = CompletionCoordinator(
-            rt,
+            self._coordinator_host(),
             CheckRegistry(),
             ensure_planning_agent=self.ensure_planning_agent,
         )
         # Concern services. Cross-concern hooks are injected as late-bound
         # closures over ``self`` so a facade-level monkeypatch (the test
         # convention) is honored at call time rather than frozen at construction.
-        self.tickets = TicketOps(rt, emit_ticket_status=self._emit_ticket_status)
-        self.notes = NoteOps(rt)
-        self.history = HistoryOps(rt)
+        self.tickets = TicketOps(
+            db=db,
+            repo_root=repo_root,
+            agents=agents,
+            events=events,
+            run_id=run_id,
+            emit_ticket_status=self._emit_ticket_status,
+        )
+        self.notes = NoteOps(
+            db=db,
+            repo_root=repo_root,
+            config=config,
+            user_config=user_config,
+        )
+        self.history = HistoryOps(db=db)
         self.plans = PlanOps(
-            rt,
+            db=db,
+            repo_root=repo_root,
+            agents=agents,
+            config=config,
+            user_config=user_config,
+            plan_sync=plan_sync,
+            session_names=session_names,
             send_agent_message=lambda *a, **k: self.send_agent_message(*a, **k),
             planner_spawn_locks=self._planner_spawn_locks,
         )
         self.agent_ops = AgentOps(
-            rt,
+            db=db,
+            agents=agents,
+            events=events,
+            run_id=run_id,
             ensure_planning_agent=lambda *a, **k: self.ensure_planning_agent(*a, **k),
             ensure_collaborator=lambda *a, **k: self.ensure_collaborator(*a, **k),
             reap_ticket_crow_agents=lambda *a, **k: self.tickets._reap_ticket_crow_agents(*a, **k),
             rogue_slug=_rogue_slug,
             agent_is_live=lambda agent: self._agent_is_live(agent),
         )
-        self.harness_cfg = HarnessConfigurator(rt)
-        self.worktrees = WorktreeProvisioner(rt)
-        self.briefs = BriefService(rt)
+        self.harness_cfg = HarnessConfigurator(config=config)
+        self.worktrees = WorktreeProvisioner(repo_root=repo_root, db=db)
+        self.briefs = BriefService(repo_root=repo_root)
+
+    def _coordinator_host(self) -> Any:
+        """Thin adapter for CompletionCoordinator until Phase 5 widens its deps."""
+        return SimpleNamespace(
+            repo_root=self._repo_root,
+            db=self._db,
+            orchestration_events=self._events,
+            run_id=self._run_id,
+            get_crow=self.agents.find_crow,
+            get_agent=self.agents.find,
+        )
 
     def _escalations(self) -> EscalationService:
-        assert self.rt.db is not None
+        assert self._db is not None
         return EscalationService(
-            db=self.rt.db,
-            repo_root=self.rt.repo_root,
-            events=self.rt.orchestration_events,
-            run_id=self.rt.run_id,
+            db=self._db,
+            repo_root=self._repo_root,
+            events=self._events,
+            run_id=self._run_id,
             agent_id="orchestrator",
             role=AgentRole.COLLABORATOR,
         )
 
     def _outcomes(self) -> TicketOutcomeService:
-        assert self.rt.db is not None
+        assert self._db is not None
         return TicketOutcomeService(
-            db=self.rt.db,
-            repo_root=self.rt.repo_root,
+            db=self._db,
+            repo_root=self._repo_root,
             escalations=self._escalations(),
             emit_status=self._emit_ticket_status,
         )
 
     async def kickoff_ready(self, only: str | None = None) -> list[str]:
         assert (
-            self.rt.db is not None
-            and self.rt.orchestration_events is not None
-            and self.rt.run_id is not None
+            self._db is not None
+            and self._events is not None
+            and self._run_id is not None
         )
-        conn = self.rt.db
+        conn = self._db
         ready = _db_compute_ready(conn)
         if only is not None:
             if only not in ready:
@@ -203,22 +266,22 @@ class Orchestrator:
                 await self.spawn_crow(tid)
             except Exception as e:
                 reason = f"Failed to start crow for {tid}: {e}"
-                crow = self.rt.get_crow(tid)
+                crow = self.agents.find_crow(tid)
                 if crow is not None:
                     crow.status = AgentStatus.FAILED
-                    self.rt.sync_agent(crow)
+                    self.agents.record(crow)
                 else:
                     _db_upsert_agent(
                         conn,
                         agent_id=f"crow-{tid}",
                         role=AgentRole.CROW.value,
                         ticket_id=tid,
-                        session=format_session_name(self.rt, "crow", f"_{tid}"),
+                        session=self._session_names.format("crow", f"_{tid}"),
                         status=AgentStatus.FAILED.value,
                     )
                 await self._fail_ticket(tid, reason)
                 continue
-            crow = self.rt.get_crow(tid)
+            crow = self.agents.find_crow(tid)
             assert crow is not None
             await self.spawn_crow_handler(tid, crow.session)
             from murder.state.persistence.tickets import get_ticket_status
@@ -251,12 +314,12 @@ class Orchestrator:
     async def _emit_ticket_status(
         self, ticket_id: str, from_status: str | TicketStatus, to_status: str
     ) -> None:
-        if self.rt.orchestration_events is None or self.rt.run_id is None:
+        if self._events is None or self._run_id is None:
             return
         from_s = from_status.value if isinstance(from_status, TicketStatus) else from_status
-        await self.rt.orchestration_events.publish(
+        await self._events.publish(
             StatusChangeEvent(
-                run_id=self.rt.run_id,
+                run_id=self._run_id,
                 agent_id="orchestrator",
                 role=AgentRole.COLLABORATOR,
                 ticket_id=ticket_id,
@@ -271,7 +334,7 @@ class Orchestrator:
         await self._outcomes().fail_ticket(ticket_id, reason)
 
     async def spawn_crow(self, ticket_id: str) -> str:
-        row = _db_get_ticket(self.rt.db, ticket_id)
+        row = _db_get_ticket(self._db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
         ch = self.harness_cfg.resolve_crow(row)
@@ -286,7 +349,7 @@ class Orchestrator:
             startup_prompt=brief,
             additional_workspace_dirs=wt.additional_workspace_dirs,
         )
-        handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
+        handle = await spawn_agent(spec, repo_root=self._repo_root, session_names=self._session_names, agents=self.agents, event_sink=self._event_sink)
         return handle.session_name
 
     async def reattach_crow(self, ticket_id: str, crow_session: str) -> None:
@@ -298,7 +361,7 @@ class Orchestrator:
         no prompt) and spawn a fresh handler. Transcript projection restarts from
         the current scrollback.
         """
-        row = _db_get_ticket(self.rt.db, ticket_id)
+        row = _db_get_ticket(self._db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
         # Double-claim guard: reattach (recovery task) and kickoff_ready both run
@@ -308,10 +371,10 @@ class Orchestrator:
         # Bail idempotently. The existing handler owns DONE.
         from murder.state.persistence.tickets import get_ticket_status as _get_ticket_status
 
-        if self.rt.get_crow_handler(ticket_id) is not None:
+        if self.agents.find_crow_handler(ticket_id) is not None:
             LOGGER.info("reattach_crow: handler for %s already live — skipping reattach", ticket_id)
             return
-        if _get_ticket_status(self.rt.db, ticket_id) != TicketStatus.IN_PROGRESS.value:
+        if _get_ticket_status(self._db, ticket_id) != TicketStatus.IN_PROGRESS.value:
             LOGGER.info(
                 "reattach_crow: ticket %s no longer in_progress — skipping reattach", ticket_id
             )
@@ -330,30 +393,33 @@ class Orchestrator:
             startup_model=ch.startup_model,
             startup_effort=ch.startup_effort,
             worktree_path=wt.worktree_path,
-            runtime=self.rt,
+            runtime=self.agents,
         )
-        self.rt.register_agent(agent)
-        agent.status = AgentStatus.RUNNING
-        self.rt.sync_agent(agent)
+        self.agents.register(agent)
+        await self.agents.transition(
+            agent,
+            from_status=AgentStatus.IDLE,
+            to_status=AgentStatus.RUNNING,
+        )
         # Fresh producer state. Reattach resumes transcript projection from the
         # current pane scrollback rather than the original startup state.
         agent.start_conversation()
         await self.spawn_crow_handler(ticket_id, crow_session)
 
     async def spawn_crow_handler(self, ticket_id: str, crow_session: str) -> str:
-        row = _db_get_ticket(self.rt.db, ticket_id)
+        row = _db_get_ticket(self._db, ticket_id)
         if row is None:
             raise KeyError(ticket_id)
         ch = self.harness_cfg.resolve_crow(row)
         harness = self.harness_cfg.adapter(ch)
-        session = format_session_name(self.rt, "crow_handler", f"_{ticket_id}")
+        session = self._session_names.format("crow_handler", f"_{ticket_id}")
         client, crow_handler_cfg = resolve_direct_role_client(
-            self.rt.config.crow_handler,
-            self.rt.user_cfg,
+            self._config.crow_handler,
+            self._user_config,
             "crow_classification",
             "crow_handler",
         )
-        crow_agent = self.rt.get_crow(ticket_id)
+        crow_agent = self.agents.find_crow(ticket_id)
         worktree_path = getattr(crow_agent, "worktree_path", None) if crow_agent else None
         handler = CrowHandler(
             agent_id=f"crow_handler-{ticket_id}",
@@ -362,23 +428,23 @@ class Orchestrator:
             crow_session=crow_session,
             harness=harness,
             config=crow_handler_cfg,
-            repo_root=self.rt.repo_root,
+            repo_root=self._repo_root,
             workspace_root=worktree_path,
-            runtime=self.rt,
+            runtime=self.agents,
             outcome=self._outcomes(),
             coordinator=self.completion_coordinator,
             client=client,
         )
-        self.rt.register_agent(handler)
+        self.agents.register(handler)
         await handler.start("", {})
         return handler.id
 
     async def spawn_planning_handler(self, plan_name: str, planner_session: str) -> str:
         """Spawn a PlanningHandler coroutine for the given planner session."""
         handler_id = f"planning_handler-{plan_name}"
-        cfg = self.rt.config.planner
+        cfg = self._config.planner
         harness = get_harness(cfg.harness, startup_model=cfg.startup_model)
-        log_session = format_session_name(self.rt, "planning_handler", f"_{plan_name}")
+        log_session = self._session_names.format("planning_handler", f"_{plan_name}")
         handler = PlanningHandler(
             agent_id=handler_id,
             session=log_session,
@@ -386,10 +452,10 @@ class Orchestrator:
             plan_name=plan_name,
             harness=harness,
             config=cfg,
-            repo_root=self.rt.repo_root,
-            runtime=self.rt,
+            repo_root=self._repo_root,
+            runtime=self.agents,
         )
-        self.rt.register_agent(handler)
+        self.agents.register(handler)
         await handler.start("", {})
         return handler_id
 
@@ -418,10 +484,10 @@ class Orchestrator:
         slug = _rogue_slug(name)
         prefix = _harness_prefix(harness_kind)
         agent_id = f"{prefix}-rogue-{slug}"
-        while self.rt.get_agent(agent_id) is not None:
+        while self.agents.find(agent_id) is not None:
             agent_id = f"{prefix}-rogue-{uuid4().hex[:8]}"
 
-        session_name = format_session_name(self.rt, "crow", f"_{prefix}_rogue_{slug}")
+        session_name = self._session_names.format("crow", f"_{prefix}_rogue_{slug}")
         startup_model = model.strip() or None
         startup_effort = effort.strip() if isinstance(effort, str) and effort.strip() else None
         harness_adapter = get_harness(
@@ -443,10 +509,10 @@ class Orchestrator:
             startup_model=startup_model,
             startup_effort=startup_effort,
             worktree_path=resolved_worktree,
-            runtime=self.rt,
+            runtime=self.agents,
         )
 
-        self.rt.register_agent(agent)
+        self.agents.register(agent)
         start_spec = HarnessStartSpec(
             cwd=cwd,
             startup_model=startup_model,
@@ -466,14 +532,17 @@ class Orchestrator:
             model_result = await agent.select_verified_model(startup_model, startup_effort)
             if not model_result.ok:
                 raise RuntimeError(model_result.message or "verified rogue model selection failed")
-            agent.status = AgentStatus.RUNNING
-            self.rt.sync_agent(agent)
+            await self.agents.transition(
+                agent,
+                from_status=AgentStatus.IDLE,
+                to_status=AgentStatus.RUNNING,
+            )
             # Rogues bypass CrowAgent.start(), so kick off transcript projection
             # here: a fresh session gets fresh producer-owned parser state.
             agent.start_conversation()
-            # ``sync_agent`` above committed the roster input with this state.
+            # Transition above committed the roster input with this state.
         except BaseException:
-            await self.rt.reap(agent_id)
+            await self.agents.reap(agent_id)
             raise
         return agent_id
 
@@ -522,7 +591,7 @@ class Orchestrator:
         cid = conversation_id.strip()
         if not cid:
             return {"ok": False, "error": "resume requires conversation_id"}
-        db = self.rt.db
+        db = self._db
         if db is None:
             return {"ok": False, "error": "resume unavailable: no database"}
         row = db.conn.execute(
@@ -546,7 +615,7 @@ class Orchestrator:
             return {"ok": False, "error": reason}
         # A live crow for this conversation means resume would fork a second copy
         # of the same session. Bail with a friendly message instead.
-        existing = self.rt.get_agent(cid)
+        existing = self.agents.find(cid)
         if existing is not None and await self._agent_is_live(existing):
             return {"ok": False, "error": "a session is already running for this conversation"}
         agent_id = await self.spawn_rogue(
@@ -564,12 +633,12 @@ class Orchestrator:
         crow_session: str,
     ) -> None:
         """Route a crow ASK to the per-plan PlanningHandler, or escalate to user."""
-        if ticket_id and self.rt.db is not None:
-            plan_name = _get_plan_for_ticket(self.rt.db, ticket_id)
+        if ticket_id and self._db is not None:
+            plan_name = _get_plan_for_ticket(self._db, ticket_id)
             if plan_name:
                 try:
                     await self.ensure_planning_agent(plan_name)
-                    handler = self.rt.get_agent(f"planning_handler-{plan_name}")
+                    handler = self.agents.find(f"planning_handler-{plan_name}")
                     if isinstance(handler, PlanningHandler):
                         await handler.relay_ask(ticket_id, ask, crow_session)
                         return
@@ -588,20 +657,20 @@ class Orchestrator:
     ) -> str:
         """Return the agent_id of a live planning agent for plan_name,
         spawning the agent + its handler if needed."""
-        assert self.rt.db is not None
+        assert self._db is not None
         agent_id = f"planner-{plan_name}"
         # setdefault keeps the get-or-create atomic. Never insert an await
         # between resolving the lock and acquiring it, or two coroutines could
         # each create a distinct Lock and defeat the mutual exclusion.
         lock = self._planner_spawn_locks.setdefault(plan_name, asyncio.Lock())
         async with lock:
-            agent = self.rt.get_agent(agent_id)
+            agent = self.agents.find(agent_id)
             if agent is not None and await self._agent_is_live(agent):
-                handler = self.rt.get_agent(f"planning_handler-{plan_name}")
+                handler = self.agents.find(f"planning_handler-{plan_name}")
                 if not isinstance(handler, PlanningHandler):
                     await self.spawn_planning_handler(plan_name, agent.session)
                 return agent_id
-            cfg = self.rt.config.planner
+            cfg = self._config.planner
             resolved_harness = (harness or cfg.harness).strip()
             resolved_model = cfg.startup_model if model is None else (model.strip() or None)
             resolved_effort = (
@@ -622,7 +691,7 @@ class Orchestrator:
                 effort=resolved_effort,
                 startup_prompt=startup_prompt,
             )
-            handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
+            handle = await spawn_agent(spec, repo_root=self._repo_root, session_names=self._session_names, agents=self.agents, event_sink=self._event_sink)
             # TODO: resumability — if a prior planner session exists with prior
             # transcript, future work will summarize via compact-style summary
             # and seed the new session. For now we always spawn fresh.
@@ -801,44 +870,44 @@ class Orchestrator:
             return None
         harness_kind = (sr.harness or "claude_code").strip()
         agent_id = f"{_harness_prefix(harness_kind)}-rogue-startup"
-        agent = self.rt.get_agent(agent_id)
+        agent = self.agents.find(agent_id)
         if agent is not None:
             if await agent.is_live():
                 return agent_id
-            await self.rt.reap(agent_id)
+            await self.agents.reap(agent_id)
         else:
             # Persisted in the DB by a prior daemon but absent from this process's
             # registry (service restart): kill any orphaned tmux session so the
             # upcoming create_session doesn't raise "already exists", then mark dead.
-            row = self.rt.db.conn.execute(
-                "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self.rt.db.repository_id, agent_id)
+            row = self._db.conn.execute(
+                "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self._db.repository_id, agent_id)
             ).fetchone()
             if row and row["session"] and await tmux.session_exists(row["session"]):
                 with contextlib.suppress(Exception):
                     await tmux.kill_session(row["session"])
-                _db_set_agent_status(self.rt.db, agent_id, "dead")
+                _db_set_agent_status(self._db, agent_id, "dead")
         return await self.spawn_rogue(harness_kind, sr.model or "", sr.effort, name="startup")
 
     async def ensure_collaborator(self) -> str:
-        agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
+        agent_id = _db_get_active_agent_by_role(self._db, "collaborator")
         if agent_id:
-            agent = self.rt.get_agent(agent_id)
+            agent = self.agents.find(agent_id)
             if agent is not None:
                 if await agent.is_live():
                     return agent_id
-                await self.rt.reap(agent_id)
+                await self.agents.reap(agent_id)
             else:
                 # Agent in DB but not in registry (e.g. service restart with
                 # keep-sessions-alive). Kill the orphaned tmux session so the
                 # upcoming create_session call doesn't raise "already exists".
-                row = self.rt.db.conn.execute(
-                    "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self.rt.db.repository_id, agent_id)
+                row = self._db.conn.execute(
+                    "SELECT session FROM agents WHERE repository_id = ? AND agent_id = ?", (self._db.repository_id, agent_id)
                 ).fetchone()
                 if row and row["session"] and await tmux.session_exists(row["session"]):
                     with contextlib.suppress(Exception):
                         await tmux.kill_session(row["session"])
-                _db_set_agent_status(self.rt.db, agent_id, "dead")
-        collab_cfg = self.rt.config.collaborator
+                _db_set_agent_status(self._db, agent_id, "dead")
+        collab_cfg = self._config.collaborator
         body = self.briefs.build(role=AgentRole.COLLABORATOR, harness_name=collab_cfg.harness)
         spec = AgentSpec(
             role=AgentRole.COLLABORATOR,
@@ -849,7 +918,7 @@ class Orchestrator:
             startup_prompt=body,
         )
         try:
-            handle = await spawn_agent(spec, rt=self.rt, event_sink=self.rt.event_sink)
+            handle = await spawn_agent(spec, repo_root=self._repo_root, session_names=self._session_names, agents=self.agents, event_sink=self._event_sink)
         except Exception as e:
             reason = f"Collaborator startup failed: {e}"
             await self._escalations().record_collaborator_startup_failure(reason)
@@ -860,28 +929,29 @@ class Orchestrator:
         """Reload project config and restart the collaborator if its live harness changed."""
         from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
 
-        new_config = Config.load(self.rt.repo_root)
-        self.rt.config = new_config
+        new_config = Config.load(self._repo_root)
+        self._config = new_config
+        self._session_names = SessionNamePolicy.from_config(new_config)
         current_harness = new_config.collaborator.harness
-        write_harnesses_doc(self.rt.repo_root)
+        write_harnesses_doc(self._repo_root)
         # Best-effort re-scrape: newly-enabled harnesses get discovered and
         # persisted. Failures are swallowed inside refresh_and_persist.
         try:
-            await refresh_and_persist_harness_models(self.rt.repo_root, self.rt.db)
+            await refresh_and_persist_harness_models(self._repo_root, self._db)
         except Exception:  # noqa: BLE001
             LOGGER.debug("model re-scrape after reconfigure_collaborator failed", exc_info=True)
 
         restarted = False
-        agent_id = _db_get_active_agent_by_role(self.rt.db, "collaborator")
+        agent_id = _db_get_active_agent_by_role(self._db, "collaborator")
         live_harness: str | None = None
         if agent_id:
-            agent = self.rt.get_agent(agent_id)
+            agent = self.agents.find(agent_id)
             if agent is not None:
                 live_harness = str(getattr(getattr(agent, "harness", None), "kind", "") or "")
             else:
-                row = self.rt.db.conn.execute(
+                row = self._db.conn.execute(
                     "SELECT harness FROM agents WHERE repository_id = ? AND agent_id = ?",
-                    (self.rt.db.repository_id, agent_id),
+                    (self._db.repository_id, agent_id),
                 ).fetchone()
                 live_harness = str(row["harness"]) if row and row["harness"] else None
         if live_harness == current_harness:
@@ -892,10 +962,10 @@ class Orchestrator:
             }
 
         if agent_id:
-            agent = self.rt.get_agent(agent_id)
+            agent = self.agents.find(agent_id)
             if agent is not None:
                 await agent.stop(failed=False, kill_session=True)
-            await self.rt.reap(agent_id)
+            await self.agents.reap(agent_id)
             try:
                 await self.ensure_collaborator()
             except Exception as e:

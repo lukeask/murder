@@ -40,7 +40,7 @@ async def test_handlers_share_the_persisted_agent_frame_without_capturing(
         db=MagicMock(),
         orchestration_events=MagicMock(),
         run_id="run",
-        get_crow=lambda _ticket: source,
+        find_crow=lambda _ticket: source,
     )
     crow.ticket_id = "T-1"
     crow.harness = crow_harness
@@ -55,7 +55,7 @@ async def test_handlers_share_the_persisted_agent_frame_without_capturing(
     planning_harness = MagicMock()
     planning_harness.detect_answers.return_value = []
     planning = PlanningHandler.__new__(PlanningHandler)
-    planning.runtime = SimpleNamespace(get_agent=lambda _agent_id: source)
+    planning.runtime = SimpleNamespace(find=lambda _agent_id: source)
     planning.plan_name = "p"
     planning.harness = planning_harness
     planning._scan_carve_forms = AsyncMock()

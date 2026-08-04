@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
     Correlation,
@@ -232,7 +233,7 @@ def test_orchestrator_reattach_binds_live_session_without_prompt(fake_tmux, tmp_
     # sees no live handler and the ticket is still in_progress — reattach proceeds.
     rt.get_crow_handler = MagicMock(return_value=None)
 
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
     # Spy on handler spawn so we don't drive the real handler coroutine.
     orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t100")
 
@@ -270,7 +271,7 @@ def test_reattach_skips_when_handler_already_live(fake_tmux, tmp_path):
     rt.get_crow = MagicMock(return_value=None)
     rt.get_crow_handler = MagicMock(return_value=object())  # handler already live
 
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
     orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t200")
 
     asyncio.run(orch.reattach_crow("t200", "crow-t200"))
@@ -300,7 +301,7 @@ def test_reattach_skips_when_ticket_not_in_progress(fake_tmux, tmp_path):
     rt.get_crow = MagicMock(return_value=None)
     rt.get_crow_handler = MagicMock(return_value=None)
 
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
     orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t201")
 
     asyncio.run(orch.reattach_crow("t201", "crow-t201"))

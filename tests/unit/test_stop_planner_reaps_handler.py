@@ -9,38 +9,28 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from unittest.mock import MagicMock
 
-from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
 from murder.runtime.orchestration.agent_ops import AgentOps
 from murder.state.persistence.agents import get_agent_status
 from murder.state.persistence.connection import RepoDb
 
 
-def _config() -> Config:
-    return Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
-    )
+class _Agents:
+    """Minimal AgentRuntime stand-in for stop_agent companion-reap tests."""
 
-
-class _Runtime:
-    def __init__(self, db: RepoDb, registered: dict) -> None:
-        self.db = db
-        self.config = _config()
-        self.repo_root = Path("/tmp")
+    def __init__(self, registered: dict) -> None:
         self._registered = registered
         self.reaped: list[str] = []
 
-    def get_agent(self, agent_id: str):
+    def find(self, agent_id: str):
         return self._registered.get(agent_id)
 
     async def reap(self, agent_id: str) -> None:
         self.reaped.append(agent_id)
 
 
-def _ops(rt) -> AgentOps:
+def _ops(db: RepoDb, agents: _Agents) -> AgentOps:
     async def _noop_ensure(_plan):  # ensure_planning_agent
         return ""
 
@@ -51,7 +41,10 @@ def _ops(rt) -> AgentOps:
         return None
 
     return AgentOps(
-        rt,
+        db=db,
+        agents=agents,
+        events=MagicMock(),
+        run_id="test-run",
         ensure_planning_agent=_noop_ensure,
         ensure_collaborator=_noop_collab,
         reap_ticket_crow_agents=_noop_reap_crow,
@@ -72,15 +65,15 @@ def test_stop_planner_reaps_registered_handler():
         "planner-planX": object(),
         "planning_handler-planX": object(),
     }
-    rt = _Runtime(db, registered)
-    ops = _ops(rt)
+    agents = _Agents(registered)
+    ops = _ops(db, agents)
 
     result = asyncio.run(ops.stop_agent("planner-planX"))
 
     assert result["handled"] is True
     # Both the planner and its handler were reaped.
-    assert "planner-planX" in rt.reaped
-    assert "planning_handler-planX" in rt.reaped
+    assert "planner-planX" in agents.reaped
+    assert "planning_handler-planX" in agents.reaped
 
 
 def test_stop_planner_marks_unregistered_handler_dead():
@@ -92,23 +85,23 @@ def test_stop_planner_marks_unregistered_handler_dead():
         (db.repository_id,),
     )
     registered = {"planner-planX": object()}  # handler NOT registered
-    rt = _Runtime(db, registered)
-    ops = _ops(rt)
+    agents = _Agents(registered)
+    ops = _ops(db, agents)
 
     asyncio.run(ops.stop_agent("planner-planX"))
 
     # The planner was reaped; the orphan DB handler row was marked dead.
-    assert "planner-planX" in rt.reaped
+    assert "planner-planX" in agents.reaped
     assert get_agent_status(db, "planning_handler-planX") == "dead"
 
 
 def test_stop_planner_with_no_handler_is_noop_for_companion():
     db = _db()
     registered = {"planner-planX": object()}
-    rt = _Runtime(db, registered)
-    ops = _ops(rt)
+    agents = _Agents(registered)
+    ops = _ops(db, agents)
 
     # No handler anywhere — must not raise.
     result = asyncio.run(ops.stop_agent("planner-planX"))
     assert result["handled"] is True
-    assert rt.reaped == ["planner-planX"]
+    assert agents.reaped == ["planner-planX"]

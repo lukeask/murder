@@ -8,14 +8,13 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.llm.harness_control.runtime.manual_input import emit_fenced_manual_input
+from murder.runtime.agent_runtime import AgentRuntime
 from murder.runtime.agents.types import AgentRole, AgentStatus
+from murder.runtime.orchestration.ports import OrchestrationEventSink
+from murder.state.persistence.connection import RepoDb
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id
 from murder.runtime.terminal import tmux
-from murder.state.persistence.agents import (
-    rename_agent as _db_rename_agent,
-)
 from murder.state.persistence.agents import (
     set_agent_status as _db_set_agent_status,
 )
@@ -42,19 +41,25 @@ def _crow_handler_companion(agent_id: str) -> str:
 
 
 class AgentOps:
-    """Agent messaging, keys, transcripts, stop/interrupt/rename over a host."""
+    """Agent messaging, keys, transcripts, stop/interrupt/rename."""
 
     def __init__(
         self,
-        rt: OrchestratorHost,
         *,
+        db: RepoDb,
+        agents: AgentRuntime,
+        events: OrchestrationEventSink,
+        run_id: str,
         ensure_planning_agent: EnsurePlanningAgent,
         ensure_collaborator: EnsureCollaborator,
         reap_ticket_crow_agents: ReapTicketCrowAgents,
         rogue_slug: RogueSlug,
         agent_is_live: Callable[[Any], Awaitable[bool]] | None = None,
     ) -> None:
-        self.rt = rt
+        self._db = db
+        self.agents = agents
+        self._events = events
+        self._run_id = run_id
         self._ensure_planning_agent = ensure_planning_agent
         self._ensure_collaborator = ensure_collaborator
         self._reap_ticket_crow_agents = reap_ticket_crow_agents
@@ -92,7 +97,7 @@ class AgentOps:
         ``client_message_id`` is forwarded into the user segment payload when
         the client supplied one for optimistic-turn reconciliation.
         """
-        db = getattr(self.rt, "db", None)
+        db = self._db
         if db is None:
             return
         from murder.runtime.orchestration.events import ConversationBlockEvent
@@ -101,11 +106,11 @@ class AgentOps:
         block = conversation.append_user_message(
             db, agent_id, text, client_message_id=client_message_id
         )
-        events = self.rt.orchestration_events
-        run_id = getattr(self.rt, "run_id", None)
+        events = self._events
+        run_id = self._run_id
         if block is None or events is None or run_id is None:
             return
-        agent = self.rt.get_agent(agent_id)
+        agent = self.agents.find(agent_id)
         await events.publish(
             ConversationBlockEvent(
                 run_id=str(run_id),
@@ -141,7 +146,7 @@ class AgentOps:
         """
         del ticket_id
 
-        agent = self.rt.get_agent(agent_id)
+        agent = self.agents.find(agent_id)
         if agent_id.startswith("planner-"):
             plan_name = agent_id[len("planner-") :]
             if not plan_name:
@@ -155,7 +160,7 @@ class AgentOps:
                     )
                     return {"ok": False, "error": "agent-not-live"}
                 await self._ensure_planning_agent(plan_name)
-                agent = self.rt.get_agent(agent_id)
+                agent = self.agents.find(agent_id)
         is_crow_target = agent_id.startswith("crow-") or is_rogue_agent_id(agent_id)
         if is_crow_target and agent is not None and hasattr(agent, "queue_message"):
             # Deliver-only-when-idle for every crow (ticketed AND rogue): the
@@ -173,7 +178,7 @@ class AgentOps:
                 status_value = getattr(agent.status, "value", agent.status)
                 producer = getattr(agent, "_producer", None)
                 if status_value == "idle" and producer is None:
-                    db = getattr(self.rt, "db", None)
+                    db = self._db
                     if db is not None and getattr(agent, "_queued_message", None) is None:
                         from murder.state.persistence import conversation  # noqa: PLC0415
 
@@ -226,14 +231,14 @@ class AgentOps:
         if agent_id is None:
             agent_id = await self._ensure_collaborator()
 
-        agent = self.rt.get_agent(agent_id)
+        agent = self.agents.find(agent_id)
         if agent_id.startswith("planner-"):
             plan_name = agent_id[len("planner-") :]
             if not plan_name:
                 return {"ok": False, "error": "planner agent_id requires a plan name"}
             if agent is None or not await self._agent_is_live_hook(agent):
                 await self._ensure_planning_agent(plan_name)
-                agent = self.rt.get_agent(agent_id)
+                agent = self.agents.find(agent_id)
         if agent is None:
             return {"ok": False, "error": f"no agent named {agent_id}"}
 
@@ -300,12 +305,12 @@ class AgentOps:
         ``available=False`` with an empty doc when the agent or its parser is
         absent (the TUI falls back to the raw pane mirror).
         """
-        agent = self.rt.get_agent(agent_id)
+        agent = self.agents.find(agent_id)
         if agent_id.startswith("planner-"):
             plan_name = agent_id[len("planner-") :]
             if plan_name and (agent is None or not await self._agent_is_live_hook(agent)):
                 await self._ensure_planning_agent(plan_name)
-                agent = self.rt.get_agent(agent_id)
+                agent = self.agents.find(agent_id)
         if agent is None or not hasattr(agent, "refresh_transcript_doc"):
             return {"handled": True, "available": False, "doc": None}
         doc = await agent.refresh_transcript_doc()
@@ -320,7 +325,7 @@ class AgentOps:
 
     async def stop_agent(self, agent_id: str) -> dict[str, Any]:
         """Stop a live agent and tear down its tmux session."""
-        if self.rt.get_agent(agent_id) is None:
+        if self.agents.find(agent_id) is None:
             # Not in the in-memory registry. The roster derives "running" from
             # the agents table, so a crow spawned in a prior service run shows
             # up as killable even though its handle was never re-registered
@@ -339,10 +344,10 @@ class AgentOps:
             # ("planner missed in poll" red toasts). Reap the planner first so
             # the handler's own planner-gone check would also self-terminate. The
             # explicit reap here makes teardown immediate and deterministic.
-            await self.rt.reap(agent_id)
+            await self.agents.reap(agent_id)
             await self._reap_planner_handler(agent_id[len("planner-") :])
             return {"handled": True, "agent_id": agent_id}
-        await self.rt.reap(agent_id)
+        await self.agents.reap(agent_id)
         return {"handled": True, "agent_id": agent_id}
 
     async def _reap_planner_handler(self, plan_name: str) -> None:
@@ -355,13 +360,13 @@ class AgentOps:
         if not plan_name:
             return
         handler_id = f"planning_handler-{plan_name}"
-        if self.rt.get_agent(handler_id) is not None:
+        if self.agents.find(handler_id) is not None:
             with contextlib.suppress(Exception):
-                await self.rt.reap(handler_id)
+                await self.agents.reap(handler_id)
             return
         # Not in the in-memory registry (e.g. a prior service run). Tear down its
         # log-tail session and mark it dead so the roster stops showing it.
-        db = self.rt.db
+        db = self._db
         if db is None:
             return
         row = db.conn.execute(
@@ -379,7 +384,7 @@ class AgentOps:
 
     async def _force_stop_unregistered_agent(self, agent_id: str) -> dict[str, Any]:
         """Kill the tmux session and mark dead an agent the runtime forgot."""
-        db = self.rt.db
+        db = self._db
         if db is None:
             return {"ok": False, "error": f"no agent named {agent_id}"}
         rows = db.conn.execute(
@@ -401,7 +406,7 @@ class AgentOps:
             # Forensic gap the v1 left open: a force-stop of an agent the runtime
             # forgot left no trace. Ride the one bus aspect into agent_records
             # (no-op when the recorder is off / no bus).
-            emit = getattr(self.rt, "_emit_agent_lifecycle", None)
+            emit = getattr(self.agents, "emit_lifecycle", None)
             if emit is not None:
                 emit(
                     op="force_stop",
@@ -414,7 +419,7 @@ class AgentOps:
         """Rename a live rogue crow without restarting its harness."""
         if not is_rogue_agent_id(agent_id):
             return {"ok": False, "error": "rename is only supported for rogue crows"}
-        agent = self.rt.get_agent(agent_id)
+        agent = self.agents.find(agent_id)
         if agent is None:
             return {"ok": False, "error": f"no agent named {agent_id}"}
         match = re.match(r"^(.+)-rogue-(.+)$", agent_id)
@@ -425,29 +430,14 @@ class AgentOps:
         new_agent_id = f"{prefix}-rogue-{slug}"
         if new_agent_id == agent_id:
             return {"handled": True, "agent_id": agent_id}
-        if self.rt.get_agent(new_agent_id) is not None:
+        if self.agents.find(new_agent_id) is not None:
             return {"ok": False, "error": f"agent already exists: {new_agent_id}"}
 
-        renamed = self.rt.rename_agent(
-            agent_id,
-            new_agent_id,
-            persist=self.rt.sync_agent,
-        )
-        if renamed is None:
-            return {"ok": False, "error": f"failed to rename {agent_id}"}
+        renamed = self.agents.rename(agent_id, new_agent_id)
         # The durable session and its transport reference keep their identity
         # across a display/agent rename. Renaming the live tmux resource here
         # would be a sixth, un-fenced controller mutation and would also break
         # clients attached by persisted session UUID.
-        if self.rt.db is not None:
-            with self.rt.db:
-                _db_rename_agent(
-                    self.rt.db,
-                    agent_id,
-                    new_agent_id,
-                    session=getattr(renamed, "session", None),
-                )
-            self.rt.sync_agent(renamed)
         return {
             "handled": True,
             "old_agent_id": agent_id,
@@ -456,7 +446,7 @@ class AgentOps:
 
     async def interrupt_agent(self, agent_id: str) -> dict[str, Any]:
         if is_rogue_agent_id(agent_id):
-            agent = self.rt.get_agent(agent_id)
+            agent = self.agents.find(agent_id)
             if agent is None:
                 return {"ok": False, "error": f"no agent named {agent_id}"}
             interrupt = getattr(agent, "interrupt_verified_generation", None)
@@ -470,7 +460,7 @@ class AgentOps:
         ticket_id = agent_id[len("crow-") :]
         if not ticket_id:
             return {"ok": False, "error": "crow agent_id requires a ticket id"}
-        handler = self.rt.get_crow_handler(ticket_id)
+        handler = self.agents.find_crow_handler(ticket_id)
         if handler is None:
             return {"ok": False, "error": f"no crow_handler for {ticket_id}"}
         await handler.interrupt_crow()

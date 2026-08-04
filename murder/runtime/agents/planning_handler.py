@@ -20,7 +20,7 @@ from murder.llm.harnesses.base import HarnessAdapter
 from murder.runtime.agents.base import AgentRole, AgentStatus, Daemon
 
 if TYPE_CHECKING:
-    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.agent_runtime import AgentRuntime
 
 LOGGER = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class PlanningHandler(Daemon):
         config: PlannerConfig,
         *,
         repo_root: Path,
-        runtime: Runtime,
+        runtime: AgentRuntime,
     ) -> None:
         self.id = agent_id
         self.session = session
@@ -100,21 +100,11 @@ class PlanningHandler(Daemon):
             self.repo_root,
             ["tail", "-f", str(self._log_path)],
         )
-        self.status = AgentStatus.RUNNING
-        self.runtime.sync_agent(self)
-        if self.runtime.orchestration_events and self.runtime.run_id:
-            await self.runtime.orchestration_events.publish(
-                StatusChangeEvent(
-                    run_id=self.runtime.run_id,
-                    agent_id=self.id,
-                    role=self.role,
-                    ticket_id=None,
-                    entity="agent",
-                    entity_id=self.id,
-                    from_status=AgentStatus.IDLE.value,
-                    to_status=AgentStatus.RUNNING.value,
-                )
-            )
+        await self.runtime.transition(
+            self,
+            from_status=AgentStatus.IDLE,
+            to_status=AgentStatus.RUNNING,
+        )
 
         self._start_loop()
 
@@ -237,7 +227,7 @@ class PlanningHandler(Daemon):
                 f"Please wrap your reply as `>>> ANSWER[{ticket_id}]: <reply>` "
                 "so the system can extract it."
             )
-        get_agent = getattr(self.runtime, "get_agent", None)
+        get_agent = getattr(self.runtime, "find", None) or getattr(self.runtime, "get_agent", None)
         planner = get_agent(f"planner-{self.plan_name}") if callable(get_agent) else None
         if planner is None:
             raise RuntimeError(f"no live planner for plan {self.plan_name}")
@@ -301,7 +291,7 @@ class PlanningHandler(Daemon):
         return True
 
     async def tick(self) -> None:
-        get_agent = getattr(self.runtime, "get_agent", None)
+        get_agent = getattr(self.runtime, "find", None) or getattr(self.runtime, "get_agent", None)
         planner = get_agent(f"planner-{self.plan_name}") if callable(get_agent) else None
         ingested = getattr(planner, "latest_ingested_frame", None) if planner is not None else None
         pane = getattr(getattr(ingested, "frame", None), "raw_text", None)
@@ -318,7 +308,7 @@ class PlanningHandler(Daemon):
             if entry is None:
                 # Stale answer from before restart, or a planner mis-tag.
                 continue
-            crow = self.runtime.get_crow(ticket_id)
+            crow = self.runtime.find_crow(ticket_id)
             if crow is not None:
                 with contextlib.suppress(Exception):
                     await crow.send(reply)

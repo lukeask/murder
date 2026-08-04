@@ -17,7 +17,7 @@ class _FakeRuntime:
     def __init__(self) -> None:
         self.sync_calls: list[str] = []
 
-    def sync_agent(self, agent: object) -> None:  # noqa: ANN401
+    def record(self, agent: object) -> None:  # noqa: ANN401
         self.sync_calls.append(getattr(agent, "status").value)
 
 

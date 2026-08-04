@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.runtime.workers.orchestrator_worker import _HANDLERS
 from murder.state.persistence import conversation
 from murder.state.persistence.connection import RepoDb
@@ -54,7 +55,7 @@ def _orchestrator(conn: RepoDb) -> tuple[Orchestrator, MagicMock, list[dict[str,
     rt = MagicMock()
     rt.db = conn
     rt.get_agent = MagicMock(return_value=None)
-    orch = Orchestrator(rt)
+    orch = adapt_rt_stub(rt)
 
     spawned: list[dict[str, Any]] = []
 

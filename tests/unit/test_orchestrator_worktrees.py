@@ -12,6 +12,7 @@ from murder.config import (
 )
 from murder.runtime.agents.base import AgentRole
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from tests.support.orchestrator import adapt_rt_stub
 from murder.state.persistence.agents import upsert_agent
 from murder.state.storage.worktrees import WorktreeRef
 from tests.support.database import open_test_repo_db
@@ -112,7 +113,7 @@ def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
         worktree_path=None,
         pid=None,
     )
-    orch = Orchestrator(rt)  # type: ignore[arg-type]
+    orch = adapt_rt_stub(rt)
 
     async def _ensure() -> str:
         ensured.append(True)
@@ -172,7 +173,7 @@ def test_reconfigure_collaborator_returns_startup_failure_error(
         worktree_path=None,
         pid=None,
     )
-    orch = Orchestrator(rt)  # type: ignore[arg-type]
+    orch = adapt_rt_stub(rt)
 
     async def _ensure() -> str:
         raise TimeoutError("Harness not awaiting input in time: session=collaborator-0")
@@ -211,7 +212,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
     async def fake_ensure(_repo: Path, _branch_name: str, **_kwargs: object) -> WorktreeRef:
         raise AssertionError("worktrees must be opt-in")
 
-    async def fake_spawn_agent(spec, *, rt, event_sink):
+    async def fake_spawn_agent(spec, *, repo_root, session_names, agents, event_sink=None):
         captured["spec"] = spec
         captured["rt"] = rt
         captured["event_sink"] = event_sink
@@ -234,7 +235,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
         lambda _ctx: _FakeAssembler(),
     )
 
-    session = asyncio.run(Orchestrator(rt).spawn_crow("t001"))  # type: ignore[arg-type]
+    session = asyncio.run(adapt_rt_stub(rt).spawn_crow("t001"))  # type: ignore[arg-type]
 
     assert session == "murder_repo_crow_t001"
     spec = captured["spec"]
@@ -271,7 +272,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         captured["ensure"] = (repo, branch_name)
         return WorktreeRef(branch="feature/c6", path=worktree)
 
-    async def fake_spawn_agent(spec, *, rt, event_sink):
+    async def fake_spawn_agent(spec, *, repo_root, session_names, agents, event_sink=None):
         captured["spec"] = spec
         captured["rt"] = rt
         captured["event_sink"] = event_sink
@@ -294,7 +295,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         lambda _ctx: _FakeAssembler(),
     )
 
-    session = asyncio.run(Orchestrator(rt).spawn_crow("t001"))  # type: ignore[arg-type]
+    session = asyncio.run(adapt_rt_stub(rt).spawn_crow("t001"))  # type: ignore[arg-type]
 
     assert session == "murder_repo_crow_t001"
     assert captured["ensure"] == (repo_root, "feature/c6")

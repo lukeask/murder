@@ -78,7 +78,8 @@ def _make_handler(db, tmp_path: Path, coordinator) -> CrowHandler:
     runtime.db = db
     runtime.orchestration_events = InProcessOrchestrationEventSink()
     runtime.run_id = "test-run"
-    runtime.sync_agent = MagicMock()
+    runtime.record = MagicMock()
+    runtime.transition = AsyncMock()
     runtime.publish_snapshot = AsyncMock()
     return CrowHandler(
         agent_id="crow_handler-t001",
@@ -114,7 +115,7 @@ def _ticket_status(db) -> str | None:
 
 def _publish_frame(handler: CrowHandler, pane: str) -> None:
     transcript = handler.harness.parse_transcript_doc(pane)
-    handler.runtime.get_crow.return_value = SimpleNamespace(
+    handler.runtime.find_crow.return_value = SimpleNamespace(
         latest_ingested_frame=SimpleNamespace(
             frame=SimpleNamespace(raw_text=pane),
             evidence=(SimpleNamespace(payload={"transcript": transcript}),),

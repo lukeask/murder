@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import UUID
 
 from murder.facts.contracts import ProjectionInputDraft
 from murder.facts.log import append_projection_input, replay_projection_inputs
+from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
 from murder.state.persistence.connection import Connection, RepoDb
 from murder.state.persistence.schema import init_db
@@ -41,10 +41,16 @@ def test_structured_decision_id_collision_is_isolated_by_repository(tmp_path: Pa
     other = RepoDb(conn=db.conn, repository_id=SECOND_TEST_REPOSITORY_ID)
     request_id = "01234567-89ab-4cde-8fab-0123456789ab"
     first = StructuredDecisionRouter(
-        SimpleNamespace(db=db, orchestration_events=None, run_id="run")
+        db=db,
+        events=InProcessOrchestrationEventSink(),
+        run_id="run",
+        get_agent=lambda _agent_id: None,
     )
     second = StructuredDecisionRouter(
-        SimpleNamespace(db=other, orchestration_events=None, run_id="run")
+        db=other,
+        events=InProcessOrchestrationEventSink(),
+        run_id="run",
+        get_agent=lambda _agent_id: None,
     )
 
     first._record_request(  # noqa: SLF001 - verifies the router's persistence boundary
