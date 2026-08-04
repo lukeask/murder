@@ -53,7 +53,6 @@ import pytest
 
 from murder.app.service.background_tasks import ServiceBackgroundTasks
 from murder.app.service.filesystem_sync import FilesystemSyncService
-from murder.app.service.recovery import ReconcileReport
 from murder.app.service.runtime import Runtime
 from murder.config import (
     Config,
@@ -251,7 +250,7 @@ def test_startup_failure_after_flock_releases_flock(
 ) -> None:
     """Any failure inside start()'s try releases the repo flock."""
     monkeypatch.setattr(
-        "murder.app.service.runtime.open_repo_db",
+        "murder.app.service.process_scope.open_repo_db",
         lambda _root: (_ for _ in ()).throw(RuntimeError("db boom")),
     )
     rt = Runtime(_config(), repo_root)
@@ -264,7 +263,7 @@ def test_startup_failure_after_flock_releases_flock(
     asyncio.run(_drive())
 
     assert rt.db is None
-    assert rt._lock_fd is None
+    assert rt._process is None
     assert lock_is_held(lock) is False
     assert not lock.exists()
 
@@ -273,7 +272,7 @@ def test_startup_failure_after_db_closes_db_and_releases_flock(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "murder.app.service.runtime.reconcile_agents_vs_tmux",
+        "murder.app.service.startup_recovery.reconcile_agents_vs_tmux",
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("reconcile boom")),
     )
     rt = Runtime(_config(), repo_root)
@@ -288,7 +287,7 @@ def test_startup_failure_after_db_closes_db_and_releases_flock(
     assert rt.db is None
     assert rt.session_controllers is None
     assert rt.sessions is None
-    assert rt._lock_fd is None
+    assert rt._process is None
     assert lock_is_held(lock) is False
 
 
@@ -320,6 +319,44 @@ def test_startup_failure_after_tasks_spawned_cancels_them(
 
     assert rt._dispatchers is None
     assert rt.db is None
+    assert lock_is_held(lock_path(repo_root)) is False
+
+
+def test_startup_failure_after_recovery_skips_project_tmux_sweep(
+    fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 4 §7.2: failed-start unwind must not project-sweep surviving panes."""
+    _install_spy_sync(monkeypatch)
+    swept: list[str] = []
+
+    async def _sweep(scope: object) -> list[str]:
+        del scope
+        swept.append("swept")
+        return ["murder_repo_crow_live"]
+
+    monkeypatch.setattr(
+        "murder.app.service.runtime.kill_project_tmux_sessions",
+        _sweep,
+    )
+
+    async def _boom(**_kwargs: object) -> None:
+        raise RuntimeError("recovery boom")
+
+    monkeypatch.setattr(
+        "murder.app.service.runtime.run_startup_recovery",
+        _boom,
+    )
+    # Sweep callback is registered before recovery; failure must still skip it.
+    rt = Runtime(_config(), repo_root)
+
+    async def _drive() -> None:
+        with pytest.raises(RuntimeError, match="recovery boom"):
+            await rt.start()
+
+    asyncio.run(_drive())
+
+    assert swept == [], "failed start must not project-sweep tmux sessions"
+    assert rt._lifecycle_committed is False
     assert lock_is_held(lock_path(repo_root)) is False
 
 
@@ -386,7 +423,8 @@ def test_graceful_stop_preserves_agent_tmux_and_skips_project_sweep(
         assert rt.agents is not None
         rt.agents.register(agent)
         # Simulate signal-graceful path without going through ServiceHost.
-        rt._external_stop.set()
+        assert rt._process is not None
+        rt._process._external_stop.set()  # noqa: SLF001
         await rt.stop()
 
     asyncio.run(_drive())
@@ -866,7 +904,12 @@ def test_filesystem_sync_close_reconciles_after_cancelling_owned_tasks(
 def test_background_tasks_consume_startup_reconcile_report_for_reattach(
     repo_root: Path,
 ) -> None:
-    expected_reattaches = [("t1", "crow-t1"), ("t2", "crow-t2")]
+    from murder.app.service.startup_recovery import CrowReattachment, StartupRecoveryResult
+
+    expected_reattaches = [
+        CrowReattachment(ticket_id="t1", crow_session="crow-t1"),
+        CrowReattachment(ticket_id="t2", crow_session="crow-t2"),
+    ]
     agents = SimpleNamespace(all=lambda: ())
     orchestrator = SimpleNamespace(reattach_crow=AsyncMock())
     from murder.observability.advanced_log import NullAdvancedLog
@@ -876,7 +919,7 @@ def test_background_tasks_consume_startup_reconcile_report_for_reattach(
         db=object(),  # type: ignore[arg-type]
         agents=agents,  # type: ignore[arg-type]
         orchestrator=orchestrator,  # type: ignore[arg-type]
-        recovery=ReconcileReport(crows_to_reattach=list(expected_reattaches)),
+        recovery=StartupRecoveryResult(crows_to_reattach=tuple(expected_reattaches)),
         advanced_log=NullAdvancedLog(),
     )
 
@@ -893,6 +936,8 @@ def test_background_tasks_consume_startup_reconcile_report_for_reattach(
 def test_background_tasks_skip_reattach_when_report_absent_or_empty(
     repo_root: Path,
 ) -> None:
+    from murder.app.service.startup_recovery import StartupRecoveryResult
+
     orchestrator = SimpleNamespace(reattach_crow=AsyncMock())
     agents = SimpleNamespace(all=lambda: ())
     from murder.observability.advanced_log import NullAdvancedLog
@@ -913,7 +958,7 @@ def test_background_tasks_skip_reattach_when_report_absent_or_empty(
             db=object(),  # type: ignore[arg-type]
             agents=agents,  # type: ignore[arg-type]
             orchestrator=orchestrator,  # type: ignore[arg-type]
-            recovery=ReconcileReport(),
+            recovery=StartupRecoveryResult(),
             advanced_log=NullAdvancedLog(),
         )
         await blank._reattach_surviving_crows()
@@ -925,15 +970,19 @@ def test_background_tasks_skip_reattach_when_report_absent_or_empty(
 def test_runtime_start_stores_startup_reconcile_report(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from murder.app.service.startup_recovery import CrowReattachment, StartupRecoveryResult
+
     _install_spy_sync(monkeypatch)
-    expected = ReconcileReport(crows_to_reattach=[("t9", "crow-t9")])
+    expected = StartupRecoveryResult(
+        crows_to_reattach=(CrowReattachment(ticket_id="t9", crow_session="crow-t9"),)
+    )
     monkeypatch.setattr(
-        "murder.app.service.runtime.reconcile_agents_vs_tmux",
-        lambda *_a, **_k: expected,
+        "murder.app.service.runtime.run_startup_recovery",
+        AsyncMock(return_value=expected),
     )
     rt = Runtime(_config(), repo_root)
 
-    async def _drive() -> ReconcileReport | None:
+    async def _drive():
         await rt.start()
         report = rt.startup_reconcile_report
         await rt.stop()
@@ -941,4 +990,6 @@ def test_runtime_start_stores_startup_reconcile_report(
 
     report = asyncio.run(_drive())
     assert report is expected
-    assert report.crows_to_reattach == [("t9", "crow-t9")]
+    assert report.crows_to_reattach == (
+        CrowReattachment(ticket_id="t9", crow_session="crow-t9"),
+    )

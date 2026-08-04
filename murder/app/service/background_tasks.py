@@ -19,7 +19,7 @@ from murder.state.persistence.connection import RepoDb
 from murder.usage_sample_command import run_service_usage_poll_loop
 
 if TYPE_CHECKING:
-    from murder.app.service.recovery import ReconcileReport
+    from murder.app.service.startup_recovery import StartupRecoveryResult
     from murder.runtime.agent_runtime import AgentRuntime
     from murder.runtime.orchestration.orchestrator import Orchestrator
 
@@ -45,7 +45,7 @@ class ServiceBackgroundTasks:
     db: RepoDb
     agents: AgentRuntime
     orchestrator: Orchestrator
-    recovery: ReconcileReport | None
+    recovery: StartupRecoveryResult | None
     advanced_log: AdvancedLogBase
     _tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict, init=False)
     _plan_seed_sequence: int = field(default=0, init=False)

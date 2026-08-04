@@ -30,11 +30,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from murder.app.service.filesystem_sync import FilesystemSyncService
-from murder.app.service.recovery import ReconcileReport
 from murder.app.service.runtime import Runtime
+from murder.app.service.startup_recovery import StartupRecoveryResult
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -141,9 +141,9 @@ def test_activity_dispatcher_starts_after_reconcile_and_is_cancelled_on_stop(
     def _fake_attach(*_args, **_kwargs) -> _SpySupervisor:
         return spy
 
-    def _reconcile(*_args, **_kwargs) -> ReconcileReport:
+    def _reconcile(*_args, **_kwargs) -> StartupRecoveryResult:
         order.append("reconcile")
-        return ReconcileReport()
+        return StartupRecoveryResult()
 
     class _Dispatcher:
         calls = 0
@@ -177,8 +177,8 @@ def test_activity_dispatcher_starts_after_reconcile_and_is_cancelled_on_stop(
         _fake_attach,
     )
     monkeypatch.setattr(
-        "murder.app.service.runtime.reconcile_agents_vs_tmux",
-        _reconcile,
+        "murder.app.service.runtime.run_startup_recovery",
+        AsyncMock(side_effect=_reconcile),
     )
 
     async def _drive() -> asyncio.Task[None]:
