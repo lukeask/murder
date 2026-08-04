@@ -12,7 +12,7 @@ from murder.llm.harnesses.models import HarnessStartSpec
 from murder.llm.harnesses.results import SimpleResult
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
 
 
 class CrowAgent(HarnessBackedAgent):

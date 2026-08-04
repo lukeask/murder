@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from murder.app.service.runtime_scope import OrchestratorHost
+from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.state.persistence import history as history_store
 
 

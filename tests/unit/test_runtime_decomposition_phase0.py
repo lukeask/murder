@@ -51,12 +51,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from murder.app.service import terminal_capture as terminal_capture_mod
 from murder.app.service.background_tasks import ServiceBackgroundTasks
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import ReconcileReport
 from murder.app.service.runtime import Runtime
-from murder.app.service.runtime_scope import AgentLifecycleHost, OrchestratorHost
-from murder.app.service import terminal_capture as terminal_capture_mod
 from murder.app.service.terminal_capture import CapturedTerminalFrame
 from murder.config import (
     Config,
@@ -65,6 +64,7 @@ from murder.config import (
     ProjectConfig,
 )
 from murder.runtime.agents.types import AgentRole, AgentStatus
+from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost, OrchestratorHost
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
     Correlation,
@@ -282,6 +282,25 @@ def test_off_protocol_consumer_sites_still_reference_attributes() -> None:
         for rel in rel_paths:
             text = (repo / rel).read_text(encoding="utf-8")
             assert attr in text, f"{rel} no longer references off-protocol {attr!r}"
+
+
+def test_phase05_runtime_scope_lives_under_runtime_not_app() -> None:
+    """Phase 0.5: protocols relocated; no upward app.service.runtime_scope imports."""
+    repo = Path(__file__).resolve().parents[2]
+    assert not (repo / "murder/app/service/runtime_scope.py").exists()
+    assert (repo / "murder/runtime/orchestration/runtime_scope.py").is_file()
+
+    stale = "murder.app.service.runtime_scope"
+    runtime_root = repo / "murder" / "runtime"
+    offenders: list[str] = []
+    for path in runtime_root.rglob("*.py"):
+        if path.name == "runtime_scope.py":
+            # Module docstring may mention the old path as relocation history.
+            continue
+        text = path.read_text(encoding="utf-8")
+        if stale in text:
+            offenders.append(str(path.relative_to(repo)))
+    assert offenders == [], f"stale upward imports: {offenders}"
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,8 @@
-"""Narrow protocols for modules that previously accepted full ``Runtime`` (W3)."""
+"""Narrow protocols for modules that previously accepted full ``Runtime`` (W3).
+
+Relocated from ``murder.app.service.runtime_scope`` (Phase 0.5) so
+``murder.runtime`` no longer imports upward into ``murder.app``.
+"""
 
 from __future__ import annotations
 

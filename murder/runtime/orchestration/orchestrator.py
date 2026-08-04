@@ -13,7 +13,7 @@ _TNUM_RE = re.compile(r"^t(\d+)$")
 
 LOGGER = logging.getLogger(__name__)
 
-from murder.app.service.runtime_scope import OrchestratorHost
+from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.config import (
     Config,
 )

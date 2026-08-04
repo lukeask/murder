@@ -8,7 +8,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from murder.app.service.runtime_scope import OrchestratorHost
+from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.llm.harness_control.runtime.manual_input import emit_fenced_manual_input
 from murder.runtime.agents.types import AgentRole, AgentStatus
 from murder.runtime.orchestration.agent_ids import is_rogue_agent_id

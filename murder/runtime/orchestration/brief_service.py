@@ -9,7 +9,7 @@ from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.brief import BriefContext, assembler_for
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime_scope import OrchestratorHost
+    from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 
 
 class BriefService:

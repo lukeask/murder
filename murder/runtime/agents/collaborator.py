@@ -18,7 +18,7 @@ from murder.runtime.terminal import tmux
 TRANSCRIPT_SCROLLBACK_LINES = 4000
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
 
 # Keep the harness's own ready/idle waits comfortably under the service-level
 # spawn timeout so a slow harness surfaces its own clean failure instead of being cancelled mid-startup.

@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from murder.app.service.runtime_scope import OrchestratorHost
+from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.llm.direct import resolve_direct_role_client
 from murder.runtime.agents.types import AgentStatus
 from murder.runtime.terminal.session_names import format_session_name

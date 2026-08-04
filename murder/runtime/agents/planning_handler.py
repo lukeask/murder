@@ -20,7 +20,7 @@ from murder.llm.harnesses.base import HarnessAdapter
 from murder.runtime.agents.base import AgentRole, AgentStatus, Daemon
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
 
 LOGGER = logging.getLogger(__name__)
 

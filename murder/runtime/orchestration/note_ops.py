@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from murder.app.service.runtime_scope import OrchestratorHost
+from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 from murder.llm.direct import resolve_direct_role_client
 from murder.work import notes as notes_mod
 

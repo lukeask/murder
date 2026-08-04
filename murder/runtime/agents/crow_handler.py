@@ -22,7 +22,7 @@ from murder.work.tickets.status import TicketStatus
 
 if TYPE_CHECKING:
     from murder.llm.clients.base import APIClient
-    from murder.app.service.runtime_scope import AgentLifecycleHost as Runtime
+    from murder.runtime.orchestration.runtime_scope import AgentLifecycleHost as Runtime
 
 
 _LOG = logging.getLogger(__name__)

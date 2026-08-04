@@ -23,7 +23,7 @@ from murder.runtime.agents.sessions import AgentHandle, AgentSpec
 from murder.runtime.terminal.session_names import format_session_name
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime_scope import OrchestratorHost
+    from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 
 
 async def spawn_agent(

@@ -13,7 +13,7 @@ from murder.config import (
 from murder.llm.harnesses import get as get_harness
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime_scope import OrchestratorHost
+    from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 
 
 @dataclass(frozen=True)

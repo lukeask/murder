@@ -10,7 +10,7 @@ from murder.state.storage.paths import tickets_dir
 from murder.state.storage.worktrees import ensure_worktree_for_branch
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime_scope import OrchestratorHost
+    from murder.runtime.orchestration.runtime_scope import OrchestratorHost
 
 
 @dataclass(frozen=True)
