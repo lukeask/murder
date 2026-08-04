@@ -1,6 +1,6 @@
 name: release
 
-# Publish to PyPI on a GitHub Release. The runner has Python + Node, so `python -m build` runs the
+# Publish to PyPI on a GitHub Release. The runner has Python + Node, so `uv build` runs the
 # hatch hook (esbuild → murder/_inktui/index.js) and the wheel ships the self-contained Ink bundle.
 # Publishing uses PyPI Trusted Publishing (OIDC) — no API token stored in GitHub.
 on:
@@ -15,15 +15,19 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi        # bind the Trusted Publisher to this environment
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
+      - name: Install Python dependencies
+        run: uv sync --frozen --no-dev
       - run: npm ci
-      - run: npm run protocol:check
-      - run: python -m pip install build
-      - run: python -m build            # hatch hook runs esbuild here → bundle in the wheel
+      - run: uv run --no-sync python tools/generate_application_protocol.py --check
+      - run: uv build                   # hatch hook runs esbuild here → bundle in the wheel
       - uses: pypa/gh-action-pypi-publish@release/v1   # no token: OIDC

@@ -136,7 +136,11 @@ function fakeActions(): { actions: SettingsActions; patches: SettingsPatch[] } {
       activatePolicy: vi.fn(async () => {}),
       clonePolicy: vi.fn(async () => null),
       setFeaturePolicy: vi.fn(async () => {}),
-      previewResolution: vi.fn(async () => []),
+      previewResolution: vi.fn(async () => ({
+        status: null,
+        policy_id: null,
+        candidates: [],
+      })),
     },
   };
   return { actions, patches };
@@ -237,7 +241,7 @@ describe('SettingsModal', () => {
     stdin.write('l');
     await tick();
     expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain(
-      'Everforest Dark',
+      'Crow (Night Roost)',
     );
     stdin.write('h');
     await tick();
@@ -245,7 +249,7 @@ describe('SettingsModal', () => {
     stdin.write('\r');
     await tick();
     expect((lastFrame() ?? '').split('\n').find((l) => l.includes('›'))).toContain(
-      'Everforest Dark',
+      'Crow (Night Roost)',
     );
   });
 

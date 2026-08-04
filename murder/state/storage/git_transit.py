@@ -15,13 +15,10 @@ from __future__ import annotations
 
 import subprocess
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-
-from murder.state.storage.worktrees import (
-    list_git_worktrees_sync,
-    list_murder_worktrees_sync,
-)
+from typing import Protocol
 
 # Bound the per-lane log by both count and time window so duration-jumps
 # (``g20d`` / ``g30d``) resolve while keeping cost predictable.
@@ -63,6 +60,17 @@ class TransitSnapshot:
     invalidation_key: str
 
 
+class _WorktreeEntryLike(Protocol):
+    @property
+    def branch(self) -> str | None: ...
+
+    @property
+    def is_main(self) -> bool: ...
+
+    @property
+    def path(self) -> Path: ...
+
+
 def _git(repo_root: Path, *args: str) -> tuple[int, str]:
     result = subprocess.run(
         ["git", "-C", str(repo_root), *args],
@@ -73,7 +81,7 @@ def _git(repo_root: Path, *args: str) -> tuple[int, str]:
     return int(result.returncode), result.stdout
 
 
-def _resolve_main_branch(repo_root: Path, worktrees) -> str:
+def _resolve_main_branch(repo_root: Path, worktrees: Iterable[_WorktreeEntryLike]) -> str:
     """Resolve the trunk branch name.
 
     Prefer the literal ``main``. Otherwise fall back to the branch of the
@@ -87,6 +95,9 @@ def _resolve_main_branch(repo_root: Path, worktrees) -> str:
             return entry.branch
     # Last resort: list_murder_worktrees_sync excludes the main checkout, so
     # query the full worktree set for the main branch name.
+    # Keep protocol imports independent of the persistence-backed worktree service.
+    from murder.state.storage.worktrees import list_git_worktrees_sync  # noqa: PLC0415
+
     for entry in list_git_worktrees_sync(repo_root):
         if entry.is_main and entry.branch:
             return entry.branch
@@ -141,6 +152,9 @@ def _lane_commits(repo_root: Path, branch: str) -> tuple[TransitCommit, ...]:
 
 def _lane_set(repo_root: Path) -> tuple[str, list[tuple[str, str | None]]]:
     """Return (main_branch, [(branch, worktree_path)]) de-duped, main first."""
+    # Keep the read-model dataclasses importable in the isolated schema build.
+    from murder.state.storage.worktrees import list_murder_worktrees_sync  # noqa: PLC0415
+
     worktrees = list_murder_worktrees_sync(repo_root)
     main_branch = _resolve_main_branch(repo_root, worktrees)
 

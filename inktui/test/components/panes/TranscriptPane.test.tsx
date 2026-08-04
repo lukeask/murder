@@ -56,7 +56,7 @@ describe('TranscriptPane', () => {
     expect(rows.every((row) => [...row].length <= 8)).toBe(true);
   });
 
-  it('does not leak tmux CSI into the rendered frame', async () => {
+  it('interprets tmux CSI without leaking it into the rendered frame', async () => {
     const tmuxFixture: PaneFixture<readonly ChatTurn[]> = {
       id: 'transcript-pane-tmux',
       description: 'TranscriptPane tmux sanitization fixture',
@@ -86,7 +86,7 @@ describe('TranscriptPane', () => {
       focused: true,
     });
     const frame = stripAnsiSgr(rendered.ansi);
-    expect(frame).toContain('left');
+    expect(frame).not.toContain('left');
     expect(frame).toContain('escape');
     expect(frame).toContain('next');
     expect(frame).not.toContain('\u001B');
