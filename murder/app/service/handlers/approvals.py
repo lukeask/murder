@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any
 
 from murder.app.protocol.permissions import (
     DecideApprovalParams,
@@ -23,28 +24,23 @@ from murder.state.persistence.approvals import (
 from murder.state.persistence.connection import RepoDb
 
 
-class ApprovalEffects(Protocol):
-    """Runtime capabilities required by approval and grant use cases."""
+@dataclass(frozen=True)
+class ApprovalUseCases:
+    """Non-null DB binding for approval and grant application handlers."""
 
-    db: RepoDb | None
+    db: RepoDb
 
 
 def register(
     app: ApplicationRegistrar,
     projections: ProjectionProviderRegistry,
-    effects: ApprovalEffects,
+    approvals: ApprovalUseCases,
 ) -> None:
     """Register approval use cases and authoritative approval projections."""
 
-    def _db() -> RepoDb:
-        connection = effects.db
-        if connection is None:
-            raise RuntimeError("service not started")
-        return connection
-
     def _list(body: dict[str, Any]) -> dict[str, Any]:
         params = ListApprovalsParams.model_validate(body)
-        requests = PermissionStore(_db()).list_approval_requests(
+        requests = PermissionStore(approvals.db).list_approval_requests(
             status=params.status,
             workflow_id=params.workflow_id,
         )
@@ -54,14 +50,14 @@ def register(
 
     def _get(body: dict[str, Any]) -> dict[str, Any]:
         params = GetApprovalParams.model_validate(body)
-        request = PermissionStore(_db()).get_approval_request(params.approval_id)
+        request = PermissionStore(approvals.db).get_approval_request(params.approval_id)
         if request is None:
             return {"ok": False, "error": "not_found"}
         return {"ok": True, "approval": request.model_dump(mode="json")}
 
     def _list_permissions(body: dict[str, Any]) -> dict[str, Any]:
         ListPermissionsParams.model_validate(body)
-        grants = PermissionStore(_db()).list_grants()
+        grants = PermissionStore(approvals.db).list_grants()
         return {
             "grants": [item.model_dump(mode="json") for item in grants],
         }
@@ -71,7 +67,7 @@ def register(
         if params.reviewer is None:
             raise ValueError("approval.decide requires a reviewer")
         reviewer = params.reviewer
-        db = _db()
+        db = approvals.db
         request = PermissionStore(db).get_approval_request(params.approval_id)
         if request is None:
             raise ValueError(f"approval {params.approval_id} does not exist")
@@ -121,4 +117,4 @@ def register(
     projections.register(ProjectionTopic.PERMISSIONS, lambda: _list_permissions({}))
 
 
-__all__ = ["ApprovalEffects", "register"]
+__all__ = ["ApprovalUseCases", "register"]

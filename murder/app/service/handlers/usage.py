@@ -2,32 +2,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from murder.app.protocol.requests import CommandName
 from murder.app.protocol.session_control import SampleHarnessUsageParams
 from murder.app.service.application import ApplicationRegistrar
-from murder.app.service.usage_sampling import sample_usage
-from murder.state.persistence.connection import RepoDb
+from murder.app.service.usage_sampling import UsageSamplingService
 
 
-class UsageEffects(Protocol):
-    repo_root: Path
-    db: RepoDb | None
-
-
-def register(app: ApplicationRegistrar, effects: UsageEffects) -> None:
+def register(app: ApplicationRegistrar, usage: UsageSamplingService) -> None:
     async def _sample_usage(body: dict[str, Any]) -> dict[str, Any]:
-        if effects.db is None:
-            raise RuntimeError("service runtime is unavailable")
         params = SampleHarnessUsageParams.model_validate(body or {})
         modes = set(params.modes) if params.modes is not None else None
-        return await sample_usage(
-            repo_root=effects.repo_root,
-            db=effects.db,
-            modes=modes,
-        )
+        return await usage.sample(modes=modes)
 
     app.register_application_command(
         CommandName.HARNESS_USAGE_SAMPLE,
@@ -35,4 +22,4 @@ def register(app: ApplicationRegistrar, effects: UsageEffects) -> None:
     )
 
 
-__all__ = ["UsageEffects", "register"]
+__all__ = ["register"]

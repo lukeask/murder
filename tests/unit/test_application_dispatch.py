@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.service.application import ApplicationDispatcher, ApplicationHandler
+from murder.app.service.document_editor_sessions import DocumentEditorSessions
 from murder.app.service.handlers import register_all
+from murder.app.service.handlers.approvals import ApprovalUseCases
+from murder.app.service.handlers.workflows import WorkflowUseCases
+from murder.app.service.projection_registry import ProjectionProviderRegistry
+from murder.runtime.sessions.service import SessionService
+from murder.state.persistence.connection import RepoDb
 
 
 class _Orchestrator:
@@ -79,6 +87,9 @@ def test_feature_composition_registers_every_closed_operation_by_enum() -> None:
         def __init__(self) -> None:
             self.queries: dict[QueryName, ApplicationHandler] = {}
             self.commands: dict[CommandName, ApplicationHandler] = {}
+            self.runtime = None
+            self.orchestrator = None
+            self.read_model = None
 
         def register_application_query(
             self, name: QueryName, handler: ApplicationHandler
@@ -91,7 +102,20 @@ def test_feature_composition_registers_every_closed_operation_by_enum() -> None:
             self.commands[name] = handler
 
     host = _RegistrationHost()
-    register_all(host)  # type: ignore[arg-type]
+    db = MagicMock(spec=RepoDb)
+    host.runtime = SimpleNamespace(
+        db=db,
+        roster=MagicMock(projection_snapshot=lambda _db: {}),
+    )
+    register_all(
+        host,  # type: ignore[arg-type]
+        projections=ProjectionProviderRegistry(),
+        document_editors=MagicMock(spec=DocumentEditorSessions),
+        sessions=MagicMock(spec=SessionService),
+        workflows=WorkflowUseCases(db),
+        approvals=ApprovalUseCases(db),
+        legacy_host=host,  # type: ignore[arg-type]
+    )
 
     assert set(host.queries) == set(QueryName)
     assert set(host.commands) < set(CommandName)

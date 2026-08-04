@@ -15,6 +15,17 @@ from murder.runtime.scheduler.projection import invalidate_schedule
 from murder.state.persistence.connection import RepoDb
 
 
+class UsageSamplingService:
+    """Bound non-null ``repo_root`` + ``db`` for application usage sampling."""
+
+    def __init__(self, repo_root: Path, db: RepoDb) -> None:
+        self._repo_root = repo_root
+        self._db = db
+
+    async def sample(self, *, modes: set[str] | None = None) -> dict[str, Any]:
+        return await sample_usage(repo_root=self._repo_root, db=self._db, modes=modes)
+
+
 async def sample_usage(
     *, repo_root: Path, db: RepoDb, modes: set[str] | None = None
 ) -> dict[str, Any]:
@@ -38,4 +49,4 @@ async def sample_usage(
     }
 
 
-__all__ = ["sample_usage"]
+__all__ = ["UsageSamplingService", "sample_usage"]

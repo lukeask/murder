@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import murder.app.service.bootstrap as bootstrap_mod
 from murder.llm.harnesses import usage_sampling
 from murder.runtime import workers as workers_pkg
-from murder.runtime.workers import CodebaseMapWorker, UsageProbeWorker
+from murder.runtime.workers import CodebaseMapWorker, HarnessVersionProbeWorker, UsageProbeWorker
 
 
 class _RecordingSupervisor:
@@ -27,20 +27,15 @@ def test_codebase_map_worker_registered(monkeypatch):
     monkeypatch.setattr(bootstrap_mod, "CommandDispatcher", lambda **k: object())
 
     db = sqlite3.connect(":memory:")
-    runtime = SimpleNamespace(
-        db=db,
-        run_id="run-1",
-        agents=SimpleNamespace(find=lambda *_a: None),
-        advanced_log=object(),
-        command_submitter=object(),
-    )
+    agents = SimpleNamespace(find=lambda *_a: None)
     orchestrator = SimpleNamespace(
         ensure_collaborator=lambda *_a: None,
     )
+    harness_versions = SimpleNamespace(replace=lambda *_a, **_k: None)
 
-    # HarnessVersionProbeWorker.from_runtime + UsageProbeWorker.from_worker_ctx
-    # need real scaffolding; stub the heavyweight worker factories to plain
-    # objects so the test focuses on registration order/membership.
+    # UsageProbeWorker.from_worker_ctx needs real scaffolding; stub the
+    # heavyweight worker factory to a plain object so the test focuses on
+    # registration order/membership.
     monkeypatch.setattr(
         workers_pkg.UsageProbeWorker, "from_worker_ctx", classmethod(lambda cls, ctx: object())
     )
@@ -52,15 +47,20 @@ def test_codebase_map_worker_registered(monkeypatch):
     monkeypatch.setattr(
         bootstrap_mod,
         "HarnessVersionProbeWorker",
-        SimpleNamespace(from_runtime=lambda rt: object()),
+        lambda **kwargs: object(),
     )
 
     supervisor = asyncio.run(
         bootstrap_mod.start_supervisor_workers(
             repo_root=Path("/repo"),
-            runtime=runtime,
-            orchestrator=orchestrator,
+            db=db,
+            run_id="run-1",
             events=object(),
+            commands=object(),
+            advanced_log=object(),
+            harness_versions=harness_versions,
+            agents=agents,
+            orchestrator=orchestrator,
         )
     )
 
@@ -69,4 +69,7 @@ def test_codebase_map_worker_registered(monkeypatch):
     # Registered last, after all pre-existing workers.
     assert isinstance(supervisor.started[-1], CodebaseMapWorker)
     assert not hasattr(UsageProbeWorker, "from_runtime")
+    assert not hasattr(HarnessVersionProbeWorker, "from_runtime")
     assert not hasattr(usage_sampling, "sample_harness_usages_for_config")
+    assert supervisor.ctx.db is db
+    assert supervisor.ctx.run_id == "run-1"

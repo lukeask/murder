@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 
 from murder.app.protocol.requests import CommandName
 from murder.app.protocol.session_control import SetSchedulerSteeringParams
@@ -11,16 +11,10 @@ from murder.app.service.scheduler_steering import set_steering
 from murder.state.persistence.connection import RepoDb
 
 
-class SchedulerEffects(Protocol):
-    db: RepoDb | None
-
-
-def register(app: ApplicationRegistrar, effects: SchedulerEffects) -> None:
+def register(app: ApplicationRegistrar, db: RepoDb) -> None:
     def _set_scheduler_steering(body: dict[str, Any]) -> dict[str, Any]:
-        if effects.db is None:
-            raise RuntimeError("service runtime is unavailable")
         params = SetSchedulerSteeringParams.model_validate(body)
-        return set_steering(effects.db, harness=params.harness, steering=params.steering)
+        return set_steering(db, harness=params.harness, steering=params.steering)
 
     app.register_application_command(
         CommandName.SCHEDULER_SET_STEERING,
@@ -28,4 +22,4 @@ def register(app: ApplicationRegistrar, effects: SchedulerEffects) -> None:
     )
 
 
-__all__ = ["SchedulerEffects", "register"]
+__all__ = ["register"]

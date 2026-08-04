@@ -73,7 +73,7 @@ class _RunningService:
     event_sink: AgentEventSink
     structured_decisions: StructuredDecisionRouter
     session_names: SessionNamePolicy
-    runtime: Runtime  # temporary facade for handlers/bootstrap (Phase 5 removes)
+    runtime: Runtime  # temporary facade for remaining legacy handlers (Phase 6 deletes)
 
 
 @dataclass
@@ -127,16 +127,23 @@ class ServiceHost:
     def register_application_handlers(self) -> None:
         """Register feature-owned handlers at the closed application boundary."""
         from murder.app.service.handlers import register_all
+        from murder.app.service.handlers.approvals import ApprovalUseCases
+        from murder.app.service.handlers.workflows import WorkflowUseCases
 
         if self.runtime is None:
             raise RuntimeError("service runtime is unavailable")
+        if self.runtime.db is None:
+            raise RuntimeError("service database is unavailable")
         if self.runtime.sessions is None:
             raise RuntimeError("session service is unavailable")
         register_all(
             self,
             projections=self.projection_providers,
-            effects=self.runtime,
+            document_editors=self.runtime.document_editors,
             sessions=self.runtime.sessions,
+            workflows=WorkflowUseCases(self.runtime.db),
+            approvals=ApprovalUseCases(self.runtime.db),
+            legacy_host=self,
         )
 
     async def start(self) -> None:
@@ -231,7 +238,7 @@ class ServiceHost:
                 get_agent=agents.find,
             )
 
-            # Temporary Runtime facade for handlers / bootstrap (Phase 5 removes).
+            # Temporary Runtime facade for remaining legacy handlers (Phase 6 deletes).
             runtime = Runtime(
                 self.config,
                 self.repo_root,
@@ -304,10 +311,11 @@ class ServiceHost:
             runtime.trigger_dispatcher = dispatchers.trigger_dispatcher
 
             from murder.app.service.handlers import orchestration, scheduler, usage
+            from murder.app.service.usage_sampling import UsageSamplingService
 
             orchestration.register(self, orchestrator)
-            scheduler.register(self, runtime)
-            usage.register(self, runtime)
+            scheduler.register(self, process.db)
+            usage.register(self, UsageSamplingService(self.repo_root, process.db))
 
             application = ApplicationDispatcher(
                 queries=self._application_queries,
@@ -405,9 +413,14 @@ class ServiceHost:
 
             self.supervisor = await start_supervisor_workers(
                 repo_root=self.repo_root,
-                runtime=runtime,
-                orchestrator=orchestrator,
+                db=process.db,
+                run_id=process.run_id,
                 events=process.events,
+                commands=process.commands,
+                advanced_log=process.advanced_log,
+                harness_versions=harness_versions,
+                agents=agents,
+                orchestrator=orchestrator,
             )
             self.background_tasks.start()
 

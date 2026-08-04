@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 from murder.app.protocol.requests import CommandName, QueryName
@@ -29,28 +30,23 @@ from murder.work.workflows.definition import WorkflowDef
 from murder.work.workflows.service import WorkflowRuntime
 
 
-class WorkflowEffects(Protocol):
-    """Runtime capabilities required by workflow-run use cases."""
+@dataclass(frozen=True)
+class WorkflowUseCases:
+    """Non-null DB binding for workflow-run application handlers."""
 
-    db: RepoDb | None
+    db: RepoDb
 
 
 def register(
     app: ApplicationRegistrar,
     projections: ProjectionProviderRegistry,
-    effects: WorkflowEffects,
+    workflows: WorkflowUseCases,
 ) -> None:
     """Register workflow-run use cases and their feature-owned snapshot."""
 
-    def _db() -> RepoDb:
-        connection = effects.db
-        if connection is None:
-            raise RuntimeError("service not started")
-        return connection
-
     def _runs_list(body: dict[str, Any]) -> dict[str, Any]:
         params = ListWorkflowRunsParams.model_validate(body)
-        runs = list_workflow_runs(_db())
+        runs = list_workflow_runs(workflows.db)
         if params.status is not None:
             runs = [run for run in runs if run.status == params.status]
         if params.definition_name is not None:
@@ -60,7 +56,7 @@ def register(
 
     def _runs_get(body: dict[str, Any]) -> dict[str, Any]:
         params = GetWorkflowRunParams.model_validate(body)
-        db = _db()
+        db = workflows.db
         run = get_workflow_run(db, params.workflow_id)
         if run is None:
             return {"ok": False, "run": None, "waits": [], "error": "not_found"}
@@ -88,7 +84,7 @@ def register(
 
     def _signal(body: dict[str, Any]) -> dict[str, Any]:
         params = SignalWorkflowParams.model_validate(body)
-        db = _db()
+        db = workflows.db
         deduplication_key = params.deduplication_key or (
             f"external:{params.name}:{params.correlation_key or ''}:{params.request_id or uuid4()}"
         )
@@ -131,4 +127,4 @@ def _load_workflow_by_name(name: str) -> WorkflowDef:
     return WorkflowDef.model_validate(found)
 
 
-__all__ = ["WorkflowEffects", "register"]
+__all__ = ["WorkflowUseCases", "register"]

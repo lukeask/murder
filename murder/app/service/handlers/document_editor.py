@@ -2,28 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
-from uuid import UUID
+from typing import Any
 
+from murder.app.protocol.document_editor import (
+    DocumentEditorTargetParams,
+    ResizeDocumentEditorParams,
+    StartDocumentEditorParams,
+)
 from murder.app.protocol.requests import CommandName
 from murder.app.service.application import ApplicationRegistrar
-from murder.app.service.document_editor_sessions import EditorSession
+from murder.app.service.document_editor_sessions import DocumentEditorSessions
 
 
-class DocumentEditorEffects(Protocol):
-    async def start_document_editor(
-        self, kind: str, name: str, columns: int, rows: int
-    ) -> tuple[EditorSession, bool]: ...
-
-    async def resize_document_editor(self, session_id: UUID, columns: int, rows: int) -> None: ...
-
-    async def document_editor_status(self, session_id: UUID) -> tuple[EditorSession, bool]: ...
-
-
-def register(app: ApplicationRegistrar, effects: DocumentEditorEffects) -> None:
+def register(app: ApplicationRegistrar, editors: DocumentEditorSessions) -> None:
     async def start(params: dict[str, Any]) -> dict[str, object]:
-        session, reused = await effects.start_document_editor(
-            str(params["kind"]), str(params["name"]), int(params["columns"]), int(params["rows"])
+        parsed = StartDocumentEditorParams.model_validate(params)
+        session, reused = await editors.start(
+            parsed.kind,
+            parsed.name,
+            columns=parsed.columns,
+            rows=parsed.rows,
         )
         return {
             "status": "active",
@@ -40,15 +38,18 @@ def register(app: ApplicationRegistrar, effects: DocumentEditorEffects) -> None:
         raise RuntimeError("use terminal.input instead of document.editor.input")
 
     async def resize(params: dict[str, Any]) -> dict[str, object]:
-        await effects.resize_document_editor(
-            UUID(str(params["terminal_session_id"])), int(params["columns"]), int(params["rows"])
+        parsed = ResizeDocumentEditorParams.model_validate(params)
+        await editors.resize(
+            parsed.terminal_session_id,
+            columns=parsed.columns,
+            rows=parsed.rows,
         )
         return {"handled": True}
 
     async def status(params: dict[str, Any]) -> dict[str, object]:
-        session, active = await effects.document_editor_status(
-            UUID(str(params["terminal_session_id"]))
-        )
+        parsed = DocumentEditorTargetParams.model_validate(params)
+        session = editors.get(parsed.terminal_session_id)
+        active = await editors.active(parsed.terminal_session_id)
         return {
             "status": "active" if active else "exited",
             "document_path": str(session.document_path),
@@ -61,4 +62,4 @@ def register(app: ApplicationRegistrar, effects: DocumentEditorEffects) -> None:
     app.register_application_command(CommandName.DOCUMENT_EDITOR_STATUS, status)
 
 
-__all__ = ["DocumentEditorEffects", "register"]
+__all__ = ["register"]

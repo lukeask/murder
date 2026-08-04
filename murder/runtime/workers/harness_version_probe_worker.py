@@ -6,21 +6,18 @@ first crow is spawned.  Subsequent probes are triggered by the scheduler
 (``state.harness_version.probe``) or a config change (``config.harnesses_changed``).
 
 The registry reference is injected as a callback so this module stays decoupled
-from ``Runtime``.
+from the service composition root.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from murder.runtime.orchestration.events import CommandEvent
-from murder.runtime.orchestration.commands import OrchestrationCommand
-from murder.runtime.orchestration.worker_names import WorkerName
-from murder.llm.harnesses import REGISTRY
+from murder.config import Config
 from murder.llm.harnesses.version_probe import (
     ProbeResult,
     binary_overrides_from_config,
@@ -29,13 +26,14 @@ from murder.llm.harnesses.version_probe import (
 )
 from murder.llm.harnesses.versioning import (
     HarnessVersionRecord,
-    HarnessVersionRegistry,
     load_manifest,
     normalize_version,
     resolve_adapter_id,
 )
+from murder.runtime.orchestration.commands import OrchestrationCommand
+from murder.runtime.orchestration.events import CommandEvent
+from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import Worker, WorkerCommand, WorkerCtx, WorkerSpec
-from murder.config import Config
 
 _log = logging.getLogger(__name__)
 
@@ -113,13 +111,6 @@ class HarnessVersionProbeWorker(Worker):
         )
         self._updater = updater
         self._config = config
-
-    @classmethod
-    def from_runtime(cls, runtime: object) -> HarnessVersionProbeWorker:
-        """Construct from a Runtime instance (preferred call site in bootstrap)."""
-        registry: HarnessVersionRegistry = runtime.harness_versions  # type: ignore[union-attr]
-        config: Config = runtime.config  # type: ignore[union-attr]
-        return cls(updater=registry.replace, config=config)
 
     async def on_start(self, ctx: WorkerCtx) -> None:
         config = self._config or Config.load(ctx.repo_root)
