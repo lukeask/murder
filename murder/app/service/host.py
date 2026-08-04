@@ -195,7 +195,8 @@ class ServiceHost:
         )
         self.runtime.agents.crow_ask_router = self.orchestrator.route_crow_ask
         # Route malformed-artifact parse errors back to the owning agent now
-        # that the orchestrator (which delivers `agent.message`) exists.
+        # that the orchestrator (which delivers `agent.message`) exists — and
+        # before sync loops start (Phase 3 notifier-before-start ordering).
         orchestrator_for_parse_errors = self.orchestrator
 
         async def _send_parse_error(agent_id: str, message: str) -> None:
@@ -207,6 +208,7 @@ class ServiceHost:
             )
 
         self.runtime.configure_parse_error_notifier(_send_parse_error)
+        await self.runtime.start_filesystem_sync()
 
         from murder.app.service.handlers import orchestration, scheduler, usage
 
@@ -218,10 +220,15 @@ class ServiceHost:
             queries=self._application_queries,
             commands=self._application_commands,
         )
+        assert self.runtime.db is not None
+        assert self.runtime.agents is not None
         self.background_tasks = ServiceBackgroundTasks(
             repo_root=self.repo_root,
-            runtime=self.runtime,
+            db=self.runtime.db,
+            agents=self.runtime.agents,
             orchestrator=self.orchestrator,
+            recovery=self.runtime.startup_reconcile_report,
+            advanced_log=self.runtime.advanced_log,
         )
 
         def schedule_plan_seed(plan_name: str, message: str, client_id: str | None) -> None:

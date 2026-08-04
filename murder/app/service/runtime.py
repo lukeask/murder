@@ -26,9 +26,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from murder.app.service.dispatcher_loops import (
+    ActivityDispatcherFactory,
+    DispatcherLoops,
+    TriggerDispatcherFactory,
+)
 from murder.app.service.document_access import DocumentAccess
 from murder.app.service.document_editor_sessions import DocumentEditorSessions, EditorSession
-from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
+from murder.app.service.filesystem_sync import FilesystemSyncService
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
@@ -62,7 +67,6 @@ from murder.runtime.orchestration.notifier import (
 from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEventSink
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
 from murder.runtime.sessions import SessionService
-from murder.runtime.sessions.registry import SessionControllerRegistry
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.session_names import SessionNamePolicy
 from murder.state.persistence.activities import (
@@ -96,11 +100,6 @@ if TYPE_CHECKING:
     from murder.work.simple_doc_sync import SimpleDocSync
     from murder.work.tickets.sync import TicketSync
 
-ActivityDispatcherFactory = Callable[
-    [RepoDb, SessionControllerRegistry], "ActivityDispatcher"
-]
-TriggerDispatcherFactory = Callable[[RepoDb], "TriggerDispatcher"]
-
 
 class Runtime:
     """Async context manager owning the murder process lifecycle."""
@@ -128,12 +127,11 @@ class Runtime:
         self.run_id: str | None = None
         self.agents: AgentRuntime | None = None
         self.event_sink: AgentEventSink = LoggingAgentEventSink()
-        self._tasks: dict[str, asyncio.Task[None]] = {}
-        self._shutdown = asyncio.Event()
         self.harness_versions = HarnessVersionRegistry()
         self._external_stop = asyncio.Event()
         self._lock_fd: int | None = None
-        self._sync: FilesystemSyncSupervisor | None = None
+        self._sync: FilesystemSyncService | None = None
+        self._dispatchers: DispatcherLoops | None = None
         self.plan_sync: PlanSync | None = None
         self.note_sync: NoteSync | None = None
         self.notetaker_context_sync: NotetakerContextSync | None = None
@@ -167,35 +165,7 @@ class Runtime:
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
         await self.stop()
 
-    async def _run_tick_loop(
-        self,
-        name: str,
-        tick: Callable[[], Awaitable[Any]],
-    ) -> None:
-        while not self._shutdown.is_set():
-            try:
-                await tick()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logging.getLogger(__name__).exception("%s dispatcher tick failed; retrying", name)
-            await asyncio.sleep(1)
-
-    async def _phase4_activity_loop(self) -> None:
-        assert self.activity_dispatcher is not None
-        await self._run_tick_loop("activity", self.activity_dispatcher.tick)
-
-    async def _phase4_trigger_loop(self) -> None:
-        assert self.trigger_dispatcher is not None
-
-        async def tick() -> None:
-            assert self.trigger_dispatcher is not None
-            self.trigger_dispatcher.tick()
-
-        await self._run_tick_loop("trigger", tick)
-
     async def start(self) -> None:  # noqa: PLR0912, PLR0915 - service bootstrap
-        self._shutdown.clear()
         self._external_stop.clear()
         self._lock_fd = acquire_flock(lock_path(self.repo_root))
         # Everything after the flock is fallible (tmux/subprocess, filesystem,
@@ -301,7 +271,7 @@ class Runtime:
                 run_id=self.run_id,
                 get_agent=self.agents.find,
             )
-            self._sync = FilesystemSyncSupervisor.attach(self.repo_root, self.db)
+            self._sync = FilesystemSyncService.attach(self.repo_root, self.db)
             self.plan_sync = self._sync.plan_sync
             self.note_sync = self._sync.note_sync
             self.notetaker_context_sync = self._sync.notetaker_context_sync
@@ -315,32 +285,32 @@ class Runtime:
             )
             self.document_editors.update_documents(self.documents)
             # Seeding stays on the boot path (cheap, idempotent — restores missing
-            # examples before the loops scan). The heavy markdown->DB reconcile is now
-            # carried by the spawned per-category loops below: non-blocking, single-pass,
-            # parallel — so it no longer blocks socket readiness nor runs twice at boot.
+            # examples before the loops scan). Sync loops start later, after the
+            # host injects the parse-error notifier (Phase 3 ordering).
             self._sync.seed()
-            self._tasks.update(self._sync.spawn_tasks())
             # External work is the final subsystem enabled at boot. Session/tmux
             # reconciliation and all Runtime core state must exist before either
             # dispatcher may recover leases or execute an activity.
             reap_expired_claims(self.db)
             reap_expired_reservations(self.db)
-            if self._activity_dispatcher_factory is not None:
-                self.activity_dispatcher = self._activity_dispatcher_factory(
-                    self.db,
-                    self.sessions.controllers,
-                )
-                self._tasks["phase4-activities"] = asyncio.create_task(self._phase4_activity_loop())
-            if self._trigger_dispatcher_factory is not None:
-                self.trigger_dispatcher = self._trigger_dispatcher_factory(self.db)
-                self._tasks["phase4-triggers"] = asyncio.create_task(self._phase4_trigger_loop())
+            self._dispatchers = DispatcherLoops()
+            await self._dispatchers.start(
+                db=self.db,
+                session_controllers=self.sessions.controllers,
+                activity_factory=self._activity_dispatcher_factory,
+                trigger_factory=self._trigger_dispatcher_factory,
+            )
+            self.activity_dispatcher = self._dispatchers.activity_dispatcher
+            self.trigger_dispatcher = self._dispatchers.trigger_dispatcher
         except BaseException:
-            for task in self._tasks.values():
-                task.cancel()
-            if self._tasks:
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await asyncio.gather(*self._tasks.values(), return_exceptions=True)
-            self._tasks.clear()
+            if self._dispatchers is not None:
+                with contextlib.suppress(Exception):
+                    await self._dispatchers.close()
+                self._dispatchers = None
+            if self._sync is not None:
+                with contextlib.suppress(Exception):
+                    await self._sync.close()
+                self._sync = None
             if self.sessions is not None:
                 with contextlib.suppress(Exception):
                     await self.sessions.close()
@@ -352,9 +322,10 @@ class Runtime:
             self.orchestration_events = None
             self.command_submitter = None
             self.run_id = None
-            self._sync = None
             self.structured_decisions = None
             self.agents = None
+            self.activity_dispatcher = None
+            self.trigger_dispatcher = None
             if self._lock_fd is not None:
                 with contextlib.suppress(Exception):
                     release_flock(self._lock_fd)
@@ -363,15 +334,20 @@ class Runtime:
                     lock_path(self.repo_root).unlink()
             raise
 
+    async def start_filesystem_sync(self) -> None:
+        """Start sync loops after parse-error notifier injection."""
+        if self._sync is None:
+            raise RuntimeError("filesystem sync is unavailable")
+        await self._sync.start()
+
     async def stop(self) -> None:
-        self._shutdown.set()
         if self._sync is not None:
-            await self._sync.shutdown(self._tasks)
-        for t in list(self._tasks.values()):
-            t.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await t
-        self._tasks.clear()
+            await self._sync.close()
+        if self._dispatchers is not None:
+            await self._dispatchers.close()
+            self._dispatchers = None
+        self.activity_dispatcher = None
+        self.trigger_dispatcher = None
         graceful = self._external_stop.is_set()
         # Stop agents before closing sessions / sweeping tmux (§7.2).
         if self.agents is not None:

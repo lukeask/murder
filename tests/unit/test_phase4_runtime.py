@@ -996,15 +996,25 @@ def test_trigger_loop_continues_after_transient_tick_failure() -> None:
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("transient")
-            runtime._shutdown.set()
+            loops._shutdown.set()
             return 0
 
-    runtime = object.__new__(Runtime)
-    runtime._shutdown = asyncio.Event()
-    dispatcher = FlakyTriggerDispatcher()
-    runtime.trigger_dispatcher = dispatcher
+    from murder.app.service.dispatcher_loops import DispatcherLoops
 
-    asyncio.run(runtime._phase4_trigger_loop())
+    loops = DispatcherLoops(retry_delay_seconds=0)
+    dispatcher = FlakyTriggerDispatcher()
+
+    async def _drive() -> None:
+        await loops.start(
+            db=object(),  # type: ignore[arg-type]
+            session_controllers=object(),  # type: ignore[arg-type]
+            activity_factory=None,
+            trigger_factory=lambda _db: dispatcher,
+        )
+        task = loops._tasks["phase4-triggers"]  # noqa: SLF001
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(_drive())
 
     assert dispatcher.calls == EXPECTED_TRANSIENT_TICKS
 

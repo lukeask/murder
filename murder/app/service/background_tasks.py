@@ -12,13 +12,15 @@ from typing import TYPE_CHECKING
 
 from murder.llm.harnesses.harnesses_doc import write_harnesses_doc
 from murder.llm.harnesses.model_cache import refresh_and_persist_harness_models
-from murder.observability.advanced_log import ParserRecord, current_advanced_log
+from murder.observability.advanced_log import AdvancedLogBase, ParserRecord
 from murder.runtime.agents.base import PROJECTION_INTERVAL_S, HarnessBackedAgent
 from murder.runtime.terminal import tmux
+from murder.state.persistence.connection import RepoDb
 from murder.usage_sample_command import run_service_usage_poll_loop
 
 if TYPE_CHECKING:
-    from murder.app.service.runtime import Runtime
+    from murder.app.service.recovery import ReconcileReport
+    from murder.runtime.agent_runtime import AgentRuntime
     from murder.runtime.orchestration.orchestrator import Orchestrator
 
 
@@ -40,21 +42,22 @@ class ServiceBackgroundTasks:
     """
 
     repo_root: Path
-    runtime: Runtime
+    db: RepoDb
+    agents: AgentRuntime
     orchestrator: Orchestrator
+    recovery: ReconcileReport | None
+    advanced_log: AdvancedLogBase
     _tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict, init=False)
     _plan_seed_sequence: int = field(default=0, init=False)
 
     def start(self) -> None:
         """Launch non-blocking work after socket and workers are available."""
-        if self.runtime.db is None:
-            raise RuntimeError("runtime database is unavailable")
         self._spawn("crow-reattach", self._reattach_surviving_crows())
         self._spawn("startup-rogue-ensure", self._ensure_startup_rogue_safely())
         self._spawn("startup-model-catalog", self._persist_catalog_then_write_models_doc())
         self._spawn(
             "usage-sample-poll",
-            run_service_usage_poll_loop(self.repo_root, self.runtime.db),
+            run_service_usage_poll_loop(self.repo_root, self.db),
         )
         self._spawn("transcript-projection-poll", self._run_projection_poll_loop())
 
@@ -119,7 +122,7 @@ class ServiceBackgroundTasks:
 
     async def _persist_catalog_then_write_models_doc(self) -> None:
         """Persist configured model catalogs, then write the settings document."""
-        await refresh_and_persist_harness_models(self.repo_root, self.runtime.db)
+        await refresh_and_persist_harness_models(self.repo_root, self.db)
         write_harnesses_doc(self.repo_root)
 
     async def _run_projection_poll_loop(self) -> None:
@@ -128,7 +131,7 @@ class ServiceBackgroundTasks:
         # freezes live state (and queued-message delivery) for that agent.
         warned_agents: set[str] = set()
         while True:
-            for agent in self.runtime.agents.all() if self.runtime.agents is not None else ():
+            for agent in self.agents.all():
                 if not isinstance(agent, HarnessBackedAgent):
                     continue
                 try:
@@ -155,7 +158,7 @@ class ServiceBackgroundTasks:
                     live_state = agent._current_live_state()
                     queued = agent.pending_message
                     choices = ["<choice-prompt>"] if live_state == "awaiting_approval" else None
-                    current_advanced_log().record_parser(
+                    self.advanced_log.record_parser(
                         ParserRecord(
                             session=getattr(agent, "session", None),
                             live_state=live_state,
@@ -170,7 +173,7 @@ class ServiceBackgroundTasks:
 
     async def _reattach_surviving_crows(self) -> None:
         """Reattach handlers to surviving crows without delaying socket readiness."""
-        report = self.runtime.startup_reconcile_report
+        report = self.recovery
         if not report or not report.crows_to_reattach:
             return
 

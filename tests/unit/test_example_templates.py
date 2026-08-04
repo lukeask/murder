@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
+from murder.app.service.filesystem_sync import FilesystemSyncService
 from murder.state.storage.paths import murder_dir, plans_dir, tickets_dir
 from murder.work.examples import EXAMPLE_TEMPLATES, example_path, seed_examples
 from murder.work.plans import parser as plan_parser
@@ -86,7 +86,7 @@ def test_seed_is_idempotent_and_preserves_edits(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_supervisor_reconcile_restores_example(tmp_path: Path) -> None:
     db = open_test_repo_db(tmp_path / "murder.db")
-    supervisor = FilesystemSyncSupervisor.attach(tmp_path, db)
+    supervisor = FilesystemSyncService.attach(tmp_path, db)
 
     await supervisor.reconcile_all()
     target = example_path(tmp_path, "example_ticket.md")

@@ -52,7 +52,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from murder.app.service.background_tasks import ServiceBackgroundTasks
-from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
+from murder.app.service.filesystem_sync import FilesystemSyncService
 from murder.app.service.recovery import ReconcileReport
 from murder.app.service.runtime import Runtime
 from murder.config import (
@@ -133,7 +133,7 @@ class _RecordingAgent:
 
 
 class _SpySupervisor:
-    """Records FilesystemSyncSupervisor boot/shutdown call sequence."""
+    """Records FilesystemSyncService boot/shutdown call sequence."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -142,19 +142,20 @@ class _SpySupervisor:
         self.notetaker_context_sync = MagicMock()
         self.ticket_sync = MagicMock()
         self.report_sync = MagicMock()
+        self._started = False
 
     def seed(self) -> None:
         self.calls.append("seed")
 
-    def spawn_tasks(self) -> dict[str, asyncio.Task[None]]:
-        self.calls.append("spawn_tasks")
-        return {}
+    async def start(self) -> None:
+        self.calls.append("start")
+        self._started = True
 
     async def reconcile_all(self) -> None:
         self.calls.append("reconcile_all")
 
-    async def shutdown(self, tasks: dict[str, asyncio.Task[None]]) -> None:
-        self.calls.append("shutdown")
+    async def close(self) -> None:
+        self.calls.append("close")
         await self.reconcile_all()
 
 
@@ -165,7 +166,7 @@ def _install_spy_sync(monkeypatch: pytest.MonkeyPatch) -> _SpySupervisor:
         return spy
 
     monkeypatch.setattr(
-        "murder.app.service.runtime.FilesystemSyncSupervisor.attach",
+        "murder.app.service.runtime.FilesystemSyncService.attach",
         _attach,
     )
     return spy
@@ -294,29 +295,22 @@ def test_startup_failure_after_db_closes_db_and_releases_flock(
 def test_startup_failure_after_tasks_spawned_cancels_them(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Rollback cancels any tasks already placed in Runtime._tasks."""
-    spawned: list[asyncio.Task[None]] = []
+    """Rollback closes DispatcherLoops when a later boot step fails."""
 
-    async def _hang() -> None:
-        await asyncio.Event().wait()
+    class _Dispatcher:
+        async def tick(self) -> None:
+            await asyncio.Event().wait()
 
-    class _HangingSupervisor(_SpySupervisor):
-        def spawn_tasks(self) -> dict[str, asyncio.Task[None]]:
-            self.calls.append("spawn_tasks")
-            task = asyncio.create_task(_hang())
-            spawned.append(task)
-            return {"plan_sync": task}
+    _install_spy_sync(monkeypatch)
 
-    hanging = _HangingSupervisor()
-    monkeypatch.setattr(
-        "murder.app.service.runtime.FilesystemSyncSupervisor.attach",
-        lambda *_a, **_k: hanging,
+    rt = Runtime(
+        _config(),
+        repo_root,
+        activity_dispatcher_factory=lambda _db, _registry=None: _Dispatcher(),
+        trigger_dispatcher_factory=lambda _db: (_ for _ in ()).throw(
+            RuntimeError("dispatcher boom")
+        ),
     )
-
-    def _boom(_db, _registry=None):
-        raise RuntimeError("dispatcher boom")
-
-    rt = Runtime(_config(), repo_root, activity_dispatcher_factory=_boom)
 
     async def _drive() -> None:
         with pytest.raises(RuntimeError, match="dispatcher boom"):
@@ -324,8 +318,7 @@ def test_startup_failure_after_tasks_spawned_cancels_them(
 
     asyncio.run(_drive())
 
-    assert rt._tasks == {}
-    assert spawned and spawned[0].cancelled()
+    assert rt._dispatchers is None
     assert rt.db is None
     assert lock_is_held(lock_path(repo_root)) is False
 
@@ -802,33 +795,39 @@ def test_reap_sets_dead_and_preserves_opposite_ticket_role_index(
 # ---------------------------------------------------------------------------
 
 
-def test_stop_runs_sync_shutdown_final_reconcile(
+def test_stop_runs_sync_close_final_reconcile(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spy = _install_spy_sync(monkeypatch)
     rt = Runtime(_config(), repo_root)
 
-    async def _drive() -> list[str]:
+    async def _drive() -> tuple[list[str], list[str]]:
         await rt.start()
         boot = list(spy.calls)
+        await rt.start_filesystem_sync()
+        after_sync = list(spy.calls)
         await rt.stop()
-        return boot
+        return boot, after_sync
 
-    boot_calls = asyncio.run(_drive())
+    boot_calls, after_sync = asyncio.run(_drive())
 
-    assert boot_calls == ["seed", "spawn_tasks"]
-    assert spy.calls == ["seed", "spawn_tasks", "shutdown", "reconcile_all"]
+    assert boot_calls == ["seed"]
+    assert after_sync == ["seed", "start"]
+    assert spy.calls == ["seed", "start", "close", "reconcile_all"]
 
 
-def test_filesystem_sync_shutdown_reconciles_after_cancelling_owned_keys(
+def test_filesystem_sync_close_reconciles_after_cancelling_owned_tasks(
     repo_root: Path,
 ) -> None:
-    """Direct supervisor contract used by Runtime.stop."""
+    """Direct FilesystemSyncService close contract used by Runtime.stop."""
 
     async def _hang() -> None:
         await asyncio.Event().wait()
 
     class _Doc:
+        async def run(self) -> None:
+            await _hang()
+
         async def reconcile_all(self) -> None:
             pass
 
@@ -836,7 +835,7 @@ def test_filesystem_sync_shutdown_reconciles_after_cancelling_owned_keys(
 
     async def _drive() -> None:
         doc = _Doc()
-        sup = FilesystemSyncSupervisor(
+        service = FilesystemSyncService(
             plan_sync=doc,  # type: ignore[arg-type]
             note_sync=doc,  # type: ignore[arg-type]
             notetaker_context_sync=doc,  # type: ignore[arg-type]
@@ -848,36 +847,13 @@ def test_filesystem_sync_shutdown_reconciles_after_cancelling_owned_keys(
         async def _tracked_reconcile() -> None:
             order.append("reconcile_all")
 
-        sup.reconcile_all = _tracked_reconcile  # type: ignore[method-assign]
-
-        owned = {
-            "plan_sync": asyncio.create_task(_hang()),
-            "note_sync": asyncio.create_task(_hang()),
-            "notetaker_context_sync": asyncio.create_task(_hang()),
-            "ticket_sync": asyncio.create_task(_hang()),
-            "report_sync": asyncio.create_task(_hang()),
-        }
-        unrelated = asyncio.create_task(_hang())
-        tasks: dict[str, asyncio.Task[None]] = {**owned, "unrelated": unrelated}
-        await sup.shutdown(tasks)
-        # Owned sync keys removed; unrelated task left for Runtime to cancel.
-        assert "unrelated" in tasks
-        assert not any(
-            k in tasks
-            for k in (
-                "plan_sync",
-                "note_sync",
-                "notetaker_context_sync",
-                "ticket_sync",
-                "report_sync",
-            )
-        )
+        service.reconcile_all = _tracked_reconcile  # type: ignore[method-assign]
+        await service.start()
+        owned = dict(service._tasks)  # noqa: SLF001
+        await service.close()
+        assert service._tasks == {}  # noqa: SLF001
         assert all(task.cancelled() for task in owned.values())
         assert order == ["reconcile_all"]
-        assert not unrelated.cancelled()
-        unrelated.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await unrelated
 
     asyncio.run(_drive())
 
@@ -891,17 +867,17 @@ def test_background_tasks_consume_startup_reconcile_report_for_reattach(
     repo_root: Path,
 ) -> None:
     expected_reattaches = [("t1", "crow-t1"), ("t2", "crow-t2")]
-    runtime = SimpleNamespace(
-        db=object(),
-        startup_reconcile_report=ReconcileReport(
-            crows_to_reattach=list(expected_reattaches),
-        ),
-    )
+    agents = SimpleNamespace(all=lambda: ())
     orchestrator = SimpleNamespace(reattach_crow=AsyncMock())
+    from murder.observability.advanced_log import NullAdvancedLog
+
     tasks = ServiceBackgroundTasks(
         repo_root=repo_root,
-        runtime=runtime,  # type: ignore[arg-type]
+        db=object(),  # type: ignore[arg-type]
+        agents=agents,  # type: ignore[arg-type]
         orchestrator=orchestrator,  # type: ignore[arg-type]
+        recovery=ReconcileReport(crows_to_reattach=list(expected_reattaches)),
+        advanced_log=NullAdvancedLog(),
     )
 
     async def _drive() -> None:
@@ -918,22 +894,27 @@ def test_background_tasks_skip_reattach_when_report_absent_or_empty(
     repo_root: Path,
 ) -> None:
     orchestrator = SimpleNamespace(reattach_crow=AsyncMock())
+    agents = SimpleNamespace(all=lambda: ())
+    from murder.observability.advanced_log import NullAdvancedLog
 
     async def _drive() -> None:
         empty = ServiceBackgroundTasks(
             repo_root=repo_root,
-            runtime=SimpleNamespace(db=object(), startup_reconcile_report=None),  # type: ignore[arg-type]
+            db=object(),  # type: ignore[arg-type]
+            agents=agents,  # type: ignore[arg-type]
             orchestrator=orchestrator,  # type: ignore[arg-type]
+            recovery=None,
+            advanced_log=NullAdvancedLog(),
         )
         await empty._reattach_surviving_crows()
 
         blank = ServiceBackgroundTasks(
             repo_root=repo_root,
-            runtime=SimpleNamespace(  # type: ignore[arg-type]
-                db=object(),
-                startup_reconcile_report=ReconcileReport(),
-            ),
+            db=object(),  # type: ignore[arg-type]
+            agents=agents,  # type: ignore[arg-type]
             orchestrator=orchestrator,  # type: ignore[arg-type]
+            recovery=ReconcileReport(),
+            advanced_log=NullAdvancedLog(),
         )
         await blank._reattach_surviving_crows()
 

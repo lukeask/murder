@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
-from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
+from murder.app.service.filesystem_sync import FilesystemSyncService
 from murder.state.persistence import plans as dbmod
 from murder.state.storage.paths import plan_md, ticket_md, tickets_dir
 from murder.work.plans.schema import Plan
@@ -174,14 +174,14 @@ def test_supervisor_notifier_routes_to_owning_agent(repo_root: Path) -> None:
     async def fake_send(agent_id: str, message: str) -> None:
         sent.append((agent_id, message))
 
-    supervisor = FilesystemSyncSupervisor.attach(repo_root, conn)
-    supervisor.set_parse_error_notifier(fake_send)
+    service = FilesystemSyncService.attach(repo_root, conn)
+    service.set_parse_error_notifier(fake_send)
 
     path = ticket_md(repo_root, "t001")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_MALFORMED_TICKET, encoding="utf-8")
 
-    asyncio.run(supervisor.ticket_sync.reconcile_file(path))
+    asyncio.run(service.ticket_sync.reconcile_file(path))
 
     assert len(sent) == 1
     agent_id, message = sent[0]
@@ -197,11 +197,11 @@ def test_supervisor_notifier_skips_unattributable_path(repo_root: Path) -> None:
     async def fake_send(agent_id: str, message: str) -> None:
         sent.append((agent_id, message))
 
-    supervisor = FilesystemSyncSupervisor.attach(repo_root, conn)
-    supervisor.set_parse_error_notifier(fake_send)
+    service = FilesystemSyncService.attach(repo_root, conn)
+    service.set_parse_error_notifier(fake_send)
 
     # A path attribute_edit cannot attribute (outside tickets/plans dirs).
-    await_notifier = supervisor.ticket_sync.parse_error_notifier
+    await_notifier = service.ticket_sync.parse_error_notifier
     assert await_notifier is not None
     asyncio.run(await_notifier(repo_root / "README.md", "boom"))
 
