@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-from murder.app.service.runtime import Runtime
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -45,43 +44,57 @@ def _config() -> Config:
     )
 
 
-def _runtime(repo_root: Path) -> Runtime:
+def _runtime(repo_root: Path):
+    from types import SimpleNamespace
+
+    from tests.support.orchestrator import build_test_orchestrator
+
     (repo_root / ".murder").mkdir(exist_ok=True)
     db = open_test_repo_db(repo_root / ".murder" / "murder.db")
-    rt = Runtime(_config(), repo_root)
-    rt.db = db
-    rt.run_id = "run-test"
-    insert_run(db, rt.run_id, "{}")
-    rt.orchestration_events = InProcessOrchestrationEventSink()
-    return rt
+    insert_run(db, "run-test", "{}")
+    events = InProcessOrchestrationEventSink()
+    orch = build_test_orchestrator(
+        repo_root=repo_root,
+        db=db,
+        config=_config(),
+        run_id="run-test",
+        events=events,
+    )
+    return SimpleNamespace(
+        config=_config(),
+        repo_root=repo_root,
+        db=db,
+        run_id="run-test",
+        orchestration_events=events,
+        orch=orch,
+        agents=orch.agents,
+    )
 
 
-def _orch(rt: Runtime):
-    from tests.support.orchestrator import adapt_rt_stub
-
-    return adapt_rt_stub(rt)
+def _orch(rt):
+    return rt.orch
 
 
-async def _drain(rt: Runtime) -> None:
+async def _drain(rt) -> None:
     agents = getattr(rt, "agents", None)
     emit_tasks = getattr(agents, "_emit_tasks", None) if agents is not None else None
     if emit_tasks:
         await asyncio.gather(*list(emit_tasks))
 
 
-def _row(rt: Runtime, name: str):
+def _row(rt, name: str):
     r = rt.db.conn.execute(
         "SELECT name, status, body FROM plans WHERE repository_id = ? AND name = ?", (rt.db.repository_id, name)
     ).fetchone()
     return dict(r) if r else None
 
 
-def _set_status(rt: Runtime, name: str, status: str) -> None:
+def _set_status(rt, name: str, status: str) -> None:
     rt.db.conn.execute("UPDATE plans SET status = ? WHERE repository_id = ? AND name = ?", (status, rt.db.repository_id, name))
     rt.db.conn.commit()
 
 
-def _set_body(rt: Runtime, name: str, body: str) -> None:
+def _set_body(rt, name: str, body: str) -> None:
     rt.db.conn.execute("UPDATE plans SET body = ? WHERE repository_id = ? AND name = ?", (body, rt.db.repository_id, name))
     rt.db.conn.commit()
 

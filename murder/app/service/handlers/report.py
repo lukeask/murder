@@ -16,13 +16,13 @@ if TYPE_CHECKING:
 def register(host: ServiceHost) -> None:
     async def _report_create(body: dict[str, Any]) -> dict[str, Any]:
         params = ReportCreateParams.model_validate(body)
-        runtime = host.runtime
-        if runtime is None or runtime.db is None:
+        db = host.db
+        if db is None:
             raise RuntimeError("database unavailable")
-        existing = reports_db.get_report(runtime.db, params.name)
+        existing = reports_db.get_report(db, params.name)
         if existing is not None:
             raise ValueError(f"report already exists: {params.name}")
-        row = ensure_report(runtime.db, host.repo_root, params.name, body=params.body)
+        row = ensure_report(db, host.repo_root, params.name, body=params.body)
         return {
             "handled": True,
             "ok": True,

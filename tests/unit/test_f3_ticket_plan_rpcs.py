@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 
 from murder.app.protocol.requests import CommandName
-from murder.app.service.runtime import Runtime
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -42,24 +41,37 @@ def _config() -> Config:
     )
 
 
-def _runtime(repo_root: Path) -> Runtime:
+def _runtime(repo_root: Path):
+    from types import SimpleNamespace
+
     from murder.runtime.sessions.service import SessionService
+    from tests.support.orchestrator import build_test_orchestrator
 
     (repo_root / ".murder").mkdir(exist_ok=True)
     db = open_test_repo_db(repo_root / ".murder" / "murder.db")
-    rt = Runtime(_config(), repo_root)
-    rt.db = db
-    rt.run_id = "run-test"
-    insert_run(db, rt.run_id, "{}")
-    rt.orchestration_events = InProcessOrchestrationEventSink()
-    rt.sessions = SessionService(db)
-    return rt
+    insert_run(db, "run-test", "{}")
+    events = InProcessOrchestrationEventSink()
+    orch = build_test_orchestrator(
+        repo_root=repo_root,
+        db=db,
+        config=_config(),
+        run_id="run-test",
+        events=events,
+    )
+    return SimpleNamespace(
+        config=_config(),
+        repo_root=repo_root,
+        db=db,
+        run_id="run-test",
+        orchestration_events=events,
+        sessions=SessionService(db),
+        orch=orch,
+        agents=orch.agents,
+    )
 
 
-def _orch(rt: Runtime):
-    from tests.support.orchestrator import adapt_rt_stub
-
-    return adapt_rt_stub(rt)
+def _orch(rt):
+    return rt.orch
 
 
 # === ticket.save_body =======================================================
@@ -253,10 +265,21 @@ class _StubOrch:
 
 
 def _host_with_handlers(repo_root: Path):
-    from murder.app.service.host import ServiceHost
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
 
+    from murder.app.service.host import ServiceHost
+    from murder.roster.service import RosterService
+
+    rt = _runtime(repo_root)
     host = ServiceHost(config=_config(), repo_root=repo_root)
-    host.runtime = _runtime(repo_root)
+    host._running = SimpleNamespace(  # noqa: SLF001
+        process=SimpleNamespace(db=rt.db, run_id=rt.run_id),
+        sessions=rt.sessions,
+        editors=MagicMock(),
+        roster=RosterService(rt.db),
+        structured_decisions=None,
+    )
     host.register_application_handlers()
     host.orchestrator = _StubOrch()  # type: ignore[assignment]
     return host

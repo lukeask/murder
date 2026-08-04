@@ -20,10 +20,10 @@ def register(
 ) -> None:
     def _get(body: dict[str, object]) -> dict[str, object]:
         RosterGetParams.model_validate(body)
-        runtime = host.runtime
-        if runtime is None:
+        roster = host.roster
+        if roster is None:
             raise RuntimeError("service not started")
-        return runtime.roster.get()
+        return roster.get()
 
     # The roster is application-only now: no compatibility RPC target remains.
     host.register_application_query(
@@ -31,10 +31,11 @@ def register(
         lambda body: asyncio.to_thread(_get, body),
     )
     if projections is not None:
-        runtime = host.runtime
-        if runtime is None or runtime.db is None:
+        roster = host.roster
+        db = host.db
+        if roster is None or db is None:
             raise RuntimeError("service not started")
-        register_projection_provider(projections, runtime.roster, runtime.db)
+        register_projection_provider(projections, roster, db)
 
 
 __all__ = ["register"]

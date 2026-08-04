@@ -281,7 +281,6 @@ class HarnessBackedAgent(LifecycleParticipant):
             repository_id=runtime.db.repository_id,
             agent_key=self.id,
             sessions=getattr(runtime, "sessions", None),
-            registry=getattr(runtime, "session_controllers", None),
             recover=True,
         )
         # A reattached pane begins with current evidence, never a resumed

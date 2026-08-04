@@ -6,6 +6,7 @@ import asyncio
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -15,14 +16,27 @@ from murder.llm.harnesses.results import fail_result, ok_result
 from murder.runtime.agents.crow import CrowAgent
 from murder.runtime.orchestration import agent_ops
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from tests.support.orchestrator import adapt_rt_stub
 from murder.runtime.terminal import tmux
 from murder.state.persistence.agents import get_agent_messages
 from murder.state.persistence.conversation import read_conversation_blocks
 from tests.support.database import open_test_repo_db
 from tests.support.fake_tmux import FakeTmux
+from tests.support.orchestrator import FakeAgents, build_test_orchestrator
 
 MANUAL_ENTER_EFFECT_COUNT = 2
+
+
+def _orch_with_agent(
+    agent: Any,
+    *,
+    db: Any = None,
+    repo_root: Path | None = None,
+    agent_id: str = "crow-t001",
+) -> Orchestrator:
+    agents = FakeAgents()
+    agent.id = agent_id
+    agents.register(agent)
+    return build_test_orchestrator(repo_root=repo_root, db=db, agents=agents)
 
 
 def _verified_agent(repo_root: Path, session_name: str) -> tuple[SimpleNamespace, object]:
@@ -47,10 +61,7 @@ def _verified_agent(repo_root: Path, session_name: str) -> tuple[SimpleNamespace
 
 def test_send_agent_key_targets_agent_session(fake_tmux: FakeTmux, repo_root: Path) -> None:
     agent, _db = _verified_agent(repo_root, "murder_demo_crow_t001")
-    rt = SimpleNamespace(
-        get_agent=lambda agent_id: agent if agent_id == "crow-t001" else None,
-    )
-    orch = adapt_rt_stub(rt)
+    orch = _orch_with_agent(agent, db=_db, repo_root=repo_root)
 
     result = asyncio.run(orch.send_agent_key("crow-t001", "Up"))
 
@@ -74,10 +85,7 @@ def test_send_agent_key_without_agent_id_ensures_collaborator(
     repo_root: Path,
 ) -> None:
     agent, _db = _verified_agent(repo_root, "murder_demo_collaborator")
-    rt = SimpleNamespace(
-        get_agent=lambda agent_id: agent if agent_id == "collaborator-1" else None,
-    )
-    orch = adapt_rt_stub(rt)
+    orch = _orch_with_agent(agent, db=_db, repo_root=repo_root, agent_id="collaborator-1")
 
     async def _ensure() -> str:
         return "collaborator-1"
@@ -97,8 +105,7 @@ def test_send_agent_key_without_agent_id_ensures_collaborator(
 
 def test_send_agent_key_literal_text(fake_tmux: FakeTmux, repo_root: Path) -> None:
     agent, _db = _verified_agent(repo_root, "murder_demo_crow_t001")
-    rt = SimpleNamespace(get_agent=lambda _agent_id: agent)
-    orch = adapt_rt_stub(rt)
+    orch = _orch_with_agent(agent, db=_db, repo_root=repo_root)
 
     result = asyncio.run(orch.send_agent_key("crow-t001", "x", literal=True))
 
@@ -114,13 +121,7 @@ def test_send_agent_key_can_submit_enter_and_log_user_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent, db = _verified_agent(repo_root, "murder_demo_crow_t001")
-    rt = SimpleNamespace(
-        get_agent=lambda _agent_id: agent,
-        db=db,
-        orchestration_events=None,
-        run_id=None,
-    )
-    orch = adapt_rt_stub(rt)
+    orch = _orch_with_agent(agent, db=db, repo_root=repo_root)
 
     # Physical emission is forbidden until the semantic action and every
     # lowered effect are durable. This assertion runs inside the fake terminal
@@ -196,9 +197,9 @@ def test_send_agent_key_has_no_direct_tmux_emitter() -> None:
 
 def test_send_agent_key_rejects_missing_verified_control() -> None:
     agent = SimpleNamespace(session="murder_demo_crow_t001")
-    rt = SimpleNamespace(get_agent=lambda _agent_id: agent)
+    orch = _orch_with_agent(agent)
 
-    result = asyncio.run(adapt_rt_stub(rt).send_agent_key("crow-t001", "Up"))
+    result = asyncio.run(orch.send_agent_key("crow-t001", "Up"))
 
     assert result == {
         "ok": False,
@@ -215,14 +216,7 @@ def test_send_agent_message_reports_delivery_failure_without_user_block(
         async def send(self, _message: str):
             return fail_result("Harness not awaiting input in time: session=crow-t001")
 
-    rt = SimpleNamespace(
-        get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
-        get_crow_handler=lambda _ticket_id: None,
-        db=db,
-        orchestration_events=None,
-        run_id=None,
-    )
-    orch = adapt_rt_stub(rt)
+    orch = _orch_with_agent(_Agent(), db=db, repo_root=repo_root)
 
     result = asyncio.run(orch.send_agent_message("crow-t001", "hello", None))
 
@@ -252,11 +246,10 @@ def test_send_agent_message_queues_while_crow_is_still_starting(
         repo_root=repo_root,
         runtime=runtime,
     )
-    runtime.get_agent = lambda agent_id: agent if agent_id == agent.id else None
-    runtime.get_crow_handler = lambda _ticket_id: None
+    orch = _orch_with_agent(agent, db=db, repo_root=repo_root, agent_id=agent.id)
 
     result = asyncio.run(
-        adapt_rt_stub(runtime).send_agent_message(
+        orch.send_agent_message(
             agent.id,
             "test before startup",
             None,
@@ -294,14 +287,7 @@ def test_send_agent_message_records_user_block_after_delivery_acceptance(
         async def send(self, _message: str):
             return ok_result()
 
-    rt = SimpleNamespace(
-        get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
-        get_crow_handler=lambda _ticket_id: None,
-        db=db,
-        orchestration_events=None,
-        run_id=None,
-    )
-    orch = adapt_rt_stub(rt)
+    orch = _orch_with_agent(_Agent(), db=db, repo_root=repo_root)
 
     result = asyncio.run(orch.send_agent_message("crow-t001", "hello", None))
 
@@ -319,14 +305,7 @@ def test_send_agent_message_persists_client_message_id_on_user_block(
         async def send(self, _message: str):
             return ok_result()
 
-    rt = SimpleNamespace(
-        get_agent=lambda agent_id: _Agent() if agent_id == "crow-t001" else None,
-        get_crow_handler=lambda _ticket_id: None,
-        db=db,
-        orchestration_events=None,
-        run_id=None,
-    )
-    orch = adapt_rt_stub(rt)
+    orch = _orch_with_agent(_Agent(), db=db, repo_root=repo_root)
 
     result = asyncio.run(
         orch.send_agent_message(

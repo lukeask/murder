@@ -18,14 +18,13 @@ from murder.app.service.dispatcher_loops import (
     DispatcherLoops,
     TriggerDispatcherFactory,
 )
-from murder.app.service.document_access import DocumentAccess
-from murder.app.service.document_editor_sessions import DocumentEditorSessions
+from murder.app.service.document_editors import DocumentEditorService
+from murder.app.service.documents import DocumentService
 from murder.app.service.filesystem_sync import FilesystemSyncService
 from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.process_scope import ProcessScope
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.app.service.read_model import ServiceReadModel
-from murder.app.service.runtime import Runtime
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions
 from murder.app.service.socket_server import ApplicationSocketServer
 from murder.app.service.startup_recovery import StartupRecoveryResult, run_startup_recovery
@@ -48,6 +47,7 @@ from murder.runtime.sessions import (
     WriteTerminalInput,
 )
 from murder.runtime.terminal.session_names import SessionNamePolicy
+from murder.state.persistence.connection import RepoDb
 from murder.state.storage.service_registry import (
     remove_service_session,
     write_service_session,
@@ -64,8 +64,8 @@ class _RunningService:
     sessions: SessionService
     agents: AgentRuntime
     sync: FilesystemSyncService
-    documents: DocumentAccess
-    editors: DocumentEditorSessions
+    documents: DocumentService
+    editors: DocumentEditorService
     dispatchers: DispatcherLoops
     orchestrator: Orchestrator
     recovery: StartupRecoveryResult
@@ -73,7 +73,7 @@ class _RunningService:
     event_sink: AgentEventSink
     structured_decisions: StructuredDecisionRouter
     session_names: SessionNamePolicy
-    runtime: Runtime  # temporary facade for remaining legacy handlers (Phase 6 deletes)
+    roster: RosterService
 
 
 @dataclass
@@ -92,7 +92,6 @@ class ServiceHost:
     websocket_port: int = 0
     activity_dispatcher_factory: ActivityDispatcherFactory | None = None
     trigger_dispatcher_factory: TriggerDispatcherFactory | None = None
-    runtime: Runtime | None = None
     read_model: ServiceReadModel | None = None
     fact_log: FactLog | None = None
     projection_input_log: ProjectionInputLog | None = None
@@ -116,6 +115,30 @@ class ServiceHost:
     # Project-wide tmux sweep runs only after a successful start commits.
     _lifecycle_committed: bool = field(default=False, repr=False)
 
+    @property
+    def db(self) -> RepoDb | None:
+        return None if self._running is None else self._running.process.db
+
+    @property
+    def run_id(self) -> str | None:
+        return None if self._running is None else self._running.process.run_id
+
+    @property
+    def roster(self) -> RosterService | None:
+        return None if self._running is None else self._running.roster
+
+    @property
+    def structured_decisions(self) -> StructuredDecisionRouter | None:
+        return None if self._running is None else self._running.structured_decisions
+
+    @property
+    def sessions(self) -> SessionService | None:
+        return None if self._running is None else self._running.sessions
+
+    @property
+    def document_editors(self) -> DocumentEditorService | None:
+        return None if self._running is None else self._running.editors
+
     def register_application_query(self, name: QueryName, handler: ApplicationHandler) -> None:
         """Register a feature use case at the closed application boundary."""
         self._application_queries[name] = handler
@@ -130,19 +153,16 @@ class ServiceHost:
         from murder.app.service.handlers.approvals import ApprovalUseCases
         from murder.app.service.handlers.workflows import WorkflowUseCases
 
-        if self.runtime is None:
-            raise RuntimeError("service runtime is unavailable")
-        if self.runtime.db is None:
-            raise RuntimeError("service database is unavailable")
-        if self.runtime.sessions is None:
-            raise RuntimeError("session service is unavailable")
+        running = self._running
+        if running is None:
+            raise RuntimeError("service is not started")
         register_all(
             self,
             projections=self.projection_providers,
-            document_editors=self.runtime.document_editors,
-            sessions=self.runtime.sessions,
-            workflows=WorkflowUseCases(self.runtime.db),
-            approvals=ApprovalUseCases(self.runtime.db),
+            document_editors=running.editors,
+            sessions=running.sessions,
+            workflows=WorkflowUseCases(running.process.db),
+            approvals=ApprovalUseCases(running.process.db),
             legacy_host=self,
         )
 
@@ -211,13 +231,13 @@ class ServiceHost:
             agents.sessions = sessions
 
             sync = FilesystemSyncService.attach(self.repo_root, process.db)
-            documents = DocumentAccess(
-                self.repo_root,
-                process.db,
+            documents = DocumentService(
+                repo_root=self.repo_root,
+                db=process.db,
                 plan_sync=sync.plan_sync,
                 note_sync=sync.note_sync,
             )
-            editors = DocumentEditorSessions(
+            editors = DocumentEditorService(
                 self.repo_root, documents, sessions=sessions
             )
             sync.seed()
@@ -238,36 +258,7 @@ class ServiceHost:
                 get_agent=agents.find,
             )
 
-            # Temporary Runtime facade for remaining legacy handlers (Phase 6 deletes).
-            runtime = Runtime(
-                self.config,
-                self.repo_root,
-                user_cfg=user_cfg,
-                activity_dispatcher_factory=activity_factory,
-                trigger_dispatcher_factory=trigger_factory,
-            )
-            runtime.bind_process(process)
-            runtime.sessions = sessions
-            runtime.agents = agents
-            runtime.roster = roster
-            runtime._sync = sync  # noqa: SLF001
-            runtime.plan_sync = sync.plan_sync
-            runtime.note_sync = sync.note_sync
-            runtime.notetaker_context_sync = sync.notetaker_context_sync
-            runtime.ticket_sync = sync.ticket_sync
-            runtime.report_sync = sync.report_sync
-            runtime.documents = documents
-            runtime.document_editors = editors
-            runtime.startup_reconcile_report = recovery
-            runtime.structured_decisions = structured_decisions
-            runtime.harness_versions = harness_versions
-            runtime.event_sink = event_sink
-            runtime.session_names = session_names
-
-            self.runtime = runtime
             self.read_model = ServiceReadModel(process.db, self.repo_root)
-            self.register_application_handlers()
-
             self.fact_log = FactLog(process.db)
             self.projection_input_log = ProjectionInputLog(process.db)
 
@@ -306,9 +297,26 @@ class ServiceHost:
                     trigger_factory=trigger_factory,
                 )
             )
-            runtime._dispatchers = dispatchers  # noqa: SLF001
-            runtime.activity_dispatcher = dispatchers.activity_dispatcher
-            runtime.trigger_dispatcher = dispatchers.trigger_dispatcher
+
+            running = _RunningService(
+                process=process,
+                sessions=sessions,
+                agents=agents,
+                sync=sync,
+                documents=documents,
+                editors=editors,
+                dispatchers=dispatchers,
+                orchestrator=orchestrator,
+                recovery=recovery,
+                harness_versions=harness_versions,
+                event_sink=event_sink,
+                structured_decisions=structured_decisions,
+                session_names=session_names,
+                roster=roster,
+            )
+            # Expose lifecycle state for handler registration before socket bind.
+            self._running = running
+            self.register_application_handlers()
 
             from murder.app.service.handlers import orchestration, scheduler, usage
             from murder.app.service.usage_sampling import UsageSamplingService
@@ -423,23 +431,6 @@ class ServiceHost:
                 orchestrator=orchestrator,
             )
             self.background_tasks.start()
-
-            running = _RunningService(
-                process=process,
-                sessions=sessions,
-                agents=agents,
-                sync=sync,
-                documents=documents,
-                editors=editors,
-                dispatchers=dispatchers,
-                orchestrator=orchestrator,
-                recovery=recovery,
-                harness_versions=harness_versions,
-                event_sink=event_sink,
-                structured_decisions=structured_decisions,
-                session_names=session_names,
-                runtime=runtime,
-            )
         except BaseException:
             self._lifecycle_committed = False
             with contextlib.suppress(Exception):
@@ -447,7 +438,6 @@ class ServiceHost:
             raise
 
         self._stack = stack
-        self._running = running
         self._lifecycle_committed = True
 
     async def _abort_partial_start(self, stack: AsyncExitStack) -> None:
@@ -470,7 +460,6 @@ class ServiceHost:
             self._service_session_name = None
         with contextlib.suppress(Exception):
             await stack.aclose()
-        self.runtime = None
         self.read_model = None
         self.fact_log = None
         self.projection_input_log = None
@@ -483,6 +472,11 @@ class ServiceHost:
         if self._running is None:
             raise RuntimeError("call ServiceHost.start() first")
         await self._running.process.wait_for_signal()
+
+    def clear_shutdown_signal(self) -> None:
+        """Make an imminent stop authoritative rather than signal-graceful."""
+        if self._running is not None:
+            self._running.process.clear_external_stop()
 
     async def stop(self) -> None:
         if self.background_tasks is not None:
@@ -511,9 +505,6 @@ class ServiceHost:
                 await self._stack.aclose()
             self._stack = None
 
-        if self.runtime is not None:
-            self.runtime._clear_local_refs()  # noqa: SLF001
-            self.runtime = None
         self._running = None
         self._lifecycle_committed = False
         self.read_model = None

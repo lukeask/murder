@@ -14,8 +14,7 @@ if TYPE_CHECKING:
 def register(host: ServiceHost) -> None:
     async def _answer_structured(body: dict[str, Any]) -> dict[str, object]:
         params = HarnessAnswerParams.model_validate(body)
-        runtime = host.runtime
-        router = getattr(runtime, "structured_decisions", None) if runtime is not None else None
+        router = host.structured_decisions
         if router is None:
             raise RuntimeError("structured decision routing is unavailable")
         return await router.respond(params.model_dump(mode="json"))

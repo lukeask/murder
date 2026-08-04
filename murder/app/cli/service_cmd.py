@@ -231,7 +231,7 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
 async def _run_supervisor_only(websocket_port: int = 0) -> None:
     # Configure stderr logging immediately so early-startup records reach the
     # child's stdout/stderr -> supervisor.ndjson. The per-run service.log file
-    # handler attaches later in Runtime.start once the run dir exists.
+    # handler attaches later in ProcessScope once the run dir exists.
     from murder.observability.logging_setup import configure_logging, resolve_log_level
 
     configure_logging(level=resolve_log_level(), log_path=None)
@@ -243,11 +243,9 @@ async def _run_supervisor_only(websocket_port: int = 0) -> None:
             await host.run_until_signal()
         finally:
             # A service shutdown is authoritative (`murder down`): the backend
-            # owns agent/tmux teardown, not any connected client. Let Runtime
-            # stop agents/tmux.
+            # owns agent/tmux teardown, not any connected client.
             with contextlib.suppress(Exception):
-                if host.runtime is not None:
-                    host.runtime.clear_shutdown_signal()
+                host.clear_shutdown_signal()
 
 
 def cmd_serviced(

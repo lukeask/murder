@@ -167,7 +167,4 @@ class FilesystemSyncService:
             await self.close()
 
 
-# Temporary alias during migration; prefer FilesystemSyncService.
-FilesystemSyncSupervisor = FilesystemSyncService
-
-__all__ = ["FilesystemSyncService", "FilesystemSyncSupervisor", "SYNC_TASK_KEYS"]
+__all__ = ["FilesystemSyncService", "SYNC_TASK_KEYS"]

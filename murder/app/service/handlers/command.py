@@ -16,12 +16,12 @@ def register(host: ServiceHost) -> None:
         from murder.state.persistence.commands import get_command_status
 
         params = CommandGetParams.model_validate(body)
-        rt = host.runtime
-        if rt is None or rt.db is None:
+        db = host.db
+        if db is None:
             return CommandGetResult(ok=False, error="runtime_db_unavailable").model_dump(
                 mode="json"
             )
-        row = get_command_status(rt.db, params.command_id)
+        row = get_command_status(db, params.command_id)
         if row is None:
             return CommandGetResult(
                 ok=False, error="not_found", command_id=params.command_id

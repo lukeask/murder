@@ -16,10 +16,10 @@ if TYPE_CHECKING:
 
 def register(host: ServiceHost) -> None:
     def _db() -> RepoDb:
-        runtime = host.runtime
-        if runtime is None or runtime.db is None:
+        db = host.db
+        if db is None:
             raise RuntimeError("service not started")
-        return runtime.db
+        return db
 
     def _fire(body: dict[str, object]) -> dict[str, object]:
         params = TriggerFireParams.model_validate(body)

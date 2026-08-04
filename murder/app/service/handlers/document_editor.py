@@ -11,23 +11,29 @@ from murder.app.protocol.document_editor import (
 )
 from murder.app.protocol.requests import CommandName
 from murder.app.service.application import ApplicationRegistrar
-from murder.app.service.document_editor_sessions import DocumentEditorSessions
+from murder.app.service.document_editors import (
+    DocumentEditorService,
+    EditorDisposition,
+    StartDocumentEditor,
+    TerminalSize,
+    document_target,
+)
 
 
-def register(app: ApplicationRegistrar, editors: DocumentEditorSessions) -> None:
+def register(app: ApplicationRegistrar, editors: DocumentEditorService) -> None:
     async def start(params: dict[str, Any]) -> dict[str, object]:
         parsed = StartDocumentEditorParams.model_validate(params)
-        session, reused = await editors.start(
-            parsed.kind,
-            parsed.name,
-            columns=parsed.columns,
-            rows=parsed.rows,
+        result = await editors.start(
+            StartDocumentEditor(
+                target=document_target(parsed.kind, parsed.name),
+                size=TerminalSize(columns=parsed.columns, rows=parsed.rows),
+            )
         )
         return {
             "status": "active",
-            "document_path": str(session.document_path),
-            "terminal_session_id": str(session.session_id),
-            "reused": reused,
+            "document_path": str(result.document_path),
+            "terminal_session_id": str(result.session_id),
+            "reused": result.disposition is EditorDisposition.REUSED,
         }
 
     async def send_input(params: dict[str, Any]) -> dict[str, object]:
@@ -41,19 +47,17 @@ def register(app: ApplicationRegistrar, editors: DocumentEditorSessions) -> None
         parsed = ResizeDocumentEditorParams.model_validate(params)
         await editors.resize(
             parsed.terminal_session_id,
-            columns=parsed.columns,
-            rows=parsed.rows,
+            TerminalSize(columns=parsed.columns, rows=parsed.rows),
         )
         return {"handled": True}
 
     async def status(params: dict[str, Any]) -> dict[str, object]:
         parsed = DocumentEditorTargetParams.model_validate(params)
-        session = editors.get(parsed.terminal_session_id)
-        active = await editors.active(parsed.terminal_session_id)
+        result = await editors.status(parsed.terminal_session_id)
         return {
-            "status": "active" if active else "exited",
-            "document_path": str(session.document_path),
-            "terminal_session_id": str(session.session_id),
+            "status": "active" if result.active else "exited",
+            "document_path": str(result.document_path),
+            "terminal_session_id": str(result.session_id),
         }
 
     app.register_application_command(CommandName.DOCUMENT_EDITOR_START, start)

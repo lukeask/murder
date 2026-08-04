@@ -14,15 +14,16 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from tests.support.orchestrator import adapt_rt_stub
 from murder.runtime.workers.orchestrator_worker import _HANDLERS
 from murder.state.persistence import conversation
 from murder.state.persistence.connection import RepoDb
 from tests.support.database import open_test_repo_db
+from tests.support.orchestrator import FakeAgents, build_test_orchestrator
 
 
 def _db() -> RepoDb:
@@ -51,11 +52,9 @@ def _add_conversation(
     conn.conn.commit()
 
 
-def _orchestrator(conn: RepoDb) -> tuple[Orchestrator, MagicMock, list[dict[str, Any]]]:
-    rt = MagicMock()
-    rt.db = conn
-    rt.get_agent = MagicMock(return_value=None)
-    orch = adapt_rt_stub(rt)
+def _orchestrator(conn: RepoDb) -> tuple[Orchestrator, FakeAgents, list[dict[str, Any]]]:
+    agents = FakeAgents()
+    orch = build_test_orchestrator(db=conn, agents=agents)
 
     spawned: list[dict[str, Any]] = []
 
@@ -66,7 +65,7 @@ def _orchestrator(conn: RepoDb) -> tuple[Orchestrator, MagicMock, list[dict[str,
     orch.spawn_rogue = _fake_spawn_rogue  # type: ignore[assignment]
     # _agent_is_live is only consulted when get_agent returns a live handle.
     orch._agent_is_live = AsyncMock(return_value=True)  # type: ignore[assignment]
-    return orch, rt, spawned
+    return orch, agents, spawned
 
 
 def test_resume_valid_cc_conversation_spawns_with_session_id() -> None:
@@ -146,9 +145,9 @@ def test_resume_already_running_crow_short_circuits() -> None:
         harness_session_id="sess-abc",
         status="complete",
     )
-    orch, rt, spawned = _orchestrator(conn)
+    orch, agents, spawned = _orchestrator(conn)
     # A live in-memory crow for this conversation: resume must not fork a copy.
-    rt.get_agent = MagicMock(return_value=MagicMock())
+    agents.register(SimpleNamespace(id="crow-live"))
     orch._agent_is_live = AsyncMock(return_value=True)  # type: ignore[assignment]
 
     result = asyncio.run(orch.resume_conversation("crow-live"))

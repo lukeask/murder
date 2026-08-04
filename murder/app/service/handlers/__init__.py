@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from murder.app.service.application import ApplicationRegistrar
-from murder.app.service.document_editor_sessions import DocumentEditorSessions
+from murder.app.service.document_editors import DocumentEditorService
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.runtime.sessions.service import SessionService
 
@@ -40,7 +40,7 @@ def register_all(
     app: ApplicationRegistrar,
     *,
     projections: ProjectionProviderRegistry,
-    document_editors: DocumentEditorSessions,
+    document_editors: DocumentEditorService,
     sessions: SessionService,
     workflows: WorkflowUseCases,
     approvals: ApprovalUseCases,
@@ -49,7 +49,7 @@ def register_all(
     """Compose built-in features at the application boundary.
 
     Stateful vertical slices receive explicit non-null services. Remaining
-    handlers still take ``legacy_host`` until they migrate off ``Runtime``.
+    handlers still take ``legacy_host`` until they migrate off ServiceHost digs.
     """
     register_approvals(app, projections, approvals)
     health.register(legacy_host)

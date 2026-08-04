@@ -7,61 +7,32 @@ direct ``.murder/tickets/<id>.md`` write (V1) and on-disk globbing (V4/V5).
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from murder.config import (
-    Config,
-    CrowHandlerConfig,
-    HarnessRoleConfig,
-    ProjectConfig,
-)
 from murder.runtime.orchestration.commands import OrchestrationCommand
 from murder.runtime.orchestration.events import CommandEvent
 from murder.runtime.orchestration.orchestrator import Orchestrator
-from tests.support.orchestrator import adapt_rt_stub
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.workers.base import WorkerCtx
 from murder.runtime.workers.orchestrator_worker import OrchestratorCommandWorker
 from murder.state.storage.paths import ticket_md
 from tests.support.database import open_test_repo_db
-
-
-@dataclass
-class _Runtime:
-    repo_root: Path
-    config: Config
-    db: object
-    event_sink: object | None = None
-    orchestration_events: object | None = None
-    run_id: str | None = None
-
-    def emit_snapshot(self, entity: object, key: str) -> None:
-        # No bus in these unit doubles -> matches Runtime.emit_snapshot's
-        # no-bus no-op; the F1 ticket emit is exercised in
-        # tests/unit/test_f1_keyonly_snapshot_ticket.py.
-        return None
-
-    async def publish_snapshot(self, entity: object, key: str) -> None:
-        return None
+from tests.support.orchestrator import build_test_orchestrator, default_test_config
 
 
 def _orch(repo_root: Path) -> Orchestrator:
     database = repo_root / ".murder" / "murder.db"
     database.parent.mkdir(parents=True, exist_ok=True)
     db = open_test_repo_db(database)
-    config = Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
+    return build_test_orchestrator(
+        repo_root=repo_root,
+        db=db,
+        config=default_test_config(project_name="repo"),
     )
-    rt = _Runtime(repo_root=repo_root, config=config, db=db)
-    return adapt_rt_stub(rt)
 
 
 def test_next_ticket_id_starts_at_one(repo_root: Path) -> None:

@@ -4,7 +4,6 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -13,6 +12,7 @@ import turso
 from pydantic import ValidationError
 
 from murder.app.service.handlers import approvals as approval_handlers
+from murder.app.service.handlers.approvals import ApprovalUseCases
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.facts.log import replay_facts, replay_projection_inputs
 from murder.llm.harness_control.model.observations import (
@@ -368,7 +368,7 @@ def test_standalone_denial_is_authoritative_and_fabricated_prior_evidence_is_rej
     with pytest.raises(ApprovalRequiredError) as required:
         service.request(proposed)
     fake = required.value.request.model_copy()
-    with pytest.raises(InvalidAuthorizationError, match="loaded from persistence"):
+    with pytest.raises(InvalidAuthorizationError, match="loads it from persistence"):
         service.approve(
             proposed,
             decision=required.value.decision,
@@ -426,7 +426,6 @@ def test_authenticated_product_handler_resolves_standalone_takeover(repo_db: Rep
 
     class Host:
         def __init__(self) -> None:
-            self.runtime = SimpleNamespace(db=repo_db)
             self.handlers: dict[str, Any] = {}
 
         def register_application_query(self, name: object, handler: Any) -> None:
@@ -439,7 +438,7 @@ def test_authenticated_product_handler_resolves_standalone_takeover(repo_db: Rep
     approval_handlers.register(
         host,  # type: ignore[arg-type]
         ProjectionProviderRegistry(),
-        host.runtime,
+        ApprovalUseCases(repo_db),
     )
     result = host.handlers["approval.decide"](
         {

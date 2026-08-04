@@ -116,16 +116,12 @@ def _minimal_config() -> Config:
     )
 
 
-def test_runtime_user_cfg_defaults_none() -> None:
-    from murder.app.service.runtime import Runtime
+def test_orchestrator_accepts_optional_user_config(tmp_path: Path) -> None:
+    from tests.support.orchestrator import build_test_orchestrator
 
-    rt = Runtime(_minimal_config(), Path("/tmp/repo"))
-    assert rt.user_cfg is None
-
-
-def test_runtime_stores_user_cfg() -> None:
-    from murder.app.service.runtime import Runtime
+    orch = build_test_orchestrator(repo_root=tmp_path, user_config=None)
+    assert orch._user_config is None  # noqa: SLF001
 
     cfg = UserConfig()
-    rt = Runtime(_minimal_config(), Path("/tmp/repo"), user_cfg=cfg)
-    assert rt.user_cfg is cfg
+    orch2 = build_test_orchestrator(repo_root=tmp_path, user_config=cfg)
+    assert orch2._user_config is cfg  # noqa: SLF001

@@ -17,7 +17,7 @@ def register(host: ServiceHost) -> None:
         EmptyParams.model_validate(body or {})
         return HealthGetResult(
             ok=True,
-            run_id=host.runtime.run_id if host.runtime else None,
+            run_id=host.run_id,
             pid=os.getpid(),
         ).model_dump(mode="json")
 

@@ -321,10 +321,13 @@ class VerifiedHarnessControlSession:
         repository_id: UUID | str | None = None,
         agent_key: str | None = None,
         sessions: object | None = None,
-        registry: object | None = None,
         recover: bool = False,
     ) -> SessionController:
-        """Install the Phase 2 controller once for this verified live session."""
+        """Install the Phase 2 controller once for this verified live session.
+
+        Session revival and controller identity are owned solely by
+        ``SessionService.ensure_persisted_tmux_session`` (§6.9 / §11).
+        """
 
         if self._session_controller is not None and not self._session_controller.closed:
             return self._session_controller
@@ -335,19 +338,19 @@ class VerifiedHarnessControlSession:
             verified_tmux_capabilities,
         )
         from murder.runtime.sessions.persistence import ensure_session_schema  # noqa: PLC0415
-        from murder.runtime.sessions.registry import (  # noqa: PLC0415
-            SessionControllerRegistry,
-        )
         from murder.runtime.sessions.service import (  # noqa: PLC0415
             SessionBackendKind,
             SessionService,
             TmuxSessionRegistration,
-            persist_or_revive_tmux_session,
         )
 
         ensure_session_schema(self._connection)
         if repository_id is None:
             raise ValueError("repository_id is required when creating a session controller")
+        if not isinstance(sessions, SessionService):
+            raise ValueError(
+                "SessionService is required when creating a session controller"
+            )
         repository_uuid = UUID(str(repository_id))
         durable_agent_key = agent_key or self._persistence_session_id or self.terminal_session
         session_id = uuid5(
@@ -364,49 +367,14 @@ class VerifiedHarnessControlSession:
             agent_id=agent_id,
         )
         backend = VerifiedHarnessSessionBackend(self)
+        controller = await sessions.ensure_persisted_tmux_session(
+            registration,
+            session_backend=backend,
+            recover=recover,
+        )
 
-        if isinstance(sessions, SessionService):
-            controller = await sessions.ensure_persisted_tmux_session(
-                registration,
-                session_backend=backend,
-                recover=recover,
-            )
-            selected_registry = sessions.controllers
-            store = sessions.store
-        else:
-            selected_registry = (
-                registry if isinstance(registry, SessionControllerRegistry) else None
-            )
-            if selected_registry is None:
-                raise ValueError(
-                    "SessionService or SessionControllerRegistry is required "
-                    "when creating a session controller"
-                )
-            from murder.runtime.sessions.contracts import SessionStatus  # noqa: PLC0415
-            from murder.runtime.sessions.persistence import SessionStore  # noqa: PLC0415
-
-            store = SessionStore(self._db)
-            prior = store.get_session(session_id)
-            record = persist_or_revive_tmux_session(
-                store,
-                repository_id=repository_uuid,
-                registration=registration,
-            )
-            if prior is not None and prior.status in {
-                SessionStatus.STOPPING,
-                SessionStatus.STOPPED,
-                SessionStatus.FAILED,
-                SessionStatus.LOST,
-            }:
-                await selected_registry.remove(record.session_id)
-            controller = await selected_registry.get_or_create(
-                record,
-                backend=backend,
-                recover=recover,
-            )
-
-        self._session_store = store
-        self._session_controller_registry = selected_registry
+        self._session_store = sessions.store
+        self._session_controller_registry = sessions.controllers
         self._session_controller = controller
         return controller
 

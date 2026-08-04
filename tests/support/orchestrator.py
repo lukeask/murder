@@ -278,11 +278,11 @@ def _is_configured_callable(fn: Any) -> bool:
 
 
 def adapt_rt_stub(rt: Any, *, repo_root: Path | None = None) -> Orchestrator:
-    """Build Orchestrator from a legacy SimpleNamespace rt stub (migration helper).
+    """Legacy SimpleNamespace/MagicMock → Orchestrator bridge.
 
-    Maps common stub attributes onto the Phase 2 constructor. Prefer
-    ``build_test_orchestrator`` for new tests. Late mutations on ``rt.get_*``
-    are honored because lookups always re-read the stub.
+    Prefer ``build_test_orchestrator`` / ``FakeAgents`` for new and migrated
+    tests. Retained only for stubs that still mutate ``rt.get_*`` after
+    construction (e.g. worktree / recovery reattach fixtures).
     """
     # MagicMock auto-creates attributes, so never trust getattr for cache keys.
     if isinstance(rt, MagicMock):

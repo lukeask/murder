@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -10,7 +9,7 @@ import pytest
 
 from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.service.application import ApplicationDispatcher, ApplicationHandler
-from murder.app.service.document_editor_sessions import DocumentEditorSessions
+from murder.app.service.document_editors import DocumentEditorService
 from murder.app.service.handlers import register_all
 from murder.app.service.handlers.approvals import ApprovalUseCases
 from murder.app.service.handlers.workflows import WorkflowUseCases
@@ -87,9 +86,26 @@ def test_feature_composition_registers_every_closed_operation_by_enum() -> None:
         def __init__(self) -> None:
             self.queries: dict[QueryName, ApplicationHandler] = {}
             self.commands: dict[CommandName, ApplicationHandler] = {}
-            self.runtime = None
             self.orchestrator = None
             self.read_model = None
+            self._db = None
+            self._roster = None
+
+        @property
+        def db(self):
+            return self._db
+
+        @property
+        def roster(self):
+            return self._roster
+
+        @property
+        def run_id(self):
+            return None
+
+        @property
+        def structured_decisions(self):
+            return None
 
         def register_application_query(
             self, name: QueryName, handler: ApplicationHandler
@@ -103,14 +119,12 @@ def test_feature_composition_registers_every_closed_operation_by_enum() -> None:
 
     host = _RegistrationHost()
     db = MagicMock(spec=RepoDb)
-    host.runtime = SimpleNamespace(
-        db=db,
-        roster=MagicMock(projection_snapshot=lambda _db: {}),
-    )
+    host._db = db
+    host._roster = MagicMock(get=lambda: {}, projection_snapshot=lambda _db: {})
     register_all(
         host,  # type: ignore[arg-type]
         projections=ProjectionProviderRegistry(),
-        document_editors=MagicMock(spec=DocumentEditorSessions),
+        document_editors=MagicMock(spec=DocumentEditorService),
         sessions=MagicMock(spec=SessionService),
         workflows=WorkflowUseCases(db),
         approvals=ApprovalUseCases(db),

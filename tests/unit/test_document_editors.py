@@ -1,3 +1,5 @@
+"""DocumentEditorService unit coverage (§6.15 / §9)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,8 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from murder.app.service.document_access import DocumentAccess
-from murder.app.service.document_editor_sessions import DocumentEditorSessions
+from murder.app.service.document_editors import (
+    DocumentEditorService,
+    EditorDisposition,
+    StartDocumentEditor,
+    TerminalSize,
+    document_target,
+)
+from murder.app.service.documents import DocumentService, PlanDocument
 
 
 class FakeEditorTmux:
@@ -14,9 +22,6 @@ class FakeEditorTmux:
         self.sessions: set[str] = set()
         self.created: list[tuple[str, Path, list[str], int, int]] = []
         self.resized: list[tuple[str, int, int]] = []
-        self.sent: list[tuple[str, str, bool, bool]] = []
-        self.frame = "\x1b[31mvim frame\x1b[0m"
-        self.dimensions = (91, 27)
 
     async def session_exists(self, name: str) -> bool:
         return name in self.sessions
@@ -36,46 +41,54 @@ class FakeEditorTmux:
     async def resize_session(self, name: str, *, columns: int, rows: int) -> None:
         self.resized.append((name, columns, rows))
 
-    async def send_keys(
-        self, name: str, text: str, *, literal: bool = True, enter: bool = True
-    ) -> None:
-        self.sent.append((name, text, literal, enter))
-
-    async def capture_viewport(self, name: str, *, escapes: bool = False) -> str:
-        assert name in self.sessions
-        assert escapes is True
-        return self.frame
-
-    async def pane_dimensions(self, name: str) -> tuple[int, int]:
-        assert name in self.sessions
-        return self.dimensions
-
 
 @pytest.fixture
 def editor_tmux(monkeypatch: pytest.MonkeyPatch) -> FakeEditorTmux:
     fake = FakeEditorTmux()
     monkeypatch.setattr(
-        "murder.app.service.document_editor_sessions.tmux.session_exists",
+        "murder.app.service.document_editors.tmux.session_exists",
         fake.session_exists,
     )
     monkeypatch.setattr(
-        "murder.app.service.document_editor_sessions.tmux.create_session",
+        "murder.app.service.document_editors.tmux.create_session",
         fake.create_session,
     )
     monkeypatch.setattr(
-        "murder.app.service.document_editor_sessions.tmux.resize_session",
+        "murder.app.service.document_editors.tmux.resize_session",
         fake.resize_session,
     )
     return fake
 
 
-def _bind_stub_sessions(sessions: DocumentEditorSessions) -> None:
-    class _StubSessions:
-        async def ensure_persisted_tmux_session(self, registration) -> object:
-            del registration
-            return object()
+class _StubSessions:
+    """Records SessionService registration calls for §6.15 assertions."""
 
-    sessions.bind_session_service(_StubSessions())  # type: ignore[arg-type]
+    def __init__(self) -> None:
+        self.registrations: list[object] = []
+
+    async def ensure_persisted_tmux_session(self, registration) -> object:
+        self.registrations.append(registration)
+        return object()
+
+
+def _editors(repo: Path) -> tuple[DocumentEditorService, _StubSessions]:
+    from unittest.mock import MagicMock
+
+    from tests.support.database import open_test_repo_db
+
+    db = open_test_repo_db(repo / "murder.db")
+    sessions = _StubSessions()
+    editors = DocumentEditorService(
+        repo,
+        DocumentService(
+            repo_root=repo,
+            db=db,
+            plan_sync=MagicMock(),
+            note_sync=MagicMock(),
+        ),
+        sessions=sessions,  # type: ignore[arg-type]
+    )
+    return editors, sessions
 
 
 async def test_start_uses_visual_argv_and_canonical_document_path(
@@ -89,24 +102,33 @@ async def test_start_uses_visual_argv_and_canonical_document_path(
     document.write_text("# plan\n")
     monkeypatch.setenv("VISUAL", "/usr/bin/env vim --clean")
     monkeypatch.setenv("EDITOR", "/bin/false")
-    sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
-    _bind_stub_sessions(sessions)
+    editors, sessions = _editors(repo)
 
-    session, reused = await sessions.start("plan", "plan with spaces", columns=73, rows=19)
+    result = await editors.start(
+        StartDocumentEditor(
+            target=PlanDocument("plan with spaces"),
+            size=TerminalSize(73, 19),
+        )
+    )
 
-    assert reused is False
-    assert session.document_path == document.resolve()
-    assert session.tmux_name.startswith("murder_editor_")
-    assert str(document) not in session.tmux_name
+    assert result.disposition is EditorDisposition.CREATED
+    assert result.document_path == document.resolve()
+    assert result.tmux_name.startswith("murder_editor_")
+    assert str(document) not in result.tmux_name
     assert editor_tmux.created == [
         (
-            session.tmux_name,
+            result.tmux_name,
             repo.resolve(),
             ["/usr/bin/env", "vim", "--clean", str(document.resolve())],
             73,
             19,
         )
     ]
+    assert len(sessions.registrations) == 1
+    reg = sessions.registrations[0]
+    assert reg.session_id == result.session_id
+    assert reg.session_kind == "document_editor"
+    assert reg.tmux_name == result.tmux_name
 
 
 async def test_blank_visual_falls_back_to_editor(
@@ -120,13 +142,18 @@ async def test_blank_visual_falls_back_to_editor(
     document.write_text("# safe\n")
     monkeypatch.setenv("VISUAL", "   ")
     monkeypatch.setenv("EDITOR", "/bin/true --fallback")
-    sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
-    _bind_stub_sessions(sessions)
+    editors, _sessions = _editors(repo)
 
-    session, reused = await sessions.start("plan", "safe", columns=80, rows=20)
+    result = await editors.start(
+        StartDocumentEditor(target=PlanDocument("safe"), size=TerminalSize(80, 20))
+    )
 
-    assert reused is False
-    assert editor_tmux.created[0][2] == ["/bin/true", "--fallback", str(session.document_path)]
+    assert result.disposition is EditorDisposition.CREATED
+    assert editor_tmux.created[0][2] == [
+        "/bin/true",
+        "--fallback",
+        str(result.document_path),
+    ]
 
 
 async def test_concurrent_start_reuses_one_session(
@@ -139,25 +166,31 @@ async def test_concurrent_start_reuses_one_session(
     document.parent.mkdir(parents=True)
     document.write_text("# safe\n")
     monkeypatch.setenv("VISUAL", "/bin/true")
-    sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
-    _bind_stub_sessions(sessions)
+    editors, sessions = _editors(repo)
+    request = StartDocumentEditor(target=PlanDocument("safe"), size=TerminalSize(80, 20))
 
     first, second = await asyncio.gather(
-        sessions.start("plan", "safe", columns=80, rows=20),
-        sessions.start("plan", "safe", columns=90, rows=25),
+        editors.start(request),
+        editors.start(
+            StartDocumentEditor(target=PlanDocument("safe"), size=TerminalSize(90, 25))
+        ),
     )
 
-    first_session, first_reused = first
-    second_session, second_reused = second
-    assert first_session == second_session
-    assert (first_reused, second_reused) == (False, True)
+    assert first.session_id == second.session_id
+    assert (first.disposition, second.disposition) == (
+        EditorDisposition.CREATED,
+        EditorDisposition.REUSED,
+    )
     assert len(editor_tmux.created) == 1
-    assert editor_tmux.resized == [(first_session.tmux_name, 90, 25)]
+    assert editor_tmux.resized == [(first.tmux_name, 90, 25)]
+    # Created and reused paths both register through SessionService (§6.15).
+    assert len(sessions.registrations) == 2
+    assert {r.session_id for r in sessions.registrations} == {first.session_id}
 
-    await sessions.resize(first_session.session_id, columns=91, rows=27)
-    assert editor_tmux.resized[-1] == (first_session.tmux_name, 91, 27)
-    assert not hasattr(sessions, "send")
-    assert not hasattr(DocumentEditorSessions, "capture")
+    await editors.resize(first.session_id, TerminalSize(91, 27))
+    assert editor_tmux.resized[-1] == (first.tmux_name, 91, 27)
+    assert not hasattr(editors, "send")
+    assert not hasattr(DocumentEditorService, "capture")
 
 
 async def test_rejects_document_symlinks_outside_the_repository(
@@ -172,13 +205,15 @@ async def test_rejects_document_symlinks_outside_the_repository(
     outside.write_text("outside\n")
     (plans / "escape.md").symlink_to(outside)
     monkeypatch.setenv("VISUAL", "/bin/true")
-    sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
-    _bind_stub_sessions(sessions)
+    editors, sessions = _editors(repo)
 
     with pytest.raises(ValueError, match="outside the repository"):
-        await sessions.start("plan", "escape", columns=80, rows=20)
+        await editors.start(
+            StartDocumentEditor(target=PlanDocument("escape"), size=TerminalSize(80, 20))
+        )
 
     assert editor_tmux.created == []
+    assert sessions.registrations == []
 
 
 @pytest.mark.parametrize(
@@ -209,10 +244,18 @@ async def test_reports_editor_configuration_errors_before_launch(
         monkeypatch.delenv("EDITOR", raising=False)
     else:
         monkeypatch.setenv("EDITOR", editor)
-    sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
-    _bind_stub_sessions(sessions)
+    editors, sessions = _editors(repo)
 
     with pytest.raises(RuntimeError, match=message):
-        await sessions.start("plan", "safe", columns=80, rows=20)
+        await editors.start(
+            StartDocumentEditor(target=PlanDocument("safe"), size=TerminalSize(80, 20))
+        )
 
     assert editor_tmux.created == []
+    assert sessions.registrations == []
+
+
+def test_document_target_helper_maps_kinds() -> None:
+    assert document_target("plan", "a") == PlanDocument("a")
+    with pytest.raises(ValueError, match="unsupported"):
+        document_target("wiki", "a")

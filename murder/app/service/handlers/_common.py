@@ -32,7 +32,7 @@ def threaded(fn: Any) -> Any:
     ``asyncio.to_thread`` runs ``fn`` off-loop and yields the dict. Only
     safe for handlers backed by ``ServiceReadModel`` (fresh per-call
     sqlite connection) or pure git/file reads — never a handler that
-    touches the shared long-lived ``runtime.db`` connection."""
+    touches the shared long-lived process ``db`` connection."""
     return lambda body=None: asyncio.to_thread(fn, body)
 
 

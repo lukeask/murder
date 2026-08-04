@@ -8,10 +8,17 @@ import os
 import shlex
 import shutil
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from murder.app.service.document_access import DocumentAccess
+from murder.app.service.documents import (
+    DocumentService,
+    DocumentTarget,
+    NoteDocument,
+    PlanDocument,
+    ReportDocument,
+)
 from murder.runtime.sessions.contracts import SessionCapabilities
 from murder.runtime.sessions.service import (
     SessionBackendKind,
@@ -22,21 +29,53 @@ from murder.runtime.terminal import tmux
 
 
 @dataclass(frozen=True)
+class TerminalSize:
+    columns: int
+    rows: int
+
+
+@dataclass(frozen=True)
+class StartDocumentEditor:
+    target: DocumentTarget
+    size: TerminalSize
+
+
+class EditorDisposition(str, Enum):
+    CREATED = "created"
+    REUSED = "reused"
+
+
+@dataclass(frozen=True)
+class EditorStartResult:
+    session_id: UUID
+    document_path: Path
+    disposition: EditorDisposition
+    tmux_name: str
+
+
+@dataclass(frozen=True)
+class EditorStatus:
+    session_id: UUID
+    document_path: Path
+    active: bool
+
+
+@dataclass(frozen=True)
 class EditorSession:
     session_id: UUID
     document_path: Path
     tmux_name: str
 
 
-class DocumentEditorSessions:
+class DocumentEditorService:
     """Resolve, validate, create, reuse and drive one editor session per document."""
 
     def __init__(
         self,
         repo_root: Path,
-        documents: DocumentAccess,
+        documents: DocumentService,
         *,
-        sessions: SessionService | None = None,
+        sessions: SessionService,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.documents = documents
@@ -45,23 +84,11 @@ class DocumentEditorSessions:
         self._by_path: dict[Path, EditorSession] = {}
         self._start_lock = asyncio.Lock()
 
-    def update_documents(self, documents: DocumentAccess) -> None:
-        self.documents = documents
-
-    def bind_session_service(self, sessions: SessionService) -> None:
-        self._sessions = sessions
-
-    def _resolve(self, kind: str, name: str) -> Path:
+    def _resolve(self, target: DocumentTarget) -> Path:
+        name = target.name
         if name != name.strip() or Path(name).name != name or "\\" in name or name in {".", ".."}:
             raise ValueError("document name must be a single safe path component")
-        if kind == "plan":
-            path = self.documents.plan_path_for(name)
-        elif kind == "note":
-            path = self.documents.note_path_for(name)
-        elif kind == "report":
-            path = self.documents.report_path_for(name)
-        else:
-            raise ValueError(f"unsupported document kind: {kind}")
+        path = self.documents.path_for(target)
         canonical = path.resolve(strict=False)
         if not canonical.is_relative_to(self.repo_root):
             raise ValueError("document path is outside the repository")
@@ -106,8 +133,6 @@ class DocumentEditorSessions:
         return editor_argv
 
     async def _register_session(self, session: EditorSession) -> None:
-        if self._sessions is None:
-            raise RuntimeError("session service is unavailable")
         await self._sessions.ensure_persisted_tmux_session(
             TmuxSessionRegistration(
                 session_id=session.session_id,
@@ -118,27 +143,38 @@ class DocumentEditorSessions:
             )
         )
 
-    async def start(
-        self, kind: str, name: str, *, columns: int, rows: int
-    ) -> tuple[EditorSession, bool]:
-        path = self._resolve(kind, name)
-        session = self._identity(path)
+    async def start(self, request: StartDocumentEditor) -> EditorStartResult:
+        path = self._resolve(request.target)
         async with self._start_lock:
+            # Identity + tmux create/reuse share the lock so concurrent starts
+            # for one document converge on a single process-local session (§6.15).
+            session = self._identity(path)
             if await tmux.session_exists(session.tmux_name):
-                await tmux.resize_session(session.tmux_name, columns=columns, rows=rows)
+                await tmux.resize_session(
+                    session.tmux_name,
+                    columns=request.size.columns,
+                    rows=request.size.rows,
+                )
                 await self._register_session(session)
-                return session, True
-            editor_argv = self._editor_argv()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            await tmux.create_session(
-                session.tmux_name,
-                self.repo_root,
-                [*editor_argv, str(path)],
-                width=columns,
-                height=rows,
+                disposition = EditorDisposition.REUSED
+            else:
+                editor_argv = self._editor_argv()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                await tmux.create_session(
+                    session.tmux_name,
+                    self.repo_root,
+                    [*editor_argv, str(path)],
+                    width=request.size.columns,
+                    height=request.size.rows,
+                )
+                await self._register_session(session)
+                disposition = EditorDisposition.CREATED
+            return EditorStartResult(
+                session_id=session.session_id,
+                document_path=session.document_path,
+                disposition=disposition,
+                tmux_name=session.tmux_name,
             )
-            await self._register_session(session)
-            return session, False
 
     def get(self, session_id: UUID) -> EditorSession:
         try:
@@ -146,13 +182,42 @@ class DocumentEditorSessions:
         except KeyError as exc:
             raise ValueError(f"unknown document editor session {session_id}") from exc
 
-    async def active(self, session_id: UUID) -> bool:
-        return await tmux.session_exists(self.get(session_id).tmux_name)
+    async def status(self, session_id: UUID) -> EditorStatus:
+        session = self.get(session_id)
+        return EditorStatus(
+            session_id=session.session_id,
+            document_path=session.document_path,
+            active=await tmux.session_exists(session.tmux_name),
+        )
 
-    async def resize(self, session_id: UUID, *, columns: int, rows: int) -> None:
+    async def resize(self, session_id: UUID, size: TerminalSize) -> None:
         session = self.get(session_id)
         if await tmux.session_exists(session.tmux_name):
-            await tmux.resize_session(session.tmux_name, columns=columns, rows=rows)
+            await tmux.resize_session(
+                session.tmux_name, columns=size.columns, rows=size.rows
+            )
 
 
-__all__ = ["DocumentEditorSessions", "EditorSession"]
+def document_target(kind: str, name: str) -> DocumentTarget:
+    """Map protocol kind strings onto typed document targets."""
+    match kind:
+        case "plan":
+            return PlanDocument(name)
+        case "note":
+            return NoteDocument(name)
+        case "report":
+            return ReportDocument(name)
+        case _:
+            raise ValueError(f"unsupported document kind: {kind}")
+
+
+__all__ = [
+    "DocumentEditorService",
+    "EditorDisposition",
+    "EditorSession",
+    "EditorStartResult",
+    "EditorStatus",
+    "StartDocumentEditor",
+    "TerminalSize",
+    "document_target",
+]

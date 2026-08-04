@@ -514,12 +514,9 @@ async def test_registry_returns_one_controller_and_recovers_persisted_record() -
 
 
 async def test_duplicate_live_controls_share_the_persisted_session_controller() -> None:
+    from murder.runtime.sessions.service import SessionService
+
     db = open_test_repo_db(Path(":memory:"))
-    store = SessionStore(db)
-    registry = SessionControllerRegistry(
-        store=store,
-        controller_factory=SessionControllerRegistry.trusted_local_controller_factory(store),
-    )
 
     def bare_control() -> VerifiedHarnessControlSession:
         control = object.__new__(VerifiedHarnessControlSession)
@@ -533,22 +530,22 @@ async def test_duplicate_live_controls_share_the_persisted_session_controller() 
         control.terminal_session = "tmux-agent-1"
         return control
 
-    first_control = bare_control()
-    second_control = bare_control()
-    first, second = await asyncio.gather(
-        first_control.ensure_session_controller(
-            repository_id=db.repository_id,
-            agent_key="agent-1",
-            registry=registry,
-        ),
-        second_control.ensure_session_controller(
-            repository_id=db.repository_id,
-            agent_key="agent-1",
-            registry=registry,
-        ),
-    )
-    assert first is second
-    await registry.close()
+    async with SessionService.open(db) as sessions:
+        first_control = bare_control()
+        second_control = bare_control()
+        first, second = await asyncio.gather(
+            first_control.ensure_session_controller(
+                repository_id=db.repository_id,
+                agent_key="agent-1",
+                sessions=sessions,
+            ),
+            second_control.ensure_session_controller(
+                repository_id=db.repository_id,
+                agent_key="agent-1",
+                sessions=sessions,
+            ),
+        )
+        assert first is second
     db.close()
 
 

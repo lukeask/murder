@@ -180,7 +180,7 @@ def test_reserved_values_are_persisted_with_runtime_warnings(tmp_path: Path) -> 
 class _Host:
     def __init__(self) -> None:
         self.repo_root = Path("/repo")
-        self.runtime: object | None = None
+        self.db: object | None = None
         self.orchestrator: object | None = None
         self.queries: dict[QueryName, object] = {}
         self.commands: dict[CommandName, object] = {}
@@ -225,7 +225,7 @@ def test_tui_handlers_publish_revisions_and_workflow_id(
         )
 
     monkeypatch.setattr(launch, "run_workflow_by_name", run_workflow)
-    host.runtime = SimpleNamespace(db=object())
+    host.db = object()
     host.orchestrator = _Orchestrator()
     start = host.commands[CommandName.WORKFLOW_START]
     assert callable(start)

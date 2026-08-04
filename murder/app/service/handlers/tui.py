@@ -135,14 +135,14 @@ def register(
         name = params.name
         args = params.args
 
-        # Single start guard covering runtime+db+orchestrator, matching the
-        # sibling handlers' message. (orchestrator and runtime are set
-        # together at startup, so a pre-start request would otherwise leak
-        # the internal "orchestrator unavailable" error instead.)
-        if host.runtime is None or host.runtime.db is None or host.orchestrator is None:
+        # Single start guard covering db+orchestrator, matching the sibling
+        # handlers' message. (orchestrator and db are set together at startup,
+        # so a pre-start request would otherwise leak the internal
+        # "orchestrator unavailable" error instead.)
+        if host.db is None or host.orchestrator is None:
             raise RuntimeError("service not started")
         orchestrator = host.orchestrator
-        db = host.runtime.db
+        db = host.db
 
         try:
             result = run_workflow_by_name(db, host.repo_root, name, args)

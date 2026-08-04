@@ -10,7 +10,6 @@ import asyncio
 import re
 from pathlib import Path
 
-from murder.app.service.runtime import Runtime
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -19,11 +18,10 @@ from murder.config import (
     ProjectConfig,
 )
 from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
-from murder.runtime.orchestration.orchestrator import Orchestrator
-from tests.support.orchestrator import adapt_rt_stub
 from murder.state.persistence.runs import insert_run
 from murder.work import notes as notes_mod
 from tests.support.database import open_test_repo_db
+from tests.support.orchestrator import build_test_orchestrator
 
 
 def _config() -> Config:
@@ -36,23 +34,41 @@ def _config() -> Config:
     )
 
 
-def _runtime(repo_root: Path) -> Runtime:
+def _runtime(repo_root: Path):
+    from types import SimpleNamespace
+
     database = repo_root / ".murder" / "murder.db"
     database.parent.mkdir(parents=True, exist_ok=True)
     conn = open_test_repo_db(database)
-    rt = Runtime(_config(), repo_root)
-    rt.db = conn
-    rt.run_id = "run-test"
-    insert_run(conn, rt.run_id, "{}")
-    rt.orchestration_events = InProcessOrchestrationEventSink()
-    return rt
+    insert_run(conn, "run-test", "{}")
+    events = InProcessOrchestrationEventSink()
+    orch = build_test_orchestrator(
+        repo_root=repo_root,
+        db=conn,
+        config=_config(),
+        run_id="run-test",
+        events=events,
+    )
+    return SimpleNamespace(
+        config=_config(),
+        repo_root=repo_root,
+        db=conn,
+        run_id="run-test",
+        orchestration_events=events,
+        orch=orch,
+        agents=orch.agents,
+    )
 
 
-async def _drain(rt: Runtime) -> None:
+async def _drain(rt) -> None:
     agents = getattr(rt, "agents", None)
     emit_tasks = getattr(agents, "_emit_tasks", None) if agents is not None else None
     if emit_tasks:
         await asyncio.gather(*list(emit_tasks))
+
+
+def _orch(rt):
+    return rt.orch
 
 
 # === Item 8: spawn_if_needed gate ============================================
@@ -60,7 +76,7 @@ async def _drain(rt: Runtime) -> None:
 
 def test_send_message_no_spawn_when_planner_not_live(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     spawned: list[str] = []
 
@@ -85,7 +101,7 @@ def test_send_message_no_spawn_when_planner_not_live(repo_root: Path) -> None:
 
 def test_send_message_spawns_when_planner_not_live_by_default(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     spawned: list[str] = []
 
@@ -104,7 +120,7 @@ def test_send_message_spawns_when_planner_not_live_by_default(repo_root: Path) -
 
 def test_send_message_delivers_to_live_planner_without_spawn(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     spawned: list[str] = []
 
@@ -145,7 +161,7 @@ def test_send_message_delivers_to_live_planner_without_spawn(repo_root: Path) ->
 
 def test_create_plan_with_body_seeds_markdown(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     body = "# Custom Plan\n\nSeeded body content.\n"
     result = asyncio.run(orch.create_plan("seeded", "", body=body))
@@ -169,7 +185,7 @@ def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path, mon
         lambda cfg, user_cfg, feature, legacy_role: (None, cfg),
     )
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     result = asyncio.run(
         orch.create_plan(None, "", body="A plan about refactoring the parser.", auto_name=True)
@@ -190,7 +206,7 @@ def test_create_plan_auto_name_falls_back_to_timestamp_slug(repo_root: Path, mon
 
 def test_create_plan_auto_name_uses_llm_slug(repo_root: Path, monkeypatch) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     async def _fake_meta(**kwargs):
         return {"short_vers": "x", "one_or_two_word_title": "Parser Rewrite"}
@@ -214,7 +230,7 @@ def test_create_plan_auto_name_uses_llm_slug(repo_root: Path, monkeypatch) -> No
 
 def test_submit_capture_custom_title_skips_llm(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     # No client configured -> if the LLM path were taken it would fall back; the
     # custom-title path must instead use the slugified title. Guard by failing
@@ -244,7 +260,7 @@ def test_submit_capture_custom_title_skips_llm(repo_root: Path) -> None:
 
 def test_submit_capture_blank_title_uses_llm_path(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     seen: list[dict] = []
 
@@ -267,7 +283,7 @@ def test_submit_capture_blank_title_uses_llm_path(repo_root: Path) -> None:
 
 def test_submit_capture_llm_error_keeps_timestamped_note(repo_root: Path) -> None:
     rt = _runtime(repo_root)
-    orch = adapt_rt_stub(rt)
+    orch = _orch(rt)
 
     async def _boom(**kwargs):
         raise RuntimeError("LLM API error")

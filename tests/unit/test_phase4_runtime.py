@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 import pytest
 
 from murder.app.service.handlers import trigger as trigger_handler
-from murder.app.service.runtime import Runtime
 from murder.facts.contracts import (
     FactActor,
     FactCorrelation,
@@ -1078,7 +1077,9 @@ def test_manual_enqueue_tick_starts_workflow() -> None:
     assert key == "click-42"
 
     class _Host:
-        runtime = type("R", (), {"db": conn})()
+        def __init__(self) -> None:
+            self.db = conn
+            self.handler = None
 
         def register_application_command(self, name: object, handler: object) -> None:
             del name

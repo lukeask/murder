@@ -152,7 +152,6 @@ class VerifiedControlFactory:
             repository_id=self.db.repository_id,
             agent_key=agent.id,
             sessions=self.sessions,
-            registry=None if self.sessions is None else self.sessions.controllers,
             recover=True,
         )
 
