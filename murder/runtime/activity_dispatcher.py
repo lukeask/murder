@@ -17,6 +17,7 @@ from murder.runtime.admission import (
 )
 from murder.runtime.sessions.contracts import SessionStatus
 from murder.runtime.sessions.persistence import SessionStore
+from murder.runtime.sessions.registry import SessionControllerRegistry
 from murder.state.persistence.activities import (
     ActivityLifecycleError,
     claim_activity,
@@ -216,6 +217,7 @@ class ActivityDispatcher:
 
 def build_default_activity_dispatcher(
     db: RepoDb,
+    registry: SessionControllerRegistry,
     *,
     worker_id: str = "activity-dispatcher",
     max_running: int = 8,
@@ -291,7 +293,7 @@ def build_default_activity_dispatcher(
         db,
         router=router,
         admission=admission,
-        executor=build_session_bound_executor(db),
+        executor=build_session_bound_executor(registry=registry),
         worker_id=worker_id,
         clock=clock,
     )

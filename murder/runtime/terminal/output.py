@@ -16,7 +16,6 @@ from uuid import UUID
 
 from murder.runtime.terminal import tmux
 from murder.runtime.terminal.vt import VtEmulator, VtSnapshot
-from murder.state.persistence.connection import RepoDb
 
 LOGGER = logging.getLogger(__name__)
 _KEYFRAME_INTERVAL_S = 2.0
@@ -208,27 +207,24 @@ class TmuxTerminalOutput:
 
 
 class TerminalOutputRegistry:
-    """Service-owned shared sources keyed by persisted session UUID."""
+    """Process-local shared output readers keyed by session UUID.
 
-    def __init__(self, db: RepoDb) -> None:
-        self._db = db
+    Callers resolve and validate the persisted session first, then supply the
+    tmux transport name. This registry owns only live control-mode readers.
+    """
+
+    def __init__(self) -> None:
         self._outputs: dict[UUID, TmuxTerminalOutput] = {}
         self._lock = asyncio.Lock()
 
-    async def open(self, session_id: UUID) -> TmuxTerminalOutput:
+    async def open(self, session_id: UUID, *, tmux_name: str) -> TmuxTerminalOutput:
+        if not tmux_name:
+            raise ValueError("tmux_name must not be empty")
         async with self._lock:
             existing = self._outputs.get(session_id)
             if existing is not None and not existing.closed:
                 return existing
-            row = self._db.conn.execute(
-                "SELECT transport, transport_ref FROM harness_sessions WHERE repository_id = ? AND session_id = ?",
-                (self._db.repository_id, str(session_id)),
-            ).fetchone()
-            if row is None:
-                raise ValueError(f"persisted session {session_id} does not exist")
-            if str(row["transport"]) != "tmux":
-                raise ValueError(f"session {session_id} does not expose a tmux terminal")
-            output = TmuxTerminalOutput(str(row["transport_ref"]))
+            output = TmuxTerminalOutput(tmux_name)
             await output.start()
             self._outputs[session_id] = output
             return output

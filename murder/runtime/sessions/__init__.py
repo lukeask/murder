@@ -37,17 +37,33 @@ if TYPE_CHECKING:
         ensure_session_schema,
     )
     from murder.runtime.sessions.registry import SessionControllerRegistry
+    from murder.runtime.sessions.service import (
+        SessionBackendKind,
+        SessionIdentityConflictError,
+        SessionService,
+        TmuxSessionRegistration,
+    )
 
 
 _LAZY_EXPORTS = {
     "SESSION_SCHEMA_SQL": ("murder.runtime.sessions.persistence", "SESSION_SCHEMA_SQL"),
+    "SessionBackendKind": ("murder.runtime.sessions.service", "SessionBackendKind"),
     "SessionController": ("murder.runtime.sessions.controller", "SessionController"),
     "SessionControllerRegistry": (
         "murder.runtime.sessions.registry",
         "SessionControllerRegistry",
     ),
+    "SessionIdentityConflictError": (
+        "murder.runtime.sessions.service",
+        "SessionIdentityConflictError",
+    ),
+    "SessionService": ("murder.runtime.sessions.service", "SessionService"),
     "SessionStore": ("murder.runtime.sessions.persistence", "SessionStore"),
     "TmuxSessionBackend": ("murder.runtime.sessions.backend", "TmuxSessionBackend"),
+    "TmuxSessionRegistration": (
+        "murder.runtime.sessions.service",
+        "TmuxSessionRegistration",
+    ),
     "ensure_session_schema": ("murder.runtime.sessions.persistence", "ensure_session_schema"),
     "verified_tmux_capabilities": (
         "murder.runtime.sessions.capabilities",
@@ -77,15 +93,19 @@ __all__ = [
     "ResizeTerminal",
     "SESSION_SCHEMA_SQL",
     "SendStructuredMessage",
+    "SessionBackendKind",
     "SessionCapabilities",
     "SessionCommand",
     "SessionController",
     "SessionControllerRegistry",
+    "SessionIdentityConflictError",
+    "SessionService",
     "SessionStatus",
     "SessionStore",
     "SessionTransport",
     "TerminateSession",
     "TmuxSessionBackend",
+    "TmuxSessionRegistration",
     "WriteTerminalInput",
     "WriterLease",
     "WriterLeaseDenied",

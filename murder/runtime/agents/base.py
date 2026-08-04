@@ -277,6 +277,7 @@ class HarnessBackedAgent(LifecycleParticipant):
         await self.verified_harness_control.ensure_session_controller(
             repository_id=runtime.db.repository_id,
             agent_key=self.id,
+            sessions=getattr(runtime, "sessions", None),
             registry=getattr(runtime, "session_controllers", None),
             recover=True,
         )

@@ -43,6 +43,8 @@ def _config() -> Config:
 
 
 def _runtime(repo_root: Path) -> Runtime:
+    from murder.runtime.sessions.service import SessionService
+
     (repo_root / ".murder").mkdir(exist_ok=True)
     db = open_test_repo_db(repo_root / ".murder" / "murder.db")
     rt = Runtime(_config(), repo_root)
@@ -50,6 +52,7 @@ def _runtime(repo_root: Path) -> Runtime:
     rt.run_id = "run-test"
     insert_run(db, rt.run_id, "{}")
     rt.orchestration_events = InProcessOrchestrationEventSink()
+    rt.sessions = SessionService(db)
     return rt
 
 

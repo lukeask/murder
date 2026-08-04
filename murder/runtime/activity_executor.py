@@ -15,8 +15,7 @@ from murder.runtime.sessions.contracts import (
     PrincipalRef,
     SendStructuredMessage,
 )
-from murder.runtime.sessions.registry import registry_for_connection
-from murder.state.persistence.connection import RepoDb
+from murder.runtime.sessions.registry import SessionControllerRegistry
 from murder.work.activities.runtime import (
     ActivityClaim,
     ActivityFailure,
@@ -28,7 +27,8 @@ from murder.work.workflows.runtime import RunAgentTurnActivity, RunReviewActivit
 
 
 def build_session_bound_executor(
-    db: RepoDb,
+    *,
+    registry: SessionControllerRegistry,
 ) -> Callable[
     [ActivityRecord, ActivityClaim, Callable[[], ActivityClaim]],
     object,
@@ -66,7 +66,6 @@ def build_session_bound_executor(
                 ),
                 retryable=True,
             )
-        registry = registry_for_connection(db)
         controller = await registry.get_or_create(session_id, recover=True)
         instructions = (
             payload.instructions

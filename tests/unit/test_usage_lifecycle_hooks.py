@@ -37,11 +37,14 @@ def _config() -> Config:
 
 
 def _runtime(conn, tmp_path: Path):
+    from murder.runtime.sessions.service import SessionService
+
     async def no_sleep(_: float) -> None:
         return None
 
     return SimpleNamespace(
         db=conn,
+        sessions=SessionService(conn),
         config=_config(),
         repo_root=tmp_path,
         orchestration_events=None,

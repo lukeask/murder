@@ -79,6 +79,8 @@ def _send_texts(ft: FakeTmux) -> list[str]:
 
 
 def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
+    from murder.runtime.sessions.service import SessionService
+
     db = open_test_repo_db(tmp_path / "state.db")
 
     async def no_sleep(_: float) -> None:
@@ -86,6 +88,7 @@ def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
 
     return SimpleNamespace(
         db=db,
+        sessions=SessionService(db),
         orchestration_events=None,
         run_id=None,
         sync_agent=MagicMock(),

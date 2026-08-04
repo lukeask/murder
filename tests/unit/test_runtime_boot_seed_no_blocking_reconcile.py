@@ -162,7 +162,7 @@ def test_activity_dispatcher_starts_after_reconcile_and_is_cancelled_on_stop(
     rt = Runtime(
         _config(),
         repo_root,
-        activity_dispatcher_factory=lambda _db: _make_dispatcher(),
+        activity_dispatcher_factory=lambda _db, _registry=None: _make_dispatcher(),
     )
 
     def _make_dispatcher() -> _Dispatcher:

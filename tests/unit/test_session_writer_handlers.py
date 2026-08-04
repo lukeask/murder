@@ -86,11 +86,19 @@ def wired_handlers(tmp_path):
         backend_factory=lambda _record: RecordingBackend(),
         controller_factory=SessionControllerRegistry.trusted_local_controller_factory(store),
     )
-    host = _FakeHost(SimpleNamespace(db=db, session_controllers=registry))
+    from murder.runtime.sessions.service import SessionService
+
+    sessions = object.__new__(SessionService)
+    sessions._db = db  # noqa: SLF001
+    sessions._store = store  # noqa: SLF001
+    sessions._controllers = registry  # noqa: SLF001
+    sessions._outputs = None  # noqa: SLF001
+    sessions._closed = False  # noqa: SLF001
+    host = _FakeHost(SimpleNamespace(db=db, sessions=sessions, session_controllers=registry))
     sessions_handlers.register(
         host,  # type: ignore[arg-type]
         ProjectionProviderRegistry(),
-        host.runtime,
+        sessions,
     )
     yield host, session_id, store, registry
     db.close()
@@ -245,11 +253,19 @@ async def test_session_writer_requires_live_controller_when_no_backend(tmp_path)
     session_id = uuid4()
     store.save_session(_session_record(session_id, db.repository_id))
     registry = SessionControllerRegistry(store=store)
-    host = _FakeHost(SimpleNamespace(db=db, session_controllers=registry))
+    from murder.runtime.sessions.service import SessionService
+
+    sessions = object.__new__(SessionService)
+    sessions._db = db  # noqa: SLF001
+    sessions._store = store  # noqa: SLF001
+    sessions._controllers = registry  # noqa: SLF001
+    sessions._outputs = None  # noqa: SLF001
+    sessions._closed = False  # noqa: SLF001
+    host = _FakeHost(SimpleNamespace(db=db, sessions=sessions, session_controllers=registry))
     sessions_handlers.register(
         host,  # type: ignore[arg-type]
         ProjectionProviderRegistry(),
-        host.runtime,
+        sessions,
     )
     holder = PrincipalRef(kind=PrincipalKind.SERVICE, id="trusted-local")
 

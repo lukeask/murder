@@ -16,7 +16,7 @@ from murder.app.service.handlers import (
     plan,
     report,
     roster,
-    sessions,
+    sessions as sessions_handlers,
     settings,
     state,
     ticket,
@@ -26,6 +26,7 @@ from murder.app.service.handlers import (
     worktree,
 )
 from murder.app.service.projection_registry import ProjectionProviderRegistry
+from murder.runtime.sessions.service import SessionService
 
 if TYPE_CHECKING:
     from murder.app.service.host import ServiceHost
@@ -36,6 +37,7 @@ def register_all(
     *,
     projections: ProjectionProviderRegistry | None = None,
     effects: object | None = None,
+    sessions: SessionService | None = None,
 ) -> None:
     """Compose built-in features at the application boundary.
 
@@ -46,6 +48,11 @@ def register_all(
     """
     feature_projections = projections or ProjectionProviderRegistry()
     feature_effects = app if effects is None else effects
+    session_service = sessions
+    if session_service is None:
+        candidate = getattr(feature_effects, "sessions", None)
+        if isinstance(candidate, SessionService):
+            session_service = candidate
 
     approvals.register(
         app,
@@ -62,10 +69,12 @@ def register_all(
     )
     state.register(legacy_host, projections)
     roster.register(legacy_host, projections)
-    sessions.register(
+    if session_service is None:
+        raise RuntimeError("SessionService is required for session handlers")
+    sessions_handlers.register(
         app,
         feature_projections,
-        cast(sessions.SessionEffects, feature_effects),
+        session_service,
     )
     ticket.register(legacy_host)
     plan.register(legacy_host)

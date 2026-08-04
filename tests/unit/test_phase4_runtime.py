@@ -25,6 +25,8 @@ from murder.runtime.admission import (
     Rejected,
     decide_admission,
 )
+from murder.runtime.sessions.persistence import SessionStore
+from murder.runtime.sessions.registry import SessionControllerRegistry
 from murder.runtime.trigger_dispatcher import (
     TriggerDispatcher,
     build_default_trigger_dispatcher,
@@ -1150,7 +1152,11 @@ def test_default_activity_dispatcher_routes_admits_and_requires_session() -> Non
         harness="codex",
         models=[{"id": "gpt-5", "label": "GPT-5"}],
     )
-    dispatcher = build_default_activity_dispatcher(conn, worker_id="test-worker")
+    dispatcher = build_default_activity_dispatcher(
+        conn,
+        SessionControllerRegistry(store=SessionStore(conn)),
+        worker_id="test-worker",
+    )
     report = asyncio.run(dispatcher.tick())
     activity = get_activity(conn, activity_id)
     assert activity is not None

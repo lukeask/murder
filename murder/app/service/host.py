@@ -6,6 +6,7 @@ import contextlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import UUID, uuid4
 
 from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.service.application import ApplicationDispatcher, ApplicationHandler
@@ -24,6 +25,13 @@ from murder.app.service.supervisor import Supervisor
 from murder.config import Config
 from murder.facts.log import FactLog, ProjectionInputLog
 from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.runtime.sessions import (
+    PrincipalKind,
+    PrincipalRef,
+    SessionTransport,
+    WriterMode,
+    WriteTerminalInput,
+)
 from murder.state.storage.service_registry import (
     remove_service_session,
     write_service_session,
@@ -98,10 +106,13 @@ class ServiceHost:
 
         if self.runtime is None:
             raise RuntimeError("service runtime is unavailable")
+        if self.runtime.sessions is None:
+            raise RuntimeError("session service is unavailable")
         register_all(
             self,
             projections=self.projection_providers,
             effects=self.runtime,
+            sessions=self.runtime.sessions,
         )
 
     async def start(self) -> None:
@@ -210,16 +221,62 @@ class ServiceHost:
                 plan_name, message, on_failure=notify_failure
             )
 
+        assert self.runtime.sessions is not None
+        sessions = self.runtime.sessions
+
+        async def terminal_input(
+            session_id: UUID,
+            client_id: str,
+            lease_id: UUID,
+            fence: int,
+            data: bytes,
+        ) -> None:
+            import base64
+
+            record = sessions.store.get_session(session_id)
+            if record is None or record.harness != "document_editor":
+                raise ValueError("terminal input target is not a document editor")
+            if record.transport is not SessionTransport.TMUX:
+                raise ValueError("document editor does not expose a tmux terminal")
+            controller = await sessions.controllers.get_or_create(record)
+            await controller.execute(
+                WriteTerminalInput(
+                    operation_id=uuid4(),
+                    lease_id=lease_id,
+                    fence=fence,
+                    encoding="base64",
+                    data=base64.b64encode(data).decode("ascii"),
+                ),
+                principal=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
+            )
+
+        async def terminal_input_validator(
+            session_id: UUID,
+            client_id: str,
+            lease_id: UUID,
+            fence: int,
+        ) -> None:
+            record = sessions.store.get_session(session_id)
+            if record is None or record.harness != "document_editor":
+                raise ValueError("terminal input target is not a document editor")
+            sessions.store.validate_writer_lease(
+                session_id=session_id,
+                lease_id=lease_id,
+                fence=fence,
+                holder=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
+                required_mode=WriterMode.RAW_TERMINAL,
+            )
+
         self.socket_server = ApplicationSocketServer(
             gateway=ApplicationGateway(application, schedule_plan_seed=schedule_plan_seed),
             facts=self.fact_log,
             projection_inputs=self.projection_input_log,
             providers=self.projection_providers,
             run_id=str(self.runtime.run_id),
-            terminal_capture=self.runtime.capture_terminal_frame,
-            terminal_output_open=self.runtime.open_terminal_output,
-            terminal_input=self.runtime.write_document_editor_terminal_input,
-            terminal_input_validator=self.runtime.validate_document_editor_terminal_writer,
+            terminal_capture=sessions.capture_terminal,
+            terminal_output_open=sessions.open_terminal_output,
+            terminal_input=terminal_input,
+            terminal_input_validator=terminal_input_validator,
             assets_dir=(self.repo_root / "webui" / "dist"),
         )
         self.websocket_bound = await self.socket_server.start(

@@ -320,6 +320,7 @@ class VerifiedHarnessControlSession:
         *,
         repository_id: UUID | str | None = None,
         agent_key: str | None = None,
+        sessions: object | None = None,
         registry: object | None = None,
         recover: bool = False,
     ) -> SessionController:
@@ -333,18 +334,15 @@ class VerifiedHarnessControlSession:
         from murder.runtime.sessions.capabilities import (  # noqa: PLC0415
             verified_tmux_capabilities,
         )
-        from murder.runtime.sessions.contracts import (  # noqa: PLC0415
-            HarnessSessionRecord,
-            SessionStatus,
-            SessionTransport,
-        )
-        from murder.runtime.sessions.persistence import (  # noqa: PLC0415
-            SessionStore,
-            ensure_session_schema,
-        )
+        from murder.runtime.sessions.persistence import ensure_session_schema  # noqa: PLC0415
         from murder.runtime.sessions.registry import (  # noqa: PLC0415
             SessionControllerRegistry,
-            registry_for_connection,
+        )
+        from murder.runtime.sessions.service import (  # noqa: PLC0415
+            SessionBackendKind,
+            SessionService,
+            TmuxSessionRegistration,
+            persist_or_revive_tmux_session,
         )
 
         ensure_session_schema(self._connection)
@@ -356,48 +354,57 @@ class VerifiedHarnessControlSession:
             NAMESPACE_URL,
             f"murder:harness-session:{repository_uuid}:{durable_agent_key}",
         )
-        store = SessionStore(self._db)
-        record = store.get_session(session_id)
-        if record is None:
-            record = HarnessSessionRecord(
-                session_id=session_id,
-                agent_id=uuid5(NAMESPACE_URL, f"murder:agent:{durable_agent_key}"),
+        agent_id = uuid5(NAMESPACE_URL, f"murder:agent:{durable_agent_key}")
+        registration = TmuxSessionRegistration(
+            session_id=session_id,
+            session_kind=str(self.harness_id),
+            tmux_name=self.terminal_session,
+            capabilities=verified_tmux_capabilities(str(self.harness_id)),
+            backend=SessionBackendKind.VERIFIED_HARNESS,
+            agent_id=agent_id,
+        )
+        backend = VerifiedHarnessSessionBackend(self)
+
+        if isinstance(sessions, SessionService):
+            controller = await sessions.ensure_persisted_tmux_session(
+                registration,
+                session_backend=backend,
+                recover=recover,
+            )
+            selected_registry = sessions.controllers
+            store = sessions.store
+        else:
+            selected_registry = (
+                registry if isinstance(registry, SessionControllerRegistry) else None
+            )
+            if selected_registry is None:
+                raise ValueError(
+                    "SessionService or SessionControllerRegistry is required "
+                    "when creating a session controller"
+                )
+            from murder.runtime.sessions.contracts import SessionStatus  # noqa: PLC0415
+            from murder.runtime.sessions.persistence import SessionStore  # noqa: PLC0415
+
+            store = SessionStore(self._db)
+            prior = store.get_session(session_id)
+            record = persist_or_revive_tmux_session(
+                store,
                 repository_id=repository_uuid,
-                harness=str(self.harness_id),
-                transport=SessionTransport.TMUX,
-                transport_ref=self.terminal_session,
-                status=SessionStatus.READY,
-                revision=0,
-                capabilities=verified_tmux_capabilities(str(self.harness_id)),
-                started_at=datetime.now(timezone.utc),
+                registration=registration,
             )
-            store.save_session(record)
-        elif record.status in {
-            SessionStatus.STOPPING,
-            SessionStatus.STOPPED,
-            SessionStatus.FAILED,
-            SessionStatus.LOST,
-        }:
-            resumed = record.model_copy(
-                update={
-                    "transport_ref": self.terminal_session,
-                    "status": SessionStatus.READY,
-                    "revision": record.revision + 1,
-                    "stopped_at": None,
-                }
+            if prior is not None and prior.status in {
+                SessionStatus.STOPPING,
+                SessionStatus.STOPPED,
+                SessionStatus.FAILED,
+                SessionStatus.LOST,
+            }:
+                await selected_registry.remove(record.session_id)
+            controller = await selected_registry.get_or_create(
+                record,
+                backend=backend,
+                recover=recover,
             )
-            store.save_session(resumed, expected_revision=record.revision)
-            record = resumed
-        selected_registry = (
-            registry
-            if isinstance(registry, SessionControllerRegistry)
-            else registry_for_connection(self._db)
-        )
-        controller = await selected_registry.get_or_create(
-            record,
-            backend=VerifiedHarnessSessionBackend(self),
-            recover=recover,
-        )
+
         self._session_store = store
         self._session_controller_registry = selected_registry
         self._session_controller = controller

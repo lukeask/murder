@@ -16,17 +16,15 @@ Process model rules:
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import json
 import logging
 import signal
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from murder.app.service.agent_registry import AgentRegistry
 from murder.app.service.document_access import DocumentAccess
@@ -34,10 +32,6 @@ from murder.app.service.document_editor_sessions import DocumentEditorSessions, 
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions, shutdown_live_agents
-from murder.app.service.terminal_capture import (
-    CapturedTerminalFrame,
-    capture_persisted_tmux_frame,
-)
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.advanced_log import (
     AdvancedLogBase,
@@ -67,24 +61,9 @@ from murder.runtime.orchestration.notifier import (
 )
 from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEventSink
 from murder.runtime.orchestration.structured_decisions import StructuredDecisionRouter
-from murder.runtime.sessions import (
-    HarnessSessionRecord,
-    PrincipalKind,
-    PrincipalRef,
-    SessionCapabilities,
-    SessionStatus,
-    SessionStore,
-    SessionTransport,
-    TmuxSessionBackend,
-    WriterMode,
-    WriteTerminalInput,
-)
-from murder.runtime.sessions.registry import (
-    close_registry_for_connection,
-    registry_for_connection,
-)
+from murder.runtime.sessions import SessionService
+from murder.runtime.sessions.registry import SessionControllerRegistry
 from murder.runtime.terminal import tmux
-from murder.runtime.terminal.output import TerminalOutputRegistry, TmuxTerminalOutput
 from murder.state.persistence.activities import (
     reap_expired_claims,
     reap_expired_reservations,
@@ -117,7 +96,9 @@ if TYPE_CHECKING:
     from murder.work.simple_doc_sync import SimpleDocSync
     from murder.work.tickets.sync import TicketSync
 
-ActivityDispatcherFactory = Callable[[RepoDb], "ActivityDispatcher"]
+ActivityDispatcherFactory = Callable[
+    [RepoDb, SessionControllerRegistry], "ActivityDispatcher"
+]
 TriggerDispatcherFactory = Callable[[RepoDb], "TriggerDispatcher"]
 
 
@@ -137,7 +118,7 @@ class Runtime:
         self.repo_root = repo_root
         self.user_cfg = user_cfg
         self.db: RepoDb | None = None
-        self.session_controllers: Any | None = None
+        self.sessions: SessionService | None = None
         self._activity_dispatcher_factory = activity_dispatcher_factory
         self._trigger_dispatcher_factory = trigger_dispatcher_factory
         self.activity_dispatcher: ActivityDispatcher | None = None
@@ -164,7 +145,6 @@ class Runtime:
         self.report_sync: SimpleDocSync | None = None
         self.documents = DocumentAccess(self.repo_root)
         self.document_editors = DocumentEditorSessions(self.repo_root, self.documents)
-        self.terminal_outputs: TerminalOutputRegistry | None = None
         self.startup_reconcile_report: ReconcileReport | None = None
         # Phase 2 flight recorder. Always present (no-op when off) so Wave 4
         # boundaries can call ``self.advanced_log.record_*`` unconditionally.
@@ -177,6 +157,12 @@ class Runtime:
         self.structured_decisions: Any | None = None
         self.crow_ask_router: Callable[[str | None, str, str], Awaitable[None]] | None = None
         self.roster: RosterService | None = None
+
+    @property
+    def session_controllers(self) -> SessionControllerRegistry | None:
+        """Compatibility alias for the SessionService-owned registry."""
+
+        return None if self.sessions is None else self.sessions.controllers
 
     async def __aenter__(self) -> Runtime:
         await self.start()
@@ -224,8 +210,8 @@ class Runtime:
         try:
             self.db = open_repo_db(self.repo_root)
             self.roster = RosterService(self.db)
-            self.terminal_outputs = TerminalOutputRegistry(self.db)
-            self.session_controllers = registry_for_connection(self.db)
+            self.sessions = SessionService(self.db)
+            self.document_editors.bind_session_service(self.sessions)
             WorkflowRuntime(self.db).recover_pending_signals()
             live_sessions = set(await tmux.list_sessions())
             report = reconcile_agents_vs_tmux(self.db, live_sessions)
@@ -326,7 +312,10 @@ class Runtime:
             reap_expired_claims(self.db)
             reap_expired_reservations(self.db)
             if self._activity_dispatcher_factory is not None:
-                self.activity_dispatcher = self._activity_dispatcher_factory(self.db)
+                self.activity_dispatcher = self._activity_dispatcher_factory(
+                    self.db,
+                    self.sessions.controllers,
+                )
                 self._tasks["phase4-activities"] = asyncio.create_task(self._phase4_activity_loop())
             if self._trigger_dispatcher_factory is not None:
                 self.trigger_dispatcher = self._trigger_dispatcher_factory(self.db)
@@ -338,14 +327,14 @@ class Runtime:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.gather(*self._tasks.values(), return_exceptions=True)
             self._tasks.clear()
-            if self.db is not None:
+            if self.sessions is not None:
                 with contextlib.suppress(Exception):
-                    await close_registry_for_connection(self.db)
+                    await self.sessions.close()
+                self.sessions = None
             with contextlib.suppress(Exception):
                 if self.db is not None:
                     self.db.close()
             self.db = None
-            self.session_controllers = None
             self.orchestration_events = None
             self.command_submitter = None
             self.run_id = None
@@ -373,9 +362,9 @@ class Runtime:
                 await t
         self._tasks.clear()
         graceful = self._external_stop.is_set()
-        if self.terminal_outputs is not None:
-            await self.terminal_outputs.close()
-            self.terminal_outputs = None
+        if self.sessions is not None:
+            await self.sessions.close()
+            self.sessions = None
         await shutdown_live_agents(self._agents, graceful=graceful)
         with contextlib.suppress(Exception):
             await kill_project_tmux_sessions(self)
@@ -390,9 +379,6 @@ class Runtime:
         if self.run_id and self.db is not None:
             _db_end_run(self.db, self.run_id)
         if self.db is not None:
-            with contextlib.suppress(Exception):
-                await close_registry_for_connection(self.db)
-            self.session_controllers = None
             self.db.close()
             self.db = None
         self._sync = None
@@ -402,7 +388,7 @@ class Runtime:
         self.ticket_sync = None
         self.report_sync = None
         self.documents = DocumentAccess(self.repo_root)
-        self.document_editors.update_documents(self.documents)
+        self.document_editors = DocumentEditorSessions(self.repo_root, self.documents)
         self.orchestration_events = None
         self.command_submitter = None
         self.structured_decisions = None
@@ -584,135 +570,10 @@ class Runtime:
             raise RuntimeError("filesystem sync is unavailable")
         self._sync.set_parse_error_notifier(send_message)
 
-    async def capture_terminal_frame(self, session_id: UUID) -> CapturedTerminalFrame:
-        """Capture a persisted harness or service-owned document editor terminal."""
-        editor_frame = await self.document_editors.capture(session_id)
-        if editor_frame is not None:
-            return editor_frame
-        if self.db is None:
-            raise RuntimeError("service database is unavailable")
-        return await capture_persisted_tmux_frame(self.db, session_id)
-
-    async def open_terminal_output(self, session_id: UUID) -> TmuxTerminalOutput:
-        """Open the native ordered output source for a persisted tmux session."""
-
-        if self.terminal_outputs is None:
-            raise RuntimeError("terminal output registry is unavailable")
-        return await self.terminal_outputs.open(session_id)
-
     async def start_document_editor(
         self, kind: str, name: str, columns: int, rows: int
     ) -> tuple[EditorSession, bool]:
-        session, reused = await self.document_editors.start(kind, name, columns=columns, rows=rows)
-        await self._register_document_editor_terminal(session)
-        return session, reused
-
-    async def _register_document_editor_terminal(self, session: EditorSession) -> None:
-        """Make a service-owned editor a fenced raw-terminal resource.
-
-        Editors deliberately reuse the existing persisted session/controller
-        machinery.  This gives the WebSocket input stream the same lease,
-        fence, mailbox serialization, and restart identity as any other tmux
-        terminal without exposing the tmux name to clients.
-        """
-
-        if self.db is None or self.session_controllers is None:
-            raise RuntimeError("service session controllers are unavailable")
-        store = SessionStore(self.db)
-        existing = store.get_session(session.session_id)
-        now = datetime.now(timezone.utc)
-        if existing is None:
-            record = HarnessSessionRecord(
-                session_id=session.session_id,
-                repository_id=UUID(self.db.repository_id),
-                harness="document_editor",
-                transport=SessionTransport.TMUX,
-                transport_ref=session.tmux_name,
-                status=SessionStatus.READY,
-                revision=0,
-                capabilities=SessionCapabilities(raw_terminal=True, interruptible=False),
-                started_at=now,
-                last_observed_at=now,
-            )
-            store.save_session(record)
-        else:
-            if existing.harness != "document_editor" or existing.transport_ref != session.tmux_name:
-                raise RuntimeError(
-                    "document editor session identity conflicts with persisted session"
-                )
-            record = existing
-            if record.status in {SessionStatus.STOPPED, SessionStatus.FAILED, SessionStatus.LOST}:
-                record = record.model_copy(
-                    update={
-                        "status": SessionStatus.READY,
-                        "revision": record.revision + 1,
-                        "stopped_at": None,
-                        "last_observed_at": now,
-                    }
-                )
-                store.save_session(record, expected_revision=existing.revision)
-        await self.session_controllers.get_or_create(
-            record,
-            backend=TmuxSessionBackend(session.tmux_name),
-        )
-
-    async def document_editor_input(self, session_id: UUID, key: str, literal: bool) -> None:
-        await self.document_editors.send(session_id, key, literal=literal)
-
-    async def write_document_editor_terminal_input(
-        self,
-        session_id: UUID,
-        client_id: str,
-        lease_id: UUID,
-        fence: int,
-        data: bytes,
-    ) -> None:
-        """Deliver one raw terminal batch through the fenced session mailbox."""
-
-        if self.db is None or self.session_controllers is None:
-            raise RuntimeError("service session controllers are unavailable")
-        record = SessionStore(self.db).get_session(session_id)
-        if record is None or record.harness != "document_editor":
-            raise ValueError("terminal input target is not a document editor")
-        if record.transport is not SessionTransport.TMUX:
-            raise ValueError("document editor does not expose a tmux terminal")
-        controller = await self.session_controllers.get_or_create(
-            record,
-            backend=TmuxSessionBackend(record.transport_ref),
-        )
-        await controller.execute(
-            WriteTerminalInput(
-                operation_id=uuid4(),
-                lease_id=lease_id,
-                fence=fence,
-                encoding="base64",
-                data=base64.b64encode(data).decode("ascii"),
-            ),
-            principal=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
-        )
-
-    async def validate_document_editor_terminal_writer(
-        self,
-        session_id: UUID,
-        client_id: str,
-        lease_id: UUID,
-        fence: int,
-    ) -> None:
-        """Fast admission check. The controller repeats it at write time."""
-
-        if self.db is None:
-            raise RuntimeError("service session store is unavailable")
-        store = SessionStore(self.db)
-        record = store.get_session(session_id)
-        if record is None or record.harness != "document_editor":
-            raise ValueError("terminal input target is not a document editor")
-        store.validate_writer_lease(
-            session_id=session_id,
-            lease_id=lease_id,
-            fence=fence,
-            holder=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
-            required_mode=WriterMode.RAW_TERMINAL,
-        )
+        return await self.document_editors.start(kind, name, columns=columns, rows=rows)
 
     async def resize_document_editor(self, session_id: UUID, columns: int, rows: int) -> None:
         await self.document_editors.resize(session_id, columns=columns, rows=rows)

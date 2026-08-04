@@ -39,10 +39,7 @@ from murder.runtime.sessions.persistence import (
     StaleWriterLeaseError,
     WriterLeaseRequiredError,
 )
-from murder.runtime.sessions.registry import (
-    SessionControllerRegistry,
-    close_registry_for_connection,
-)
+from murder.runtime.sessions.registry import SessionControllerRegistry
 from tests.support.database import open_test_repo_db
 
 SECOND_REVISION = 2
@@ -518,6 +515,11 @@ async def test_registry_returns_one_controller_and_recovers_persisted_record() -
 
 async def test_duplicate_live_controls_share_the_persisted_session_controller() -> None:
     db = open_test_repo_db(Path(":memory:"))
+    store = SessionStore(db)
+    registry = SessionControllerRegistry(
+        store=store,
+        controller_factory=SessionControllerRegistry.trusted_local_controller_factory(store),
+    )
 
     def bare_control() -> VerifiedHarnessControlSession:
         control = object.__new__(VerifiedHarnessControlSession)
@@ -537,14 +539,16 @@ async def test_duplicate_live_controls_share_the_persisted_session_controller() 
         first_control.ensure_session_controller(
             repository_id=db.repository_id,
             agent_key="agent-1",
+            registry=registry,
         ),
         second_control.ensure_session_controller(
             repository_id=db.repository_id,
             agent_key="agent-1",
+            registry=registry,
         ),
     )
     assert first is second
-    await close_registry_for_connection(db)
+    await registry.close()
     db.close()
 
 

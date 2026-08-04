@@ -66,19 +66,16 @@ def editor_tmux(monkeypatch: pytest.MonkeyPatch) -> FakeEditorTmux:
         "murder.app.service.document_editor_sessions.tmux.resize_session",
         fake.resize_session,
     )
-    monkeypatch.setattr(
-        "murder.app.service.document_editor_sessions.tmux.send_keys",
-        fake.send_keys,
-    )
-    monkeypatch.setattr(
-        "murder.app.service.document_editor_sessions.tmux.capture_viewport",
-        fake.capture_viewport,
-    )
-    monkeypatch.setattr(
-        "murder.app.service.document_editor_sessions.tmux.pane_dimensions",
-        fake.pane_dimensions,
-    )
     return fake
+
+
+def _bind_stub_sessions(sessions: DocumentEditorSessions) -> None:
+    class _StubSessions:
+        async def ensure_persisted_tmux_session(self, registration) -> object:
+            del registration
+            return object()
+
+    sessions.bind_session_service(_StubSessions())  # type: ignore[arg-type]
 
 
 async def test_start_uses_visual_argv_and_canonical_document_path(
@@ -93,6 +90,7 @@ async def test_start_uses_visual_argv_and_canonical_document_path(
     monkeypatch.setenv("VISUAL", "/usr/bin/env vim --clean")
     monkeypatch.setenv("EDITOR", "/bin/false")
     sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
+    _bind_stub_sessions(sessions)
 
     session, reused = await sessions.start("plan", "plan with spaces", columns=73, rows=19)
 
@@ -123,6 +121,7 @@ async def test_blank_visual_falls_back_to_editor(
     monkeypatch.setenv("VISUAL", "   ")
     monkeypatch.setenv("EDITOR", "/bin/true --fallback")
     sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
+    _bind_stub_sessions(sessions)
 
     session, reused = await sessions.start("plan", "safe", columns=80, rows=20)
 
@@ -130,7 +129,7 @@ async def test_blank_visual_falls_back_to_editor(
     assert editor_tmux.created[0][2] == ["/bin/true", "--fallback", str(session.document_path)]
 
 
-async def test_concurrent_start_reuses_one_session_and_drives_only_that_session(
+async def test_concurrent_start_reuses_one_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     editor_tmux: FakeEditorTmux,
@@ -141,6 +140,7 @@ async def test_concurrent_start_reuses_one_session_and_drives_only_that_session(
     document.write_text("# safe\n")
     monkeypatch.setenv("VISUAL", "/bin/true")
     sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
+    _bind_stub_sessions(sessions)
 
     first, second = await asyncio.gather(
         sessions.start("plan", "safe", columns=80, rows=20),
@@ -154,15 +154,10 @@ async def test_concurrent_start_reuses_one_session_and_drives_only_that_session(
     assert len(editor_tmux.created) == 1
     assert editor_tmux.resized == [(first_session.tmux_name, 90, 25)]
 
-    await sessions.send(first_session.session_id, "Escape", literal=False)
     await sessions.resize(first_session.session_id, columns=91, rows=27)
-    frame = await sessions.capture(first_session.session_id)
-
-    assert editor_tmux.sent == [(first_session.tmux_name, "Escape", False, False)]
     assert editor_tmux.resized[-1] == (first_session.tmux_name, 91, 27)
-    assert frame is not None
-    assert frame.data == editor_tmux.frame
-    assert (frame.columns, frame.rows) == editor_tmux.dimensions
+    assert not hasattr(sessions, "send")
+    assert not hasattr(DocumentEditorSessions, "capture")
 
 
 async def test_rejects_document_symlinks_outside_the_repository(
@@ -178,6 +173,7 @@ async def test_rejects_document_symlinks_outside_the_repository(
     (plans / "escape.md").symlink_to(outside)
     monkeypatch.setenv("VISUAL", "/bin/true")
     sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
+    _bind_stub_sessions(sessions)
 
     with pytest.raises(ValueError, match="outside the repository"):
         await sessions.start("plan", "escape", columns=80, rows=20)
@@ -189,7 +185,7 @@ async def test_rejects_document_symlinks_outside_the_repository(
     ("visual", "editor", "message"),
     [
         (None, None, "no editor configured"),
-        ("definitely-not-a-real-editor --flag", "/bin/true", "executable was not found"),
+        ("definitely-not-a-real-editor --flag", "/bin/true", "executable not found"),
         ("'unterminated", "/bin/true", "invalid editor configuration"),
     ],
 )
@@ -214,6 +210,7 @@ async def test_reports_editor_configuration_errors_before_launch(
     else:
         monkeypatch.setenv("EDITOR", editor)
     sessions = DocumentEditorSessions(repo, DocumentAccess(repo))
+    _bind_stub_sessions(sessions)
 
     with pytest.raises(RuntimeError, match=message):
         await sessions.start("plan", "safe", columns=80, rows=20)

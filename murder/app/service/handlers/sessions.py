@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from murder.app.protocol.requests import CommandName, QueryName
@@ -25,22 +25,12 @@ from murder.runtime.sessions.contracts import (
     RequestMeta,
     WriterLeaseReply,
 )
-from murder.runtime.sessions.persistence import SessionNotFoundError, SessionStore
-from murder.runtime.sessions.registry import (
-    SessionBackendRequiredError,
-    SessionControllerRegistry,
-)
-from murder.state.persistence.connection import RepoDb
+from murder.runtime.sessions.persistence import SessionNotFoundError
+from murder.runtime.sessions.registry import SessionBackendRequiredError
+from murder.runtime.sessions.service import SessionService
 
 if TYPE_CHECKING:
     from murder.runtime.sessions.controller import SessionController
-
-
-class SessionEffects(Protocol):
-    """Runtime capabilities required by the session application feature."""
-
-    db: RepoDb | None
-    session_controllers: SessionControllerRegistry | None
 
 
 def _meta(
@@ -61,33 +51,14 @@ def _reply_json(reply: WriterLeaseReply) -> dict[str, object]:
 def register(  # noqa: PLR0915
     app: ApplicationRegistrar,
     projections: ProjectionProviderRegistry,
-    effects: SessionEffects,
+    sessions: SessionService,
 ) -> None:
-    """Register session use cases without coupling them to the service host.
-
-    There is no session-list application read model yet, so this feature
-    intentionally owns no ``sessions`` snapshot provider.  Registering an
-    empty provider here would make the subscription look authoritative when it
-    is not.
-    """
+    """Register session use cases against the process SessionService."""
     del projections
 
-    def _registry() -> SessionControllerRegistry:
-        registry = getattr(effects, "session_controllers", None)
-        if not isinstance(registry, SessionControllerRegistry):
-            raise RuntimeError("session controller registry is unavailable")
-        return registry
-
-    def _store() -> SessionStore:
-        connection = getattr(effects, "db", None)
-        if connection is None:
-            raise RuntimeError("service not started")
-        return SessionStore(connection)
-
     async def _controller(session_id: UUID) -> SessionController:
-        registry = _registry()
         try:
-            return await registry.get_or_create(session_id)
+            return await sessions.controllers.get_or_create(session_id)
         except SessionNotFoundError:
             raise
         except SessionBackendRequiredError as exc:
@@ -95,7 +66,7 @@ def register(  # noqa: PLR0915
 
     def _get(body: dict[str, object]) -> dict[str, object]:
         params = GetWriterLeaseParams.model_validate(body)
-        store = _store()
+        store = sessions.store
         if store.get_session(params.session_id) is None:
             return GetWriterLeaseResult(ok=False, error="not_found").model_dump(mode="json")
         lease = store.active_writer_lease(params.session_id)
@@ -183,6 +154,5 @@ def register(  # noqa: PLR0915
 
 
 __all__ = [
-    "SessionEffects",
     "register",
 ]

@@ -1,46 +1,7 @@
-"""Capture terminal viewports by their persisted harness-session identity."""
+"""Deprecated shim — capture lives in ``murder.runtime.terminal.capture``."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from uuid import UUID
+from murder.runtime.terminal.capture import CapturedTerminalFrame, capture_tmux_frame
 
-from murder.runtime.terminal import tmux
-from murder.state.persistence.connection import RepoDb
-
-
-@dataclass(frozen=True)
-class CapturedTerminalFrame:
-    data: str
-    columns: int
-    rows: int
-
-
-async def capture_persisted_tmux_frame(
-    db: RepoDb,
-    session_id: UUID,
-) -> CapturedTerminalFrame:
-    """Capture a tmux viewport for one persisted harness session.
-
-    Application clients address a terminal by ``harness_sessions.session_id``.
-    They never address a transient agent id or a tmux name directly.
-    """
-    row = db.conn.execute(
-        """
-        SELECT transport, transport_ref
-        FROM harness_sessions
-        WHERE session_id = ? AND repository_id = ?
-        """,
-        (str(session_id), db.repository_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError(f"persisted session {session_id} does not exist")
-    if str(row["transport"]) != "tmux":
-        raise ValueError(f"session {session_id} does not expose a tmux terminal")
-    transport_ref = str(row["transport_ref"])
-    data = await tmux.capture_viewport(transport_ref, escapes=True)
-    columns, rows = await tmux.pane_dimensions(transport_ref)
-    return CapturedTerminalFrame(data=data, columns=columns, rows=rows)
-
-
-__all__ = ["CapturedTerminalFrame", "capture_persisted_tmux_frame"]
+__all__ = ["CapturedTerminalFrame", "capture_tmux_frame"]

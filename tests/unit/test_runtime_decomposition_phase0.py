@@ -51,12 +51,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from murder.app.service import terminal_capture as terminal_capture_mod
 from murder.app.service.background_tasks import ServiceBackgroundTasks
 from murder.app.service.filesystem_sync import FilesystemSyncSupervisor
 from murder.app.service.recovery import ReconcileReport
 from murder.app.service.runtime import Runtime
-from murder.app.service.terminal_capture import CapturedTerminalFrame
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -77,6 +75,7 @@ from murder.runtime.sessions.contracts import (
     SessionTransport,
     WriterLeaseGranted,
     WriterMode,
+    WriteTerminalInput,
 )
 from murder.runtime.sessions.persistence import SessionStore
 from murder.state.storage.filesystem import lock_is_held
@@ -349,6 +348,7 @@ def test_startup_failure_after_db_closes_db_and_releases_flock(
 
     assert rt.db is None
     assert rt.session_controllers is None
+    assert rt.sessions is None
     assert rt._lock_fd is None
     assert lock_is_held(lock) is False
 
@@ -375,7 +375,7 @@ def test_startup_failure_after_tasks_spawned_cancels_them(
         lambda *_a, **_k: hanging,
     )
 
-    def _boom(_db):
+    def _boom(_db, _registry=None):
         raise RuntimeError("dispatcher boom")
 
     rt = Runtime(_config(), repo_root, activity_dispatcher_factory=_boom)
@@ -505,16 +505,10 @@ def test_start_document_editor_registers_persisted_session_and_controller(
     asyncio.run(_drive())
 
 
-def test_document_editor_registration_does_not_revive_stopping_or_refresh_transport_ref(
+def test_document_editor_registration_revives_stopping_and_refreshes_transport_ref(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pins the editor/harness revival divergence §6.9 calls out for Phase 1.
-
-    Harness ``ensure_session_controller`` revives STOPPING and refreshes
-    ``transport_ref``. Runtime._register_document_editor_terminal does neither:
-    STOPPING is left as-is, and revival of STOPPED/FAILED/LOST keeps the old
-    transport_ref (only matching refs are accepted).
-    """
+    """Phase 1 unified revival: STOPPING revives and transport_ref refreshes."""
     _install_spy_sync(monkeypatch)
     _patch_editor_tmux_kwargs(monkeypatch, fake_tmux)
     _write_plan(repo_root)
@@ -534,16 +528,15 @@ def test_document_editor_registration_does_not_revive_stopping_or_refresh_transp
         )
         store.save_session(stopping, expected_revision=existing.revision)
 
-        # Re-register the same editor session (reuse path).
         _, reused = await rt.start_document_editor("plan", "safe", 80, 24)
         assert reused is True
         after = store.get_session(session.session_id)
         assert after is not None
-        assert after.status is SessionStatus.STOPPING
-        assert after.revision == stopping.revision
+        assert after.status is SessionStatus.READY
+        assert after.revision == stopping.revision + 1
         assert after.transport_ref == session.tmux_name
 
-        # STOPPED with a mismatched transport_ref is rejected, not revived+refreshed.
+        # STOPPED with a mismatched transport_ref is revived and refreshed.
         stopped = after.model_copy(
             update={
                 "status": SessionStatus.STOPPED,
@@ -552,8 +545,11 @@ def test_document_editor_registration_does_not_revive_stopping_or_refresh_transp
             }
         )
         store.save_session(stopped, expected_revision=after.revision)
-        with pytest.raises(RuntimeError, match="identity conflicts"):
-            await rt.start_document_editor("plan", "safe", 80, 24)
+        await rt.start_document_editor("plan", "safe", 80, 24)
+        revived = store.get_session(session.session_id)
+        assert revived is not None
+        assert revived.status is SessionStatus.READY
+        assert revived.transport_ref == session.tmux_name
 
         await rt.stop()
 
@@ -563,7 +559,7 @@ def test_document_editor_registration_does_not_revive_stopping_or_refresh_transp
 def test_document_editor_terminal_input_goes_through_session_controller(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fenced raw input uses WriteTerminalInput on the controller, not editors.send."""
+    """Fenced raw input uses WriteTerminalInput on the controller."""
     _install_spy_sync(monkeypatch)
     _patch_editor_tmux_kwargs(monkeypatch, fake_tmux)
     _write_plan(repo_root)
@@ -594,11 +590,11 @@ def test_document_editor_terminal_input_goes_through_session_controller(
 
     async def _drive() -> None:
         await rt.start()
-        # Force controller construction to use our recording backend.
         assert rt.session_controllers is not None
         original_get_or_create = rt.session_controllers.get_or_create
 
-        async def _get_or_create(record, *, backend=None):
+        async def _get_or_create(record, *, backend=None, recover=False):
+            del recover
             return await original_get_or_create(record, backend=_RecordingBackend())
 
         monkeypatch.setattr(rt.session_controllers, "get_or_create", _get_or_create)
@@ -620,30 +616,38 @@ def test_document_editor_terminal_input_goes_through_session_controller(
         )
         assert isinstance(granted, WriterLeaseGranted)
 
-        await rt.write_document_editor_terminal_input(
-            session.session_id,
-            "client-1",
-            granted.lease.lease_id,
-            granted.lease.fence,
-            b"hello",
+        assert rt.sessions is not None
+        controller = await rt.sessions.controllers.get_or_create(
+            rt.sessions.store.get_session(session.session_id)
         )
-        # Legacy bypass path still exists on Runtime / DocumentEditorSessions.
-        await rt.document_editor_input(session.session_id, "x", literal=True)
+        import base64
+        from uuid import uuid4 as _uuid4
+
+        await controller.execute(
+            WriteTerminalInput(
+                operation_id=_uuid4(),
+                lease_id=granted.lease.lease_id,
+                fence=granted.lease.fence,
+                encoding="base64",
+                data=base64.b64encode(b"hello").decode("ascii"),
+            ),
+            principal=principal,
+        )
+        assert not hasattr(rt, "document_editor_input")
+        assert not hasattr(rt, "write_document_editor_terminal_input")
         await rt.stop()
 
     asyncio.run(_drive())
 
     assert written == [b"hello"]
-    send_calls = fake_tmux.calls_to("send_keys")
-    assert any(args[1] == "x" for args, _kw in send_calls)
 
 
 # ---------------------------------------------------------------------------
-# Terminal capture fallback
+# Terminal capture (single SessionService path)
 # ---------------------------------------------------------------------------
 
 
-def test_capture_terminal_prefers_in_process_editor_then_falls_back_to_persisted(
+def test_capture_terminal_uses_persisted_session_path(
     fake_tmux, repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_spy_sync(monkeypatch)
@@ -653,37 +657,23 @@ def test_capture_terminal_prefers_in_process_editor_then_falls_back_to_persisted
     fake_tmux._last_captured_pane = "editor-frame"
     fake_tmux.set_pane_dimensions(91, 27)
 
-    persisted_calls: list[UUID] = []
-    original_capture = terminal_capture_mod.capture_persisted_tmux_frame
-
-    async def _spy_persisted(db, session_id: UUID) -> CapturedTerminalFrame:
-        persisted_calls.append(session_id)
-        return await original_capture(db, session_id)
-
-    monkeypatch.setattr(
-        "murder.app.service.runtime.capture_persisted_tmux_frame",
-        _spy_persisted,
-    )
-
     rt = Runtime(_config(), repo_root)
 
     async def _drive() -> None:
         await rt.start()
         session, _ = await rt.start_document_editor("plan", "safe", 80, 24)
 
-        # In-process editor path: does not consult harness_sessions SQL.
-        editor_frame = await rt.capture_terminal_frame(session.session_id)
+        # Editors register through SessionService, so capture goes through
+        # the generic persisted path (no editor-first probe).
+        assert rt.sessions is not None
+        editor_frame = await rt.sessions.capture_terminal(session.session_id)
         assert editor_frame.data == "editor-frame"
         assert (editor_frame.columns, editor_frame.rows) == (91, 27)
-        assert persisted_calls == []
 
-        # Unknown id with no editor map entry falls through to persisted capture.
         missing = uuid4()
         with pytest.raises(ValueError, match="does not exist"):
-            await rt.capture_terminal_frame(missing)
-        assert persisted_calls == [missing]
+            await rt.sessions.capture_terminal(missing)
 
-        # Persisted harness session (not in editor _by_id) uses DB path.
         harness_id = uuid4()
         assert rt.db is not None
         now = datetime.now(timezone.utc)
@@ -703,10 +693,10 @@ def test_capture_terminal_prefers_in_process_editor_then_falls_back_to_persisted
         )
         fake_tmux.add_session("murder_harness_pane")
         fake_tmux._last_captured_pane = "harness-frame"
-        harness_frame = await rt.capture_terminal_frame(harness_id)
+        harness_frame = await rt.sessions.capture_terminal(harness_id)
         assert harness_frame.data == "harness-frame"
-        assert persisted_calls == [missing, harness_id]
 
+        assert not hasattr(rt, "capture_terminal_frame")
         await rt.stop()
 
     asyncio.run(_drive())

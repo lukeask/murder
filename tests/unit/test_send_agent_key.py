@@ -25,14 +25,22 @@ MANUAL_ENTER_EFFECT_COUNT = 2
 
 
 def _verified_agent(repo_root: Path, session_name: str) -> tuple[SimpleNamespace, object]:
+    from murder.runtime.sessions.service import SessionService
+
     db = open_test_repo_db(repo_root / "murder.db")
+    sessions = SessionService(db)
     control = VerifiedHarnessControlSession.from_tmux(
         harness_kind="codex",
         terminal_session=session_name,
         db=db,
         persistence_session_id="crow-t001",
     )
-    asyncio.run(control.ensure_session_controller(repository_id=db.repository_id))
+    asyncio.run(
+        control.ensure_session_controller(
+            repository_id=db.repository_id,
+            sessions=sessions,
+        )
+    )
     return SimpleNamespace(session=session_name, verified_harness_control=control), db
 
 

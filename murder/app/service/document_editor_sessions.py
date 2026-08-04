@@ -12,7 +12,12 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from murder.app.service.document_access import DocumentAccess
-from murder.app.service.terminal_capture import CapturedTerminalFrame
+from murder.runtime.sessions.contracts import SessionCapabilities
+from murder.runtime.sessions.service import (
+    SessionBackendKind,
+    SessionService,
+    TmuxSessionRegistration,
+)
 from murder.runtime.terminal import tmux
 
 
@@ -26,15 +31,25 @@ class EditorSession:
 class DocumentEditorSessions:
     """Resolve, validate, create, reuse and drive one editor session per document."""
 
-    def __init__(self, repo_root: Path, documents: DocumentAccess) -> None:
+    def __init__(
+        self,
+        repo_root: Path,
+        documents: DocumentAccess,
+        *,
+        sessions: SessionService | None = None,
+    ) -> None:
         self.repo_root = repo_root.resolve()
         self.documents = documents
+        self._sessions = sessions
         self._by_id: dict[UUID, EditorSession] = {}
         self._by_path: dict[Path, EditorSession] = {}
         self._start_lock = asyncio.Lock()
 
     def update_documents(self, documents: DocumentAccess) -> None:
         self.documents = documents
+
+    def bind_session_service(self, sessions: SessionService) -> None:
+        self._sessions = sessions
 
     def _resolve(self, kind: str, name: str) -> Path:
         if name != name.strip() or Path(name).name != name or "\\" in name or name in {".", ".."}:
@@ -90,6 +105,19 @@ class DocumentEditorSessions:
             raise RuntimeError(f"configured editor executable not found: {executable}")
         return editor_argv
 
+    async def _register_session(self, session: EditorSession) -> None:
+        if self._sessions is None:
+            raise RuntimeError("session service is unavailable")
+        await self._sessions.ensure_persisted_tmux_session(
+            TmuxSessionRegistration(
+                session_id=session.session_id,
+                session_kind="document_editor",
+                tmux_name=session.tmux_name,
+                capabilities=SessionCapabilities(raw_terminal=True, interruptible=False),
+                backend=SessionBackendKind.PLAIN_TMUX,
+            )
+        )
+
     async def start(
         self, kind: str, name: str, *, columns: int, rows: int
     ) -> tuple[EditorSession, bool]:
@@ -98,6 +126,7 @@ class DocumentEditorSessions:
         async with self._start_lock:
             if await tmux.session_exists(session.tmux_name):
                 await tmux.resize_session(session.tmux_name, columns=columns, rows=rows)
+                await self._register_session(session)
                 return session, True
             editor_argv = self._editor_argv()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +137,7 @@ class DocumentEditorSessions:
                 width=columns,
                 height=rows,
             )
+            await self._register_session(session)
             return session, False
 
     def get(self, session_id: UUID) -> EditorSession:
@@ -119,26 +149,10 @@ class DocumentEditorSessions:
     async def active(self, session_id: UUID) -> bool:
         return await tmux.session_exists(self.get(session_id).tmux_name)
 
-    async def send(self, session_id: UUID, key: str, *, literal: bool) -> None:
-        session = self.get(session_id)
-        if not await tmux.session_exists(session.tmux_name):
-            raise RuntimeError("document editor has exited")
-        await tmux.send_keys(session.tmux_name, key, literal=literal, enter=False)
-
     async def resize(self, session_id: UUID, *, columns: int, rows: int) -> None:
         session = self.get(session_id)
         if await tmux.session_exists(session.tmux_name):
             await tmux.resize_session(session.tmux_name, columns=columns, rows=rows)
-
-    async def capture(self, session_id: UUID) -> CapturedTerminalFrame | None:
-        session = self._by_id.get(session_id)
-        if session is None:
-            return None
-        if not await tmux.session_exists(session.tmux_name):
-            raise RuntimeError("document editor has exited")
-        data = await tmux.capture_viewport(session.tmux_name, escapes=True)
-        columns, rows = await tmux.pane_dimensions(session.tmux_name)
-        return CapturedTerminalFrame(data=data, columns=columns, rows=rows)
 
 
 __all__ = ["DocumentEditorSessions", "EditorSession"]
