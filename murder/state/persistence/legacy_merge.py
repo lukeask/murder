@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
@@ -12,7 +11,6 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from murder.state.persistence.backup import backup_database, default_backup_path
 from murder.state.persistence.connection import Connection, write_repository_id
 from murder.state.storage.paths import db_path, legacy_db_path, repository_id_path
-from murder.state.storage.service_registry import list_service_sessions
 
 INTEGER_PK_TABLES = {
     "checklist": "id",
@@ -135,21 +133,6 @@ def _rename_legacy_files(path: Path) -> None:
         sidecar = Path(str(path) + suffix)
         if sidecar.exists():
             sidecar.replace(Path(str(migrated) + suffix))
-
-
-def _service_is_live(pid: int) -> bool:
-    """Conservatively determine whether a service-registry owner is live."""
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # We cannot safely conclude that a service owned by another user is
-        # gone, so leave its database untouched.
-        return True
-    return True
 
 
 def _copy_table(  # noqa: PLR0912, PLR0915
@@ -313,22 +296,12 @@ def merge_known_legacy_databases(
     explicit_repos: Iterable[Path] = (),
 ) -> list[Path]:
     current_root = current_repo.resolve()
-    sessions = list_service_sessions()
+    # Single-daemon era: no per-repo session registry to discover other checkouts.
+    # Merge the current checkout plus any explicitly requested roots only.
     roots = {
         current_root,
         *(path.resolve() for path in explicit_repos),
-        *(session.repo_root.resolve() for session in sessions),
     }
-    # A live service may still be using its checkout-local pre-consolidation
-    # database. Never copy or rename another live service's database as a side
-    # effect of opening this repository. Stale registry entries remain eligible
-    # for the one-time migration; the current repository remains eligible too.
-    live_other_roots = {
-        session.repo_root.resolve()
-        for session in sessions
-        if session.repo_root.resolve() != current_root and _service_is_live(session.pid)
-    }
-    roots.difference_update(live_other_roots)
     merged: list[Path] = []
     for root in sorted(roots, key=str):
         if merge_legacy_database(target, root):

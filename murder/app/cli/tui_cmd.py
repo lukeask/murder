@@ -1,8 +1,8 @@
 """TUI launch and service-start commands.
 
-The TUI is the Ink (Node) frontend. `murder` brings the daemon up, resolves its
-application WebSocket URL, then passes that URL to Ink. There is no Unix
-application transport or fallback protocol.
+The TUI is the Ink (Node) frontend. `murder` brings the daemon up, activates the
+cwd repository, then passes ``ws://127.0.0.1:62077/api/ws/{repository_id}`` to
+Ink. There is no Unix application transport or fallback protocol.
 """
 
 from __future__ import annotations
@@ -17,17 +17,9 @@ import typer
 from murder.app.cli._util import node_major_version as _node_major_version
 from murder.app.cli._util import repo_root as _repo_root
 from murder.app.cli.service_cmd import (
-    _ensure_supervisor,
-    _ensure_supervisor_started,
-    _live_lock_owner_pid,
     _run_async_entry,
     apply_client_log_level,
-)
-from murder.state.storage.paths import lock_path
-from murder.state.storage.service_registry import (
-    list_service_sessions,
-    project_session_name,
-    service_registry_dir,
+    ensure_daemon_and_activate,
 )
 
 # Node runtime floor (current LTS). Ink 5 needs >=18. 20 is the future-proof floor we ship against.
@@ -111,27 +103,18 @@ def _spawn_ink(argv: list[str], cwd: Path | None, websocket_url: str, project: s
 
 async def _launch_tui() -> None:
     repo = _repo_root()
-    socket_path = lock_path(repo)
     # Resolve the runner and check Node BEFORE bringing the daemon up — fail fast and clearly,
     # without spawning anything, if the host can't run the TUI.
     argv, cwd = _resolve_ink_entrypoint(repo)
     _require_node()
-    await _ensure_supervisor(repo, socket_path)
-    session = next(
-        (item for item in list_service_sessions() if item.name == project_session_name(repo)),
-        None,
-    )
-    if session is None:
-        owner = _live_lock_owner_pid(repo)
-        if owner is not None:
-            raise InkLaunchError(
-                f"service is running (PID {owner}) but no WebSocket endpoint is published "
-                f"under {service_registry_dir()}. "
-                "The service may have started with a different runtime directory "
-                "(check XDG_RUNTIME_DIR). Try `murder down` then `murder up`."
-            )
-        raise InkLaunchError("service started without publishing its WebSocket endpoint")
-    _spawn_ink(argv, cwd, session.websocket_url, repo.name)
+    _started, info = await ensure_daemon_and_activate(repo)
+    del _started
+    websocket_url = info.get("websocket_url")
+    if not isinstance(websocket_url, str) or not websocket_url:
+        raise InkLaunchError(
+            "daemon activated the repository but did not return a WebSocket URL"
+        )
+    _spawn_ink(argv, cwd, websocket_url, repo.name)
 
 
 def cmd_up(
@@ -145,14 +128,14 @@ def cmd_up(
         case_sensitive=False,
     ),
 ) -> None:
-    """Start the background supervisor and print whether it was already running."""
+    """Start the background daemon, activate cwd, and print whether it was already running."""
     # Resolve + propagate the rung to env BEFORE spawning serviced (inherited env
     # carries it. The recorder mode rides the same rung. No separate flag.
     apply_client_log_level(log_level)
 
     async def _up() -> None:
         repo = _repo_root()
-        started = await _ensure_supervisor_started(repo, lock_path(repo))
+        started, _info = await ensure_daemon_and_activate(repo)
         typer.echo("started" if started else "already up")
 
     _run_async_entry(_up())

@@ -38,8 +38,8 @@ from murder.state.storage.filesystem import (
     release_flock,
 )
 from murder.state.storage.service_registry import (
-    remove_service_session,
-    write_service_session,
+    remove_daemon_record,
+    write_daemon_record,
 )
 from murder.user_config import (
     UserConfig,
@@ -119,7 +119,6 @@ class DaemonHost:
         self._daemon_supervisor: Supervisor | None = None
         self._http: DaemonHttpServer | None = None
         self._primary_repository_id: str | None = None
-        self._session_name: str | None = None
         self._stop = asyncio.Event()
         self.bound: tuple[str, int] | None = None
 
@@ -190,7 +189,7 @@ class DaemonHost:
         bind_host: str,
         port: int,
     ) -> None:
-        """Bind ``DaemonHttpServer`` and publish the primary repo's WS URL."""
+        """Bind ``DaemonHttpServer`` and publish the daemon registry record."""
         assert self.manager is not None
         http = DaemonHttpServer(
             manager=self.manager,
@@ -201,13 +200,11 @@ class DaemonHost:
         await http.ensure_session(primary.repository_id)
         bound = await http.start(host=bind_host, port=port)
         # Assign before registry write so ordered shutdown can stop the listener
-        # if session publication fails mid-attach.
+        # if publication fails mid-attach.
         self._http = http
         self.bound = bound
         self._primary_repository_id = primary.repository_id
-        ws_url = f"ws://{bound[0]}:{bound[1]}/api/ws/{primary.repository_id}"
-        session = write_service_session(primary.repo_root, ws_url)
-        self._session_name = session.name
+        write_daemon_record(port=bound[1])
         LOGGER.info(
             "daemon listening on http://%s:%d/ (ws path /api/ws/{repository_id}; primary=%s)",
             bound[0],
@@ -241,10 +238,8 @@ class DaemonHost:
             self._http = None
             self.bound = None
 
-        if self._session_name is not None:
-            with contextlib.suppress(Exception):
-                remove_service_session(self._session_name)
-            self._session_name = None
+        with contextlib.suppress(Exception):
+            remove_daemon_record()
 
         self._primary_repository_id = None
 

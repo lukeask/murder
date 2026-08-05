@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import signal
@@ -17,31 +18,29 @@ import typer
 
 from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
-from murder.app.protocol.common import DAEMON_WEBSOCKET_PORT
+from murder.app.protocol.common import DAEMON_WEBSOCKET_HOST, DAEMON_WEBSOCKET_PORT
 from murder.app.service.daemon_host import (
     DaemonHost,
     daemon_lock_path,
     live_daemon_pid,
     probe_daemon_listener,
 )
+from murder.app.service.repository_manager import RecentRepository, RepositoryManager
 from murder.state.persistence.connection import RepoDb, open_repo_db
 from murder.state.persistence.escalations import list_pending_escalations
 from murder.state.persistence.tickets import get_ticket
 from murder.state.storage.filesystem import read_lock_pid
 from murder.state.storage.paths import (
     agents_dir,
-    logs_dir,
     notes_dir,
     plans_dir,
 )
 from murder.state.storage.service_registry import (
-    AmbiguousServiceSessionError,
-    ServiceSession,
-    list_service_sessions,
     project_session_name,
-    remove_service_session,
-    resolve_service_session_selector,
+    read_daemon_record,
+    remove_daemon_record,
 )
+from murder.user_config import config_dir
 from murder.work.plans.sync import PlanSync, content_hash
 from murder.work.tickets import lifecycle
 from murder.work.tickets.schema import ChecklistItem, Ticket
@@ -107,54 +106,29 @@ def _open_existing_db(repo: Path):  # type: ignore[return]
     return open_repo_db(repo)
 
 
-def _live_service_sessions() -> list[ServiceSession]:
-    sessions: list[ServiceSession] = []
-    for session in list_service_sessions():
-        if _pid_is_alive(session.pid):
-            sessions.append(session)
-        else:
-            remove_service_session(session.name)
-    return sessions
+def _daemon_http_base() -> str:
+    return f"http://{DAEMON_WEBSOCKET_HOST}:{DAEMON_WEBSOCKET_PORT}"
 
 
-async def _supervisor_is_live(repo: Path, socket_path: Path) -> bool:
-    """Return whether the daemon has published this repo's endpoint.
-
-    Acquiring the daemon lock happens near the beginning of service startup, well
-    before the application listener is ready.  The session registry entry is
-    written atomically only after the listener has bound, so it is the readiness
-    barrier clients need.  Merely seeing a live daemon lock owner would let a
-    cold-starting service escape this wait and make the TUI fail with "no
-    WebSocket endpoint is published".
-    """
-    del socket_path  # retained in the private API while callers still pass a readiness path
-    pid = live_daemon_pid()
-    if pid is None:
-        return False
-    name = project_session_name(repo)
-    return any(session.name == name and session.pid == pid for session in list_service_sessions())
-
-
-def _live_lock_owner_pid(repo: Path) -> int | None:
+def _live_lock_owner_pid() -> int | None:
     """Return the live daemon pid, if any.
 
-    ``repo`` is retained for call-site compatibility; exclusivity is daemon-wide.
     A live lock owner whose socket is not answering may still be in startup (or
     briefly have a busy event loop).  It is not safe to treat that state as
-    permission to launch a second supervisor: the duplicate will lose the
-    flock race and exit with code 1, obscuring the healthy process that won.
+    permission to launch a second daemon: the duplicate will lose the flock race
+    and exit with code 1, obscuring the healthy process that won.
     """
-    del repo
     return live_daemon_pid()
 
 
-def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
-    log_root = logs_dir(repo) / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+def _spawn_daemon_process(*, cwd: Path | None = None) -> subprocess.Popen[bytes]:
+    """Spawn ``murder serviced`` once; logs go under the user config directory."""
+    log_root = config_dir() / "logs" / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     log_root.mkdir(parents=True, exist_ok=True)
-    with open(log_root / "supervisor.ndjson", "ab", buffering=0) as log_file:
+    with open(log_root / "daemon.ndjson", "ab", buffering=0) as log_file:
         return subprocess.Popen(
             [sys.executable, "-m", "murder", "serviced"],
-            cwd=str(repo),
+            cwd=str(cwd) if cwd is not None else None,
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -163,24 +137,15 @@ def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
         )
 
 
-async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
-    """Make sure a responsive supervisor is running. Return whether this call started it."""
-    if await _supervisor_is_live(repo, socket_path):
-        return False
+async def _daemon_is_ready() -> bool:
+    """True when a live murder daemon is accepting on the fixed listener port."""
+    return await probe_daemon_listener()
 
-    # Live daemon on the fixed port but this repo's session is not published yet
-    # (Phase 3/4 will activate via HTTP). Prefer waiting on the existing daemon
-    # over spawning a doomed duplicate.
-    if await probe_daemon_listener():
-        delays = (0.25, 0.5, *(1.0 for _ in range(30)))
-        for delay in delays:
-            await asyncio.sleep(delay)
-            if await _supervisor_is_live(repo, socket_path):
-                return False
-        raise RuntimeError(
-            "murder daemon is running but did not publish this repository's "
-            "WebSocket endpoint within 30s"
-        )
+
+async def _ensure_daemon_impl(*, spawn_cwd: Path | None = None) -> bool:
+    """Make sure the daemon is accepting on ``:62077``. Return whether we started it."""
+    if await _daemon_is_ready():
+        return False
 
     proc: subprocess.Popen[bytes] | None = None
     # Cold boots can spend several seconds reconciling persisted harness state
@@ -192,11 +157,11 @@ async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
         # owner during that readiness gap instead of spawning a doomed
         # duplicate.  If an owner dies while we wait, the next iteration takes
         # over startup.
-        if proc is None and _live_lock_owner_pid(repo) is None:
-            proc = _spawn_service_process(repo)
+        if proc is None and _live_lock_owner_pid() is None:
+            proc = _spawn_daemon_process(cwd=spawn_cwd)
 
         await asyncio.sleep(delay)
-        if await _supervisor_is_live(repo, socket_path):
+        if await _daemon_is_ready():
             return proc is not None and live_daemon_pid() == proc.pid
 
         # Fail fast if the child already died (e.g. crashed on import) instead
@@ -206,25 +171,66 @@ async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
         if proc is not None:
             rc = proc.poll()
             if rc is not None:
-                owner_pid = _live_lock_owner_pid(repo)
+                owner_pid = _live_lock_owner_pid()
                 if owner_pid is not None and owner_pid != proc.pid:
                     proc = None
                     continue
-                raise RuntimeError(f"supervisor process exited during startup (code {rc})")
-    raise RuntimeError("supervisor did not become ready within 30s")
+                raise RuntimeError(f"daemon process exited during startup (code {rc})")
+    raise RuntimeError("murder daemon did not become ready within 30s")
 
 
-async def _ensure_supervisor(repo: Path, socket_path: Path) -> None:
-    await _ensure_supervisor_impl(repo, socket_path)
+async def _ensure_daemon_started(*, spawn_cwd: Path | None = None) -> bool:
+    """Return True when this call started the daemon, False if it was already live."""
+    return await _ensure_daemon_impl(spawn_cwd=spawn_cwd)
 
 
-async def _ensure_supervisor_started(repo: Path, socket_path: Path) -> bool:
-    """Return True when this call started the supervisor, False if it was already live."""
-    return await _ensure_supervisor_impl(repo, socket_path)
+async def _post_daemon_json(path: str, body: dict) -> dict:
+    """POST JSON to the local daemon HTTP API and return the decoded body."""
+    from aiohttp import ClientSession
+
+    url = f"{_daemon_http_base()}{path}"
+    async with ClientSession() as session:
+        async with session.post(url, json=body) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(f"daemon {path} failed ({resp.status}): {text}")
+            if not text:
+                return {}
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"daemon {path} returned non-JSON ({resp.status}): {text[:200]}"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"daemon {path} returned non-object JSON")
+            return payload
 
 
-def _friendly_lock_message(repo: Path) -> str:
-    del repo
+async def _activate_repository(repo: Path) -> dict:
+    """Ask the running daemon to activate ``repo`` (idempotent)."""
+    return await _post_daemon_json(
+        "/api/repos/activate",
+        {"path": str(repo.resolve(strict=False))},
+    )
+
+
+async def _deactivate_repository(repo: Path) -> dict:
+    """Ask the running daemon to deactivate one repository host."""
+    return await _post_daemon_json(
+        "/api/repos/deactivate",
+        {"path": str(repo.resolve(strict=False))},
+    )
+
+
+async def ensure_daemon_and_activate(repo: Path) -> tuple[bool, dict]:
+    """Ensure the daemon is up, then activate ``repo``. Returns (started, activate body)."""
+    started = await _ensure_daemon_started(spawn_cwd=repo)
+    info = await _activate_repository(repo)
+    return started, info
+
+
+def _friendly_lock_message() -> str:
     pid = live_daemon_pid()
     pid_text = f" (PID {pid})" if pid is not None else ""
     return (
@@ -237,7 +243,7 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
     try:
         asyncio.run(coro)
     except BlockingIOError:
-        typer.secho(_friendly_lock_message(_repo_root()), fg=typer.colors.RED, err=True)
+        typer.secho(_friendly_lock_message(), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
     except RuntimeError as e:
         # Flattened to a CLI line for the expected lock/readiness cases, but log
@@ -250,7 +256,7 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
 
 async def _run_supervisor_only(websocket_port: int = 0) -> None:
     # Configure stderr logging immediately so early-startup records reach the
-    # child's stdout/stderr -> supervisor.ndjson. Per-repo run logs attach later
+    # child's stdout/stderr -> daemon.ndjson. Per-repo run logs attach later
     # inside each RepositoryHost / ProcessScope.
     from murder.observability.logging_setup import configure_logging, resolve_log_level
 
@@ -280,19 +286,17 @@ _DOWN_WAIT_S = 5.0
 _DOWN_POLL_S = 0.1
 
 
-def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) -> None:
+def _signal_daemon(pid: int) -> None:
     # Re-read the live daemon pid right before signalling so we don't SIGTERM a
-    # recycled, unrelated process: between the session-registry read and here
-    # the daemon may have exited and its pid been reused. Only signal if the
-    # daemon lock still names this exact pid. Otherwise the old service is gone.
-    del repo  # repo path retained for call-site compatibility
+    # recycled, unrelated process: between the registry/lock read and here the
+    # daemon may have exited and its pid been reused. Only signal if the daemon
+    # lock still names this exact pid. Otherwise the old service is gone.
     current = live_daemon_pid()
     if current != pid:
         if current is None:
             with contextlib.suppress(FileNotFoundError):
                 daemon_lock_path().unlink()
-        if session_name is not None:
-            remove_service_session(session_name)
+            remove_daemon_record()
         typer.echo(f"PID {pid} no longer holds the daemon lock; nothing to signal.")
         return
     try:
@@ -300,14 +304,13 @@ def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) ->
     except ProcessLookupError:
         with contextlib.suppress(FileNotFoundError):
             daemon_lock_path().unlink()
-        if session_name is not None:
-            remove_service_session(session_name)
+        remove_daemon_record()
         typer.echo(f"Removed stale daemon lock for dead PID {pid}.")
         return
     typer.echo(f"Sent SIGTERM to pid {pid}")
 
-    # Wait for a clean exit. Escalate if the supervisor hangs after removing its
-    # session file (clients would otherwise see lock-held-but-no-session).
+    # Wait for a clean exit. Escalate if the daemon hangs after removing its
+    # registry record (clients would otherwise see lock-held-but-no-listener).
     deadline = time.monotonic() + _DOWN_WAIT_S
     while time.monotonic() < deadline:
         if not _pid_is_alive(pid):
@@ -329,67 +332,97 @@ def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) ->
         with contextlib.suppress(FileNotFoundError):
             if read_lock_pid(daemon_lock_path()) in (None, pid):
                 daemon_lock_path().unlink()
-        if session_name is not None:
-            remove_service_session(session_name)
+        remove_daemon_record()
 
 
-def _down_named_session(selector: str) -> None:
-    sessions = _live_service_sessions()
-    try:
-        session = resolve_service_session_selector(selector, sessions)
-    except AmbiguousServiceSessionError as exc:
-        typer.secho(
-            f"Multiple murder services share basename {exc.selector!r}. Use the full session id:",
-            err=True,
-        )
-        for match in exc.matches:
-            typer.secho(
-                f"  murder down -s {match.name}  # hash={match.path_hash} repo={match.repo_root}",
-                err=True,
-            )
-        raise typer.Exit(1) from exc
-
-    if session is None:
-        typer.secho(f"No murder service session named {selector!r}. Run `murder ls`.", err=True)
-        raise typer.Exit(1)
-    _signal_service(session.repo_root, session.pid, session_name=session.name)
-
-
-def cmd_down(
-    session: str | None = typer.Option(
-        None,
-        "--session",
-        "-s",
-        help="Stop a service by session id or unambiguous directory basename.",
-    ),
-) -> None:
-    """Signal a running murder process."""
-    if session:
-        _down_named_session(session)
-        return
-
-    repo = _repo_root()
+def cmd_down() -> None:
+    """Stop the murder daemon (deactivates all repository hosts)."""
     pid = live_daemon_pid()
     if pid is None:
-        typer.secho("No daemon lock pid found (murder not running?).", err=True)
+        if read_daemon_record() is not None:
+            remove_daemon_record()
+            typer.echo("Removed stale daemon registry record.")
+            return
+        typer.secho("No murder daemon running.", err=True)
         raise typer.Exit(1)
-    _signal_service(repo, pid, session_name=project_session_name(repo))
+    _signal_daemon(pid)
+
 
 def cmd_id() -> None:
-    """Print the current directory's murder service session id."""
+    """Print the current directory's path-derived murder id."""
     typer.echo(project_session_name(_repo_root()))
 
 
+async def _fetch_repo_list() -> list[dict] | None:
+    """Return ``GET /api/repos`` rows when the daemon is up, else None."""
+    from aiohttp import ClientSession
+
+    if not await _daemon_is_ready():
+        return None
+    url = f"{_daemon_http_base()}/api/repos"
+    try:
+        async with ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status >= 400:
+                    return None
+                payload = await resp.json()
+    except Exception:
+        return None
+    rows = payload.get("repositories") if isinstance(payload, dict) else None
+    return list(rows) if isinstance(rows, list) else None
+
+
+def _list_repositories_offline() -> list[RecentRepository]:
+    return RepositoryManager().list_recent()
+
+
 def cmd_ls() -> None:
-    """List running murder service instances."""
-    sessions = sorted(_live_service_sessions(), key=lambda s: (s.basename, s.name))
-    if not sessions:
-        typer.echo("No murder services running.")
+    """List known repositories and which hosts are active in the daemon."""
+    rows = asyncio.run(_fetch_repo_list())
+    if rows is None:
+        offline = _list_repositories_offline()
+        if not offline:
+            typer.echo("No murder repositories registered.")
+            return
+        typer.echo(f"{'ACTIVE':<8} {'REPOSITORY_ID':<38}  ROOT")
+        for entry in offline:
+            typer.echo(f"{'no':<8} {entry.repository_id:<38}  {entry.root_path}")
         return
 
-    typer.echo(f"{'SESSION':<30} {'PID':>7}  REPO")
-    for session in sessions:
-        typer.echo(f"{session.name:<30} {session.pid:>7}  {session.repo_root}")
+    if not rows:
+        typer.echo("No murder repositories registered.")
+        return
+    typer.echo(f"{'ACTIVE':<8} {'REPOSITORY_ID':<38}  ROOT")
+    for row in rows:
+        active = "yes" if row.get("active") else "no"
+        rid = str(row.get("repository_id") or "")
+        root = str(row.get("root_path") or "")
+        typer.echo(f"{active:<8} {rid:<38}  {root}")
+
+
+repo_app = typer.Typer(help="Per-repository daemon host controls.")
+
+
+@repo_app.command("stop")
+def cmd_repo_stop(
+    path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Repository checkout to deactivate (daemon stays running).",
+    ),
+) -> None:
+    """Deactivate one repository host inside the running daemon."""
+
+    async def _stop() -> None:
+        if not await _daemon_is_ready():
+            raise RuntimeError("murder daemon is not running")
+        await _deactivate_repository(path)
+        typer.echo(f"stopped {path}")
+
+    _run_async_entry(_stop())
 
 
 def cmd_status() -> None:

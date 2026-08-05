@@ -72,6 +72,8 @@ class _FakeManager:
     recent: list[RecentRepository] = field(default_factory=list)
     ws_counts: dict[str, int] = field(default_factory=dict)
     inits: list[tuple[Path, bool]] = field(default_factory=list)
+    activated: list[Path] = field(default_factory=list)
+    deactivated: list[str] = field(default_factory=list)
     _on_deactivated: Any = None
 
     @property
@@ -81,14 +83,41 @@ class _FakeManager:
     def get(self, repository_id: str) -> _FakeHost | None:
         return self.hosts.get(repository_id)
 
+    def get_by_root(self, repo_root: Path) -> _FakeHost | None:
+        root = repo_root.resolve(strict=False)
+        for host in self.hosts.values():
+            if host.repo_root.resolve(strict=False) == root:
+                return host
+        return None
+
     def resolve_root(self, repository_id: str) -> Path | None:
         return self.roots.get(repository_id)
+
+    async def activate(self, repo_root: Path) -> _FakeHost:
+        root = repo_root.resolve(strict=False)
+        self.activated.append(root)
+        existing = self.get_by_root(root)
+        if existing is not None:
+            return existing
+        for rid, path in self.roots.items():
+            if path.resolve(strict=False) == root:
+                host = self.hosts.get(rid)
+                if host is not None:
+                    return host
+                raise KeyError(rid)
+        raise FileNotFoundError(f"unknown repository root: {root}")
 
     async def activate_by_id(self, repository_id: str) -> _FakeHost:
         host = self.hosts.get(repository_id)
         if host is None:
             raise KeyError(repository_id)
         return host
+
+    async def deactivate(self, repository_id: str) -> None:
+        self.deactivated.append(repository_id)
+        self.hosts.pop(repository_id, None)
+        if self._on_deactivated is not None:
+            self._on_deactivated(repository_id)
 
     def note_ws_connect(self, repository_id: str) -> None:
         self.ws_counts[repository_id] = self.ws_counts.get(repository_id, 0) + 1
@@ -187,6 +216,67 @@ async def test_picker_list_and_init(tmp_path: Path) -> None:
             assert manager.inits == [(fresh.resolve(), False)]
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_activate_and_deactivate_by_path(tmp_path: Path) -> None:
+    db, facts, inputs = _logs(tmp_path, TEST_REPOSITORY_ID)
+    root = tmp_path / "proj"
+    root.mkdir()
+    host = _FakeHost(
+        repository_id=TEST_REPOSITORY_ID,
+        run_id="run-activate",
+        application_dispatcher=_Application(),
+        fact_log=facts,
+        projection_input_log=inputs,
+        projection_providers=ProjectionProviderRegistry(),
+        repo_root=root,
+    )
+    manager = _FakeManager(
+        hosts={TEST_REPOSITORY_ID: host},
+        roots={TEST_REPOSITORY_ID: root},
+        recent=[
+            RecentRepository(
+                repository_id=TEST_REPOSITORY_ID,
+                root_path=root,
+                created_at="t0",
+                last_seen_at="t1",
+            )
+        ],
+    )
+    server = DaemonHttpServer(manager=manager)
+    try:
+        bind_host, port = await server.start(host="127.0.0.1", port=0)
+        base = f"http://{bind_host}:{port}"
+        async with ClientSession() as http:
+            async with http.post(
+                f"{base}/api/repos/activate",
+                json={"path": str(root)},
+            ) as resp:
+                assert resp.status == 200
+                body = await resp.json()
+                assert body["repository_id"] == TEST_REPOSITORY_ID
+                assert body["active"] is True
+                assert body["websocket_url"] == (
+                    f"ws://{bind_host}:{port}/api/ws/{TEST_REPOSITORY_ID}"
+                )
+            assert manager.activated == [root.resolve()]
+            assert server.session_for(TEST_REPOSITORY_ID) is not None
+
+            async with http.post(
+                f"{base}/api/repos/deactivate",
+                json={"path": str(root)},
+            ) as resp:
+                assert resp.status == 200
+                stopped = await resp.json()
+                assert stopped["ok"] is True
+                assert stopped["active"] is False
+            assert manager.deactivated == [TEST_REPOSITORY_ID]
+            assert TEST_REPOSITORY_ID not in manager.hosts
+            assert server.session_for(TEST_REPOSITORY_ID) is None
+    finally:
+        await server.stop()
+        db.close()
 
 
 @pytest.mark.asyncio

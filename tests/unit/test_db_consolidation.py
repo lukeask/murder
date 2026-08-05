@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -27,7 +26,6 @@ from murder.state.persistence.legacy_merge import (
 )
 from murder.state.persistence.repositories import forget_repository
 from murder.state.storage.paths import db_path
-from murder.state.storage.service_registry import ServiceSession
 from tests.support.database import (
     SECOND_TEST_REPOSITORY_ID,
     TEST_REPOSITORY_ID,
@@ -156,31 +154,27 @@ def _write_legacy_fact(repo: Path, fact_id: str) -> Path:
     return legacy
 
 
-def test_legacy_merge_leaves_other_live_service_database_untouched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_legacy_merge_only_includes_current_and_explicit_roots(
+    tmp_path: Path,
 ) -> None:
     current = tmp_path / "current"
     other = tmp_path / "other"
     current_legacy = _write_legacy_fact(current, "current-fact")
     other_legacy = _write_legacy_fact(other, "other-fact")
-    session = ServiceSession(
-        name="other-service",
-        basename="other",
-        path_hash="otherhash",
-        repo_root=other,
-        pid=os.getpid(),
-        websocket_url="ws://127.0.0.1:1/api/ws",
-    )
-    monkeypatch.setattr(
-        "murder.state.persistence.legacy_merge.list_service_sessions", lambda: [session]
-    )
 
     shared = open_test_repo_db(tmp_path / "shared.db")
     try:
+        # Without an explicit path, session discovery no longer pulls in other
+        # checkouts — only the current root is merged.
         assert merge_known_legacy_databases(shared.conn, current) == [current]
         assert current_legacy.with_name("murder.db.migrated").exists()
         assert other_legacy.exists()
         assert not other_legacy.with_name("murder.db.migrated").exists()
+
+        assert merge_known_legacy_databases(shared.conn, current, explicit_repos=(other,)) == [
+            other
+        ]
+        assert other_legacy.with_name("murder.db.migrated").exists()
     finally:
         shared.close()
 

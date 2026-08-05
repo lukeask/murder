@@ -26,6 +26,7 @@ from murder.app.cli.service_cmd import (
     cmd_retry,
     cmd_serviced,
     cmd_status,
+    repo_app,
 )
 from murder.app.cli.tui_cmd import _launch_tui, cmd_up
 from murder.app.cli.web_cmd import web_app
@@ -40,6 +41,7 @@ app = typer.Typer(
 app.add_typer(tickets_app, name="ticket")
 app.add_typer(web_app, name="web")
 app.add_typer(db_app, name="db")
+app.add_typer(repo_app, name="repo")
 
 
 @app.callback()

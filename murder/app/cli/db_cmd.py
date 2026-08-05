@@ -42,9 +42,7 @@ def cmd_db_migrate(
 ) -> None:
     """Merge legacy per-repository databases into the shared database.
 
-    The current checkout and known service-session repositories are always
-    considered.  Positional paths cover inactive checkouts that are not in the
-    service registry.
+    The current checkout and any explicitly listed repository paths are merged.
     """
     conn = connect()
     try:

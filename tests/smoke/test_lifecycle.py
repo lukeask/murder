@@ -25,11 +25,9 @@ from pathlib import Path
 import pytest
 
 from murder.app.cli.init_cmd import _scaffold_project
-from murder.state.storage.service_registry import (
-    project_session_name,
-    read_service_session,
-    service_registry_path,
-)
+from murder.app.protocol.common import DAEMON_WEBSOCKET_HOST
+from murder.state.persistence.connection import open_repo_db
+from murder.state.storage.service_registry import live_daemon_record, read_daemon_record
 
 _MANUAL_ENV = "MURDER_MANUAL_SMOKE"
 _STARTUP_TIMEOUT_S = 15.0
@@ -51,11 +49,19 @@ async def _connect_with_retry(repo: Path, *, deadline: float):
     last_exc: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            session = read_service_session(service_registry_path(project_session_name(repo)))
-            if session is None:
-                raise RuntimeError("application service registry is not ready")
+            record = live_daemon_record() or read_daemon_record()
+            if record is None:
+                raise RuntimeError("daemon registry is not ready")
+            db = open_repo_db(repo)
+            try:
+                repository_id = db.repository_id
+            finally:
+                db.close()
+            ws_url = (
+                f"ws://{DAEMON_WEBSOCKET_HOST}:{record.port}/api/ws/{repository_id}"
+            )
             http = ClientSession()
-            ws = await http.ws_connect(session.websocket_url, timeout=2.0)
+            ws = await http.ws_connect(ws_url, timeout=2.0)
             await ws.send_json(
                 {
                     "op": "client.hello",
@@ -107,6 +113,7 @@ def test_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = {
         **os.environ,
         "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_RUNTIME_DIR": str(tmp_path),
     }
 
     proc = subprocess.Popen(

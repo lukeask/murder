@@ -6,12 +6,13 @@ from pathlib import Path
 import pytest
 
 from murder.state.storage.service_registry import (
-    AmbiguousServiceSessionError,
-    ServiceSession,
+    daemon_registry_path,
+    live_daemon_record,
     project_path_hash,
     project_session_name,
-    resolve_service_session_selector,
+    read_daemon_record,
     service_runtime_root,
+    write_daemon_record,
 )
 
 
@@ -33,29 +34,27 @@ def test_project_session_name_uses_resolved_full_path(
     assert kenny_name != tony_name
 
 
-def test_resolve_service_session_selector_rejects_duplicate_basenames(tmp_path: Path) -> None:
-    first = ServiceSession(
-        name="project-aaaaaaaaaaaa",
-        basename="project",
-        path_hash="aaaaaaaaaaaa",
-        repo_root=tmp_path / "kenny" / "project",
-        pid=1001,
-        websocket_url="ws://127.0.0.1:9001/api/ws",
-    )
-    second = ServiceSession(
-        name="project-bbbbbbbbbbbb",
-        basename="project",
-        path_hash="bbbbbbbbbbbb",
-        repo_root=tmp_path / "tony" / "project",
-        pid=1002,
-        websocket_url="ws://127.0.0.1:9002/api/ws",
-    )
+def test_write_and_read_daemon_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    record = write_daemon_record(port=62077, pid=4242, started_at="2026-01-01T00:00:00+00:00")
+    assert record.pid == 4242
+    assert record.port == 62077
+    assert daemon_registry_path() == service_runtime_root() / "daemon.json"
+    loaded = read_daemon_record()
+    assert loaded == record
 
-    with pytest.raises(AmbiguousServiceSessionError) as exc_info:
-        resolve_service_session_selector("project", [first, second])
 
-    assert [match.name for match in exc_info.value.matches] == [first.name, second.name]
-    assert resolve_service_session_selector(first.name, [first, second]) == first
+def test_live_daemon_record_clears_dead_pid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    write_daemon_record(port=62077, pid=2_000_000_001)
+    assert live_daemon_record() is None
+    assert read_daemon_record() is None
 
 
 def test_service_runtime_root_uses_explicit_xdg(

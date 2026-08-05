@@ -9,7 +9,6 @@ import pytest
 from murder.app.cli import service_cmd
 from murder.app.service import daemon_host as daemon_host_mod
 from murder.state.storage.filesystem import acquire_flock, lock_is_held, release_flock
-from murder.state.storage.service_registry import ServiceSession, project_session_name
 
 SERVICE_PID = 123
 
@@ -39,84 +38,61 @@ def test_live_daemon_ignores_reused_pid_in_stale_file(
     monkeypatch.setattr(daemon_host_mod, "daemon_lock_path", lambda: path)
     monkeypatch.setattr(daemon_host_mod.os, "kill", lambda *_a, **_k: None)
 
-    assert service_cmd._live_lock_owner_pid(tmp_path) is None
+    assert service_cmd._live_lock_owner_pid() is None
 
 
-async def test_supervisor_is_not_ready_until_matching_endpoint_is_published(
+async def test_daemon_ready_when_listener_probes(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    lock = tmp_path / "daemon.lock"
-    lock.write_text(f"{SERVICE_PID}\n", encoding="ascii")
-    monkeypatch.setattr(daemon_host_mod, "daemon_lock_path", lambda: lock)
-    monkeypatch.setattr(daemon_host_mod, "live_daemon_pid", lambda: SERVICE_PID)
-    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: SERVICE_PID)
-    monkeypatch.setattr(service_cmd, "list_service_sessions", lambda: [])
-
-    assert await service_cmd._supervisor_is_live(tmp_path, lock) is False
+    monkeypatch.setattr(service_cmd, "probe_daemon_listener", AsyncMock(return_value=True))
+    assert await service_cmd._daemon_is_ready() is True
 
 
-async def test_supervisor_is_ready_after_matching_endpoint_is_published(
+async def test_daemon_not_ready_when_listener_absent(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    lock = tmp_path / "daemon.lock"
-    lock.write_text(f"{SERVICE_PID}\n", encoding="ascii")
-    session = ServiceSession(
-        name=project_session_name(tmp_path),
-        basename="repo",
-        path_hash="hash",
-        repo_root=tmp_path,
-        pid=SERVICE_PID,
-        websocket_url="ws://127.0.0.1:62077/api/ws",
-    )
-    monkeypatch.setattr(daemon_host_mod, "live_daemon_pid", lambda: SERVICE_PID)
-    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: SERVICE_PID)
-    monkeypatch.setattr(service_cmd, "list_service_sessions", lambda: [session])
-
-    assert await service_cmd._supervisor_is_live(tmp_path, lock) is True
-
-
-async def test_ensure_supervisor_waits_for_live_lock_owner(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    live = AsyncMock(side_effect=[False, True])
-    spawn = Mock()
-    monkeypatch.setattr(service_cmd, "_supervisor_is_live", live)
     monkeypatch.setattr(service_cmd, "probe_daemon_listener", AsyncMock(return_value=False))
-    monkeypatch.setattr(service_cmd, "_live_lock_owner_pid", lambda _repo: 123)
-    monkeypatch.setattr(service_cmd, "_spawn_service_process", spawn)
+    assert await service_cmd._daemon_is_ready() is False
+
+
+async def test_ensure_daemon_waits_for_live_lock_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ready = AsyncMock(side_effect=[False, True])
+    spawn = Mock()
+    monkeypatch.setattr(service_cmd, "_daemon_is_ready", ready)
+    monkeypatch.setattr(service_cmd, "_live_lock_owner_pid", lambda: 123)
+    monkeypatch.setattr(service_cmd, "_spawn_daemon_process", spawn)
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    started = await service_cmd._ensure_supervisor_impl(tmp_path, tmp_path / "bus.sock")
+    started = await service_cmd._ensure_daemon_impl(spawn_cwd=tmp_path)
 
     assert started is False
     spawn.assert_not_called()
 
 
-async def test_ensure_supervisor_follows_concurrent_winner_when_our_child_exits(
+async def test_ensure_daemon_follows_concurrent_winner_when_our_child_exits(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    live = AsyncMock(side_effect=[False, False, True])
+    ready = AsyncMock(side_effect=[False, False, True])
     owners = iter([None, 456, 456])
     proc = Mock(pid=123)
     proc.poll.return_value = 1
     spawn = Mock(return_value=proc)
-    monkeypatch.setattr(service_cmd, "_supervisor_is_live", live)
-    monkeypatch.setattr(service_cmd, "probe_daemon_listener", AsyncMock(return_value=False))
-    monkeypatch.setattr(service_cmd, "_live_lock_owner_pid", lambda _repo: next(owners))
-    monkeypatch.setattr(service_cmd, "_spawn_service_process", spawn)
+    monkeypatch.setattr(service_cmd, "_daemon_is_ready", ready)
+    monkeypatch.setattr(service_cmd, "_live_lock_owner_pid", lambda: next(owners))
+    monkeypatch.setattr(service_cmd, "_spawn_daemon_process", spawn)
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    started = await service_cmd._ensure_supervisor_impl(tmp_path, tmp_path / "bus.sock")
+    started = await service_cmd._ensure_daemon_impl(spawn_cwd=tmp_path)
 
     assert started is False
-    spawn.assert_called_once_with(tmp_path)
+    spawn.assert_called_once()
 
 
-async def test_ensure_supervisor_reports_our_child_startup_failure(
+async def test_ensure_daemon_reports_our_child_startup_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -124,33 +100,44 @@ async def test_ensure_supervisor_reports_our_child_startup_failure(
     proc.poll.return_value = 1
     monkeypatch.setattr(
         service_cmd,
-        "_supervisor_is_live",
+        "_daemon_is_ready",
         AsyncMock(side_effect=[False, False]),
     )
-    monkeypatch.setattr(service_cmd, "probe_daemon_listener", AsyncMock(return_value=False))
-    monkeypatch.setattr(service_cmd, "_live_lock_owner_pid", lambda _repo: None)
-    monkeypatch.setattr(service_cmd, "_spawn_service_process", Mock(return_value=proc))
+    monkeypatch.setattr(service_cmd, "_live_lock_owner_pid", lambda: None)
+    monkeypatch.setattr(service_cmd, "_spawn_daemon_process", Mock(return_value=proc))
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
     with pytest.raises(
         RuntimeError,
-        match=r"supervisor process exited during startup \(code 1\)",
+        match=r"daemon process exited during startup \(code 1\)",
     ):
-        await service_cmd._ensure_supervisor_impl(tmp_path, tmp_path / "bus.sock")
+        await service_cmd._ensure_daemon_impl(spawn_cwd=tmp_path)
 
 
-async def test_ensure_supervisor_attaches_when_daemon_listener_is_live(
+async def test_ensure_daemon_attaches_when_listener_already_live(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    live = AsyncMock(side_effect=[False, True])
     spawn = Mock()
-    monkeypatch.setattr(service_cmd, "_supervisor_is_live", live)
-    monkeypatch.setattr(service_cmd, "probe_daemon_listener", AsyncMock(return_value=True))
-    monkeypatch.setattr(service_cmd, "_spawn_service_process", spawn)
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(service_cmd, "_daemon_is_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(service_cmd, "_spawn_daemon_process", spawn)
 
-    started = await service_cmd._ensure_supervisor_impl(tmp_path, tmp_path / "bus.sock")
+    started = await service_cmd._ensure_daemon_impl(spawn_cwd=tmp_path)
 
     assert started is False
     spawn.assert_not_called()
+
+
+async def test_ensure_daemon_and_activate_posts_after_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    activate = AsyncMock(return_value={"repository_id": "r1", "websocket_url": "ws://x"})
+    monkeypatch.setattr(service_cmd, "_ensure_daemon_started", AsyncMock(return_value=True))
+    monkeypatch.setattr(service_cmd, "_activate_repository", activate)
+
+    started, info = await service_cmd.ensure_daemon_and_activate(tmp_path)
+
+    assert started is True
+    assert info["repository_id"] == "r1"
+    activate.assert_awaited_once_with(tmp_path)

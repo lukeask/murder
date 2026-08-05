@@ -806,6 +806,8 @@ class DaemonHttpServer:
         app = web.Application()
         app.router.add_get("/api/repos", self._handle_list_repos)
         app.router.add_post("/api/repos/init", self._handle_init_repo)
+        app.router.add_post("/api/repos/activate", self._handle_activate_repo)
+        app.router.add_post("/api/repos/deactivate", self._handle_deactivate_repo)
         app.router.add_get("/api/ws/{repository_id}", self._handle_websocket)
         if self._assets_dir is not None and self._assets_dir.is_dir():
             app.router.add_get("/{path:.*}", self._serve_asset)
@@ -868,6 +870,74 @@ class DaemonHttpServer:
             },
             status=201,
         )
+
+    def _repo_websocket_url(self, repository_id: str) -> str:
+        host, port = self.bound or ("127.0.0.1", 0)
+        return f"ws://{host}:{port}/api/ws/{repository_id}"
+
+    async def _handle_activate_repo(self, request: Any) -> Any:
+        """Activate (or reuse) a host for ``path`` and warm its socket session."""
+        web, _ = _aiohttp()
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="JSON body required") from None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="JSON object required")
+        raw_path = body.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise web.HTTPBadRequest(text="'path' string is required")
+        root = Path(raw_path).expanduser().resolve(strict=False)
+        try:
+            host = await self._manager.activate(root)
+            await self.ensure_session(host.repository_id)
+        except FileNotFoundError as exc:
+            raise web.HTTPNotFound(text=str(exc)) from exc
+        except (OSError, ValueError, RuntimeError, KeyError) as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        except Exception as exc:
+            LOGGER.exception("failed to activate path=%s", root)
+            raise web.HTTPInternalServerError(text=str(exc)) from exc
+        return web.json_response(
+            {
+                "repository_id": host.repository_id,
+                "root_path": str(host.repo_root),
+                "websocket_url": self._repo_websocket_url(host.repository_id),
+                "active": True,
+            }
+        )
+
+    async def _handle_deactivate_repo(self, request: Any) -> Any:
+        """Deactivate one host by ``path`` or ``repository_id`` (daemon stays up)."""
+        web, _ = _aiohttp()
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="JSON body required") from None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="JSON object required")
+        repository_id = body.get("repository_id")
+        raw_path = body.get("path")
+        if isinstance(repository_id, str) and repository_id.strip():
+            rid = repository_id.strip()
+        elif isinstance(raw_path, str) and raw_path.strip():
+            root = Path(raw_path).expanduser().resolve(strict=False)
+            host = self._manager.get_by_root(root)
+            if host is None:
+                # Not active — treat as success (idempotent stop).
+                return web.json_response({"ok": True, "active": False})
+            rid = host.repository_id
+        else:
+            raise web.HTTPBadRequest(text="'path' or 'repository_id' is required")
+        if self._manager.get(rid) is None:
+            self.drop_session(rid)
+            return web.json_response({"ok": True, "active": False})
+        await self._manager.deactivate(rid)
+        # Belt-and-suspenders: manager.on_deactivated usually drops this, but the
+        # HTTP path owns the session cache and must not leave a stale entry if the
+        # callback was never wired (tests) or failed.
+        self.drop_session(rid)
+        return web.json_response({"ok": True, "repository_id": rid, "active": False})
 
     async def _handle_websocket(self, request: Any) -> Any:
         web, _ = _aiohttp()
