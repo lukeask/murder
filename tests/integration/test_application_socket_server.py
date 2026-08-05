@@ -275,3 +275,40 @@ async def test_gateway_timeout_cancels_application_await() -> None:
 
     await application.started.wait()
     await asyncio.wait_for(application.cancelled.wait(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_static_assets_served_from_assets_dir(tmp_path: Path) -> None:
+    assets = tmp_path / "spa"
+    assets.mkdir()
+    assets.joinpath("index.html").write_text("<html>spa</html>", encoding="utf-8")
+    asset_dir = assets / "assets"
+    asset_dir.mkdir()
+    asset_dir.joinpath("app.js").write_text("console.log('ok')", encoding="utf-8")
+
+    db, facts, inputs = _test_logs(tmp_path)
+    server = ApplicationSocketServer(
+        gateway=ApplicationGateway(_Application()),
+        facts=facts,
+        projection_inputs=inputs,
+        providers=ProjectionProviderRegistry(),
+        run_id="test-run",
+        assets_dir=assets,
+    )
+    try:
+        host, port = await server.start(host="127.0.0.1", port=0)
+        base = f"http://{host}:{port}"
+        async with ClientSession() as http:
+            async with http.get(f"{base}/") as resp:
+                assert resp.status == 200
+                assert "spa" in await resp.text()
+            async with http.get(f"{base}/index.html") as resp:
+                assert resp.status == 200
+            async with http.get(f"{base}/assets/app.js") as resp:
+                assert resp.status == 200
+                assert "ok" in await resp.text()
+            async with http.get(f"{base}/missing-route") as resp:
+                assert resp.status == 200
+                assert "spa" in await resp.text()
+    finally:
+        await _stop_server(server, db)

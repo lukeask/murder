@@ -6,9 +6,8 @@ regenerated from source on every wheel build so staleness is structurally imposs
 * The Ink TUI as a single self-contained JS bundle at ``murder/_inktui/index.js`` (esbuild),
   run by the user's Node at launch.
 * The web/mobile React frontend as a static SPA at ``murder/_webui/`` (an ``index.html`` plus
-  hashed JS/CSS under ``assets/``), built by Vite and served by ``murder/web/bridge.py``. The
-  bridge resolves assets at ``murder/_webui/`` first, falling back to ``webui/dist`` in a source
-  checkout.
+  hashed JS/CSS under ``assets/``), built by Vite and served by ``ApplicationSocketServer``. Asset
+  resolution prefers ``webui/dist`` when present, falling back to packaged ``murder/_webui/``.
 
 This hook, during a **wheel** build, runs one root ``npm ci`` for the npm workspace, regenerates the
 protocol in the isolated build environment, then builds ``inktui`` and ``webui`` through their workspace scripts. It copies

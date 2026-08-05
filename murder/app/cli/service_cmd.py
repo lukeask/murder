@@ -17,12 +17,15 @@ import typer
 
 from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
-from murder.app.service.host import ServiceHost
+from murder.app.service.gateway import ApplicationGateway
+from murder.app.service.repository_host import RepositoryHost
+from murder.app.service.socket_server import ApplicationSocketServer
+from murder.app.service.webui_assets import resolve_webui_assets_dir
 from murder.config import Config
 from murder.state.persistence.connection import RepoDb, open_repo_db
 from murder.state.persistence.escalations import list_pending_escalations
 from murder.state.persistence.tickets import get_ticket
-from murder.state.storage.filesystem import lock_is_held, read_lock_pid
+from murder.state.storage.filesystem import acquire_flock, lock_is_held, read_lock_pid, release_flock
 from murder.state.storage.paths import (
     agents_dir,
     lock_path,
@@ -37,7 +40,9 @@ from murder.state.storage.service_registry import (
     project_session_name,
     remove_service_session,
     resolve_service_session_selector,
+    write_service_session,
 )
+from murder.user_config import ensure_user_themes, load_user_config
 from murder.work.plans.sync import PlanSync, content_hash
 from murder.work.tickets import lifecycle
 from murder.work.tickets.schema import ChecklistItem, Ticket
@@ -237,15 +242,90 @@ async def _run_supervisor_only(websocket_port: int = 0) -> None:
     configure_logging(level=resolve_log_level(), log_path=None)
     repo = _repo_root()
     cfg = Config.load(repo)
-    host = ServiceHost(cfg, repo, websocket_port=websocket_port)
-    async with host:
+
+    # Phase 1 bridge: flock / user-config / socket still live in the CLI entry
+    # until DaemonHost (Phase 2) and path-scoped routing (Phase 3) land.
+    ensure_user_themes()
+    try:
+        user_cfg = load_user_config()
+    except Exception:
+        user_cfg = None
+
+    lock_fd = acquire_flock(lock_path(repo))
+    host: RepositoryHost | None = None
+    socket_server: ApplicationSocketServer | None = None
+    session_name: str | None = None
+
+    async def _ordered_shutdown(*, authoritative: bool) -> None:
+        """Mirror former ServiceHost.stop() ordering for the Phase 1 CLI bridge.
+
+        clear → background → supervisor → socket → session registry → host stack.
+        """
+        nonlocal host, socket_server, session_name
+        if host is not None and authoritative:
+            with contextlib.suppress(Exception):
+                host.clear_shutdown_signal()
+        if host is not None and host.background_tasks is not None:
+            with contextlib.suppress(Exception):
+                await host.background_tasks.stop()
+            host.background_tasks = None
+        if host is not None and host.supervisor is not None:
+            with contextlib.suppress(Exception):
+                await host.supervisor.stop_all()
+            host.supervisor = None
+        if socket_server is not None:
+            with contextlib.suppress(FileNotFoundError, OSError, Exception):
+                await socket_server.stop()
+            socket_server = None
+        if session_name is not None:
+            with contextlib.suppress(Exception):
+                remove_service_session(session_name)
+            session_name = None
+        if host is not None:
+            with contextlib.suppress(Exception):
+                await host.stop()
+            host = None
+
+    try:
+        host = RepositoryHost(cfg, repo, user_config=user_cfg)
+        await host.start()
+        assert host.application_dispatcher is not None
+        assert host.fact_log is not None
+        assert host.projection_input_log is not None
+        socket_server = ApplicationSocketServer(
+            gateway=ApplicationGateway(
+                host.application_dispatcher,
+                schedule_plan_seed=host.schedule_plan_seed,
+            ),
+            facts=host.fact_log,
+            projection_inputs=host.projection_input_log,
+            providers=host.projection_providers,
+            run_id=host.run_id,
+            terminal_capture=host.terminal_capture,
+            terminal_output_open=host.terminal_output_open,
+            terminal_input=host.terminal_input,
+            terminal_input_validator=host.terminal_input_validator,
+            assets_dir=resolve_webui_assets_dir(repo),
+        )
+        host.set_plan_seed_failure_notifier(socket_server.notify_plan_seed_failed)
+        bound = await socket_server.start(host="127.0.0.1", port=websocket_port)
+        session = write_service_session(repo, f"ws://{bound[0]}:{bound[1]}/api/ws")
+        session_name = session.name
+        logging.getLogger(__name__).info(
+            "application websocket listener on ws://%s:%d/api/ws", *bound
+        )
         try:
-            await host.run_until_signal()
+            await host.process.wait_for_signal()
         finally:
             # A service shutdown is authoritative (`murder down`): the backend
             # owns agent/tmux teardown, not any connected client.
-            with contextlib.suppress(Exception):
-                host.clear_shutdown_signal()
+            await _ordered_shutdown(authoritative=True)
+    finally:
+        await _ordered_shutdown(authoritative=False)
+        with contextlib.suppress(Exception):
+            release_flock(lock_fd)
+        with contextlib.suppress(FileNotFoundError, OSError):
+            lock_path(repo).unlink()
 
 
 def cmd_serviced(

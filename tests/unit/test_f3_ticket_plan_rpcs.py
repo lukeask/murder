@@ -268,12 +268,12 @@ def _host_with_handlers(repo_root: Path):
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
-    from murder.app.service.host import ServiceHost
     from murder.app.service.read_model import ServiceReadModel
+    from murder.app.service.repository_host import RepositoryHost
     from murder.roster.service import RosterService
 
     rt = _runtime(repo_root)
-    host = ServiceHost(config=_config(), repo_root=repo_root)
+    host = RepositoryHost(config=_config(), repo_root=repo_root)
     stub = _StubOrch()
     host.orchestrator = stub  # type: ignore[assignment]
     host.read_model = ServiceReadModel(rt.db, repo_root)

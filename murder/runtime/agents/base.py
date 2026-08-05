@@ -98,7 +98,7 @@ class HarnessBackedAgent(LifecycleParticipant):
     harness_session: Any  # HarnessSession — typed Any to avoid import cycle
     # Owned transcript projection. Every harness-backed agent projects its own
     # pane into the conversation store via project_once(), driven by a single
-    # service-owned ticker (ServiceHost). This is a universal per-agent concern,
+    # service-owned ticker (RepositoryHost). This is a universal per-agent concern,
     # independent of ticket orchestration — so it lives here rather than in
     # CrowHandler, which keeps rogues (no handler) and collaborators projecting
     # too. The producer is built (no I/O, no task) by start_conversation().

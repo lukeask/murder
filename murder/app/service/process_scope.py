@@ -1,8 +1,9 @@
-"""Process-wide resources whose lifetime matches the Service process.
+"""Process-wide resources whose lifetime matches one RepositoryHost.
 
-Owns flock, RepoDb, run/log infrastructure, advanced-log, orchestration event
-sink, command submitter, recorder subscription, and external-stop signals.
-Does not own agents, sessions, sync, documents, or dispatchers.
+Owns RepoDb, run/log infrastructure, advanced-log, orchestration event sink,
+command submitter, recorder subscription, and external-stop signals.
+Does not own agents, sessions, sync, documents, dispatchers, or exclusivity
+locking (the daemon manager owns one host per repository_id).
 """
 
 from __future__ import annotations
@@ -46,8 +47,7 @@ from murder.state.persistence.runs import insert_run as _db_insert_run
 from murder.state.persistence.runs import (
     set_run_advanced_log_path as _db_set_run_advanced_log_path,
 )
-from murder.state.storage.filesystem import acquire_flock, release_flock
-from murder.state.storage.paths import lock_path, logs_dir, panes_dir, service_log
+from murder.state.storage.paths import logs_dir, panes_dir, service_log
 from murder.state.storage.run_id_allocation import allocate_run_id
 
 if TYPE_CHECKING:
@@ -64,14 +64,13 @@ class ProcessResources:
 
 
 class ProcessScope:
-    """Acquire and tear down process-scoped Service resources."""
+    """Acquire and tear down per-repository Service resources."""
 
     def __init__(self) -> None:
         self._resources: ProcessResources | None = None
         self._external_stop = asyncio.Event()
         self._stack = AsyncExitStack()
         self._closed = False
-        self._lock_fd: int | None = None
         self._repo_root: Path | None = None
         self._recorder_sub: SubscriptionHandle | None = None
         self._recorder_mode: str = "off"
@@ -101,18 +100,6 @@ class ProcessScope:
         self._external_stop.clear()
         self._repo_root = repo_root
         self._closed = False
-
-        self._lock_fd = acquire_flock(lock_path(repo_root))
-
-        async def _release_flock() -> None:
-            if self._lock_fd is not None:
-                with contextlib.suppress(Exception):
-                    release_flock(self._lock_fd)
-                self._lock_fd = None
-                with contextlib.suppress(FileNotFoundError, OSError):
-                    lock_path(repo_root).unlink()
-
-        self._stack.push_async_callback(_release_flock)
 
         db = open_repo_db(repo_root)
         self._stack.callback(db.close)
@@ -234,7 +221,7 @@ class ProcessScope:
         self._external_stop.clear()
 
     async def wait_for_signal(self) -> None:
-        """Block until SIGINT/SIGTERM. Used after CLI kickoff."""
+        """Block until SIGINT/SIGTERM. Used after CLI kickoff / by the daemon."""
         loop = asyncio.get_running_loop()
 
         def _wake() -> None:

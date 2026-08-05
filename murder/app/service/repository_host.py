@@ -1,9 +1,15 @@
-"""ServiceHost — backend composition root for the murder service process."""
+"""RepositoryHost — per-repository composition root for the murder service.
+
+Daemon-level concerns (socket listener, session registry, signal wait, user
+themes/config loading) live outside this class. Callers pass ``user_config``
+in and consume the exposed dispatcher / fact / projection / terminal inputs
+to attach a socket session.
+"""
 
 from __future__ import annotations
 
 import contextlib
-import logging
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,12 +27,16 @@ from murder.app.service.dispatcher_loops import (
 from murder.app.service.document_editors import DocumentEditorService
 from murder.app.service.documents import DocumentService
 from murder.app.service.filesystem_sync import FilesystemSyncService
-from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.process_scope import ProcessScope
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.app.service.read_model import ServiceReadModel
 from murder.app.service.runtime_lifecycle import kill_project_tmux_sessions
-from murder.app.service.socket_server import ApplicationSocketServer
+from murder.app.service.socket_server import (
+    TerminalCapture,
+    TerminalInput,
+    TerminalInputValidator,
+    TerminalOutputOpen,
+)
 from murder.app.service.startup_recovery import StartupRecoveryResult, run_startup_recovery
 from murder.app.service.supervisor import Supervisor
 from murder.config import Config
@@ -47,12 +57,9 @@ from murder.runtime.sessions import (
     WriteTerminalInput,
 )
 from murder.runtime.terminal.session_names import SessionNamePolicy
-from murder.state.storage.service_registry import (
-    remove_service_session,
-    write_service_session,
-)
+from murder.user_config import UserConfig
 
-LOGGER = logging.getLogger(__name__)
+PlanSeedFailureNotifier = Callable[[str | None, str, str], Awaitable[None]]
 
 
 @dataclass
@@ -76,19 +83,19 @@ class _RunningService:
 
 
 @dataclass
-class ServiceHost:
-    """Wires runtime, application services, and the application socket server.
+class RepositoryHost:
+    """Wires runtime and application services for one repository.
 
-    Responsibility (keep it this narrow): the process COMPOSITION ROOT and
+    Responsibility (keep it this narrow): the per-repo COMPOSITION ROOT and
     lifecycle owner. ``start``/``stop`` wire the collaborators and own the
     background tasks. ``register_application_handlers`` just delegates to the
-    ``handlers/`` package. This class deliberately holds NO request logic.
+    ``handlers/`` package. This class deliberately holds NO request logic and
+    NO process-wide socket / signal / user-config loading.
     """
 
     config: Config
     repo_root: Path
-    websocket_host: str = "127.0.0.1"
-    websocket_port: int = 0
+    user_config: UserConfig | None = None
     activity_dispatcher_factory: ActivityDispatcherFactory | None = None
     trigger_dispatcher_factory: TriggerDispatcherFactory | None = None
     read_model: ServiceReadModel | None = None
@@ -97,10 +104,15 @@ class ServiceHost:
     projection_providers: ProjectionProviderRegistry = field(
         default_factory=ProjectionProviderRegistry, repr=False
     )
+    application_dispatcher: ApplicationDispatcher | None = None
+    terminal_capture: TerminalCapture | None = field(default=None, repr=False)
+    terminal_output_open: TerminalOutputOpen | None = field(default=None, repr=False)
+    terminal_input: TerminalInput | None = field(default=None, repr=False)
+    terminal_input_validator: TerminalInputValidator | None = field(
+        default=None, repr=False
+    )
     orchestrator: Orchestrator | None = None
     supervisor: Supervisor | None = None
-    socket_server: ApplicationSocketServer | None = None
-    websocket_bound: tuple[str, int] | None = None
     background_tasks: ServiceBackgroundTasks | None = field(default=None, repr=False)
     _application_queries: dict[QueryName, ApplicationHandler] = field(
         default_factory=dict, repr=False
@@ -108,7 +120,9 @@ class ServiceHost:
     _application_commands: dict[CommandName, ApplicationHandler] = field(
         default_factory=dict, repr=False
     )
-    _service_session_name: str | None = field(default=None, repr=False)
+    _plan_seed_failure_notifier: PlanSeedFailureNotifier | None = field(
+        default=None, repr=False
+    )
     _stack: AsyncExitStack | None = field(default=None, repr=False)
     _running: _RunningService | None = field(default=None, repr=False)
     # Project-wide tmux sweep runs only after a successful start commits.
@@ -152,6 +166,39 @@ class ServiceHost:
             structured_decisions=running.structured_decisions,
         )
 
+    def set_plan_seed_failure_notifier(
+        self, notifier: PlanSeedFailureNotifier | None
+    ) -> None:
+        """Attach (or clear) the transport callback for planner-seed failures."""
+        self._plan_seed_failure_notifier = notifier
+
+    def schedule_plan_seed(
+        self, plan_name: str, message: str, client_id: str | None
+    ) -> None:
+        """Schedule a planner seed; failures go to the attached notifier if any."""
+        if self.background_tasks is None:
+            raise RuntimeError("service is not started")
+
+        async def notify_failure(error: str) -> None:
+            if self._plan_seed_failure_notifier is not None:
+                await self._plan_seed_failure_notifier(client_id, plan_name, error)
+
+        self.background_tasks.schedule_plan_seed(
+            plan_name, message, on_failure=notify_failure
+        )
+
+    @property
+    def run_id(self) -> str:
+        if self._running is None:
+            raise RuntimeError("service is not started")
+        return self._running.process.run_id
+
+    @property
+    def process(self) -> ProcessScope:
+        if self._running is None:
+            raise RuntimeError("service is not started")
+        return self._running.process
+
     async def start(self) -> None:
         from murder.runtime.activity_dispatcher import (  # noqa: PLC0415
             build_default_activity_dispatcher,
@@ -159,16 +206,9 @@ class ServiceHost:
         from murder.runtime.trigger_dispatcher import (  # noqa: PLC0415
             build_default_trigger_dispatcher,
         )
-        from murder.user_config import ensure_user_themes, load_user_config  # noqa: PLC0415
 
         if self._stack is not None or self._running is not None:
-            raise RuntimeError("ServiceHost.start() cannot be called twice without stop()")
-
-        ensure_user_themes()
-        try:
-            user_cfg = load_user_config()
-        except Exception:
-            user_cfg = None
+            raise RuntimeError("RepositoryHost.start() cannot be called twice without stop()")
 
         activity_factory = self.activity_dispatcher_factory or build_default_activity_dispatcher
         trigger_factory = self.trigger_dispatcher_factory or (
@@ -248,7 +288,7 @@ class ServiceHost:
 
             orchestrator = Orchestrator(
                 config=self.config,
-                user_config=user_cfg,
+                user_config=self.user_config,
                 repo_root=self.repo_root,
                 db=process.db,
                 run_id=process.run_id,
@@ -298,11 +338,11 @@ class ServiceHost:
                 session_names=session_names,
                 roster=roster,
             )
-            # Expose lifecycle state for handler registration before socket bind.
+            # Expose lifecycle state for handler registration before workers start.
             self._running = running
             self.register_application_handlers()
 
-            application = ApplicationDispatcher(
+            self.application_dispatcher = ApplicationDispatcher(
                 queries=self._application_queries,
                 commands=self._application_commands,
             )
@@ -314,19 +354,6 @@ class ServiceHost:
                 recovery=recovery,
                 advanced_log=process.advanced_log,
             )
-
-            def schedule_plan_seed(plan_name: str, message: str, client_id: str | None) -> None:
-                assert self.background_tasks is not None
-
-                async def notify_failure(error: str) -> None:
-                    if self.socket_server is not None:
-                        await self.socket_server.notify_plan_seed_failed(
-                            client_id, plan_name, error
-                        )
-
-                self.background_tasks.schedule_plan_seed(
-                    plan_name, message, on_failure=notify_failure
-                )
 
             async def terminal_input(
                 session_id: UUID,
@@ -371,30 +398,10 @@ class ServiceHost:
                     required_mode=WriterMode.RAW_TERMINAL,
                 )
 
-            self.socket_server = ApplicationSocketServer(
-                gateway=ApplicationGateway(
-                    application, schedule_plan_seed=schedule_plan_seed
-                ),
-                facts=self.fact_log,
-                projection_inputs=self.projection_input_log,
-                providers=self.projection_providers,
-                run_id=str(process.run_id),
-                terminal_capture=sessions.capture_terminal,
-                terminal_output_open=sessions.open_terminal_output,
-                terminal_input=terminal_input,
-                terminal_input_validator=terminal_input_validator,
-                assets_dir=(self.repo_root / "webui" / "dist"),
-            )
-            self.websocket_bound = await self.socket_server.start(
-                host=self.websocket_host, port=self.websocket_port
-            )
-            host, port = self.websocket_bound
-            session = write_service_session(self.repo_root, f"ws://{host}:{port}/api/ws")
-            self._service_session_name = session.name
-
-            LOGGER.info(
-                "application websocket listener on ws://%s:%d/api/ws", *self.websocket_bound
-            )
+            self.terminal_capture = sessions.capture_terminal
+            self.terminal_output_open = sessions.open_terminal_output
+            self.terminal_input = terminal_input
+            self.terminal_input_validator = terminal_input_validator
 
             self.supervisor = await start_supervisor_workers(
                 repo_root=self.repo_root,
@@ -426,29 +433,20 @@ class ServiceHost:
             with contextlib.suppress(Exception):
                 await self.supervisor.stop_all()
             self.supervisor = None
-        if self.socket_server is not None:
-            with contextlib.suppress(Exception):
-                await self.socket_server.stop()
-            self.socket_server = None
-        self.websocket_bound = None
-        if self._service_session_name is not None:
-            with contextlib.suppress(Exception):
-                remove_service_session(self._service_session_name)
-            self._service_session_name = None
         with contextlib.suppress(Exception):
             await stack.aclose()
         self.read_model = None
         self.fact_log = None
         self.projection_input_log = None
+        self.application_dispatcher = None
+        self.terminal_capture = None
+        self.terminal_output_open = None
+        self.terminal_input = None
+        self.terminal_input_validator = None
         self.orchestrator = None
         self._stack = None
         self._running = None
         self._lifecycle_committed = False
-
-    async def run_until_signal(self) -> None:
-        if self._running is None:
-            raise RuntimeError("call ServiceHost.start() first")
-        await self._running.process.wait_for_signal()
 
     def clear_shutdown_signal(self) -> None:
         """Make an imminent stop authoritative rather than signal-graceful."""
@@ -464,15 +462,6 @@ class ServiceHost:
             await self.supervisor.stop_all()
             self.supervisor = None
 
-        if self.socket_server is not None:
-            with contextlib.suppress(FileNotFoundError, OSError):
-                await self.socket_server.stop()
-            self.socket_server = None
-
-        if self._service_session_name is not None:
-            remove_service_session(self._service_session_name)
-            self._service_session_name = None
-
         if self._running is not None:
             # Authoritative stop for murder down (clear graceful signal).
             self._running.process.clear_external_stop()
@@ -487,10 +476,14 @@ class ServiceHost:
         self.read_model = None
         self.fact_log = None
         self.projection_input_log = None
+        self.application_dispatcher = None
+        self.terminal_capture = None
+        self.terminal_output_open = None
+        self.terminal_input = None
+        self.terminal_input_validator = None
         self.orchestrator = None
-        self.websocket_bound = None
 
-    async def __aenter__(self) -> ServiceHost:
+    async def __aenter__(self) -> RepositoryHost:
         await self.start()
         return self
 
@@ -498,4 +491,4 @@ class ServiceHost:
         await self.stop()
 
 
-__all__ = ["ServiceHost"]
+__all__ = ["RepositoryHost"]

@@ -1,6 +1,6 @@
 """Graceful vs authoritative shutdown tmux policy (§7.2 / §11).
 
-Authoritative ``ServiceHost.stop()`` (murder down) clears the external-stop
+Authoritative ``RepositoryHost.stop()`` (murder down) clears the external-stop
 signal and runs the project-wide tmux sweep. A graceful signal stop leaves the
 external-stop flag set so the sweep is skipped and Crow panes survive for
 reattach.
@@ -11,13 +11,12 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from murder.app.service.host import ServiceHost
 from murder.app.service.filesystem_sync import FilesystemSyncService
+from murder.app.service.repository_host import RepositoryHost
 from murder.config import (
     Config,
     CrowHandlerConfig,
@@ -46,7 +45,7 @@ def _patch_host_peripherals(monkeypatch: pytest.MonkeyPatch, swept: list[object]
         return []
 
     monkeypatch.setattr(
-        "murder.app.service.host.kill_project_tmux_sessions",
+        "murder.app.service.repository_host.kill_project_tmux_sessions",
         _fake_kill,
     )
 
@@ -57,35 +56,14 @@ def _patch_host_peripherals(monkeypatch: pytest.MonkeyPatch, swept: list[object]
     monkeypatch.setattr(FilesystemSyncService, "running", _noop_running)
     monkeypatch.setattr(FilesystemSyncService, "seed", lambda self: None)
 
-    async def _fake_socket_start(self, *, host: str, port: int):  # noqa: ANN001
-        del self, port
-        return (host or "127.0.0.1", 8765)
-
-    monkeypatch.setattr(
-        "murder.app.service.host.ApplicationSocketServer.start",
-        _fake_socket_start,
-    )
-    monkeypatch.setattr(
-        "murder.app.service.host.ApplicationSocketServer.stop",
-        AsyncMock(),
-    )
-
     async def _fake_supervisor(**_kwargs: object) -> MagicMock:
         supervisor = MagicMock()
         supervisor.stop_all = AsyncMock()
         return supervisor
 
     monkeypatch.setattr(
-        "murder.app.service.host.start_supervisor_workers",
+        "murder.app.service.repository_host.start_supervisor_workers",
         _fake_supervisor,
-    )
-    monkeypatch.setattr(
-        "murder.app.service.host.write_service_session",
-        lambda repo_root, url: SimpleNamespace(name="test-session"),
-    )
-    monkeypatch.setattr(
-        "murder.app.service.host.remove_service_session",
-        lambda _name: None,
     )
     monkeypatch.setattr(
         "murder.app.service.background_tasks.ServiceBackgroundTasks.start",
@@ -97,9 +75,11 @@ def _patch_host_peripherals(monkeypatch: pytest.MonkeyPatch, swept: list[object]
     )
 
 
-async def _start_host(repo_root: Path, monkeypatch: pytest.MonkeyPatch, swept: list) -> ServiceHost:
+async def _start_host(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch, swept: list
+) -> RepositoryHost:
     _patch_host_peripherals(monkeypatch, swept)
-    host = ServiceHost(
+    host = RepositoryHost(
         config=_config(),
         repo_root=repo_root,
         activity_dispatcher_factory=lambda _db, _reg: _NoopDispatcher(),  # type: ignore[return-value,arg-type]
@@ -136,7 +116,7 @@ def test_graceful_stop_preserves_project_tmux(
     async def _drive() -> None:
         host = await _start_host(repo_root, monkeypatch, swept)
         # Graceful path: external stop remains set and stop() must not clear it.
-        # Drive stack unwind directly so we do not hit ServiceHost.stop()'s
+        # Drive stack unwind directly so we do not hit RepositoryHost.stop()'s
         # authoritative clear_external_stop().
         host._running.process._external_stop.set()  # noqa: SLF001
         assert host._running.process.is_external_stop_set()
@@ -149,9 +129,6 @@ def test_graceful_stop_preserves_project_tmux(
         if host.supervisor is not None:
             await host.supervisor.stop_all()
             host.supervisor = None
-        if host.socket_server is not None:
-            await host.socket_server.stop()
-            host.socket_server = None
         await stack.aclose()
         host._stack = None
         host._running = None

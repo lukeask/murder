@@ -1,4 +1,4 @@
-"""Phase 4: ProcessScope owns flock/DB/run/log/signal/advanced-log lifetime."""
+"""Phase 4: ProcessScope owns DB/run/log/signal/advanced-log lifetime."""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from murder.config import (
     ProjectConfig,
 )
 from murder.observability.advanced_log import NullAdvancedLog, current_advanced_log
-from murder.state.storage.filesystem import lock_is_held
-from murder.state.storage.paths import lock_path
 
 
 def _config() -> Config:
@@ -39,23 +37,20 @@ def test_acquisition_success(repo_root: Path) -> None:
             assert scope.events is not None
             assert scope.commands is not None
             assert scope.advanced_log is not None
-            assert lock_is_held(lock_path(repo_root))
             return scope.run_id, scope.resources
 
     run_id, resources = asyncio.run(_drive())
     assert run_id
     assert resources.db is not None
-    assert lock_is_held(lock_path(repo_root)) is False
 
 
-def test_failure_after_flock_releases_flock(
+def test_failure_after_db_open_closes_db(
     repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         "murder.app.service.process_scope.open_repo_db",
         lambda _root: (_ for _ in ()).throw(RuntimeError("db boom")),
     )
-    lock = lock_path(repo_root)
 
     async def _drive() -> None:
         with pytest.raises(RuntimeError, match="db boom"):
@@ -63,11 +58,9 @@ def test_failure_after_flock_releases_flock(
                 pass
 
     asyncio.run(_drive())
-    assert lock_is_held(lock) is False
-    assert not lock.exists()
 
 
-def test_failure_after_db_closes_db_and_releases_flock(
+def test_failure_after_db_closes_db(
     repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     closed: list[str] = []
@@ -98,7 +91,6 @@ def test_failure_after_db_closes_db_and_releases_flock(
 
     asyncio.run(_drive())
     assert closed == ["db"]
-    assert lock_is_held(lock_path(repo_root)) is False
 
 
 def test_failure_after_advanced_log_start_stops_it(
@@ -254,10 +246,9 @@ def test_double_close_is_harmless(repo_root: Path) -> None:
             await scope.close()
 
     asyncio.run(_drive())
-    assert lock_is_held(lock_path(repo_root)) is False
 
 
-def test_advanced_log_start_failure_clears_ambient_and_releases_flock(
+def test_advanced_log_start_failure_clears_ambient(
     repo_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class _Adv:
@@ -282,6 +273,5 @@ def test_advanced_log_start_failure_clears_ambient_and_releases_flock(
                 pass
 
     asyncio.run(_drive())
-    assert lock_is_held(lock_path(repo_root)) is False
     # Ambient context must not leak the failed recorder.
     assert isinstance(current_advanced_log(), NullAdvancedLog)

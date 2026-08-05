@@ -62,7 +62,7 @@ def register_all(
 ) -> None:
     """Compose built-in features at the application boundary.
 
-    Handlers receive exact feature dependencies — never ServiceHost.
+    Handlers receive exact feature dependencies — never RepositoryHost.
     """
     register_approvals(app, projections, approvals)
     health.register(app, run_id=run_id)

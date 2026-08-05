@@ -87,10 +87,10 @@ class AgentRuntime:
         self._verified_control_factory = verified_control_factory
         self._preserve_tmux_on_close = preserve_tmux_on_close
         self._lifecycle_events_enabled = lifecycle_events_enabled
-        # Slot is non-null from construction; ServiceHost binds the orchestrator
+        # Slot is non-null from construction; RepositoryHost binds the orchestrator
         # route after Orchestrator exists (chicken-egg with agents dep).
         self.crow_ask_router = CrowAskRouterSlot()
-        # Bound by ServiceHost after StructuredDecisionRouter exists (needs agents.find).
+        # Bound by RepositoryHost after StructuredDecisionRouter exists (needs agents.find).
         # Projection must not run before that assignment.
         self.structured_decisions: StructuredDecisionRouter | None = None
         # Agent conversation / daemon code still needs process bindings. These are

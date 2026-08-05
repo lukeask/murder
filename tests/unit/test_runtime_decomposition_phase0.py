@@ -3,7 +3,7 @@
 Pins final acceptance criteria from
 ``.murder/reports/murder_runtime_decomposition_spec.md`` §11 and §9 architecture
 rules. Characterization that lived on the deleted Runtime facade now lives on
-ProcessScope / AgentRuntime / SessionService / ServiceHost / FilesystemSyncService.
+ProcessScope / AgentRuntime / SessionService / RepositoryHost / FilesystemSyncService.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def test_off_protocol_seams_threaded_onto_explicit_deps() -> None:
 
 
 def test_handlers_do_not_receive_service_host() -> None:
-    """§2.1 / §11: handlers receive feature operations, not ServiceHost."""
+    """§2.1 / §11: handlers receive feature operations, not RepositoryHost."""
     repo = Path(__file__).resolve().parents[2]
     handlers = repo / "murder" / "app" / "service" / "handlers"
     offenders: list[str] = []
@@ -131,13 +131,15 @@ def test_handlers_do_not_receive_service_host() -> None:
             offenders.append(f"{path.relative_to(repo)}: legacy_host")
         if "from murder.app.service.host import ServiceHost" in text:
             offenders.append(f"{path.relative_to(repo)}: ServiceHost import")
-    assert offenders == [], f"ServiceHost handler coupling remains:\n" + "\n".join(offenders)
+        if "from murder.app.service.repository_host import RepositoryHost" in text:
+            offenders.append(f"{path.relative_to(repo)}: RepositoryHost import")
+    assert offenders == [], f"RepositoryHost handler coupling remains:\n" + "\n".join(offenders)
 
 
 def test_agent_runtime_constructs_process_bindings() -> None:
     """AgentRuntime process bindings are constructor deps, not post-open mutation."""
     repo = Path(__file__).resolve().parents[2]
-    host = (repo / "murder/app/service/host.py").read_text(encoding="utf-8")
+    host = (repo / "murder/app/service/repository_host.py").read_text(encoding="utf-8")
     runtime = (repo / "murder/runtime/agent_runtime.py").read_text(encoding="utf-8")
     assert "agents.command_submitter =" not in host
     assert "agents.sessions =" not in host
