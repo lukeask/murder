@@ -42,6 +42,8 @@ def _fake_orchestrator(*, existing_agent=None, db_row=None) -> MagicMock:
     orch._db = MagicMock()
     orch._db.conn.execute.return_value.fetchone.return_value = db_row
     orch._db.execute.return_value.fetchone.return_value = db_row
+    orch._session_names = MagicMock()
+    orch._session_names.format.return_value = "murder_test_crow_claude_rogue_startup"
     orch.spawn_rogue = AsyncMock(return_value="claude-rogue-startup")
     return orch
 
@@ -89,3 +91,34 @@ def test_dead_existing_rogue_is_reaped_then_respawned(xdg: Path) -> None:
     asyncio.run(Orchestrator.ensure_startup_rogue(orch))
     orch.agents.reap.assert_awaited_once_with("claude-rogue-startup")
     orch.spawn_rogue.assert_awaited_once_with("claude_code", "", None, name="startup")
+
+
+def test_stale_tmux_session_killed_before_spawn_on_fresh_db(xdg: Path) -> None:
+    """Orphan startup-rogue tmux after wedged daemon must not block respawn."""
+    _write_startup_rogue("cursor", "auto", None)
+    orch = _fake_orchestrator(existing_agent=None, db_row=None)
+    orch._session_names = MagicMock()
+    orch._session_names.format.return_value = "murder_test_crow_cursor_rogue_startup"
+    killed: list[str] = []
+
+    async def _session_exists(name: str) -> bool:
+        return name == "murder_test_crow_cursor_rogue_startup"
+
+    async def _kill(name: str) -> None:
+        killed.append(name)
+
+    import asyncio
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "murder.runtime.orchestration.orchestrator.tmux.session_exists",
+            _session_exists,
+        )
+        mp.setattr(
+            "murder.runtime.orchestration.orchestrator.tmux.kill_session",
+            _kill,
+        )
+        asyncio.run(Orchestrator.ensure_startup_rogue(orch))
+
+    assert killed == ["murder_test_crow_cursor_rogue_startup"]
+    orch.spawn_rogue.assert_awaited_once_with("cursor", "auto", None, name="startup")

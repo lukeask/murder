@@ -862,7 +862,10 @@ class Orchestrator:
         if sr is None:
             return None
         harness_kind = (sr.harness or "claude_code").strip()
-        agent_id = f"{_harness_prefix(harness_kind)}-rogue-startup"
+        prefix = _harness_prefix(harness_kind)
+        agent_id = f"{prefix}-rogue-startup"
+        startup_slug = _rogue_slug("startup")
+        expected_session = self._session_names.format("crow", f"_{prefix}_rogue_{startup_slug}")
         agent = self.agents.find(agent_id)
         if agent is not None:
             if await agent.is_live():
@@ -879,6 +882,11 @@ class Orchestrator:
                 with contextlib.suppress(Exception):
                     await tmux.kill_session(row["session"])
                 _db_set_agent_status(self._db, agent_id, "dead")
+        # Fresh DB or wedged daemon: tmux may still hold the deterministic startup
+        # rogue pane even when no agent row exists to reconcile.
+        if await tmux.session_exists(expected_session):
+            with contextlib.suppress(Exception):
+                await tmux.kill_session(expected_session)
         return await self.spawn_rogue(harness_kind, sr.model or "", sr.effort, name="startup")
 
     async def ensure_collaborator(self) -> str:

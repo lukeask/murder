@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.projection import invalidate_schedule
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
 from murder.state.persistence.connection import DB_INTEGRITY_ERRORS, RepoDb
-from murder.state.persistence.harness_control import prune_capture_history
+from murder.state.persistence.harness_control import prune_harness_capture_retention
 from murder.state.persistence.tickets import compute_ready
 from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
 from murder.verdict.policy.scheduler_policy import (
@@ -37,8 +38,12 @@ from murder.verdict.policy.scheduler_policy import (
 _VALID_MODES = frozenset({"manual", "autorun_ready", "crow_magic"})
 _VALID_STEERING = frozenset({"auto", "pause", "prefer"})
 _TICK_INTERVAL_S = 10.0
-_HARNESS_CAPTURE_RETENTION = timedelta(days=5)
+_HARNESS_RAW_CAPTURE_RETENTION = timedelta(minutes=10)
+_HARNESS_OBSERVATION_REVISION_WINDOW = timedelta(hours=1)
+# Bound synchronous prune work per tick so a huge backlog cannot wedge the bus.
+_PRUNE_TICK_MAX_BATCHES = 10
 _WINDOW_NAME_RE = re.compile(r"^(\d+)(h|d)$", re.IGNORECASE)
+LOGGER = logging.getLogger(__name__)
 _WINDOW_NAME_MINUTES = {"h": 60.0, "d": 1440.0}
 
 
@@ -125,7 +130,7 @@ class SchedulerWorker(Worker):
         self._tick_seq = 0
         # Track last emitted reset per harness (harness → prev_pct at emit time)
         self._last_reset_prev_pct: dict[str, float] = {}
-        self._last_prune_day: str = ""
+        self._prune_in_progress = False
         self._command_submitter = command_submitter
         self._events = events
 
@@ -137,8 +142,8 @@ class SchedulerWorker(Worker):
             "INSERT OR IGNORE INTO scheduler_state(repository_id, mode, updated_at) VALUES (?, 'manual', ?)",
             (ctx.db.repository_id, now),
         )
-        self._prune_old_snapshots(ctx.db)
-        self._last_prune_day = datetime.now(timezone.utc).date().isoformat()
+        # Capture pruning runs on scheduler ticks off the event loop; never block
+        # startup on a multi-gigabyte backlog.
 
     async def run(self, ctx: WorkerCtx, stop_event: asyncio.Event) -> None:
         while True:
@@ -150,23 +155,33 @@ class SchedulerWorker(Worker):
                 await self._tick(ctx)
 
     def _prune_old_snapshots(self, db: RepoDb, *, now: datetime | None = None) -> None:
-        current_time = now or datetime.now(timezone.utc)
-        prune_capture_history(
+        prune_harness_capture_retention(
             db,
-            captured_before=current_time - _HARNESS_CAPTURE_RETENTION,
+            raw_frame_retention=_HARNESS_RAW_CAPTURE_RETENTION,
+            observation_retention=_HARNESS_OBSERVATION_REVISION_WINDOW,
+            now=now,
+            max_batches=_PRUNE_TICK_MAX_BATCHES,
         )
         db.conn.execute(
             "DELETE FROM harness_usage_snapshots WHERE repository_id = ? AND fetched_at < datetime('now', '-60 days')",
             (db.repository_id,),
         )
 
+    async def _maybe_prune_old_snapshots(self, db: RepoDb) -> None:
+        if self._prune_in_progress:
+            return
+        self._prune_in_progress = True
+        try:
+            await asyncio.to_thread(self._prune_old_snapshots, db)
+        except Exception:
+            LOGGER.debug("harness capture prune failed", exc_info=True)
+        finally:
+            self._prune_in_progress = False
+
     async def _tick(self, ctx: WorkerCtx) -> None:
         if ctx.db is None:
             return
-        today = datetime.now(timezone.utc).date().isoformat()
-        if today != self._last_prune_day:
-            self._prune_old_snapshots(ctx.db)
-            self._last_prune_day = today
+        await self._maybe_prune_old_snapshots(ctx.db)
         if ctx.run_id is None:
             return
         row = ctx.db.conn.execute(

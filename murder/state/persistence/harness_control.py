@@ -548,6 +548,18 @@ def persist_observation_delta(
     return inserted
 
 
+_PRUNE_BATCH_SIZE = 500
+
+
+def _capture_cutoff_iso(captured_before: datetime) -> str:
+    cutoff = (
+        captured_before.astimezone(timezone.utc)
+        if captured_before.tzinfo is not None
+        else captured_before
+    )
+    return cutoff.isoformat()
+
+
 def prune_capture_history(db: RepoDb, *, captured_before: datetime) -> None:
     """Delete raw capture history strictly older than ``captured_before``.
 
@@ -555,12 +567,7 @@ def prune_capture_history(db: RepoDb, *, captured_before: datetime) -> None:
     cleanup cannot leave an observation pointing at evidence that no longer
     exists. Deleting frames cascades to their evidence envelopes.
     """
-    cutoff = (
-        captured_before.astimezone(timezone.utc)
-        if captured_before.tzinfo is not None
-        else captured_before
-    )
-    cutoff_iso = cutoff.isoformat()
+    cutoff_iso = _capture_cutoff_iso(captured_before)
     db.conn.execute(
         "DELETE FROM harness_control_observations WHERE repository_id = ? AND captured_at < ?",
         (db.repository_id, cutoff_iso),
@@ -569,6 +576,115 @@ def prune_capture_history(db: RepoDb, *, captured_before: datetime) -> None:
         "DELETE FROM harness_control_frames WHERE repository_id = ? AND captured_at < ?",
         (db.repository_id, cutoff_iso),
     )
+
+
+def prune_raw_frames(
+    db: RepoDb,
+    *,
+    captured_before: datetime,
+    batch_size: int = _PRUNE_BATCH_SIZE,
+    max_batches: int | None = None,
+) -> int:
+    """Delete raw frames strictly older than ``captured_before``.
+
+    Evidence cascades via FK; observations are untouched (their evidence refs
+    are plain JSON and are never dereferenced in production).  Deletes are
+    batched so a large backlog cannot wedge the service on one monolithic
+    statement.
+    """
+    cutoff_iso = _capture_cutoff_iso(captured_before)
+    total = 0
+    batches = 0
+    while max_batches is None or batches < max_batches:
+        cur = db.conn.execute(
+            """
+            DELETE FROM harness_control_frames
+             WHERE repository_id = ? AND frame_id IN (
+                SELECT frame_id FROM harness_control_frames
+                 WHERE repository_id = ? AND captured_at < ?
+                 LIMIT ?
+             )
+            """,
+            (db.repository_id, db.repository_id, cutoff_iso, batch_size),
+        )
+        deleted = int(cur.rowcount or 0)
+        total += deleted
+        batches += 1
+        if deleted < batch_size:
+            break
+    return total
+
+
+def prune_observation_history(
+    db: RepoDb,
+    *,
+    captured_before: datetime,
+    batch_size: int = _PRUNE_BATCH_SIZE,
+    max_batches: int | None = None,
+) -> int:
+    """Delete observation revisions strictly older than ``captured_before``.
+
+    The newest revision per (harness_id, session_id, pane_epoch) is always
+    retained, even when older than the cutoff, so restart hydration and
+    recovery never lose their seed snapshot.  Deletes are batched for the same
+    reason as ``prune_raw_frames``.
+    """
+    cutoff_iso = _capture_cutoff_iso(captured_before)
+    total = 0
+    batches = 0
+    while max_batches is None or batches < max_batches:
+        cur = db.conn.execute(
+            """
+            DELETE FROM harness_control_observations
+             WHERE rowid IN (
+                SELECT o.rowid FROM harness_control_observations AS o
+                 WHERE o.repository_id = ? AND o.captured_at < ?
+                   AND EXISTS (
+                       SELECT 1 FROM harness_control_observations AS newer
+                        WHERE newer.repository_id = o.repository_id
+                          AND newer.harness_id = o.harness_id
+                          AND newer.session_id IS o.session_id
+                          AND newer.pane_epoch = o.pane_epoch
+                          AND (newer.capture_sequence, newer.semantic_sequence)
+                              > (o.capture_sequence, o.semantic_sequence)
+                   )
+                 LIMIT ?
+             )
+            """,
+            (db.repository_id, cutoff_iso, batch_size),
+        )
+        deleted = int(cur.rowcount or 0)
+        total += deleted
+        batches += 1
+        if deleted < batch_size:
+            break
+    return total
+
+
+def prune_harness_capture_retention(
+    db: RepoDb,
+    *,
+    raw_frame_retention: timedelta,
+    observation_retention: timedelta,
+    now: datetime | None = None,
+    batch_size: int = _PRUNE_BATCH_SIZE,
+    max_batches: int | None = None,
+) -> tuple[int, int]:
+    """Apply observation and raw-frame retention for one repository partition."""
+    current_time = now or datetime.now(timezone.utc)
+    observations = prune_observation_history(
+        db,
+        captured_before=current_time - observation_retention,
+        batch_size=batch_size,
+        max_batches=max_batches,
+    )
+    frames = prune_raw_frames(
+        db,
+        captured_before=current_time - raw_frame_retention,
+        batch_size=batch_size,
+        max_batches=max_batches,
+    )
+    return observations, frames
 
 
 def latest_observation(
@@ -1116,5 +1232,6 @@ __all__ = [
     "persist_observation_delta",
     "persist_observation_snapshot",
     "persist_operation",
+    "prune_harness_capture_retention",
     "record_effect_emissions",
 ]

@@ -60,6 +60,8 @@ from murder.state.persistence.harness_control import (
     persist_observation_snapshot,
     persist_operation,
     prune_capture_history,
+    prune_observation_history,
+    prune_raw_frames,
     record_effect_emissions,
 )
 from tests.support.database import open_test_repo_db
@@ -333,6 +335,98 @@ def test_prune_capture_history_removes_only_captures_older_than_cutoff(conn) -> 
         row["capture_sequence"]
         for row in conn.conn.execute("SELECT capture_sequence FROM harness_control_observations")
     } == {2, 3}
+
+
+def _insert_capture_row(
+    conn,
+    *,
+    capture_id: str,
+    captured_at: datetime,
+    sequence: int,
+    session_id: str = "session-a",
+) -> None:
+    captured_at_iso = captured_at.isoformat()
+    frame_id = f"frame-{capture_id}"
+    conn.conn.execute(
+        """
+        INSERT INTO harness_control_frames(
+            repository_id, frame_id, harness_id, session_id, captured_at,
+            width, height, raw_text,
+            ansi_preserved, pane_epoch, capture_sequence, stored_at
+        ) VALUES (?, ?, 'codex', ?, ?, 80, 24, 'frame', 0, 1, ?, ?)
+        """,
+        (conn.repository_id, frame_id, session_id, captured_at_iso, sequence, captured_at_iso),
+    )
+    conn.conn.execute(
+        """
+        INSERT INTO harness_control_evidence(
+            repository_id, evidence_id, frame_id, harness_id, parser_version, evidence_type,
+            captured_at, payload_json, source_regions_json, diagnostics_json, stored_at
+        ) VALUES (?, ?, ?, 'codex', 'v1', 'codex.frame', ?, '{}', '[]', '{}', ?)
+        """,
+        (conn.repository_id, f"evidence-{capture_id}", frame_id, captured_at_iso, captured_at_iso),
+    )
+    conn.conn.execute(
+        """
+        INSERT INTO harness_control_observations(
+            repository_id, harness_id, session_id, pane_epoch, capture_sequence,
+            semantic_sequence,
+            captured_at, snapshot_json, evidence_refs_json, stored_at
+        ) VALUES (?, 'codex', ?, 1, ?, 0, ?, '{}', '[]', ?)
+        """,
+        (conn.repository_id, session_id, sequence, captured_at_iso, captured_at_iso),
+    )
+
+
+def test_prune_raw_frames_removes_frames_and_evidence_but_keeps_observations(conn) -> None:
+    _insert_capture_row(conn, capture_id="old", captured_at=NOW - timedelta(microseconds=1), sequence=1)
+    _insert_capture_row(conn, capture_id="boundary", captured_at=NOW, sequence=2)
+
+    prune_raw_frames(conn, captured_before=NOW)
+
+    assert {
+        row["frame_id"]
+        for row in conn.conn.execute("SELECT frame_id FROM harness_control_frames")
+    } == {"frame-boundary"}
+    assert {
+        row["evidence_id"]
+        for row in conn.conn.execute("SELECT evidence_id FROM harness_control_evidence")
+    } == {"evidence-boundary"}
+    assert {
+        row["capture_sequence"]
+        for row in conn.conn.execute("SELECT capture_sequence FROM harness_control_observations")
+    } == {1, 2}
+
+
+def test_prune_observation_history_keeps_latest_revision_per_session(conn) -> None:
+    old = NOW - timedelta(hours=2)
+    _insert_capture_row(conn, capture_id="s1-old", captured_at=old, sequence=1)
+    _insert_capture_row(conn, capture_id="s1-newer", captured_at=old + timedelta(minutes=1), sequence=2)
+    _insert_capture_row(conn, capture_id="s2-old", captured_at=old, sequence=3, session_id="session-b")
+    _insert_capture_row(conn, capture_id="s2-recent", captured_at=NOW, sequence=4, session_id="session-b")
+
+    prune_observation_history(conn, captured_before=NOW - timedelta(hours=1))
+
+    remaining = {
+        (row["session_id"], row["capture_sequence"])
+        for row in conn.conn.execute(
+            "SELECT session_id, capture_sequence FROM harness_control_observations"
+        )
+    }
+    # session-a's newest revision is past the cutoff but must be retained;
+    # session-b's old revision is pruned since a newer revision exists.
+    assert remaining == {("session-a", 2), ("session-b", 4)}
+
+
+def test_prune_observation_history_never_removes_the_only_revision(conn) -> None:
+    _insert_capture_row(conn, capture_id="lone", captured_at=NOW - timedelta(days=30), sequence=1)
+
+    prune_observation_history(conn, captured_before=NOW)
+
+    assert [
+        row["capture_sequence"]
+        for row in conn.conn.execute("SELECT capture_sequence FROM harness_control_observations")
+    ] == [1]
 
 
 def test_action_and_effects_are_durable_before_emission_result(conn) -> None:

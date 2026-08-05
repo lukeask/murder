@@ -32,17 +32,17 @@ def _insert_frame(
     )
 
 
-def test_scheduler_prunes_harness_captures_after_five_days(conn: RepoDb) -> None:
+def test_scheduler_prunes_raw_frames_after_ten_minutes(conn: RepoDb) -> None:
     _insert_frame(
         conn,
-        frame_id="older-than-five-days",
-        captured_at=NOW - timedelta(days=5, microseconds=1),
+        frame_id="older-than-ten-minutes",
+        captured_at=NOW - timedelta(minutes=10, microseconds=1),
         sequence=1,
     )
     _insert_frame(
         conn,
-        frame_id="exactly-five-days",
-        captured_at=NOW - timedelta(days=5),
+        frame_id="exactly-ten-minutes",
+        captured_at=NOW - timedelta(minutes=10),
         sequence=2,
     )
 
@@ -53,4 +53,4 @@ def test_scheduler_prunes_harness_captures_after_five_days(conn: RepoDb) -> None
         for row in conn.conn.execute(
             "SELECT frame_id FROM harness_control_frames ORDER BY capture_sequence"
         )
-    ] == ["exactly-five-days"]
+    ] == ["exactly-ten-minutes"]
