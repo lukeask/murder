@@ -35,6 +35,17 @@ PROMPT_COUNT = 2
 BACKEND_CONNECTION_COUNT = 2
 
 
+@pytest.fixture(autouse=True)
+def _skip_live_usage_sampling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests assert prompt Enter traces; keep startup/shutdown usage off-path."""
+    from murder.llm.harnesses.usage_sampling import LiveSessionUsageResult
+
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.sample_live_session_usage",
+        AsyncMock(return_value=LiveSessionUsageResult(outcome="skipped", reason="test")),
+    )
+
+
 async def _no_sleep(_: float) -> None:
     """Keep reconciliation traces deterministic without making them timing tests."""
 
@@ -54,20 +65,33 @@ def _db(tmp_path: Path) -> RepoDb:
     return open_test_repo_db(tmp_path / "state.db")
 
 
-def _runtime(conn: RepoDb, *, events: object | None = None) -> SimpleNamespace:
+def _runtime(
+    conn: RepoDb, *, events: object | None = None, repo_root: Path | None = None
+) -> SimpleNamespace:
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
     from murder.runtime.sessions.service import SessionService
+    from tests.support.orchestrator import default_test_config
 
+    sessions = SessionService(conn)
+    factory = VerifiedControlFactory(
+        db=conn,
+        sessions=sessions,
+        prompt_policy=PromptDriverPolicy(
+            observation_interval=timedelta(), maximum_observations=12
+        ),
+        prompt_sleep=_no_sleep,
+    )
     return SimpleNamespace(
         db=conn,
-        sessions=SessionService(conn),
+        sessions=sessions,
+        config=default_test_config(),
+        repo_root=repo_root or Path("."),
         orchestration_events=events,
         run_id="run-1" if events is not None else None,
         record=MagicMock(),
         transition=AsyncMock(side_effect=_stub_transition),
-        verified_prompt_driver_policy=PromptDriverPolicy(
-            observation_interval=timedelta(), maximum_observations=12
-        ),
-        verified_prompt_driver_sleep=_no_sleep,
+        initialize_verified_control=factory.initialize,
+        structured_decisions=SimpleNamespace(observe=AsyncMock()),
     )
 
 
@@ -89,7 +113,7 @@ def _new_agent(
 ) -> tuple[CollaboratorAgent, SimpleNamespace]:
     fake_tmux.set_session_exists(True)
     fake_tmux.queue_pane(CC_IDLE)
-    runtime = _runtime(conn, events=events)
+    runtime = _runtime(conn, events=events, repo_root=tmp_path)
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
         session="murder_test_collaborator",
@@ -279,8 +303,15 @@ def test_stop_clean_sets_conversation_complete_without_legacy_exit_scrape(
 ) -> None:
     """Clean stop completes the conversation without unowned `/exit` input."""
     conn = _db(tmp_path)
+    from tests.support.orchestrator import default_test_config
+
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=None, run_id=None, record=MagicMock()
+        db=conn,
+        orchestration_events=None,
+        run_id=None,
+        record=MagicMock(),
+        config=default_test_config(),
+        repo_root=tmp_path,
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -309,8 +340,15 @@ def test_stop_preserve_session_leaves_conversation_in_progress(
     """1.g: graceful TUI-quit (kill_session=False) leaves conversation in_progress
     so next startup can mark it stale."""
     conn = _db(tmp_path)
+    from tests.support.orchestrator import default_test_config
+
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=None, run_id=None, record=MagicMock()
+        db=conn,
+        orchestration_events=None,
+        run_id=None,
+        record=MagicMock(),
+        config=default_test_config(),
+        repo_root=tmp_path,
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -336,8 +374,15 @@ def test_destructive_stop_closes_owned_backend_connections(
     tmp_path: Path,
 ) -> None:
     conn = _db(tmp_path)
+    from tests.support.orchestrator import default_test_config
+
     runtime = SimpleNamespace(
-        db=conn, orchestration_events=None, run_id=None, record=MagicMock()
+        db=conn,
+        orchestration_events=None,
+        run_id=None,
+        record=MagicMock(),
+        config=default_test_config(),
+        repo_root=tmp_path,
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",
@@ -398,13 +443,19 @@ def test_reinitialize_after_destructive_stop_creates_fresh_backend_connection(
     """stop() clears owned backends so the next init bootstraps a new connection."""
 
     conn = _db(tmp_path)
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
+    from tests.support.orchestrator import default_test_config
+
+    factory = VerifiedControlFactory(db=conn)
     runtime = SimpleNamespace(
         db=conn,
         orchestration_events=None,
         run_id=None,
         record=MagicMock(),
         repo_root=tmp_path,
+        config=default_test_config(),
         session_controllers=None,
+        initialize_verified_control=factory.initialize,
     )
     agent = CollaboratorAgent(
         agent_id="collaborator-0",

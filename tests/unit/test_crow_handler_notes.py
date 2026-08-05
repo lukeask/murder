@@ -53,6 +53,8 @@ def db(tmp_path: Path):
 
 @pytest.fixture
 def handler(db, tmp_path: Path) -> CrowHandler:
+    from murder.runtime.agent_runtime import CrowAskRouterSlot
+
     runtime = MagicMock()
     runtime.db = db
     runtime.orchestration_events = InProcessOrchestrationEventSink()
@@ -60,7 +62,7 @@ def handler(db, tmp_path: Path) -> CrowHandler:
     runtime.record = MagicMock()
     runtime.transition = AsyncMock()
     runtime.publish_snapshot = AsyncMock()
-    runtime.crow_ask_router = None
+    runtime.crow_ask_router = CrowAskRouterSlot()
     return CrowHandler(
         agent_id="crow_handler-t001",
         ticket_id="t001",

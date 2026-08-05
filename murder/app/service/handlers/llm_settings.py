@@ -2,31 +2,36 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from murder.app.protocol.requests import CommandName
+from murder.app.service.application import ApplicationRegistrar
 from murder.app.service.settings import effective_harness_view
 from murder.app.service.settings import llm as llm_usecases
 from murder.app.service.settings_service import SettingsService
+from murder.config import Config
 from murder.runtime.workers.model_catalog_refresh_worker import (
     provider_has_usable_credentials,
     request_catalog_refresh,
 )
 
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
 
-
-def register(host: ServiceHost) -> None:  # noqa: PLR0915 - command registration is intentionally flat
+def register(  # noqa: PLR0915 - command registration is intentionally flat
+    app: ApplicationRegistrar,
+    *,
+    repo_root: Path,
+    config: Config,
+) -> None:
     def _repository() -> SettingsService:
-        return SettingsService(repo_root=host.repo_root)
+        return SettingsService(repo_root=repo_root)
 
     def _save_reply(cfg: Any, *, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         _repository().save(cfg)
-        project = host.config.project.name if host.config.project is not None else None
+        project = config.project.name if config.project is not None else None
         return llm_usecases.llm_reply(
             cfg,
-            effective=effective_harness_view(host.config),
+            effective=effective_harness_view(config),
             extra=extra,
             project=project,
         )
@@ -131,22 +136,22 @@ def register(host: ServiceHost) -> None:  # noqa: PLR0915 - command registration
         cfg = llm_usecases.load_mutable_config(_repository())
         return llm_usecases.preview_resolution(cfg, body)
 
-    host.register_application_command(CommandName.LLM_SETTINGS_SET_DISABLED, _llm_set_disabled)
-    host.register_application_command(CommandName.LLM_PROVIDER_CREATE, _llm_provider_create)
-    host.register_application_command(CommandName.LLM_PROVIDER_UPDATE, _llm_provider_update)
-    host.register_application_command(CommandName.LLM_PROVIDER_DELETE, _llm_provider_delete)
-    host.register_application_command(
+    app.register_application_command(CommandName.LLM_SETTINGS_SET_DISABLED, _llm_set_disabled)
+    app.register_application_command(CommandName.LLM_PROVIDER_CREATE, _llm_provider_create)
+    app.register_application_command(CommandName.LLM_PROVIDER_UPDATE, _llm_provider_update)
+    app.register_application_command(CommandName.LLM_PROVIDER_DELETE, _llm_provider_delete)
+    app.register_application_command(
         CommandName.LLM_PROVIDER_MODELS_UPDATE, _llm_provider_models_update
     )
-    host.register_application_command(
+    app.register_application_command(
         CommandName.LLM_PROVIDER_DISCOVER_MODELS, _llm_provider_discover_models
     )
-    host.register_application_command(CommandName.LLM_POLICY_CREATE, _llm_policy_create)
-    host.register_application_command(CommandName.LLM_POLICY_UPDATE, _llm_policy_update)
-    host.register_application_command(CommandName.LLM_POLICY_DELETE, _llm_policy_delete)
-    host.register_application_command(CommandName.LLM_POLICY_ACTIVATE, _llm_policy_activate)
-    host.register_application_command(CommandName.LLM_POLICY_CLONE, _llm_policy_clone)
-    host.register_application_command(
+    app.register_application_command(CommandName.LLM_POLICY_CREATE, _llm_policy_create)
+    app.register_application_command(CommandName.LLM_POLICY_UPDATE, _llm_policy_update)
+    app.register_application_command(CommandName.LLM_POLICY_DELETE, _llm_policy_delete)
+    app.register_application_command(CommandName.LLM_POLICY_ACTIVATE, _llm_policy_activate)
+    app.register_application_command(CommandName.LLM_POLICY_CLONE, _llm_policy_clone)
+    app.register_application_command(
         CommandName.LLM_FEATURE_POLICY_SET, _llm_feature_policy_set
     )
-    host.register_application_command(CommandName.LLM_PREVIEW_RESOLUTION, _llm_preview_resolution)
+    app.register_application_command(CommandName.LLM_PREVIEW_RESOLUTION, _llm_preview_resolution)

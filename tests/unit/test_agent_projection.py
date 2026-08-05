@@ -31,14 +31,20 @@ def _last_frame() -> str:
 
 
 def _rogue(conn, bus, tmp_path: Path) -> CrowAgent:
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
     from murder.runtime.sessions.service import SessionService
 
+    sessions = SessionService(conn)
+    factory = VerifiedControlFactory(db=conn, sessions=sessions)
+    observe = AsyncMock()
     runtime = SimpleNamespace(
         db=conn,
-        sessions=SessionService(conn),
+        sessions=sessions,
         orchestration_events=bus,
         run_id="run-1",
         record=MagicMock(),
+        initialize_verified_control=factory.initialize,
+        structured_decisions=SimpleNamespace(observe=observe),
     )
     agent = CrowAgent(
         agent_id="claude-rogue-testingpostworker",
@@ -118,15 +124,20 @@ def test_project_once_touches_roster_last_seen_on_activity(
     """Conversation projection bumps roster last_seen (rogues have no CrowHandler heartbeat)."""
     db = open_test_repo_db(tmp_path / "state.db")
     bus = SimpleNamespace(publish=AsyncMock())
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
     from murder.runtime.sessions.service import SessionService
 
+    sessions = SessionService(db)
+    factory = VerifiedControlFactory(db=db, sessions=sessions)
     runtime = SimpleNamespace(
         db=db,
-        sessions=SessionService(db),
+        sessions=sessions,
         orchestration_events=bus,
         run_id="run-1",
         record=MagicMock(),
         heartbeat=MagicMock(),
+        initialize_verified_control=factory.initialize,
+        structured_decisions=SimpleNamespace(observe=AsyncMock()),
     )
     agent = CrowAgent(
         agent_id="claude-rogue-testingpostworker",
@@ -152,6 +163,29 @@ def test_project_once_touches_roster_last_seen_on_activity(
         and call.kwargs.get("invalidate") is True
         for call in runtime.heartbeat.call_args_list
     )
+
+
+def test_project_once_observes_structured_decisions(
+    fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """project_once must call StructuredDecisionRouter.observe with the ingested snapshot."""
+    db = open_test_repo_db(tmp_path / "state.db")
+    bus = SimpleNamespace(publish=AsyncMock())
+    agent = _rogue(db, bus, tmp_path)
+    agent.start_conversation()
+    agent._producer._summary_provider_resolved = True
+    pane = _last_frame()
+    fake_tmux.queue_pane("")
+    fake_tmux.queue_pane(pane)
+    asyncio.run(agent.initialize_verified_harness_control())
+
+    asyncio.run(agent.project_once())
+
+    observe = agent.runtime.structured_decisions.observe
+    observe.assert_awaited_once()
+    observed_agent, snapshot = observe.await_args.args
+    assert observed_agent is agent
+    assert snapshot is agent.latest_ingested_frame.snapshot
 
 
 def test_project_once_is_noop_without_producer(fake_tmux: FakeTmux, tmp_path: Path) -> None:

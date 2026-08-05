@@ -39,26 +39,28 @@ def patched(monkeypatch):
 
 
 def _make_coordinator(checks):
-    rt = MagicMock()
-    rt.db = MagicMock()
-    rt.repo_root = Path("/tmp")
-    rt.orchestration_events = None
-    rt.run_id = None
     crow = MagicMock()
     crow.send = AsyncMock()
-    rt.get_crow = MagicMock(return_value=crow)
 
     registry = MagicMock()
     registry.assigned_checks = MagicMock(return_value=list(checks))
 
-    coordinator = CompletionCoordinator(rt, registry)
-    return coordinator, rt, crow
+    coordinator = CompletionCoordinator(
+        registry,
+        repo_root=Path("/tmp"),
+        db=MagicMock(),
+        events=None,
+        run_id=None,
+        find_crow=MagicMock(return_value=crow),
+        find_agent=lambda _aid: None,
+    )
+    return coordinator, crow
 
 
 def test_fail_ticket_short_circuits_reprompt_and_remaining_checks(patched, monkeypatch):
     first = _StubCheck("first")  # -> FAIL_TICKET
     second = _StubCheck("second")  # -> REPROMPT (must never dispatch)
-    coordinator, rt, crow = _make_coordinator([first, second])
+    coordinator, crow = _make_coordinator([first, second])
 
     # Map resolution by check name so the order is deterministic.
     def _policy(name: str, _attempts: int) -> Owner:
@@ -85,7 +87,7 @@ def test_fail_ticket_short_circuits_reprompt_and_remaining_checks(patched, monke
 
 
 def test_dispatch_returns_true_only_for_fail_ticket(patched):
-    coordinator, rt, crow = _make_coordinator([])
+    coordinator, crow = _make_coordinator([])
     monkeypatch_fail = AsyncMock()
     coordinator._fail_ticket = monkeypatch_fail  # type: ignore[method-assign]
     coordinator._ask_planner = AsyncMock()  # type: ignore[method-assign]

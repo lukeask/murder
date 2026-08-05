@@ -3,28 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 
 from murder.app.protocol.lifecycle import TriggerFireParams, TriggerFireResult
 from murder.app.protocol.requests import CommandName
+from murder.app.service.application import ApplicationRegistrar
 from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.triggers import enqueue_manual_trigger_fire
 
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
 
-
-def register(host: ServiceHost) -> None:
-    def _db() -> RepoDb:
-        db = host.db
-        if db is None:
-            raise RuntimeError("service not started")
-        return db
-
+def register(app: ApplicationRegistrar, db: RepoDb) -> None:
     def _fire(body: dict[str, object]) -> dict[str, object]:
         params = TriggerFireParams.model_validate(body)
         occurrence_key = enqueue_manual_trigger_fire(
-            _db(),
+            db,
             params.trigger_id,
             occurrence_key=params.occurrence_key,
             now=datetime.now(timezone.utc),
@@ -35,4 +26,4 @@ def register(host: ServiceHost) -> None:
             occurrence_key=occurrence_key,
         ).model_dump(mode="json")
 
-    host.register_application_command(CommandName.TRIGGER_FIRE, _fire)
+    app.register_application_command(CommandName.TRIGGER_FIRE, _fire)

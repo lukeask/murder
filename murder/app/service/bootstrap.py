@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from murder.app.service.command_dispatch import CommandDispatcher
@@ -52,25 +53,30 @@ async def start_supervisor_workers(
         advanced_log=advanced_log,
     )
     supervisor = Supervisor(worker_ctx, command_dispatcher=cmd_dispatcher)
-    await supervisor.start_worker(StateCommandWorker())
-    await supervisor.start_worker(
-        SchedulerWorker(command_submitter=commands, events=events)
-    )
-    await supervisor.start_worker(UsageProbeWorker.from_worker_ctx(worker_ctx))
-    await supervisor.start_worker(ModelCatalogRefreshWorker())
-    await supervisor.start_worker(
-        HarnessVersionProbeWorker(updater=harness_versions.replace)
-    )
-    await supervisor.start_worker(DoneSessionSweeperWorker())
-    await supervisor.start_worker(PlannerSessionSweeperWorker())
-    await supervisor.start_worker(
-        CollaboratorWorker(
-            ensure_collaborator=orchestrator.ensure_collaborator,
-            get_agent=agents.find,
+    try:
+        await supervisor.start_worker(StateCommandWorker())
+        await supervisor.start_worker(
+            SchedulerWorker(command_submitter=commands, events=events)
         )
-    )
-    await supervisor.start_worker(OrchestratorCommandWorker(orchestrator))
-    await supervisor.start_worker(CodebaseMapWorker())
+        await supervisor.start_worker(UsageProbeWorker.from_worker_ctx(worker_ctx))
+        await supervisor.start_worker(ModelCatalogRefreshWorker())
+        await supervisor.start_worker(
+            HarnessVersionProbeWorker(updater=harness_versions.replace)
+        )
+        await supervisor.start_worker(DoneSessionSweeperWorker())
+        await supervisor.start_worker(PlannerSessionSweeperWorker())
+        await supervisor.start_worker(
+            CollaboratorWorker(
+                ensure_collaborator=orchestrator.ensure_collaborator,
+                get_agent=agents.find,
+            )
+        )
+        await supervisor.start_worker(OrchestratorCommandWorker(orchestrator))
+        await supervisor.start_worker(CodebaseMapWorker())
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await supervisor.stop_all()
+        raise
     return supervisor
 
 

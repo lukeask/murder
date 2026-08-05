@@ -3,26 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from murder.app.protocol.read_models import dto_to_wire
-from murder.app.service.read_model import ServiceReadModel
-from murder.runtime.orchestration.orchestrator import Orchestrator
-
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
-
-
-def require_read_model(host: ServiceHost) -> ServiceReadModel:
-    if host.read_model is None:
-        raise RuntimeError("read model unavailable")
-    return host.read_model
-
-
-def require_orchestrator(host: ServiceHost) -> Orchestrator:
-    if host.orchestrator is None:
-        raise RuntimeError("orchestrator unavailable")
-    return host.orchestrator
 
 
 def threaded(fn: Any) -> Any:

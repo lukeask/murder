@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from murder.app.protocol.requests import CommandName, QueryName
 from murder.app.protocol.subscriptions import ProjectionTopic
@@ -15,22 +15,26 @@ from murder.app.protocol.workflows import (
     SetWorkflowsParams,
     StartWorkflowParams,
 )
+from murder.app.service.application import ApplicationRegistrar
 from murder.app.service.projection_registry import ProjectionProviderRegistry
-
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
+from murder.runtime.orchestration.orchestrator import Orchestrator
+from murder.state.persistence.connection import RepoDb
 
 LOGGER = logging.getLogger(__name__)
 
 
 def register(
-    host: ServiceHost,
-    projections: ProjectionProviderRegistry | None = None,
+    app: ApplicationRegistrar,
+    projections: ProjectionProviderRegistry,
+    *,
+    repo_root: Path,
+    db: RepoDb,
+    orchestrator: Orchestrator,
 ) -> None:
     def _tui_prefs_file() -> Path:
         from murder.state.storage.paths import tui_prefs_path as _tui_prefs_path
 
-        return _tui_prefs_path(host.repo_root)
+        return _tui_prefs_path(repo_root)
 
     def _tui_load_favorites(_body: dict[str, Any]) -> dict[str, Any]:
         import json
@@ -135,17 +139,8 @@ def register(
         name = params.name
         args = params.args
 
-        # Single start guard covering db+orchestrator, matching the sibling
-        # handlers' message. (orchestrator and db are set together at startup,
-        # so a pre-start request would otherwise leak the internal
-        # "orchestrator unavailable" error instead.)
-        if host.db is None or host.orchestrator is None:
-            raise RuntimeError("service not started")
-        orchestrator = host.orchestrator
-        db = host.db
-
         try:
-            result = run_workflow_by_name(db, host.repo_root, name, args)
+            result = run_workflow_by_name(db, repo_root, name, args)
         except KeyError as exc:
             # Turn the lookup miss into a client-facing message (KeyError's
             # repr would leak as a bare name. Mirrors other handlers'
@@ -200,22 +195,21 @@ def register(
         themes, new_id = import_theme_from_json(params.theme_json, theme_id=params.id)
         return {"ok": True, "themes": themes, "id": new_id}
 
-    host.register_application_query(QueryName.FAVORITES_GET, _tui_load_favorites)
-    host.register_application_query(QueryName.SPAWN_FAVORITES_GET, _tui_load_spawn_favorites)
-    host.register_application_query(QueryName.TEMPLATES_GET, _tui_load_prompt_templates)
-    host.register_application_query(QueryName.THEMES_GET, _tui_load_themes)
-    host.register_application_query(QueryName.WORKFLOWS_GET, _tui_load_workflows)
-    host.register_application_command(CommandName.FAVORITES_SET, _tui_save_favorites)
-    host.register_application_command(CommandName.SPAWN_FAVORITES_SET, _tui_save_spawn_favorites)
-    host.register_application_command(CommandName.TEMPLATES_SET, _tui_save_prompt_templates)
-    host.register_application_command(CommandName.THEMES_SET, _tui_save_themes)
-    host.register_application_command(CommandName.THEME_IMPORT, _tui_import_theme)
-    host.register_application_command(CommandName.WORKFLOWS_SET, _tui_save_workflows)
-    host.register_application_command(CommandName.WORKFLOW_PUT, _tui_put_workflow)
-    host.register_application_command(CommandName.WORKFLOW_DELETE, _tui_delete_workflow)
-    host.register_application_command(CommandName.WORKFLOW_START, _tui_run_workflow)
-    if projections is not None:
-        projections.register(ProjectionTopic.FAVORITES, lambda: _tui_load_favorites({}))
-        projections.register(ProjectionTopic.TEMPLATES, lambda: _tui_load_prompt_templates({}))
-        projections.register(ProjectionTopic.THEMES, lambda: _tui_load_themes({}))
-        projections.register(ProjectionTopic.WORKFLOWS, lambda: _tui_load_workflows({}))
+    app.register_application_query(QueryName.FAVORITES_GET, _tui_load_favorites)
+    app.register_application_query(QueryName.SPAWN_FAVORITES_GET, _tui_load_spawn_favorites)
+    app.register_application_query(QueryName.TEMPLATES_GET, _tui_load_prompt_templates)
+    app.register_application_query(QueryName.THEMES_GET, _tui_load_themes)
+    app.register_application_query(QueryName.WORKFLOWS_GET, _tui_load_workflows)
+    app.register_application_command(CommandName.FAVORITES_SET, _tui_save_favorites)
+    app.register_application_command(CommandName.SPAWN_FAVORITES_SET, _tui_save_spawn_favorites)
+    app.register_application_command(CommandName.TEMPLATES_SET, _tui_save_prompt_templates)
+    app.register_application_command(CommandName.THEMES_SET, _tui_save_themes)
+    app.register_application_command(CommandName.THEME_IMPORT, _tui_import_theme)
+    app.register_application_command(CommandName.WORKFLOWS_SET, _tui_save_workflows)
+    app.register_application_command(CommandName.WORKFLOW_PUT, _tui_put_workflow)
+    app.register_application_command(CommandName.WORKFLOW_DELETE, _tui_delete_workflow)
+    app.register_application_command(CommandName.WORKFLOW_START, _tui_run_workflow)
+    projections.register(ProjectionTopic.FAVORITES, lambda: _tui_load_favorites({}))
+    projections.register(ProjectionTopic.TEMPLATES, lambda: _tui_load_prompt_templates({}))
+    projections.register(ProjectionTopic.THEMES, lambda: _tui_load_themes({}))
+    projections.register(ProjectionTopic.WORKFLOWS, lambda: _tui_load_workflows({}))

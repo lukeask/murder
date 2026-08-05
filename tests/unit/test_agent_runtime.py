@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from murder.observability.advanced_log import NullAdvancedLog
+from murder.roster.service import RosterService
 from murder.runtime.agent_runtime import AgentRuntime
 from murder.runtime.agents.types import AgentRole, AgentStatus
 from murder.runtime.agents.verified_control import VerifiedControlFactory
 from murder.runtime.orchestration.events import AgentLifecycleEvent, StatusChangeEvent
 from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
-from murder.roster.service import RosterService
+from murder.runtime.sessions.service import SessionService
 from murder.state.storage.paths import db_path
 from tests.support.database import open_test_repo_db
+from tests.support.orchestrator import default_test_config
 
 
 class _RecordingAgent:
@@ -57,16 +61,22 @@ def _insert_ticket(db, ticket_id: str) -> None:
     )
 
 
-def _make_runtime(db, *, preserve: bool = False, events=None) -> AgentRuntime:
+def _make_runtime(
+    db, repo_root: Path, *, preserve: bool = False, events=None
+) -> AgentRuntime:
     bus = events or InProcessOrchestrationEventSink()
     return AgentRuntime(
         db=db,
+        config=default_test_config(),
+        repo_root=repo_root,
         roster=RosterService(db),
         events=bus,
         run_id="run-test",
         advanced_log=NullAdvancedLog(),
         preserve_tmux_on_close=lambda: preserve,
         verified_control_factory=VerifiedControlFactory(db=db),
+        command_submitter=MagicMock(),
+        sessions=SessionService(db),
         lifecycle_events_enabled=True,
     )
 
@@ -74,7 +84,7 @@ def _make_runtime(db, *, preserve: bool = False, events=None) -> AgentRuntime:
 def test_register_is_atomic_with_persistence(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     agent = _RecordingAgent("crow-t1")
 
     agents.register(agent)
@@ -90,7 +100,7 @@ def test_register_is_atomic_with_persistence(repo_root) -> None:
 
 def test_register_rolls_back_index_on_persist_failure(repo_root, monkeypatch) -> None:
     db = _connect(repo_root)
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     agent = _RecordingAgent("crow-t1")
 
     monkeypatch.setattr(
@@ -103,10 +113,30 @@ def test_register_rolls_back_index_on_persist_failure(repo_root, monkeypatch) ->
     assert agents.find("crow-t1") is None
 
 
+def test_register_survives_advanced_log_failure(repo_root, monkeypatch) -> None:
+    db = _connect(repo_root)
+    _insert_ticket(db, "t1")
+    agents = _make_runtime(db, repo_root)
+    agent = _RecordingAgent("crow-t1")
+
+    def _boom(_record) -> None:
+        raise RuntimeError("log boom")
+
+    monkeypatch.setattr(agents._advanced_log, "record_state_mutation", _boom)  # noqa: SLF001
+    agents.register(agent)
+
+    assert agents.find("crow-t1") is agent
+    row = db.conn.execute(
+        "SELECT agent_id, status FROM agents WHERE agent_id = ?", ("crow-t1",)
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "running"
+
+
 def test_register_duplicate_id_fails(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     agents.register(_RecordingAgent("crow-t1"))
     with pytest.raises(ValueError, match="already registered"):
         agents.register(_RecordingAgent("crow-t1"))
@@ -115,11 +145,9 @@ def test_register_duplicate_id_fails(repo_root) -> None:
 def test_rename_rolls_back_on_persistence_failure(repo_root, monkeypatch) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     agent = _RecordingAgent("a-old", role=AgentRole.COLLABORATOR, ticket_id=None)
     agents.register(agent)
-
-    real_record = agents.record
 
     def _flaky(a) -> None:
         raise RuntimeError("rename persist boom")
@@ -130,12 +158,83 @@ def test_rename_rolls_back_on_persistence_failure(repo_root, monkeypatch) -> Non
     assert agents.find("a-old") is agent
     assert agents.find("a-new") is None
     assert agent.id == "a-old"
+    # Durable SQLite identity must roll back with memory (autocommit would leave a-new).
+    assert (
+        db.conn.execute(
+            "SELECT agent_id FROM agents WHERE agent_id = ?", ("a-old",)
+        ).fetchone()
+        is not None
+    )
+    assert (
+        db.conn.execute(
+            "SELECT agent_id FROM agents WHERE agent_id = ?", ("a-new",)
+        ).fetchone()
+        is None
+    )
+
+
+def test_rename_rekeys_owned_task(repo_root) -> None:
+    db = _connect(repo_root)
+    agents = _make_runtime(db, repo_root)
+    agent = _RecordingAgent("a-old", role=AgentRole.COLLABORATOR, ticket_id=None)
+    agents.register(agent)
+
+    async def _drive() -> None:
+        async def _never_ends() -> None:
+            await asyncio.Future()
+
+        task = asyncio.create_task(_never_ends())
+        agents.attach_task("a-old", task)
+        agents.rename("a-old", "a-new")
+
+        assert "a-old" not in agents._tasks  # noqa: SLF001
+        assert agents._tasks.get("a-new") is task  # noqa: SLF001
+
+        await agents.reap("a-new")
+        assert task.done()
+        assert "a-new" not in agents._tasks  # noqa: SLF001
+        assert agents.find("a-new") is None
+
+    asyncio.run(_drive())
+
+
+def test_rename_rolls_back_task_key_on_persistence_failure(
+    repo_root, monkeypatch
+) -> None:
+    db = _connect(repo_root)
+    agents = _make_runtime(db, repo_root)
+    agent = _RecordingAgent("a-old", role=AgentRole.COLLABORATOR, ticket_id=None)
+    agents.register(agent)
+
+    async def _drive() -> None:
+        async def _never_ends() -> None:
+            await asyncio.Future()
+
+        task = asyncio.create_task(_never_ends())
+        agents.attach_task("a-old", task)
+
+        monkeypatch.setattr(
+            agents,
+            "record",
+            lambda _a: (_ for _ in ()).throw(RuntimeError("rename persist boom")),
+        )
+        with pytest.raises(RuntimeError, match="rename persist boom"):
+            agents.rename("a-old", "a-new")
+
+        assert agents._tasks.get("a-old") is task  # noqa: SLF001
+        assert "a-new" not in agents._tasks  # noqa: SLF001
+        assert not task.done()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_drive())
 
 
 def test_reap_crow_preserves_handler_index(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     crow = _RecordingAgent("crow-t1", role=AgentRole.CROW, ticket_id="t1")
     handler = _RecordingAgent(
         "crow_handler-t1", role=AgentRole.CROW_HANDLER, ticket_id="t1"
@@ -153,7 +252,7 @@ def test_reap_crow_preserves_handler_index(repo_root) -> None:
 def test_reap_handler_preserves_crow_index(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     crow = _RecordingAgent("crow-t1", role=AgentRole.CROW, ticket_id="t1")
     handler = _RecordingAgent(
         "crow_handler-t1", role=AgentRole.CROW_HANDLER, ticket_id="t1"
@@ -177,7 +276,7 @@ def test_transition_persists_and_publishes(repo_root) -> None:
         published.append(event)
 
     bus.subscribe(_capture)
-    agents = _make_runtime(db, events=bus)
+    agents = _make_runtime(db, repo_root, events=bus)
     agent = _RecordingAgent("crow-t1", status=AgentStatus.IDLE)
     agents.register(agent)
 
@@ -196,7 +295,7 @@ def test_transition_persists_and_publishes(repo_root) -> None:
 def test_close_stops_agents_concurrently_and_respects_tmux_policy(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db, preserve=True)
+    agents = _make_runtime(db, repo_root, preserve=True)
     a1 = _RecordingAgent("crow-t1")
     a2 = _RecordingAgent("collab", role=AgentRole.COLLABORATOR, ticket_id=None)
     agents.register(a1)
@@ -212,7 +311,7 @@ def test_close_stops_agents_concurrently_and_respects_tmux_policy(repo_root) -> 
 def test_authoritative_close_kills_owned_sessions(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db, preserve=False)
+    agents = _make_runtime(db, repo_root, preserve=False)
     agent = _RecordingAgent("crow-t1", status=AgentStatus.RUNNING)
     agents.register(agent)
 
@@ -224,7 +323,7 @@ def test_authoritative_close_kills_owned_sessions(repo_root) -> None:
 def test_close_does_not_mark_terminal_agents_failed(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db, preserve=False)
+    agents = _make_runtime(db, repo_root, preserve=False)
     agent = _RecordingAgent("crow-t1", status=AgentStatus.DONE)
     agents.register(agent)
 
@@ -243,7 +342,7 @@ def test_lifecycle_events_stop_after_close(repo_root) -> None:
         published.append(event)
 
     bus.subscribe(_capture)
-    agents = _make_runtime(db, events=bus)
+    agents = _make_runtime(db, repo_root, events=bus)
     agent = _RecordingAgent("crow-t1")
     agents.register(agent)
 
@@ -268,7 +367,7 @@ def test_lifecycle_emission_tasks_are_drained_on_close(repo_root) -> None:
         published.append(event)
 
     bus.subscribe(_capture)
-    agents = _make_runtime(db, events=bus)
+    agents = _make_runtime(db, repo_root, events=bus)
 
     async def _drive() -> None:
         # Register must run with a live loop so lifecycle emission is scheduled.
@@ -286,7 +385,7 @@ def test_lifecycle_emission_tasks_are_drained_on_close(repo_root) -> None:
 def test_role_indexes_track_crow_and_handler(repo_root) -> None:
     db = _connect(repo_root)
     _insert_ticket(db, "t1")
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     crow = _RecordingAgent("crow-t1", role=AgentRole.CROW, ticket_id="t1")
     handler = _RecordingAgent(
         "crow_handler-t1", role=AgentRole.CROW_HANDLER, ticket_id="t1"
@@ -300,7 +399,7 @@ def test_role_indexes_track_crow_and_handler(repo_root) -> None:
 
 def test_rename_persists_identity(repo_root) -> None:
     db = _connect(repo_root)
-    agents = _make_runtime(db)
+    agents = _make_runtime(db, repo_root)
     agent = _RecordingAgent("planner-old", role=AgentRole.PLANNER, ticket_id=None)
     agents.register(agent)
     renamed = agents.rename("planner-old", "planner-new")
@@ -311,3 +410,9 @@ def test_rename_persists_identity(repo_root) -> None:
         "SELECT agent_id FROM agents WHERE agent_id = ?", ("planner-new",)
     ).fetchone()
     assert row is not None
+    assert (
+        db.conn.execute(
+            "SELECT agent_id FROM agents WHERE agent_id = ?", ("planner-old",)
+        ).fetchone()
+        is None
+    )

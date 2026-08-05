@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from murder.runtime.agents.types import AgentRole
 from murder.runtime.orchestration.events import CompletionVerdictEvent
@@ -35,22 +35,9 @@ class DoneHandleResult:
     failed_checks: tuple[str, ...] = ()
 
 
-class CoordinatorHost(Protocol):
-    """Subset of runtime the coordinator requires."""
-
-    repo_root: Path
-    db: RepoDb | None
-    orchestration_events: OrchestrationEventSink | None
-    run_id: str | None
-
-    def get_crow(self, ticket_id: str) -> Agent | None: ...
-
-    def get_agent(self, agent_id: str) -> Agent | None: ...
-
-    # F1: key-only ticket snapshot emit (async choke point). See Runtime.
-
-
 EnsurePlanner = Callable[[str], Awaitable[str]]
+FindCrow = Callable[[str], "Agent | None"]
+FindAgent = Callable[[str], "Agent | None"]
 
 
 def _now() -> str:
@@ -72,13 +59,23 @@ def _get_plan_name(db: RepoDb, ticket_id: str) -> str | None:
 class CompletionCoordinator:
     def __init__(
         self,
-        rt: CoordinatorHost,
         registry: CheckRegistry,
         *,
+        repo_root: Path,
+        db: RepoDb | None,
+        events: OrchestrationEventSink | None,
+        run_id: str | None,
+        find_crow: FindCrow,
+        find_agent: FindAgent,
         ensure_planning_agent: EnsurePlanner | None = None,
     ) -> None:
-        self._rt = rt
         self._registry = registry
+        self._repo_root = repo_root
+        self._db = db
+        self._events = events
+        self._run_id = run_id
+        self._find_crow = find_crow
+        self._find_agent = find_agent
         self._ensure_planning_agent = ensure_planning_agent
 
     async def handle_done(
@@ -90,10 +87,10 @@ class CompletionCoordinator:
     ) -> DoneHandleResult:
         from murder.state.persistence.tickets import get_ticket as _db_get_ticket
 
-        if self._rt.db is None:
+        if self._db is None:
             return DoneHandleResult(completed=False)
 
-        db = self._rt.db
+        db = self._db
         row = _db_get_ticket(db, ticket_id)
         if row is None:
             LOGGER.warning("coordinator.handle_done: ticket %s not found", ticket_id)
@@ -101,7 +98,7 @@ class CompletionCoordinator:
 
         ctx = CompletionContext(
             ticket_id=ticket_id,
-            repo_root=repo_root or self._rt.repo_root,
+            repo_root=repo_root or self._repo_root,
             db=db,
         )
 
@@ -157,7 +154,7 @@ class CompletionCoordinator:
                 break
 
         if not ticket_failed and reprompt_msgs:
-            crow = self._rt.get_crow(ticket_id)
+            crow = self._find_crow(ticket_id)
             if crow is not None:
                 combined = "The following checks failed. Please fix them:\n\n" + "\n\n".join(
                     reprompt_msgs
@@ -191,11 +188,11 @@ class CompletionCoordinator:
         one bus aspect. This is now server-side forensic data only. No-op
         before the bus / run id exist.
         """
-        if self._rt.orchestration_events is None or self._rt.run_id is None:
+        if self._events is None or self._run_id is None:
             return
-        await self._rt.orchestration_events.publish(
+        await self._events.publish(
             CompletionVerdictEvent(
-                run_id=self._rt.run_id,
+                run_id=self._run_id,
                 agent_id="completion",
                 ticket_id=ticket_id,
                 completed=completed,
@@ -226,7 +223,7 @@ class CompletionCoordinator:
             await self._ask_planner(ticket_id, check_name, result, crow_session)
 
         elif owner == Owner.ASK_USER:
-            if self._rt.db is None:
+            if self._db is None:
                 return False
             reason = self._format_failure_reason(check_name, result)
             await self._escalate_to_user(ticket_id, reason)
@@ -246,10 +243,10 @@ class CompletionCoordinator:
         result: CheckResult | None,
         crow_session: str,
     ) -> None:
-        if self._rt.db is None:
+        if self._db is None:
             return
 
-        plan_name = _get_plan_name(self._rt.db, ticket_id)
+        plan_name = _get_plan_name(self._db, ticket_id)
         if plan_name is None:
             reason = self._format_failure_reason(check_name, result)
             await self._escalate_to_user(ticket_id, f"[no plan] {reason}")
@@ -263,7 +260,7 @@ class CompletionCoordinator:
 
         from murder.runtime.agents.planning_handler import PlanningHandler
 
-        handler = self._rt.get_agent(f"planning_handler-{plan_name}")
+        handler = self._find_agent(f"planning_handler-{plan_name}")
         if not isinstance(handler, PlanningHandler):
             reason = self._format_failure_reason(check_name, result)
             LOGGER.warning("no live planner for plan %s — escalating to user", plan_name)
@@ -293,13 +290,13 @@ class CompletionCoordinator:
         live in ``TicketOutcomeService.complete_ticket`` so the done path no
         longer hand-rolls a status event the orchestrator already encapsulates.
         """
-        if self._rt.db is None:
+        if self._db is None:
             return
         await self._outcomes().complete_ticket(ticket_id)
 
     async def _fail_ticket(self, ticket_id: str, reason: str) -> None:
         """Fail the ticket via the shared terminal-transition authority."""
-        if self._rt.db is None:
+        if self._db is None:
             return
         await self._outcomes().fail_ticket(ticket_id, reason)
 
@@ -317,12 +314,12 @@ class CompletionCoordinator:
         from murder.runtime.orchestration.events import StatusChangeEvent
         from murder.work.tickets.status import TicketStatus
 
-        if self._rt.orchestration_events is None or self._rt.run_id is None:
+        if self._events is None or self._run_id is None:
             return
         from_s = from_status.value if isinstance(from_status, TicketStatus) else from_status
-        await self._rt.orchestration_events.publish(
+        await self._events.publish(
             StatusChangeEvent(
-                run_id=self._rt.run_id,
+                run_id=self._run_id,
                 agent_id="coordinator",
                 role=AgentRole.COLLABORATOR,
                 ticket_id=ticket_id,
@@ -338,15 +335,15 @@ class CompletionCoordinator:
 
         Wires ``emit_status`` to the coordinator's own ``agent_id="coordinator"``
         emitter and the worktree prune / escalation recording to the coordinator
-        host, so completion and failure reuse the same authority the orchestrator
+        deps, so completion and failure reuse the same authority the orchestrator
         does instead of forking it.
         """
         from murder.runtime.orchestration.outcome import TicketOutcomeService
 
-        assert self._rt.db is not None
+        assert self._db is not None
         return TicketOutcomeService(
-            db=self._rt.db,
-            repo_root=self._rt.repo_root,
+            db=self._db,
+            repo_root=self._repo_root,
             escalations=self._make_escalation_service(),
             emit_status=self._emit_status,
         )
@@ -356,26 +353,26 @@ class CompletionCoordinator:
         await esc.escalate_to_user(reason, severity=2, ticket_id=ticket_id)
 
     async def _block_ticket(self, ticket_id: str) -> None:
-        if self._rt.db is None:
+        if self._db is None:
             return
         from murder.state.persistence.tickets import update_ticket_status
         from murder.work.tickets.status import TicketStatus
 
-        update_ticket_status(self._rt.db, ticket_id, TicketStatus.BLOCKED.value)
-        self._rt.db.conn.commit()
+        update_ticket_status(self._db, ticket_id, TicketStatus.BLOCKED.value)
+        self._db.conn.commit()
 
     def _make_escalation_service(self) -> EscalationService:
         from murder.verdict.escalations.service import EscalationService
 
-        assert self._rt.db is not None
+        assert self._db is not None
         return EscalationService(
-            db=self._rt.db,
-            repo_root=self._rt.repo_root,
-            events=self._rt.orchestration_events,
-            run_id=self._rt.run_id,
+            db=self._db,
+            repo_root=self._repo_root,
+            events=self._events,
+            run_id=self._run_id,
             agent_id="coordinator",
             role=AgentRole.COLLABORATOR,
         )
 
 
-__all__ = ["CompletionCoordinator", "CoordinatorHost", "DoneHandleResult"]
+__all__ = ["CompletionCoordinator", "DoneHandleResult"]

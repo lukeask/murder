@@ -86,26 +86,6 @@ def test_feature_composition_registers_every_closed_operation_by_enum() -> None:
         def __init__(self) -> None:
             self.queries: dict[QueryName, ApplicationHandler] = {}
             self.commands: dict[CommandName, ApplicationHandler] = {}
-            self.orchestrator = None
-            self.read_model = None
-            self._db = None
-            self._roster = None
-
-        @property
-        def db(self):
-            return self._db
-
-        @property
-        def roster(self):
-            return self._roster
-
-        @property
-        def run_id(self):
-            return None
-
-        @property
-        def structured_decisions(self):
-            return None
 
         def register_application_query(
             self, name: QueryName, handler: ApplicationHandler
@@ -117,10 +97,10 @@ def test_feature_composition_registers_every_closed_operation_by_enum() -> None:
         ) -> None:
             self.commands[name] = handler
 
+    from pathlib import Path
+
     host = _RegistrationHost()
     db = MagicMock(spec=RepoDb)
-    host._db = db
-    host._roster = MagicMock(get=lambda: {}, projection_snapshot=lambda _db: {})
     register_all(
         host,  # type: ignore[arg-type]
         projections=ProjectionProviderRegistry(),
@@ -128,8 +108,15 @@ def test_feature_composition_registers_every_closed_operation_by_enum() -> None:
         sessions=MagicMock(spec=SessionService),
         workflows=WorkflowUseCases(db),
         approvals=ApprovalUseCases(db),
-        legacy_host=host,  # type: ignore[arg-type]
+        db=db,
+        repo_root=Path("/tmp/murder-test"),
+        run_id="run-test",
+        config=MagicMock(project=None),
+        read_model=MagicMock(),
+        orchestrator=MagicMock(),
+        roster_service=MagicMock(get=lambda: {}, projection_snapshot=lambda _db: {}),
+        structured_decisions=MagicMock(),
     )
 
     assert set(host.queries) == set(QueryName)
-    assert set(host.commands) < set(CommandName)
+    assert set(host.commands) == set(CommandName)

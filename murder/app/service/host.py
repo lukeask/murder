@@ -47,7 +47,6 @@ from murder.runtime.sessions import (
     WriteTerminalInput,
 )
 from murder.runtime.terminal.session_names import SessionNamePolicy
-from murder.state.persistence.connection import RepoDb
 from murder.state.storage.service_registry import (
     remove_service_session,
     write_service_session,
@@ -115,30 +114,6 @@ class ServiceHost:
     # Project-wide tmux sweep runs only after a successful start commits.
     _lifecycle_committed: bool = field(default=False, repr=False)
 
-    @property
-    def db(self) -> RepoDb | None:
-        return None if self._running is None else self._running.process.db
-
-    @property
-    def run_id(self) -> str | None:
-        return None if self._running is None else self._running.process.run_id
-
-    @property
-    def roster(self) -> RosterService | None:
-        return None if self._running is None else self._running.roster
-
-    @property
-    def structured_decisions(self) -> StructuredDecisionRouter | None:
-        return None if self._running is None else self._running.structured_decisions
-
-    @property
-    def sessions(self) -> SessionService | None:
-        return None if self._running is None else self._running.sessions
-
-    @property
-    def document_editors(self) -> DocumentEditorService | None:
-        return None if self._running is None else self._running.editors
-
     def register_application_query(self, name: QueryName, handler: ApplicationHandler) -> None:
         """Register a feature use case at the closed application boundary."""
         self._application_queries[name] = handler
@@ -156,6 +131,10 @@ class ServiceHost:
         running = self._running
         if running is None:
             raise RuntimeError("service is not started")
+        if self.read_model is None:
+            raise RuntimeError("read model unavailable")
+        if self.orchestrator is None:
+            raise RuntimeError("orchestrator unavailable")
         register_all(
             self,
             projections=self.projection_providers,
@@ -163,7 +142,14 @@ class ServiceHost:
             sessions=running.sessions,
             workflows=WorkflowUseCases(running.process.db),
             approvals=ApprovalUseCases(running.process.db),
-            legacy_host=self,
+            db=running.process.db,
+            repo_root=self.repo_root,
+            run_id=running.process.run_id,
+            config=self.config,
+            read_model=self.read_model,
+            orchestrator=self.orchestrator,
+            roster_service=running.roster,
+            structured_decisions=running.structured_decisions,
         )
 
     async def start(self) -> None:
@@ -218,17 +204,19 @@ class ServiceHost:
             agents = await stack.enter_async_context(
                 AgentRuntime.open(
                     db=process.db,
+                    config=self.config,
+                    repo_root=self.repo_root,
                     roster=roster,
                     events=process.events,
                     run_id=process.run_id,
                     advanced_log=process.advanced_log,
                     preserve_tmux_on_close=process.is_external_stop_set,
                     verified_control_factory=verified_factory,
+                    command_submitter=process.commands,
+                    sessions=sessions,
                     lifecycle_events_enabled=(process.recorder_mode != "off"),
                 )
             )
-            agents.command_submitter = process.commands
-            agents.sessions = sessions
 
             sync = FilesystemSyncService.attach(self.repo_root, process.db)
             documents = DocumentService(
@@ -242,12 +230,7 @@ class ServiceHost:
             )
             sync.seed()
 
-            recovery = await run_startup_recovery(
-                db=process.db,
-                repo_root=self.repo_root,
-                agents=agents,
-                sessions=sessions,
-            )
+            recovery = await run_startup_recovery(db=process.db)
 
             harness_versions = HarnessVersionRegistry()
             event_sink: AgentEventSink = LoggingAgentEventSink()
@@ -257,6 +240,7 @@ class ServiceHost:
                 run_id=process.run_id,
                 get_agent=agents.find,
             )
+            agents.structured_decisions = structured_decisions
 
             self.read_model = ServiceReadModel(process.db, self.repo_root)
             self.fact_log = FactLog(process.db)
@@ -275,7 +259,7 @@ class ServiceHost:
                 session_names=session_names,
                 plan_sync=sync.plan_sync,
             )
-            agents.crow_ask_router = orchestrator.route_crow_ask
+            agents.crow_ask_router.bind(orchestrator.route_crow_ask)
             self.orchestrator = orchestrator
 
             async def _send_parse_error(agent_id: str, message: str) -> None:
@@ -317,13 +301,6 @@ class ServiceHost:
             # Expose lifecycle state for handler registration before socket bind.
             self._running = running
             self.register_application_handlers()
-
-            from murder.app.service.handlers import orchestration, scheduler, usage
-            from murder.app.service.usage_sampling import UsageSamplingService
-
-            orchestration.register(self, orchestrator)
-            scheduler.register(self, process.db)
-            usage.register(self, UsageSamplingService(self.repo_root, process.db))
 
             application = ApplicationDispatcher(
                 queries=self._application_queries,

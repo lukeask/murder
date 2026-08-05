@@ -97,16 +97,17 @@ def _make_handler(db, tmp_path: Path, coordinator) -> CrowHandler:
 
 def _real_coordinator(db, tmp_path: Path) -> CompletionCoordinator:
     """A coordinator whose registry assigns NO checks → completion transitions done."""
-    rt = MagicMock()
-    rt.db = db
-    rt.repo_root = tmp_path
-    rt.orchestration_events = InProcessOrchestrationEventSink()
-    rt.run_id = "test-run"
-    rt.publish_snapshot = AsyncMock()
-    rt.get_crow = MagicMock(return_value=None)
     registry = MagicMock()
     registry.assigned_checks = MagicMock(return_value=[])
-    return CompletionCoordinator(rt, registry)
+    return CompletionCoordinator(
+        registry,
+        repo_root=tmp_path,
+        db=db,
+        events=InProcessOrchestrationEventSink(),
+        run_id="test-run",
+        find_crow=lambda _tid: None,
+        find_agent=lambda _aid: None,
+    )
 
 
 def _ticket_status(db) -> str | None:

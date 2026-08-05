@@ -26,8 +26,10 @@ from murder.runtime.agents.events import AgentDoneEvent, LoggingAgentEventSink
 from murder.runtime.agents.types import AgentRole, AgentStatus
 from murder.runtime.agents.verified_control import VerifiedControlFactory
 from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
+from murder.runtime.sessions.service import SessionService
 from murder.state.storage.paths import db_path
 from tests.support.database import open_test_repo_db
+from tests.support.orchestrator import default_test_config
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -88,12 +90,16 @@ def test_agent_runtime_lifecycle_rides_bus_into_agent_records(tmp_path):
         try:
             agents = AgentRuntime(
                 db=db,
+                config=default_test_config(),
+                repo_root=repo,
                 roster=RosterService(db),
                 events=bus,
                 run_id="run-w4",
                 advanced_log=log,
                 preserve_tmux_on_close=lambda: False,
                 verified_control_factory=VerifiedControlFactory(db=db),
+                command_submitter=MagicMock(),
+                sessions=SessionService(db),
                 lifecycle_events_enabled=True,
             )
             agents.register(_FakeAgent("a-1"))

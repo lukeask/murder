@@ -223,15 +223,30 @@ class TerminalOutputRegistry:
         async with self._lock:
             existing = self._outputs.get(session_id)
             if existing is not None and not existing.closed:
-                return existing
+                if existing.session_name == tmux_name:
+                    return existing
+                # Revival (or any transport_ref change) must not keep streaming
+                # the old pane. Drop and close under the open lock so close()
+                # cannot observe a half-replaced entry.
+                del self._outputs[session_id]
+                await existing.close()
             output = TmuxTerminalOutput(tmux_name)
             await output.start()
             self._outputs[session_id] = output
             return output
 
+    async def remove(self, session_id: UUID) -> None:
+        """Detach and close any live output reader for ``session_id``."""
+
+        async with self._lock:
+            output = self._outputs.pop(session_id, None)
+        if output is not None:
+            await output.close()
+
     async def close(self) -> None:
-        outputs = tuple(self._outputs.values())
-        self._outputs.clear()
+        async with self._lock:
+            outputs = tuple(self._outputs.values())
+            self._outputs.clear()
         for output in outputs:
             await output.close()
 

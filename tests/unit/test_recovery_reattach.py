@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.config import Config, CrowHandlerConfig, HarnessRoleConfig, ProjectConfig
-from murder.runtime.orchestration.orchestrator import Orchestrator
-from tests.support.orchestrator import adapt_rt_stub
+from murder.runtime.agents.types import AgentRole
 from murder.runtime.sessions.contracts import (
     AcquireWriterLease,
     Correlation,
@@ -31,6 +30,7 @@ from murder.runtime.sessions.contracts import (
 )
 from murder.runtime.sessions.persistence import SessionStore
 from tests.support.database import open_test_repo_db
+from tests.support.orchestrator import FakeAgents, build_test_orchestrator
 
 
 def _db():
@@ -212,36 +212,31 @@ def test_missing_tmux_controller_session_is_lost_and_writer_revoked():
     assert report.harness_sessions_marked_lost == [str(session_id)]
 
 
-def test_orchestrator_reattach_binds_live_session_without_prompt(fake_tmux, tmp_path):
-    conn = _db()
-    _insert_ticket(conn, "t100")
-
-    rt = MagicMock()
-    rt.repo_root = tmp_path
-    rt.db = conn
-    rt.config = Config(
+def _config() -> Config:
+    return Config(
         project=ProjectConfig(name="repo"),
         collaborator=HarnessRoleConfig(harness="codex"),
         default_crow=HarnessRoleConfig(harness="codex"),
         crow_handler=CrowHandlerConfig(model="test-model"),
     )
-    rt.register_agent = MagicMock()
-    rt.sync_agent = MagicMock()
-    rt.publish_snapshot = AsyncMock()
-    rt.get_crow = MagicMock(return_value=None)
-    # On a real restart the in-memory handler died, so the double-claim guard
-    # sees no live handler and the ticket is still in_progress — reattach proceeds.
-    rt.get_crow_handler = MagicMock(return_value=None)
 
-    orch = adapt_rt_stub(rt)
+
+def test_orchestrator_reattach_binds_live_session_without_prompt(fake_tmux, tmp_path):
+    conn = _db()
+    _insert_ticket(conn, "t100")
+
+    agents = FakeAgents()
+    orch = build_test_orchestrator(
+        repo_root=tmp_path, db=conn, config=_config(), agents=agents
+    )
     # Spy on handler spawn so we don't drive the real handler coroutine.
     orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t100")
 
     asyncio.run(orch.reattach_crow("t100", "crow-t100"))
 
     # A CrowAgent was registered, bound to the live session, set RUNNING.
-    assert rt.register_agent.call_count == 1
-    agent = rt.register_agent.call_args[0][0]
+    agent = agents.find("crow-t100")
+    assert agent is not None
     assert agent.id == "crow-t100"
     assert agent.session == "crow-t100"
     # No prompt: CrowAgent.start (which sends the brief) was never invoked, so the
@@ -256,28 +251,27 @@ def test_reattach_skips_when_handler_already_live(fake_tmux, tmp_path):
     conn = _db()
     _insert_ticket(conn, "t200")  # in_progress
 
-    rt = MagicMock()
-    rt.repo_root = tmp_path
-    rt.db = conn
-    rt.config = Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
+    agents = FakeAgents()
+    agents.register(
+        type(
+            "Handler",
+            (),
+            {
+                "id": "crow_handler-t200",
+                "ticket_id": "t200",
+                "role": AgentRole.CROW_HANDLER,
+            },
+        )()
     )
-    rt.register_agent = MagicMock()
-    rt.sync_agent = MagicMock()
-    rt.publish_snapshot = AsyncMock()
-    rt.get_crow = MagicMock(return_value=None)
-    rt.get_crow_handler = MagicMock(return_value=object())  # handler already live
-
-    orch = adapt_rt_stub(rt)
+    orch = build_test_orchestrator(
+        repo_root=tmp_path, db=conn, config=_config(), agents=agents
+    )
     orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t200")
 
     asyncio.run(orch.reattach_crow("t200", "crow-t200"))
 
-    # Bailed: no duplicate agent registered, no second handler spawned.
-    assert rt.register_agent.call_count == 0
+    # Bailed: no duplicate crow registered, no second handler spawned.
+    assert agents.find("crow-t200") is None
     orch.spawn_crow_handler.assert_not_awaited()
 
 
@@ -287,26 +281,15 @@ def test_reattach_skips_when_ticket_not_in_progress(fake_tmux, tmp_path):
     conn = _db()
     _insert_ticket(conn, "t201", status="failed")
 
-    rt = MagicMock()
-    rt.repo_root = tmp_path
-    rt.db = conn
-    rt.config = Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
+    agents = FakeAgents()
+    orch = build_test_orchestrator(
+        repo_root=tmp_path, db=conn, config=_config(), agents=agents
     )
-    rt.register_agent = MagicMock()
-    rt.publish_snapshot = AsyncMock()
-    rt.get_crow = MagicMock(return_value=None)
-    rt.get_crow_handler = MagicMock(return_value=None)
-
-    orch = adapt_rt_stub(rt)
     orch.spawn_crow_handler = AsyncMock(return_value="crow_handler-t201")
 
     asyncio.run(orch.reattach_crow("t201", "crow-t201"))
 
-    assert rt.register_agent.call_count == 0
+    assert agents.find("crow-t201") is None
     orch.spawn_crow_handler.assert_not_awaited()
 
 

@@ -11,9 +11,18 @@ from murder.app.service.filesystem_sync import SYNC_TASK_KEYS, FilesystemSyncSer
 from tests.support.database import open_test_repo_db
 
 
+async def _noop_send(_agent_id: str, _message: str) -> None:
+    return None
+
+
+def _with_notifier(service: FilesystemSyncService) -> FilesystemSyncService:
+    service.set_parse_error_notifier(_noop_send)
+    return service
+
+
 def test_start_creates_owned_tasks(repo_root: Path, tmp_path: Path) -> None:
     db = open_test_repo_db(tmp_path / "murder.db")
-    service = FilesystemSyncService.attach(repo_root, db)
+    service = _with_notifier(FilesystemSyncService.attach(repo_root, db))
 
     async def _drive() -> dict[str, asyncio.Task[None]]:
         await service.start()
@@ -28,6 +37,20 @@ def test_start_creates_owned_tasks(repo_root: Path, tmp_path: Path) -> None:
 
     assert set(tasks) == set(SYNC_TASK_KEYS)
     assert all(task.cancelled() or task.done() for task in tasks.values())
+
+
+def test_start_without_notifier_raises(repo_root: Path, tmp_path: Path) -> None:
+    db = open_test_repo_db(tmp_path / "murder.db")
+    service = FilesystemSyncService.attach(repo_root, db)
+
+    async def _drive() -> None:
+        with pytest.raises(RuntimeError, match="parse-error notifier must be installed"):
+            await service.start()
+
+    try:
+        asyncio.run(_drive())
+    finally:
+        db.close()
 
 
 def test_parse_notifier_must_be_installed_before_start(repo_root: Path, tmp_path: Path) -> None:
@@ -90,13 +113,15 @@ def test_close_cancels_tasks_and_reconciles(repo_root: Path) -> None:
         async def reconcile_all(self) -> None:
             order.append("reconcile")
 
-    service = FilesystemSyncService(
-        plan_sync=_Doc(),  # type: ignore[arg-type]
-        note_sync=_Doc(),  # type: ignore[arg-type]
-        notetaker_context_sync=_Doc(),  # type: ignore[arg-type]
-        ticket_sync=_Doc(),  # type: ignore[arg-type]
-        report_sync=_Doc(),  # type: ignore[arg-type]
-        repo_root=repo_root,
+    service = _with_notifier(
+        FilesystemSyncService(
+            plan_sync=_Doc(),  # type: ignore[arg-type]
+            note_sync=_Doc(),  # type: ignore[arg-type]
+            notetaker_context_sync=_Doc(),  # type: ignore[arg-type]
+            ticket_sync=_Doc(),  # type: ignore[arg-type]
+            report_sync=_Doc(),  # type: ignore[arg-type]
+            repo_root=repo_root,
+        )
     )
 
     async def _tracked_reconcile() -> None:
@@ -124,13 +149,15 @@ def test_running_context_manager_starts_and_closes(repo_root: Path) -> None:
         async def reconcile_all(self) -> None:
             return None
 
-    service = FilesystemSyncService(
-        plan_sync=_Doc(),  # type: ignore[arg-type]
-        note_sync=_Doc(),  # type: ignore[arg-type]
-        notetaker_context_sync=_Doc(),  # type: ignore[arg-type]
-        ticket_sync=_Doc(),  # type: ignore[arg-type]
-        report_sync=_Doc(),  # type: ignore[arg-type]
-        repo_root=repo_root,
+    service = _with_notifier(
+        FilesystemSyncService(
+            plan_sync=_Doc(),  # type: ignore[arg-type]
+            note_sync=_Doc(),  # type: ignore[arg-type]
+            notetaker_context_sync=_Doc(),  # type: ignore[arg-type]
+            ticket_sync=_Doc(),  # type: ignore[arg-type]
+            report_sync=_Doc(),  # type: ignore[arg-type]
+            repo_root=repo_root,
+        )
     )
 
     async def _drive() -> bool:

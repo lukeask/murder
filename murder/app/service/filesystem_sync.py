@@ -54,8 +54,8 @@ class FilesystemSyncService:
     notetaker_context_sync: NotetakerContextSync
     ticket_sync: TicketSync
     report_sync: ReportSync
+    repo_root: Path
 
-    repo_root: Path | None = None
     _tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict, init=False, repr=False)
     _running: bool = field(default=False, init=False, repr=False)
     _parse_error_notifier: MessageSender | None = field(default=None, init=False, repr=False)
@@ -66,16 +66,14 @@ class FilesystemSyncService:
         repo_root: Path,
         db: RepoDb,
     ) -> FilesystemSyncService:
-        service = cls.__new__(cls)
-        service.repo_root = repo_root
-        service.plan_sync = PlanSync(repo_root, db)
-        service.note_sync = NoteSync(repo_root, db)
-        service.notetaker_context_sync = NotetakerContextSync(repo_root, db)
-        service.ticket_sync = TicketSync(repo_root, db)
-        service.report_sync = ReportSync(repo_root, db)
-        service._tasks = {}
-        service._running = False
-        service._parse_error_notifier = None
+        service = cls(
+            plan_sync=PlanSync(repo_root, db),
+            note_sync=NoteSync(repo_root, db),
+            notetaker_context_sync=NotetakerContextSync(repo_root, db),
+            ticket_sync=TicketSync(repo_root, db),
+            report_sync=ReportSync(repo_root, db),
+            repo_root=repo_root,
+        )
         return service
 
     def set_parse_error_notifier(self, send_message: MessageSender) -> None:
@@ -93,8 +91,6 @@ class FilesystemSyncService:
         repo_root = self.repo_root
 
         async def _notify(path: Path, parse_error: str) -> None:
-            if repo_root is None:
-                return
             agent_id = attribute_edit(path, repo_root=repo_root)
             if agent_id is None:
                 LOGGER.debug("parse_error for unattributable artifact %s; not notifying", path)
@@ -110,8 +106,7 @@ class FilesystemSyncService:
 
     def seed(self) -> None:
         """Restore any missing example artifacts. Cheap and idempotent. Kept on the boot path."""
-        if self.repo_root is not None:
-            seed_examples(self.repo_root)
+        seed_examples(self.repo_root)
 
     async def reconcile_all(self) -> None:
         self.seed()
@@ -121,12 +116,24 @@ class FilesystemSyncService:
         await self.ticket_sync.reconcile_all()
         await self.report_sync.reconcile_all()
 
+    def _require_parse_error_notifier(self) -> MessageSender:
+        if self._parse_error_notifier is None:
+            raise RuntimeError(
+                "parse-error notifier must be installed via set_parse_error_notifier() "
+                "before start()/running(); seed()/reconcile_all() do not require it"
+            )
+        return self._parse_error_notifier
+
     async def start(self) -> None:
-        """Spawn owned sync loops. Idempotent if already running."""
+        """Spawn owned sync loops. Idempotent if already running.
+
+        Requires ``set_parse_error_notifier`` first so parse errors cannot be
+        silently dropped. ``seed`` / ``reconcile_all`` remain notifier-free.
+        """
         if self._running:
             return
-        if self._parse_error_notifier is not None:
-            self._install_parse_error_notifier(self._parse_error_notifier)
+        notifier = self._require_parse_error_notifier()
+        self._install_parse_error_notifier(notifier)
         self._tasks = {
             "plan_sync": asyncio.create_task(self.plan_sync.run(), name="plan_sync"),
             "note_sync": asyncio.create_task(self.note_sync.run(), name="note_sync"),

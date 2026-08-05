@@ -70,7 +70,7 @@ def test_startup_recovery_returns_surviving_crows_and_kills_stale(
     )
 
     async def _drive() -> StartupRecoveryResult:
-        return await run_startup_recovery(db=db, repo_root=repo_root)
+        return await run_startup_recovery(db=db)
 
     result = asyncio.run(_drive())
     db.close()
@@ -125,7 +125,7 @@ def test_startup_recovery_marks_lost_sessions_from_reconcile_report(
         lambda _db: MagicMock(recover_pending_signals=lambda: None),
     )
 
-    result = asyncio.run(run_startup_recovery(db=db, repo_root=repo_root))
+    result = asyncio.run(run_startup_recovery(db=db))
     db.close()
     assert result.harness_sessions_marked_lost == (lost_id,)
     assert result.sessions_killed == ()

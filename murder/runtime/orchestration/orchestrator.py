@@ -7,7 +7,6 @@ import contextlib
 import logging
 import re
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -152,8 +151,13 @@ class Orchestrator:
         self._plan_sync = plan_sync
         self._planner_spawn_locks: dict[str, asyncio.Lock] = {}
         self.completion_coordinator = CompletionCoordinator(
-            self._coordinator_host(),
             CheckRegistry(),
+            repo_root=repo_root,
+            db=db,
+            events=events,
+            run_id=run_id,
+            find_crow=self.agents.find_crow,
+            find_agent=self.agents.find,
             ensure_planning_agent=self.ensure_planning_agent,
         )
         # Concern services. Cross-concern hooks are injected as late-bound
@@ -199,17 +203,6 @@ class Orchestrator:
         self.harness_cfg = HarnessConfigurator(config=config)
         self.worktrees = WorktreeProvisioner(repo_root=repo_root, db=db)
         self.briefs = BriefService(repo_root=repo_root)
-
-    def _coordinator_host(self) -> Any:
-        """Thin adapter for CompletionCoordinator until Phase 5 widens its deps."""
-        return SimpleNamespace(
-            repo_root=self._repo_root,
-            db=self._db,
-            orchestration_events=self._events,
-            run_id=self._run_id,
-            get_crow=self.agents.find_crow,
-            get_agent=self.agents.find,
-        )
 
     def _escalations(self) -> EscalationService:
         assert self._db is not None

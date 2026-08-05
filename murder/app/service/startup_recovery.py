@@ -10,8 +10,6 @@ from __future__ import annotations
 import contextlib
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
@@ -23,10 +21,6 @@ from murder.state.persistence.activities import (
 from murder.state.persistence.connection import RepoDb
 from murder.state.persistence.conversation import mark_stale_conversations
 from murder.work.workflows.service import WorkflowRuntime
-
-if TYPE_CHECKING:
-    from murder.runtime.agent_runtime import AgentRuntime
-    from murder.runtime.sessions.service import SessionService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -106,21 +100,12 @@ def _from_reconcile_report(
     )
 
 
-async def run_startup_recovery(
-    *,
-    db: RepoDb,
-    repo_root: Path,
-    agents: AgentRuntime | None = None,
-    sessions: SessionService | None = None,
-) -> StartupRecoveryResult:
+async def run_startup_recovery(*, db: RepoDb) -> StartupRecoveryResult:
     """Run the synchronous boot reconciliation path before socket bind.
 
-    ``agents`` and ``sessions`` are accepted for the composition-root call shape;
-    current reconciliation is DB + tmux only. Surviving Crows are returned for
+    Current reconciliation is DB + tmux only. Surviving Crows are returned for
     post-socket reattachment — they are not reattached here.
     """
-    del agents, sessions, repo_root  # reserved for future typed planners
-
     WorkflowRuntime(db).recover_pending_signals()
     live_sessions = set(await tmux.list_sessions())
     report = reconcile_agents_vs_tmux(db, live_sessions)

@@ -52,6 +52,17 @@ CODEX_IDLE = _load("codex_idle.txt")
 MINIMUM_EVIDENCE_RECORDS = 3
 
 
+@pytest.fixture(autouse=True)
+def _skip_live_usage_sampling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Launch-sequence Enter assertions exclude startup usage sampling."""
+    from murder.llm.harnesses.usage_sampling import LiveSessionUsageResult
+
+    monkeypatch.setattr(
+        "murder.llm.harnesses.usage_sampling.sample_live_session_usage",
+        AsyncMock(return_value=LiveSessionUsageResult(outcome="skipped", reason="test")),
+    )
+
+
 @pytest.fixture
 def fake_tmux_launch(monkeypatch):
     ft = FakeTmux()
@@ -79,7 +90,9 @@ def _send_texts(ft: FakeTmux) -> list[str]:
 
 
 def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
     from murder.runtime.sessions.service import SessionService
+    from tests.support.orchestrator import default_test_config
 
     db = open_test_repo_db(tmp_path / "state.db")
 
@@ -96,17 +109,26 @@ def _verified_runtime(tmp_path: Path) -> SimpleNamespace:
         del from_status, reason
         agent.status = to_status  # type: ignore[attr-defined]
 
+    sessions = SessionService(db)
+    factory = VerifiedControlFactory(
+        db=db,
+        sessions=sessions,
+        prompt_policy=PromptDriverPolicy(
+            observation_interval=timedelta(), maximum_observations=12
+        ),
+        prompt_sleep=no_sleep,
+    )
     return SimpleNamespace(
         db=db,
-        sessions=SessionService(db),
+        sessions=sessions,
+        config=default_test_config(),
+        repo_root=tmp_path,
         orchestration_events=None,
         run_id=None,
         record=MagicMock(),
         transition=AsyncMock(side_effect=transition),
-        verified_prompt_driver_policy=PromptDriverPolicy(
-            observation_interval=timedelta(), maximum_observations=12
-        ),
-        verified_prompt_driver_sleep=no_sleep,
+        initialize_verified_control=factory.initialize,
+        structured_decisions=SimpleNamespace(observe=AsyncMock()),
     )
 
 

@@ -2,25 +2,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from murder.app.protocol.reads import CommandGetParams, CommandGetResult
 from murder.app.protocol.requests import QueryName
+from murder.app.service.application import ApplicationRegistrar
+from murder.state.persistence.connection import RepoDb
 
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
 
-
-def register(host: ServiceHost) -> None:
+def register(app: ApplicationRegistrar, db: RepoDb) -> None:
     def _command_status(body: dict[str, Any]) -> dict[str, Any]:
         from murder.state.persistence.commands import get_command_status
 
         params = CommandGetParams.model_validate(body)
-        db = host.db
-        if db is None:
-            return CommandGetResult(ok=False, error="runtime_db_unavailable").model_dump(
-                mode="json"
-            )
         row = get_command_status(db, params.command_id)
         if row is None:
             return CommandGetResult(
@@ -35,4 +29,4 @@ def register(host: ServiceHost) -> None:
             updated_at=row["updated_at"],
         ).model_dump(mode="json")
 
-    host.register_application_query(QueryName.COMMAND_GET, _command_status)
+    app.register_application_query(QueryName.COMMAND_GET, _command_status)

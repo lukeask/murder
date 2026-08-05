@@ -33,13 +33,16 @@ def _insert_ticket(db: RepoDb, tid: str, status: str) -> None:
 
 
 def _coordinator(db: RepoDb, monkeypatch):
-    rt = MagicMock()
-    rt.db = db
-    rt.repo_root = Path("/tmp")
-    rt.orchestration_events = None
-    rt.run_id = None
     registry = MagicMock()
-    coordinator = CompletionCoordinator(rt, registry)
+    coordinator = CompletionCoordinator(
+        registry,
+        repo_root=Path("/tmp"),
+        db=db,
+        events=None,
+        run_id=None,
+        find_crow=lambda _tid: None,
+        find_agent=lambda _aid: None,
+    )
 
     # Avoid touching the filesystem for worktree pruning. The done-path prune now
     # lives in TicketOutcomeService (call-site import of the worktree helper), so

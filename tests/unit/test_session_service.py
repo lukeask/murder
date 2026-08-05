@@ -252,6 +252,117 @@ async def test_open_terminal_output_resolves_persisted_tmux_ref(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        SessionStatus.STOPPING,
+        SessionStatus.STOPPED,
+        SessionStatus.FAILED,
+        SessionStatus.LOST,
+    ],
+)
+async def test_revive_replaces_stale_terminal_output_reader(
+    db, monkeypatch: pytest.MonkeyPatch, status: SessionStatus
+) -> None:
+    from murder.runtime.terminal.output import TmuxTerminalOutput
+
+    started: list[str] = []
+    closed: list[str] = []
+
+    async def _fake_start(self: TmuxTerminalOutput) -> None:
+        started.append(self.session_name)
+
+    async def _fake_close(self: TmuxTerminalOutput) -> None:
+        closed.append(self.session_name)
+        self._closed = True  # noqa: SLF001
+
+    monkeypatch.setattr(TmuxTerminalOutput, "start", _fake_start)
+    monkeypatch.setattr(TmuxTerminalOutput, "close", _fake_close)
+
+    async with SessionService.open(db) as sessions:
+        session_id = uuid4()
+        await sessions.ensure_persisted_tmux_session(
+            _registration(session_id, tmux_name="old_pane")
+        )
+        stale = await sessions.open_terminal_output(session_id)
+        assert stale.session_name == "old_pane"
+
+        existing = sessions.store.get_session(session_id)
+        assert existing is not None
+        sessions.store.save_session(
+            existing.model_copy(
+                update={"status": status, "revision": existing.revision + 1}
+            ),
+            expected_revision=existing.revision,
+        )
+        await sessions.ensure_persisted_tmux_session(
+            _registration(session_id, tmux_name="new_pane")
+        )
+        # Revival must detach the old control client before any reopen.
+        assert "old_pane" in closed
+        assert stale.closed
+
+        revived = await sessions.open_terminal_output(session_id)
+        assert revived is not stale
+        assert revived.session_name == "new_pane"
+        assert started == ["old_pane", "new_pane"]
+
+
+@pytest.mark.asyncio
+async def test_open_terminal_output_replaces_reader_when_tmux_name_changes(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Registry open must not cache-hit across a transport_ref rename."""
+
+    from murder.runtime.terminal.output import TmuxTerminalOutput
+
+    async def _fake_start(self: TmuxTerminalOutput) -> None:
+        return None
+
+    async def _fake_close(self: TmuxTerminalOutput) -> None:
+        self._closed = True  # noqa: SLF001
+
+    monkeypatch.setattr(TmuxTerminalOutput, "start", _fake_start)
+    monkeypatch.setattr(TmuxTerminalOutput, "close", _fake_close)
+
+    async with SessionService.open(db) as sessions:
+        session_id = uuid4()
+        await sessions.ensure_persisted_tmux_session(
+            _registration(session_id, tmux_name="pane_a")
+        )
+        first = await sessions.open_terminal_output(session_id)
+        # Bypass ensure_ revival: call the registry with a new name directly.
+        second = await sessions.outputs.open(session_id, tmux_name="pane_b")
+        assert first.closed
+        assert second is not first
+        assert second.session_name == "pane_b"
+
+
+@pytest.mark.asyncio
+async def test_capture_and_open_raise_after_close(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake_capture(tmux_name: str) -> CapturedTerminalFrame:
+        return CapturedTerminalFrame(data=f"frame:{tmux_name}", columns=80, rows=24)
+
+    monkeypatch.setattr(
+        "murder.runtime.sessions.service.capture_tmux_frame",
+        _fake_capture,
+    )
+
+    async with SessionService.open(db) as sessions:
+        session_id = uuid4()
+        await sessions.ensure_persisted_tmux_session(
+            _registration(session_id, tmux_name="pane_closed")
+        )
+        await sessions.close()
+        with pytest.raises(RuntimeError, match="SessionService is closed"):
+            await sessions.capture_terminal(session_id)
+        with pytest.raises(RuntimeError, match="SessionService is closed"):
+            await sessions.open_terminal_output(session_id)
+
+
+@pytest.mark.asyncio
 async def test_open_terminal_output_rejects_unknown_session(db) -> None:
     async with SessionService.open(db) as sessions:
         with pytest.raises(ValueError, match="does not exist"):

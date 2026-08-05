@@ -238,10 +238,11 @@ class SessionService:
             registration=registration,
         )
         # Revival refreshes transport_ref / status in the store. Drop any live
-        # controller so get_or_create installs a backend bound to the new ref
-        # instead of silently retaining a stale TmuxSessionBackend.
+        # controller and output reader so get_or_create / open install backends
+        # and control clients bound to the new ref instead of retaining stale ones.
         if prior is not None and prior.status in _REVIVABLE:
             await self._controllers.remove(record.session_id)
+            await self._outputs.remove(record.session_id)
         return await self._controllers.get_or_create(
             record,
             backend=backend,
@@ -257,9 +258,13 @@ class SessionService:
         return record.transport_ref
 
     async def capture_terminal(self, session_id: UUID) -> CapturedTerminalFrame:
+        if self._closed:
+            raise RuntimeError("SessionService is closed")
         return await capture_tmux_frame(self.resolve_tmux_ref(session_id))
 
     async def open_terminal_output(self, session_id: UUID) -> TmuxTerminalOutput:
+        if self._closed:
+            raise RuntimeError("SessionService is closed")
         return await self._outputs.open(
             session_id,
             tmux_name=self.resolve_tmux_ref(session_id),

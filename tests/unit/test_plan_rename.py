@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -198,17 +199,22 @@ def test_retarget_plan_runtime_rekeys_live_planner_and_handler(
     from murder.runtime.agent_runtime import AgentRuntime
     from murder.runtime.agents.verified_control import VerifiedControlFactory
     from murder.runtime.orchestration.notifier import InProcessOrchestrationEventSink
+    from murder.runtime.sessions.service import SessionService
     from tests.support.orchestrator import build_test_orchestrator, default_test_config
 
     conn = _connect(repo_root)
     agents = AgentRuntime(
         db=conn,
+        config=default_test_config(),
+        repo_root=repo_root,
         roster=RosterService(conn),
         events=InProcessOrchestrationEventSink(),
         run_id="test-run",
         advanced_log=NullAdvancedLog(),
         preserve_tmux_on_close=lambda: False,
         verified_control_factory=VerifiedControlFactory(db=conn),
+        command_submitter=MagicMock(),
+        sessions=SessionService(conn),
         lifecycle_events_enabled=False,
     )
     planner = SimpleNamespace(

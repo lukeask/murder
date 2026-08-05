@@ -410,6 +410,11 @@ class AdvancedLogBase:
 
     mode: AdvancedMode = "off"
 
+    @property
+    def db_path(self) -> Path | None:
+        """Filesystem path of the recorder DB, or ``None`` when recording is off."""
+        return None
+
     async def start(self) -> None:  # pragma: no cover - trivial
         return None
 
@@ -486,6 +491,11 @@ class AdvancedLog(AdvancedLogBase):
         # on the next successful enqueue so the hole is visible, never silent.
         self._drops: dict[str, int] = {}
         self.gate = ChangeGate()
+
+    @property
+    def db_path(self) -> Path:
+        """Filesystem path of this recorder's SQLite database."""
+        return self._db_path
 
     @property
     def dropped(self) -> int:

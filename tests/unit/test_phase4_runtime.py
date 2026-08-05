@@ -1078,7 +1078,6 @@ def test_manual_enqueue_tick_starts_workflow() -> None:
 
     class _Host:
         def __init__(self) -> None:
-            self.db = conn
             self.handler = None
 
         def register_application_command(self, name: object, handler: object) -> None:
@@ -1086,7 +1085,7 @@ def test_manual_enqueue_tick_starts_workflow() -> None:
             self.handler = handler
 
     host = _Host()
-    trigger_handler.register(host)  # type: ignore[arg-type]
+    trigger_handler.register(host, conn)  # type: ignore[arg-type]
     duplicate = host.handler({"trigger_id": str(trigger_id), "occurrence_key": "click-42"})
     assert duplicate["ok"] is True
     assert duplicate["occurrence_key"] == "click-42"

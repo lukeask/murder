@@ -162,130 +162,10 @@ class HarnessBackedAgent(LifecycleParticipant):
         heartbeat(self.id, invalidate=invalidate)
 
     async def initialize_verified_harness_control(self) -> None:
-        runtime = getattr(self, "runtime", None)
-        if runtime is not None and hasattr(runtime, "initialize_verified_control"):
-            await runtime.initialize_verified_control(self)
-            return
-        if runtime is None or runtime.db is None:
-            raise RuntimeError("verified harness control requires the service persistence database")
-        from murder.llm.harness_control.runtime.session import VerifiedHarnessControlSession
-        from murder.user_config import load_user_config
-
-        options: dict[str, Any] = {}
-        if getattr(runtime, "verified_prompt_driver_policy", None) is not None:
-            options["prompt_policy"] = runtime.verified_prompt_driver_policy
-        if getattr(runtime, "verified_prompt_driver_sleep", None) is not None:
-            options["prompt_sleep"] = runtime.verified_prompt_driver_sleep
-        tui = load_user_config().tui
-        use_app_server = self.harness.kind == "codex" and tui.codex_control_backend == "app_server"
-        use_acp = self.harness.kind == "cursor" and tui.cursor_control_backend == "acp"
-        use_agent_sdk = (
-            self.harness.kind == "claude_code" and tui.claude_control_backend == "agent_sdk"
-        )
-        if use_app_server:
-            connection = getattr(self, "app_server_connection", None)
-            if connection is None:
-                from murder.llm.harness_control.app_server.bootstrap import (
-                    start_app_server_session,
-                )
-
-                harness_session = getattr(self, "harness_session", None)
-                cwd = (
-                    harness_session.repo_root
-                    if harness_session is not None
-                    else getattr(self, "repo_root", None)
-                )
-                if cwd is None:
-                    raise RuntimeError("app-server bootstrap requires a cwd")
-                connection, _client = await start_app_server_session(
-                    cwd=cwd,
-                    model=getattr(self, "startup_model", None),
-                    model_provider=getattr(self, "startup_model_provider", None),
-                    effort=getattr(self, "startup_effort", None),
-                )
-                self.app_server_connection = connection
-            self.verified_harness_control = VerifiedHarnessControlSession.from_app_server(
-                app_server=connection,
-                harness_kind=self.harness.kind,
-                terminal_session=self.session,
-                db=runtime.db,
-                persistence_session_id=self.id,
-                **options,
-            )
-        elif use_acp:
-            connection = getattr(self, "acp_connection", None)
-            if connection is None:
-                from murder.llm.harness_control.acp.bootstrap import start_acp_session
-
-                harness_session = getattr(self, "harness_session", None)
-                cwd = (
-                    harness_session.repo_root
-                    if harness_session is not None
-                    else getattr(self, "repo_root", None)
-                )
-                if cwd is None:
-                    raise RuntimeError("ACP bootstrap requires a cwd")
-                connection, _client = await start_acp_session(
-                    agent="cursor",
-                    cwd=cwd,
-                    model=getattr(self, "startup_model", None),
-                    effort=getattr(self, "startup_effort", None),
-                )
-                self.acp_connection = connection
-            self.verified_harness_control = VerifiedHarnessControlSession.from_acp(
-                acp=connection,
-                harness_kind=self.harness.kind,
-                terminal_session=self.session,
-                db=runtime.db,
-                persistence_session_id=self.id,
-                **options,
-            )
-        elif use_agent_sdk:
-            connection = getattr(self, "agent_sdk_connection", None)
-            if connection is None:
-                from murder.llm.harness_control.agent_sdk.bootstrap import (
-                    start_agent_sdk_session,
-                )
-
-                harness_session = getattr(self, "harness_session", None)
-                cwd = (
-                    harness_session.repo_root
-                    if harness_session is not None
-                    else getattr(self, "repo_root", None)
-                )
-                if cwd is None:
-                    raise RuntimeError("Agent SDK bootstrap requires a cwd")
-                connection, _client = await start_agent_sdk_session(
-                    cwd=cwd,
-                    model=getattr(self, "startup_model", None),
-                    effort=getattr(self, "startup_effort", None),
-                )
-                self.agent_sdk_connection = connection
-            self.verified_harness_control = VerifiedHarnessControlSession.from_agent_sdk(
-                agent_sdk=connection,
-                harness_kind=self.harness.kind,
-                terminal_session=self.session,
-                db=runtime.db,
-                persistence_session_id=self.id,
-                **options,
-            )
-        else:
-            self.verified_harness_control = VerifiedHarnessControlSession.from_tmux(
-                harness_kind=self.harness.kind,
-                terminal_session=self.session,
-                db=runtime.db,
-                persistence_session_id=self.id,
-                **options,
-            )
-        await self.verified_harness_control.ensure_session_controller(
-            repository_id=runtime.db.repository_id,
-            agent_key=self.id,
-            sessions=getattr(runtime, "sessions", None),
-            recover=True,
-        )
-        # A reattached pane begins with current evidence, never a resumed
-        # procedural stack.  Unfinished persisted effects are explicitly
-        # escalated by the session recovery boundary rather than replayed.
+        runtime = self.runtime
+        if runtime is None:
+            raise RuntimeError("verified harness control requires an AgentRuntime")
+        await runtime.initialize_verified_control(self)
 
     async def send_verified_prompt(
         self,
@@ -516,17 +396,16 @@ class HarnessBackedAgent(LifecycleParticipant):
                 setattr(self, attribute, None)
 
     async def _usage_sampling_context(self) -> Any | None:
-        runtime = getattr(self, "runtime", None)
+        runtime = self.runtime
         if runtime is None:
             return None
         from murder.llm.harnesses.usage_sampling import UsageSamplingContext
 
-        config = getattr(runtime, "config", None)
-        repo_root = getattr(runtime, "repo_root", None) or getattr(self, "repo_root", None)
-        db = getattr(runtime, "db", None)
-        if config is None or repo_root is None:
-            return None
-        return UsageSamplingContext(config=config, repo_root=Path(repo_root), db=db)
+        return UsageSamplingContext(
+            config=runtime.config,
+            repo_root=Path(runtime.repo_root),
+            db=runtime.db,
+        )
 
     async def _sample_live_usage_on_startup(self) -> None:
         ctx = await self._usage_sampling_context()
@@ -612,12 +491,17 @@ class HarnessBackedAgent(LifecycleParticipant):
             return
         if self.verified_harness_control is None:
             return
-        runtime = getattr(self, "runtime", None)
+        runtime = self.runtime
         ingested = await self.verified_harness_control.ingest_once()
         self.latest_ingested_frame = ingested
-        decision_router = getattr(runtime, "structured_decisions", None)
-        if decision_router is not None:
-            await decision_router.observe(self, ingested.snapshot)
+        if runtime is None:
+            raise RuntimeError(f"project_once requires an AgentRuntime for agent {self.id}")
+        decision_router = runtime.structured_decisions
+        if decision_router is None:
+            raise RuntimeError(
+                f"AgentRuntime.structured_decisions unbound before project_once for {self.id}"
+            )
+        await decision_router.observe(self, ingested.snapshot)
         transcript = next(
             (
                 item.payload.get("transcript")
@@ -653,9 +537,10 @@ class HarnessBackedAgent(LifecycleParticipant):
         """
         if not changes or self.role is not AgentRole.CROW or not self.ticket_id:
             return
-        runtime = getattr(self, "runtime", None)
-        get_handler = getattr(runtime, "find_crow_handler", None) or getattr(runtime, "get_crow_handler", None)
-        handler = get_handler(self.ticket_id) if callable(get_handler) else None
+        runtime = self.runtime
+        if runtime is None:
+            return
+        handler = runtime.find_crow_handler(self.ticket_id)
         observe = getattr(handler, "observe_conversation_changes", None)
         if callable(observe):
             await observe(changes)

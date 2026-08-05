@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from murder.app.protocol.lifecycle import ImageUploadParams, ImageUploadResult
 from murder.app.protocol.requests import CommandName
-
-if TYPE_CHECKING:
-    from murder.app.service.host import ServiceHost
+from murder.app.service.application import ApplicationRegistrar
 
 
-def register(host: ServiceHost) -> None:
+def register(app: ApplicationRegistrar, repo_root: Path) -> None:
     def _image_upload(body: dict[str, Any]) -> dict[str, Any]:
         # F9: store a pasted clipboard image under .murder/images and return
         # the stored path. Bytes ride base64 over the application protocol.
@@ -68,10 +67,10 @@ def register(host: ServiceHost) -> None:
             ).model_dump(mode="json")
         ext = _sanitize((params.ext or "png").lstrip(".")) or "png"
 
-        images_dir = _murder_dir(host.repo_root) / "images"
+        images_dir = _murder_dir(repo_root) / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         fpath = images_dir / f"{stem}.{ext}"
         fpath.write_bytes(data)
         return ImageUploadResult(ok=True, path=str(fpath)).model_dump(mode="json")
 
-    host.register_application_command(CommandName.IMAGE_UPLOAD, _image_upload)
+    app.register_application_command(CommandName.IMAGE_UPLOAD, _image_upload)

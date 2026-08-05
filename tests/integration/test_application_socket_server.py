@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,11 +13,9 @@ from aiohttp import ClientSession
 
 from murder.app.protocol.common import APPLICATION_PROTOCOL_VERSION, ErrorCode
 from murder.app.protocol.requests import CommandName, QueryName, QueryRequest
-from murder.app.protocol.terminal import TerminalFrame
-from murder.app.protocol.wire import ReplyMessage, TerminalFrameMessage
 from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.projection_registry import ProjectionProviderRegistry
-from murder.app.service.socket_server import ApplicationConnection, ApplicationSocketServer
+from murder.app.service.socket_server import ApplicationSocketServer
 from murder.facts.log import FactLog, ProjectionInputLog
 from murder.state.persistence.connection import RepoDb
 from tests.support.database import open_test_repo_db
@@ -265,58 +262,6 @@ async def test_terminal_frames_and_replies_share_serialized_writer(tmp_path: Pat
             assert reply["result"]["ok"] is True
     finally:
         await _stop_server(server, db)
-
-
-@pytest.mark.asyncio
-async def test_terminal_frames_coalesce_under_writer_backpressure() -> None:
-    sent: list[dict[str, Any]] = []
-    release = asyncio.Event()
-    last_sequence = 7
-
-    class _BlockingSocket:
-        async def send_json(self, payload: dict[str, Any]) -> None:
-            sent.append(payload)
-            if payload.get("op") == "reply" and payload.get("request_id") == "hold":
-                await release.wait()
-
-        async def close(self) -> None:
-            return None
-
-    connection = ApplicationConnection(_BlockingSocket(), "coalesce-client")
-    try:
-        await connection.send(ReplyMessage(request_id="hold", result={"held": True}))
-        await asyncio.sleep(0)
-        session_id = uuid4()
-        now = datetime.now(timezone.utc)
-        for sequence in range(1, last_sequence + 1):
-            await connection.send(
-                TerminalFrameMessage(
-                    stream_id="s1",
-                    frame=TerminalFrame(
-                        subscription_id="s1",
-                        session_id=session_id,
-                        sequence=sequence,
-                        captured_at=now,
-                        columns=80,
-                        rows=24,
-                        data=f"seq-{sequence}",
-                    ),
-                )
-            )
-        await connection.send(ReplyMessage(request_id="after", result={"ok": True}))
-        release.set()
-        deadline = asyncio.get_running_loop().time() + 1.0
-        while asyncio.get_running_loop().time() < deadline:
-            if any(item.get("request_id") == "after" for item in sent):
-                break
-            await asyncio.sleep(0.01)
-        frames = [item for item in sent if item.get("op") == "terminal.frame"]
-        assert len(frames) == 1
-        assert frames[0]["frame"]["sequence"] == last_sequence
-        assert frames[0]["frame"]["data"] == f"seq-{last_sequence}"
-        assert any(item.get("request_id") == "after" for item in sent)
-    finally:
-        await connection.close()
 
 
 @pytest.mark.asyncio

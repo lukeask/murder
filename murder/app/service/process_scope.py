@@ -151,7 +151,7 @@ class ProcessScope:
         if mode != "off":
             with contextlib.suppress(Exception):
                 _db_set_run_advanced_log_path(
-                    db, run_id, str(getattr(advanced_log, "_db_path", ""))
+                    db, run_id, str(advanced_log.db_path or "")
                 )
         for artifact in (
             service_log(repo_root, run_id),

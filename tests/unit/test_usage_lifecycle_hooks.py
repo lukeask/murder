@@ -37,6 +37,7 @@ def _config() -> Config:
 
 
 def _runtime(conn, tmp_path: Path):
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
     from murder.runtime.sessions.service import SessionService
 
     async def no_sleep(_: float) -> None:
@@ -52,19 +53,26 @@ def _runtime(conn, tmp_path: Path):
         del from_status, reason
         agent.status = to_status  # type: ignore[attr-defined]
 
+    sessions = SessionService(conn)
+    factory = VerifiedControlFactory(
+        db=conn,
+        sessions=sessions,
+        prompt_policy=PromptDriverPolicy(
+            observation_interval=timedelta(), maximum_observations=12
+        ),
+        prompt_sleep=no_sleep,
+    )
     return SimpleNamespace(
         db=conn,
-        sessions=SessionService(conn),
+        sessions=sessions,
         config=_config(),
         repo_root=tmp_path,
         orchestration_events=None,
         run_id=None,
         record=MagicMock(),
         transition=AsyncMock(side_effect=transition),
-        verified_prompt_driver_policy=PromptDriverPolicy(
-            observation_interval=timedelta(), maximum_observations=12
-        ),
-        verified_prompt_driver_sleep=no_sleep,
+        initialize_verified_control=factory.initialize,
+        structured_decisions=SimpleNamespace(observe=AsyncMock()),
     )
 
 

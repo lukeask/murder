@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from pathlib import Path
 
 from murder.config import (
@@ -10,40 +9,11 @@ from murder.config import (
     HarnessRoleConfig,
     ProjectConfig,
 )
-from murder.runtime.agents.base import AgentRole
-from murder.runtime.orchestration.orchestrator import Orchestrator
-from tests.support.orchestrator import adapt_rt_stub
+from murder.runtime.agents.types import AgentRole
 from murder.state.persistence.agents import upsert_agent
 from murder.state.storage.worktrees import WorktreeRef
 from tests.support.database import open_test_repo_db
-
-
-@dataclass
-class _Runtime:
-    repo_root: Path
-    config: Config
-    db: object
-    event_sink: object | None = None
-    orchestration_events: object | None = None
-    run_id: str | None = None
-
-    def get_crow(self, _ticket_id: str):
-        return None
-
-    def get_crow_handler(self, _ticket_id: str):
-        return None
-
-    def register_agent(self, _agent) -> None:
-        return None
-
-    def get_agent(self, _agent_id: str):
-        return None
-
-    async def reap(self, _agent_id: str) -> None:
-        return None
-
-    def rename_agent(self, _old_agent_id: str, _new_agent_id: str, *, persist=None):
-        return None
+from tests.support.orchestrator import FakeAgents, build_test_orchestrator
 
 
 class _LiveHarness:
@@ -53,15 +23,26 @@ class _LiveHarness:
 class _LiveCollaborator:
     harness = _LiveHarness()
 
-    def __init__(self) -> None:
+    def __init__(self, agent_id: str = "collaborator-0") -> None:
+        self.id = agent_id
         self.stopped = False
 
     async def stop(self, *, failed: bool = False, kill_session: bool = True) -> None:
+        del failed, kill_session
         self.stopped = True
 
 
 async def _skip_model_refresh(*_args, **_kwargs) -> None:
     return None
+
+
+def _config() -> Config:
+    return Config(
+        project=ProjectConfig(name="repo"),
+        collaborator=HarnessRoleConfig(harness="codex"),
+        default_crow=HarnessRoleConfig(harness="codex"),
+        crow_handler=CrowHandlerConfig(model="test-model"),
+    )
 
 
 def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
@@ -82,24 +63,17 @@ def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
         Path("murder/resources/templates/roles.yaml").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    config = Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
-    )
     live = _LiveCollaborator()
+    agents = FakeAgents()
+    agents.register(live)
     reaped: list[str] = []
     ensured: list[bool] = []
 
-    class _RuntimeWithCollaborator(_Runtime):
-        def get_agent(self, agent_id: str):
-            return live if agent_id == "collaborator-0" else None
+    async def _tracking_reap(agent_id: str) -> None:
+        reaped.append(agent_id)
+        await FakeAgents.reap(agents, agent_id)
 
-        async def reap(self, agent_id: str) -> None:
-            reaped.append(agent_id)
-
-    rt = _RuntimeWithCollaborator(repo_root=repo_root, config=config, db=conn)
+    agents.reap = _tracking_reap  # type: ignore[method-assign]
     upsert_agent(
         conn,
         agent_id="collaborator-0",
@@ -113,7 +87,9 @@ def test_reconfigure_collaborator_restarts_when_saved_harness_changes(
         worktree_path=None,
         pid=None,
     )
-    orch = adapt_rt_stub(rt)
+    orch = build_test_orchestrator(
+        repo_root=repo_root, config=_config(), db=conn, agents=agents
+    )
 
     async def _ensure() -> str:
         ensured.append(True)
@@ -147,19 +123,9 @@ def test_reconfigure_collaborator_returns_startup_failure_error(
         Path("murder/resources/templates/roles.yaml").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    config = Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
-    )
     live = _LiveCollaborator()
-
-    class _RuntimeWithCollaborator(_Runtime):
-        def get_agent(self, agent_id: str):
-            return live if agent_id == "collaborator-0" else None
-
-    rt = _RuntimeWithCollaborator(repo_root=repo_root, config=config, db=conn)
+    agents = FakeAgents()
+    agents.register(live)
     upsert_agent(
         conn,
         agent_id="collaborator-0",
@@ -173,7 +139,9 @@ def test_reconfigure_collaborator_returns_startup_failure_error(
         worktree_path=None,
         pid=None,
     )
-    orch = adapt_rt_stub(rt)
+    orch = build_test_orchestrator(
+        repo_root=repo_root, config=_config(), db=conn, agents=agents
+    )
 
     async def _ensure() -> str:
         raise TimeoutError("Harness not awaiting input in time: session=collaborator-0")
@@ -200,13 +168,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
         """,
         (conn.repository_id,),
     )
-    config = Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
-    )
-    rt = _Runtime(repo_root=repo_root, config=config, db=conn)
+    orch = build_test_orchestrator(repo_root=repo_root, config=_config(), db=conn)
     captured = {}
 
     async def fake_ensure(_repo: Path, _branch_name: str, **_kwargs: object) -> WorktreeRef:
@@ -214,7 +176,6 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
 
     async def fake_spawn_agent(spec, *, repo_root, session_names, agents, event_sink=None):
         captured["spec"] = spec
-        captured["rt"] = rt
         captured["event_sink"] = event_sink
         return type("Handle", (), {"session_name": "murder_repo_crow_t001"})()
 
@@ -235,7 +196,7 @@ def test_spawn_crow_defaults_to_main_checkout(repo_root: Path, monkeypatch) -> N
         lambda _ctx: _FakeAssembler(),
     )
 
-    session = asyncio.run(adapt_rt_stub(rt).spawn_crow("t001"))  # type: ignore[arg-type]
+    session = asyncio.run(orch.spawn_crow("t001"))
 
     assert session == "murder_repo_crow_t001"
     spec = captured["spec"]
@@ -258,13 +219,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         """,
         (conn.repository_id,),
     )
-    config = Config(
-        project=ProjectConfig(name="repo"),
-        collaborator=HarnessRoleConfig(harness="codex"),
-        default_crow=HarnessRoleConfig(harness="codex"),
-        crow_handler=CrowHandlerConfig(model="test-model"),
-    )
-    rt = _Runtime(repo_root=repo_root, config=config, db=conn)
+    orch = build_test_orchestrator(repo_root=repo_root, config=_config(), db=conn)
     worktree = repo_root / ".murder" / "worktrees" / "feature-c6"
     captured = {}
 
@@ -274,7 +229,6 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
 
     async def fake_spawn_agent(spec, *, repo_root, session_names, agents, event_sink=None):
         captured["spec"] = spec
-        captured["rt"] = rt
         captured["event_sink"] = event_sink
         return type("Handle", (), {"session_name": "murder_repo_crow_t001"})()
 
@@ -295,7 +249,7 @@ def test_spawn_crow_provisions_opt_in_worktree_and_puts_it_in_agent_scope(
         lambda _ctx: _FakeAssembler(),
     )
 
-    session = asyncio.run(adapt_rt_stub(rt).spawn_crow("t001"))  # type: ignore[arg-type]
+    session = asyncio.run(orch.spawn_crow("t001"))
 
     assert session == "murder_repo_crow_t001"
     assert captured["ensure"] == (repo_root, "feature/c6")

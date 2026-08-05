@@ -138,7 +138,7 @@ class ApplicationGateway:
     ) -> dict[str, Any]:
         try:
             return await asyncio.wait_for(awaitable, timeout=timeout_s)
-        except TimeoutError as exc:
+        except (TimeoutError, asyncio.TimeoutError) as exc:
             raise TimeoutError(f"request timed out after {timeout_s:g}s") from exc
 
     def _schedule_plan_seed_if_needed(

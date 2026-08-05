@@ -179,9 +179,6 @@ def test_reserved_values_are_persisted_with_runtime_warnings(tmp_path: Path) -> 
 
 class _Host:
     def __init__(self) -> None:
-        self.repo_root = Path("/repo")
-        self.db: object | None = None
-        self.orchestrator: object | None = None
         self.queries: dict[QueryName, object] = {}
         self.commands: dict[CommandName, object] = {}
 
@@ -195,21 +192,10 @@ class _Host:
 def test_tui_handlers_publish_revisions_and_workflow_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    from murder.app.service.projection_registry import ProjectionProviderRegistry
+
     monkeypatch.setattr(user_config, "workflows_path", lambda: tmp_path / "workflows.yaml")
     host = _Host()
-    tui.register(host)  # type: ignore[arg-type]
-
-    get = host.queries[QueryName.WORKFLOWS_GET]
-    assert callable(get)
-    initial = get({})
-    assert initial["revision"]
-
-    put = host.commands[CommandName.WORKFLOW_PUT]
-    assert callable(put)
-    saved = put({"workflow": _workflow("alpha"), "expected_revision": initial["revision"]})
-    assert saved["ok"]
-    assert saved["workflow"]["name"] == "alpha"
-
     workflow_id = uuid4()
 
     class _Orchestrator:
@@ -225,8 +211,26 @@ def test_tui_handlers_publish_revisions_and_workflow_id(
         )
 
     monkeypatch.setattr(launch, "run_workflow_by_name", run_workflow)
-    host.db = object()
-    host.orchestrator = _Orchestrator()
+    orchestrator = _Orchestrator()
+    tui.register(
+        host,  # type: ignore[arg-type]
+        ProjectionProviderRegistry(),
+        repo_root=Path("/repo"),
+        db=object(),  # type: ignore[arg-type]
+        orchestrator=orchestrator,  # type: ignore[arg-type]
+    )
+
+    get = host.queries[QueryName.WORKFLOWS_GET]
+    assert callable(get)
+    initial = get({})
+    assert initial["revision"]
+
+    put = host.commands[CommandName.WORKFLOW_PUT]
+    assert callable(put)
+    saved = put({"workflow": _workflow("alpha"), "expected_revision": initial["revision"]})
+    assert saved["ok"]
+    assert saved["workflow"]["name"] == "alpha"
+
     start = host.commands[CommandName.WORKFLOW_START]
     assert callable(start)
     result = start({"name": "alpha"})

@@ -330,13 +330,12 @@ class CrowHandler(Daemon):
         """
         from murder.runtime.orchestration.verified_signals import VerifiedOrchestrationSignals
 
-        route_ask = getattr(self.runtime, "crow_ask_router", None)
+        route_ask = self.runtime.crow_ask_router
 
         for change in changes:
             signals = VerifiedOrchestrationSignals.from_conversation_block_change(change)
             for ask in signals.asks:
-                if route_ask is not None:
-                    await route_ask(self.ticket_id, ask, self.crow_session)
+                await route_ask(self.ticket_id, ask, self.crow_session)
 
     def _latch_done(self) -> None:
         """Record that this crow has emitted ``>>> DONE`` (once)."""

@@ -10,15 +10,13 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from murder.llm.harnesses.base import HarnessSession
 from murder.llm.harnesses.results import fail_result
-from murder.runtime.orchestration.orchestrator import Orchestrator
-from tests.support.orchestrator import adapt_rt_stub
+from murder.runtime.agents.types import AgentRole
 from murder.state.persistence.agents import upsert_agent
 from murder.state.persistence.tickets import get_ticket_status, insert_ticket
 from murder.state.storage.paths import db_path
@@ -27,6 +25,7 @@ from murder.verdict.completion.registry import CheckRegistry
 from murder.work.tickets.schema import Ticket
 from murder.work.tickets.status import TicketStatus
 from tests.support.database import open_test_repo_db
+from tests.support.orchestrator import FakeAgents, build_test_orchestrator, default_test_config
 
 
 def _connect(repo_root: Path):
@@ -64,30 +63,31 @@ def test_kickoff_reaps_stale_running_agents_when_ticket_still_ready(
         status="running",
     )
     reaped: list[str] = []
+    agents = FakeAgents()
 
     async def _reap(agent_id: str) -> None:
         reaped.append(agent_id)
 
-    rt = SimpleNamespace(
-        db=conn,
-        orchestration_events=MagicMock(),
-        run_id="test-run",
-        repo_root=repo_root,
-        reap=_reap,
-        get_crow=lambda _tid: None,
-        sync_agent=MagicMock(),
-        publish_snapshot=AsyncMock(),
+    agents.reap = _reap  # type: ignore[method-assign]
+    bus = MagicMock()
+    bus.publish = AsyncMock()
+    orch = build_test_orchestrator(
+        repo_root=repo_root, db=conn, agents=agents, events=bus, run_id="test-run"
     )
-    orch = adapt_rt_stub(rt)
     monkeypatch.setattr(orch, "spawn_crow", AsyncMock(return_value="crow-sess"))
     monkeypatch.setattr(orch, "spawn_crow_handler", AsyncMock())
-    monkeypatch.setattr(
-        orch,
-        "_emit_ticket_status",
-        AsyncMock(),
-    )
-    fake_crow = SimpleNamespace(session="crow-sess")
-    rt.get_crow = lambda _tid: fake_crow  # type: ignore[method-assign]
+    monkeypatch.setattr(orch, "_emit_ticket_status", AsyncMock())
+    fake_crow = type(
+        "Crow",
+        (),
+        {
+            "id": "crow-t099",
+            "ticket_id": "t099",
+            "role": AgentRole.CROW,
+            "session": "crow-sess",
+        },
+    )()
+    agents.register(fake_crow)
 
     kicked = asyncio.run(orch.kickoff_ready(only="t099"))
 
@@ -110,21 +110,17 @@ def test_force_ticket_status_reaps_crow_agents(repo_root: Path) -> None:
         ),
     )
     reaped: list[str] = []
+    agents = FakeAgents()
 
     async def _reap(agent_id: str) -> None:
         reaped.append(agent_id)
 
+    agents.reap = _reap  # type: ignore[method-assign]
     bus = MagicMock()
     bus.publish = AsyncMock()
-    rt = SimpleNamespace(
-        db=conn,
-        orchestration_events=bus,
-        run_id="test-run",
-        repo_root=repo_root,
-        reap=_reap,
-        publish_snapshot=AsyncMock(),
+    orch = build_test_orchestrator(
+        repo_root=repo_root, db=conn, agents=agents, events=bus, run_id="test-run"
     )
-    orch = adapt_rt_stub(rt)
 
     result = asyncio.run(orch.force_ticket_status("t098", "done"))
 
@@ -146,14 +142,7 @@ def test_set_schedule_at_updates_ticket_timestamp(repo_root: Path) -> None:
             updated_at=created,
         ),
     )
-    rt = SimpleNamespace(
-        db=conn,
-        repo_root=repo_root,
-        orchestration_events=None,
-        run_id=None,
-        publish_snapshot=AsyncMock(),
-    )
-    orch = adapt_rt_stub(rt)
+    orch = build_test_orchestrator(repo_root=repo_root, db=conn)
 
     asyncio.run(orch.set_schedule_at("t097a", "2026-05-29T09:00:00"))
 
@@ -185,40 +174,25 @@ def test_codex_rogue_reaps_session_on_startup_failure(
     monkeypatch: pytest.MonkeyPatch,
     error_message: str,
 ) -> None:
-    agents: dict[str, object] = {}
-    reaped: list[str] = []
-
-    async def _reap(agent_id: str) -> None:
-        reaped.append(agent_id)
+    agents = FakeAgents()
 
     async def _fail_start(self: HarnessSession, spec) -> object:
         return fail_result(error_message)
 
     monkeypatch.setattr(HarnessSession, "start", _fail_start)
 
-    rt = SimpleNamespace(
-        db=MagicMock(),
-        orchestration_events=MagicMock(),
-        run_id="test-run",
+    orch = build_test_orchestrator(
         repo_root=repo_root,
-        config=SimpleNamespace(
-            project=SimpleNamespace(name="test"),
-            runtime=SimpleNamespace(session_name_template="murder_{project}_{role}{suffix}"),
-        ),
-        get_agent=agents.get,
-        register_agent=lambda agent: agents.setdefault(agent.id, agent),
-        sync_agent=MagicMock(),
-        publish_snapshot=AsyncMock(),
-        reap=_reap,
+        agents=agents,
+        config=default_test_config(project_name="test"),
     )
-    orch = adapt_rt_stub(rt)
 
     with pytest.raises(RuntimeError, match=error_message):
         asyncio.run(orch.spawn_rogue("codex", "gpt-5.4-mini"))
 
-    assert len(agents) == 1
-    assert reaped == list(agents)
-    rt.sync_agent.assert_not_called()
+    assert agents.reaped
+    assert agents.all() == ()
+    assert agents.recorded == []
 
 
 def test_transition_done_heals_ready_status(repo_root: Path) -> None:
@@ -234,14 +208,15 @@ def test_transition_done_heals_ready_status(repo_root: Path) -> None:
             updated_at=now,
         ),
     )
-    rt = SimpleNamespace(
-        db=conn,
+    coordinator = CompletionCoordinator(
+        CheckRegistry(),
         repo_root=repo_root,
-        orchestration_events=None,
+        db=conn,
+        events=None,
         run_id=None,
-        publish_snapshot=AsyncMock(),
+        find_crow=lambda _tid: None,
+        find_agent=lambda _aid: None,
     )
-    coordinator = CompletionCoordinator(rt, CheckRegistry())
 
     asyncio.run(
         coordinator._transition_done("t097")  # noqa: SLF001 — unit test of safety net

@@ -120,10 +120,29 @@ def test_off_protocol_seams_threaded_onto_explicit_deps() -> None:
     assert "_user_config" in plan
 
 
-def test_service_host_does_not_retain_runtime_field() -> None:
+def test_handlers_do_not_receive_service_host() -> None:
+    """§2.1 / §11: handlers receive feature operations, not ServiceHost."""
     repo = Path(__file__).resolve().parents[2]
-    text = (repo / "murder/app/service/host.py").read_text(encoding="utf-8")
-    assert "from murder.app.service.runtime import" not in text
-    assert "runtime: Runtime" not in text
-    assert "class _RunningService" in text
-    assert "Never injected into child components" in text
+    handlers = repo / "murder" / "app" / "service" / "handlers"
+    offenders: list[str] = []
+    for path in handlers.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "legacy_host" in text:
+            offenders.append(f"{path.relative_to(repo)}: legacy_host")
+        if "from murder.app.service.host import ServiceHost" in text:
+            offenders.append(f"{path.relative_to(repo)}: ServiceHost import")
+    assert offenders == [], f"ServiceHost handler coupling remains:\n" + "\n".join(offenders)
+
+
+def test_agent_runtime_constructs_process_bindings() -> None:
+    """AgentRuntime process bindings are constructor deps, not post-open mutation."""
+    repo = Path(__file__).resolve().parents[2]
+    host = (repo / "murder/app/service/host.py").read_text(encoding="utf-8")
+    runtime = (repo / "murder/runtime/agent_runtime.py").read_text(encoding="utf-8")
+    assert "agents.command_submitter =" not in host
+    assert "agents.sessions =" not in host
+    assert "command_submitter=process.commands" in host
+    assert "sessions=sessions" in host
+    assert "class CrowAskRouterSlot" in runtime
+    assert "agents.crow_ask_router.bind(" in host
+    assert "self.crow_ask_router: CrowAskRouter | None = None" not in runtime

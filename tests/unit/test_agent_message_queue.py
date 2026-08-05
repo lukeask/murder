@@ -29,24 +29,36 @@ MINIMUM_EVIDENCE_RECORDS = 3
 
 @pytest.fixture
 def agent(fake_tmux, tmp_path: Path) -> CrowAgent:
+    from murder.runtime.agents.verified_control import VerifiedControlFactory
     from murder.runtime.sessions.service import SessionService
+    from tests.support.orchestrator import default_test_config
 
     db = open_test_repo_db(tmp_path / "state.db")
 
     async def no_sleep(_: float) -> None:
         return None
 
-    runtime = SimpleNamespace()
-    runtime.db = db
-    runtime.sessions = SessionService(db)
-    runtime.orchestration_events = MagicMock()
-    runtime.orchestration_events.publish = AsyncMock()
-    runtime.run_id = "test-run"
-    runtime.record = MagicMock()
-    runtime.verified_prompt_driver_policy = PromptDriverPolicy(
-        observation_interval=timedelta(), maximum_observations=12
+    sessions = SessionService(db)
+    factory = VerifiedControlFactory(
+        db=db,
+        sessions=sessions,
+        prompt_policy=PromptDriverPolicy(
+            observation_interval=timedelta(), maximum_observations=12
+        ),
+        prompt_sleep=no_sleep,
     )
-    runtime.verified_prompt_driver_sleep = no_sleep
+    runtime = SimpleNamespace(
+        db=db,
+        sessions=sessions,
+        orchestration_events=MagicMock(),
+        run_id="test-run",
+        record=MagicMock(),
+        config=default_test_config(),
+        repo_root=tmp_path,
+        initialize_verified_control=factory.initialize,
+        structured_decisions=SimpleNamespace(observe=AsyncMock()),
+    )
+    runtime.orchestration_events.publish = AsyncMock()
     return CrowAgent(
         agent_id="cc-rogue-test",
         ticket_id=None,

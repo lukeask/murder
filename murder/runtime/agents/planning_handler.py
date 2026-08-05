@@ -227,8 +227,7 @@ class PlanningHandler(Daemon):
                 f"Please wrap your reply as `>>> ANSWER[{ticket_id}]: <reply>` "
                 "so the system can extract it."
             )
-        get_agent = getattr(self.runtime, "find", None) or getattr(self.runtime, "get_agent", None)
-        planner = get_agent(f"planner-{self.plan_name}") if callable(get_agent) else None
+        planner = self.runtime.find(f"planner-{self.plan_name}")
         if planner is None:
             raise RuntimeError(f"no live planner for plan {self.plan_name}")
         previous, was_routed, pending = self._register_pending_ask(ticket_id, ask, crow_session)
@@ -291,8 +290,7 @@ class PlanningHandler(Daemon):
         return True
 
     async def tick(self) -> None:
-        get_agent = getattr(self.runtime, "find", None) or getattr(self.runtime, "get_agent", None)
-        planner = get_agent(f"planner-{self.plan_name}") if callable(get_agent) else None
+        planner = self.runtime.find(f"planner-{self.plan_name}")
         ingested = getattr(planner, "latest_ingested_frame", None) if planner is not None else None
         pane = getattr(getattr(ingested, "frame", None), "raw_text", None)
         if not isinstance(pane, str):
