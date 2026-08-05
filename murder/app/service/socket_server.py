@@ -1,8 +1,11 @@
-"""The service's single application-only WebSocket boundary.
+"""Daemon HTTP + per-repo application WebSocket boundary.
+
+``DaemonHttpServer`` owns the process listener (SPA, picker API,
+``/api/ws/{repository_id}``). ``RepositorySocketSession`` owns one repo's
+handshake/dispatch/terminal machinery. ``ApplicationSocketServer`` remains a
+single-repo ``/api/ws`` compat wrapper for focused tests.
 
 No Unix socket, bus envelope, generic publish, or RPC target is accepted here.
-The connection class owns one peer, while the two coordinators own the only
-long-running application streams.
 """
 
 from __future__ import annotations
@@ -521,8 +524,13 @@ class TerminalStreamCoordinator:
                 sequence = update.sequence
 
 
-class ApplicationSocketServer:
-    """WebSocket-only typed application server owned by the service process."""
+class RepositorySocketSession:
+    """Per-repo WebSocket handshake / dispatch / terminal machinery.
+
+    Constructed on demand from a live ``RepositoryHost``. Repo identity is not
+    on the wire — callers route ``/api/ws/{repository_id}`` before handing off.
+    ``server.hello.server_id`` is this host's ``run_id`` (restart detection).
+    """
 
     def __init__(
         self,
@@ -537,7 +545,6 @@ class ApplicationSocketServer:
         terminal_input: TerminalInput | None = None,
         terminal_input_validator: TerminalInputValidator | None = None,
         terminal_interval_s: float = 0.1,
-        assets_dir: Path | None = None,
     ) -> None:
         self._gateway = gateway
         self._facts = facts
@@ -550,31 +557,15 @@ class ApplicationSocketServer:
             interval_s=terminal_interval_s,
         )
         self._terminal_input = TerminalInputCoordinator(terminal_input, terminal_input_validator)
-        self._assets_dir = assets_dir
         self._connections: dict[str, ApplicationConnection] = {}
-        self._runner: Any = None
-        self._site: Any = None
-        self.bound: tuple[str, int] | None = None
 
-    async def start(self, *, host: str = "127.0.0.1", port: int = 0) -> tuple[str, int]:
-        web, _ = _aiohttp()
-        app = web.Application()
-        app.router.add_get("/api/ws", self._handle_websocket)
-        if self._assets_dir is not None and self._assets_dir.is_dir():
-            app.router.add_get("/{path:.*}", self._serve_asset)
-        self._runner = web.AppRunner(app)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, host, port)
-        await self._site.start()
-        server = next(iter(self._site._server.sockets))
-        self.bound = (str(server.getsockname()[0]), int(server.getsockname()[1]))
-        return self.bound
+    @property
+    def run_id(self) -> str:
+        return self._run_id
 
-    async def stop(self) -> None:
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
-            self._site = None
+    @property
+    def connection_count(self) -> int:
+        return len(self._connections)
 
     async def notify_plan_seed_failed(
         self, client_id: str | None, plan_name: str, message: str
@@ -592,7 +583,7 @@ class ApplicationSocketServer:
         except Exception:
             LOGGER.debug("failed to deliver plan seed failure to %s", client_id, exc_info=True)
 
-    async def _handle_websocket(self, request: Any) -> Any:
+    async def handle_websocket(self, request: Any) -> Any:
         web, WSMsgType = _aiohttp()
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
@@ -622,7 +613,15 @@ class ApplicationSocketServer:
                 return ws
             connection = ApplicationConnection(ws, hello.client.client_id)
             self._connections[connection.client_id] = connection
-            await connection.send(ServerHello(server_id=self._run_id, queries=list(self._gateway.available_queries), commands=list(self._gateway.available_commands), fact_cursor=self._facts.watermark(), projection_cursor=self._inputs.watermark()))
+            await connection.send(
+                ServerHello(
+                    server_id=self._run_id,
+                    queries=list(self._gateway.available_queries),
+                    commands=list(self._gateway.available_commands),
+                    fact_cursor=self._facts.watermark(),
+                    projection_cursor=self._inputs.watermark(),
+                )
+            )
             async for raw in ws:
                 if raw.type is not WSMsgType.TEXT:
                     continue
@@ -642,20 +641,6 @@ class ApplicationSocketServer:
                     self._connections.pop(connection.client_id, None)
                 await connection.close()
         return ws
-
-    async def _serve_asset(self, request: Any) -> Any:
-        web, _ = _aiohttp()
-        assert self._assets_dir is not None
-        root = self._assets_dir.resolve()
-        candidate = (root / request.match_info.get("path", "")).resolve()
-        if not candidate.is_relative_to(root):
-            raise web.HTTPForbidden()
-        if candidate.is_file():
-            return web.FileResponse(candidate)
-        index = root / "index.html"
-        if index.is_file():
-            return web.FileResponse(index)
-        raise web.HTTPNotFound()
 
     async def _dispatch(self, connection: ApplicationConnection, message: object) -> None:
         if isinstance(message, RequestMessage):
@@ -749,6 +734,254 @@ class ApplicationSocketServer:
             )
 
 
+def session_from_host(repo_host: Any) -> RepositorySocketSession:
+    """Build a ``RepositorySocketSession`` from a started ``RepositoryHost``."""
+    assert repo_host.application_dispatcher is not None
+    assert repo_host.fact_log is not None
+    assert repo_host.projection_input_log is not None
+    session = RepositorySocketSession(
+        gateway=ApplicationGateway(
+            repo_host.application_dispatcher,
+            schedule_plan_seed=repo_host.schedule_plan_seed,
+        ),
+        facts=repo_host.fact_log,
+        projection_inputs=repo_host.projection_input_log,
+        providers=repo_host.projection_providers,
+        run_id=repo_host.run_id,
+        terminal_capture=repo_host.terminal_capture,
+        terminal_output_open=repo_host.terminal_output_open,
+        terminal_input=repo_host.terminal_input,
+        terminal_input_validator=repo_host.terminal_input_validator,
+    )
+    repo_host.set_plan_seed_failure_notifier(session.notify_plan_seed_failed)
+    return session
+
+
+class DaemonHttpServer:
+    """Process-wide aiohttp listener: SPA, picker API, path-scoped WS routing."""
+
+    def __init__(
+        self,
+        *,
+        manager: Any,
+        assets_dir: Path | None = None,
+    ) -> None:
+        # ``manager`` is a ``RepositoryManager``; typed as Any to avoid import cycles.
+        self._manager = manager
+        self._assets_dir = assets_dir
+        self._sessions: dict[str, RepositorySocketSession] = {}
+        self._session_lock = asyncio.Lock()
+        self._runner: Any = None
+        self._site: Any = None
+        self.bound: tuple[str, int] | None = None
+
+    def session_for(self, repository_id: str) -> RepositorySocketSession | None:
+        return self._sessions.get(repository_id)
+
+    def drop_session(self, repository_id: str) -> None:
+        """Forget a cached session after the manager deactivates its host.
+
+        The host clears its plan-seed notifier in ``deactivate`` before ``stop``;
+        this only drops the transport cache so the next connect rebuilds one.
+        """
+        self._sessions.pop(repository_id, None)
+
+    async def ensure_session(self, repository_id: str) -> RepositorySocketSession:
+        """Activate the host (if needed) and return a live socket session.
+
+        Serialized so two concurrent first connects cannot orphan a session
+        (split ``_connections`` / plan-seed notifier).
+        """
+        async with self._session_lock:
+            host = await self._manager.activate_by_id(repository_id)
+            existing = self._sessions.get(repository_id)
+            if existing is not None and existing.run_id == host.run_id:
+                return existing
+            session = session_from_host(host)
+            self._sessions[repository_id] = session
+            return session
+
+    async def start(self, *, host: str = "127.0.0.1", port: int = 0) -> tuple[str, int]:
+        web, _ = _aiohttp()
+        app = web.Application()
+        app.router.add_get("/api/repos", self._handle_list_repos)
+        app.router.add_post("/api/repos/init", self._handle_init_repo)
+        app.router.add_get("/api/ws/{repository_id}", self._handle_websocket)
+        if self._assets_dir is not None and self._assets_dir.is_dir():
+            app.router.add_get("/{path:.*}", self._serve_asset)
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, host, port)
+        await self._site.start()
+        server = next(iter(self._site._server.sockets))
+        self.bound = (str(server.getsockname()[0]), int(server.getsockname()[1]))
+        return self.bound
+
+    async def stop(self) -> None:
+        self._sessions.clear()
+        if self._runner is not None:
+            await self._runner.cleanup()
+            self._runner = None
+            self._site = None
+
+    async def _handle_list_repos(self, request: Any) -> Any:
+        web, _ = _aiohttp()
+        del request
+        rows = [
+            {
+                "repository_id": entry.repository_id,
+                "root_path": str(entry.root_path),
+                "created_at": entry.created_at,
+                "last_seen_at": entry.last_seen_at,
+                "active": entry.repository_id in self._manager.active,
+            }
+            for entry in self._manager.list_recent()
+        ]
+        return web.json_response({"repositories": rows})
+
+    async def _handle_init_repo(self, request: Any) -> Any:
+        web, _ = _aiohttp()
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="JSON body required") from None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="JSON object required")
+        raw_path = body.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise web.HTTPBadRequest(text="'path' string is required")
+        force = bool(body.get("force", False))
+        from murder.app.service.project_scaffold import ProjectAlreadyInitialized
+
+        try:
+            entry = self._manager.initialize(Path(raw_path).expanduser(), force=force)
+        except ProjectAlreadyInitialized as exc:
+            raise web.HTTPConflict(text=str(exc)) from exc
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        return web.json_response(
+            {
+                "repository_id": entry.repository_id,
+                "root_path": str(entry.root_path),
+                "created_at": entry.created_at,
+                "last_seen_at": entry.last_seen_at,
+            },
+            status=201,
+        )
+
+    async def _handle_websocket(self, request: Any) -> Any:
+        web, _ = _aiohttp()
+        repository_id = request.match_info["repository_id"]
+        if self._manager.resolve_root(repository_id) is None and self._manager.get(
+            repository_id
+        ) is None:
+            raise web.HTTPNotFound(text=f"unknown repository_id: {repository_id}")
+        try:
+            session = await self.ensure_session(repository_id)
+        except KeyError as exc:
+            raise web.HTTPNotFound(text=str(exc)) from exc
+        except Exception as exc:
+            LOGGER.exception("failed to activate repository_id=%s", repository_id)
+            raise web.HTTPInternalServerError(text=str(exc)) from exc
+        self._manager.note_ws_connect(repository_id)
+        try:
+            return await session.handle_websocket(request)
+        finally:
+            self._manager.note_ws_disconnect(repository_id)
+
+    async def _serve_asset(self, request: Any) -> Any:
+        web, _ = _aiohttp()
+        assert self._assets_dir is not None
+        root = self._assets_dir.resolve()
+        candidate = (root / request.match_info.get("path", "")).resolve()
+        if not candidate.is_relative_to(root):
+            raise web.HTTPForbidden()
+        if candidate.is_file():
+            return web.FileResponse(candidate)
+        index = root / "index.html"
+        if index.is_file():
+            return web.FileResponse(index)
+        raise web.HTTPNotFound()
+
+
+class ApplicationSocketServer:
+    """Single-repo test / compat listener binding ``RepositorySocketSession`` at ``/api/ws``.
+
+    Production daemons use ``DaemonHttpServer`` with ``/api/ws/{repository_id}``.
+    """
+
+    def __init__(
+        self,
+        *,
+        gateway: ApplicationGateway,
+        facts: FactLog,
+        projection_inputs: ProjectionInputLog,
+        providers: ProjectionProviderRegistry,
+        run_id: str,
+        terminal_capture: TerminalCapture | None = None,
+        terminal_output_open: TerminalOutputOpen | None = None,
+        terminal_input: TerminalInput | None = None,
+        terminal_input_validator: TerminalInputValidator | None = None,
+        terminal_interval_s: float = 0.1,
+        assets_dir: Path | None = None,
+    ) -> None:
+        self._session = RepositorySocketSession(
+            gateway=gateway,
+            facts=facts,
+            projection_inputs=projection_inputs,
+            providers=providers,
+            run_id=run_id,
+            terminal_capture=terminal_capture,
+            terminal_output_open=terminal_output_open,
+            terminal_input=terminal_input,
+            terminal_input_validator=terminal_input_validator,
+            terminal_interval_s=terminal_interval_s,
+        )
+        self._assets_dir = assets_dir
+        self._runner: Any = None
+        self._site: Any = None
+        self.bound: tuple[str, int] | None = None
+
+    async def notify_plan_seed_failed(
+        self, client_id: str | None, plan_name: str, message: str
+    ) -> None:
+        await self._session.notify_plan_seed_failed(client_id, plan_name, message)
+
+    async def start(self, *, host: str = "127.0.0.1", port: int = 0) -> tuple[str, int]:
+        web, _ = _aiohttp()
+        app = web.Application()
+        app.router.add_get("/api/ws", self._session.handle_websocket)
+        if self._assets_dir is not None and self._assets_dir.is_dir():
+            app.router.add_get("/{path:.*}", self._serve_asset)
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, host, port)
+        await self._site.start()
+        server = next(iter(self._site._server.sockets))
+        self.bound = (str(server.getsockname()[0]), int(server.getsockname()[1]))
+        return self.bound
+
+    async def stop(self) -> None:
+        if self._runner is not None:
+            await self._runner.cleanup()
+            self._runner = None
+            self._site = None
+
+    async def _serve_asset(self, request: Any) -> Any:
+        web, _ = _aiohttp()
+        assert self._assets_dir is not None
+        root = self._assets_dir.resolve()
+        candidate = (root / request.match_info.get("path", "")).resolve()
+        if not candidate.is_relative_to(root):
+            raise web.HTTPForbidden()
+        if candidate.is_file():
+            return web.FileResponse(candidate)
+        index = root / "index.html"
+        if index.is_file():
+            return web.FileResponse(index)
+        raise web.HTTPNotFound()
+
+
 def _input_payload(item: object) -> dict[str, object]:
     payload = {"type": "projection.invalidate", "projection": item.projection, "subject_key": item.subject_key, "generation": item.generation, "source_fact_id": str(item.source_fact_id) if item.source_fact_id else None}
     return validate_event(item.projection, payload)
@@ -831,4 +1064,13 @@ def _terminal_color(color: int | tuple[int, int, int] | None) -> TerminalColor:
     return TerminalColor(kind="rgb", red=color[0], green=color[1], blue=color[2])
 
 
-__all__ = ["ApplicationConnection", "ApplicationSocketServer", "SubscriptionCoordinator", "TerminalInputCoordinator", "TerminalStreamCoordinator"]
+__all__ = [
+    "ApplicationConnection",
+    "ApplicationSocketServer",
+    "DaemonHttpServer",
+    "RepositorySocketSession",
+    "SubscriptionCoordinator",
+    "TerminalInputCoordinator",
+    "TerminalStreamCoordinator",
+    "session_from_host",
+]

@@ -5,9 +5,8 @@ One process owns ``config_dir()/daemon.lock``, a single aiohttp listener on
 (``ModelCatalogRefreshWorker``, ``HarnessVersionProbeWorker``). Per-repo work
 lives in ``RepositoryManager`` / ``RepositoryHost``.
 
-Path-scoped ``/api/ws/{repository_id}`` routing lands in Phase 3; this phase
-still attaches one ``ApplicationSocketServer`` to the initially activated host
-so ``serviced`` keeps working end-to-end.
+Path-scoped routing: ``DaemonHttpServer`` serves the SPA, picker HTTP API, and
+``GET /api/ws/{repository_id}`` → per-repo ``RepositorySocketSession``.
 """
 
 from __future__ import annotations
@@ -20,13 +19,12 @@ import signal
 from pathlib import Path
 
 from murder.app.protocol.common import DAEMON_WEBSOCKET_HOST, DAEMON_WEBSOCKET_PORT
-from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.repository_host import RepositoryHost
 from murder.app.service.repository_manager import (
     DEFAULT_HOST_IDLE_TIMEOUT_S,
     RepositoryManager,
 )
-from murder.app.service.socket_server import ApplicationSocketServer
+from murder.app.service.socket_server import DaemonHttpServer
 from murder.app.service.supervisor import Supervisor
 from murder.app.service.webui_assets import resolve_webui_assets_dir
 from murder.config import Config
@@ -119,8 +117,8 @@ class DaemonHost:
         self.harness_versions = HarnessVersionRegistry()
         self.manager: RepositoryManager | None = None
         self._daemon_supervisor: Supervisor | None = None
-        self._socket_server: ApplicationSocketServer | None = None
-        self._socket_repository_id: str | None = None
+        self._http: DaemonHttpServer | None = None
+        self._primary_repository_id: str | None = None
         self._session_name: str | None = None
         self._stop = asyncio.Event()
         self.bound: tuple[str, int] | None = None
@@ -150,7 +148,7 @@ class DaemonHost:
             await self._start_daemon_workers(probe_config=Config.load(initial_repo))
             self.manager.start_eviction_loop()
             primary = await self.manager.activate(initial_repo)
-            await self._attach_socket(primary, bind_host=bind_host, port=port)
+            await self._attach_http(primary, bind_host=bind_host, port=port)
             try:
                 await self._wait_for_signal()
             finally:
@@ -185,57 +183,36 @@ class DaemonHost:
             raise
         self._daemon_supervisor = supervisor
 
-    async def _attach_socket(
+    async def _attach_http(
         self,
-        repo_host: RepositoryHost,
+        primary: RepositoryHost,
         *,
         bind_host: str,
         port: int,
     ) -> None:
-        """Bind the Phase-1-compatible application listener for ``repo_host``.
-
-        Phase 3 replaces this with path-scoped ``DaemonHttpServer`` routing.
-        """
+        """Bind ``DaemonHttpServer`` and publish the primary repo's WS URL."""
         assert self.manager is not None
-        assert repo_host.application_dispatcher is not None
-        assert repo_host.fact_log is not None
-        assert repo_host.projection_input_log is not None
-
-        socket_server = ApplicationSocketServer(
-            gateway=ApplicationGateway(
-                repo_host.application_dispatcher,
-                schedule_plan_seed=repo_host.schedule_plan_seed,
-            ),
-            facts=repo_host.fact_log,
-            projection_inputs=repo_host.projection_input_log,
-            providers=repo_host.projection_providers,
-            run_id=repo_host.run_id,
-            terminal_capture=repo_host.terminal_capture,
-            terminal_output_open=repo_host.terminal_output_open,
-            terminal_input=repo_host.terminal_input,
-            terminal_input_validator=repo_host.terminal_input_validator,
-            assets_dir=resolve_webui_assets_dir(repo_host.repo_root),
+        http = DaemonHttpServer(
+            manager=self.manager,
+            assets_dir=resolve_webui_assets_dir(primary.repo_root),
         )
-        repo_host.set_plan_seed_failure_notifier(socket_server.notify_plan_seed_failed)
-        bound = await socket_server.start(host=bind_host, port=port)
+        self.manager.set_on_deactivated(http.drop_session)
+        # Warm the primary session so plan-seed notifier is wired before clients.
+        await http.ensure_session(primary.repository_id)
+        bound = await http.start(host=bind_host, port=port)
         # Assign before registry write so ordered shutdown can stop the listener
         # if session publication fails mid-attach.
-        self._socket_server = socket_server
+        self._http = http
         self.bound = bound
-        self._socket_repository_id = repo_host.repository_id
-        # Phase-2 bridge: the aiohttp app is wired to this host's dispatcher.
-        # Pin it so idle eviction cannot tear down the only bound session before
-        # Phase 3 path-scoped WS refcounting lands.
-        self.manager.pin(repo_host.repository_id)
-        session = write_service_session(
-            repo_host.repo_root, f"ws://{bound[0]}:{bound[1]}/api/ws"
-        )
+        self._primary_repository_id = primary.repository_id
+        ws_url = f"ws://{bound[0]}:{bound[1]}/api/ws/{primary.repository_id}"
+        session = write_service_session(primary.repo_root, ws_url)
         self._session_name = session.name
         LOGGER.info(
-            "application websocket listener on ws://%s:%d/api/ws (repository_id=%s)",
+            "daemon listening on http://%s:%d/ (ws path /api/ws/{repository_id}; primary=%s)",
             bound[0],
             bound[1],
-            repo_host.repository_id,
+            primary.repository_id,
         )
 
     async def _wait_for_signal(self) -> None:
@@ -250,18 +227,18 @@ class DaemonHost:
         await self._stop.wait()
 
     async def _ordered_shutdown(self, *, authoritative: bool) -> None:
-        """Mirror former ServiceHost / Phase-1 bridge stop ordering."""
+        """Mirror former ServiceHost / Phase-2 bridge stop ordering."""
         manager = self.manager
-        if manager is not None and authoritative and self._socket_repository_id is not None:
-            primary = manager.get(self._socket_repository_id)
+        if manager is not None and authoritative and self._primary_repository_id is not None:
+            primary = manager.get(self._primary_repository_id)
             if primary is not None:
                 with contextlib.suppress(Exception):
                     primary.clear_shutdown_signal()
 
-        if self._socket_server is not None:
+        if self._http is not None:
             with contextlib.suppress(FileNotFoundError, OSError, Exception):
-                await self._socket_server.stop()
-            self._socket_server = None
+                await self._http.stop()
+            self._http = None
             self.bound = None
 
         if self._session_name is not None:
@@ -269,11 +246,10 @@ class DaemonHost:
                 remove_service_session(self._session_name)
             self._session_name = None
 
-        if manager is not None and self._socket_repository_id is not None:
-            manager.unpin(self._socket_repository_id)
-        self._socket_repository_id = None
+        self._primary_repository_id = None
 
         if manager is not None:
+            manager.set_on_deactivated(None)
             with contextlib.suppress(Exception):
                 await manager.deactivate_all()
             self.manager = None

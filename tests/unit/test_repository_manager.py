@@ -81,9 +81,55 @@ async def test_deactivate_stops_host(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     await manager.activate(repo)
     await manager.deactivate("repo-1")
+    host.set_plan_seed_failure_notifier.assert_called_once_with(None)
     host.clear_shutdown_signal.assert_called_once()
     host.stop.assert_awaited_once()
     assert manager.get("repo-1") is None
+
+
+async def test_activate_by_id_reuses_and_resolves(
+    monkeypatch: pytest.MonkeyPatch, isolated_db: Path, tmp_path: Path
+):
+    repo = tmp_path / "by-id"
+    repo.mkdir()
+    conn = connect(isolated_db)
+    try:
+        init_db(conn)
+        rid = resolve_repository(conn, repo)
+        conn.commit()
+    finally:
+        conn.close()
+
+    manager = RepositoryManager()
+    host = _fake_host(repo, rid)
+    monkeypatch.setattr(mgr_mod, "Config", SimpleNamespace(load=lambda _root: object()))
+    monkeypatch.setattr(mgr_mod, "RepositoryHost", lambda *_a, **_k: host)
+    monkeypatch.setattr(manager, "_bump_last_seen", lambda _root: None)
+
+    assert manager.resolve_root(rid) == repo.resolve()
+    first = await manager.activate_by_id(rid)
+    second = await manager.activate_by_id(rid)
+    assert first is second is host
+
+    with pytest.raises(KeyError):
+        await manager.activate_by_id("missing-repository-id")
+
+
+async def test_on_deactivated_hook(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    repo = tmp_path / "hook"
+    repo.mkdir()
+    manager = RepositoryManager()
+    host = _fake_host(repo, "hook-id")
+    seen: list[str] = []
+    manager.set_on_deactivated(seen.append)
+    monkeypatch.setattr(mgr_mod, "Config", SimpleNamespace(load=lambda _root: object()))
+    monkeypatch.setattr(mgr_mod, "RepositoryHost", lambda *_a, **_k: host)
+    monkeypatch.setattr(manager, "_bump_last_seen", lambda _root: None)
+
+    await manager.activate(repo)
+    await manager.deactivate("hook-id")
+    assert seen == ["hook-id"]
+    host.set_plan_seed_failure_notifier.assert_called_once_with(None)
 
 
 def test_list_recent_orders_by_last_seen(isolated_db: Path, tmp_path: Path):

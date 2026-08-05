@@ -9,8 +9,10 @@ memory-sane.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,9 +57,9 @@ class RepositoryManager:
         self._hosts: dict[str, RepositoryHost] = {}
         self._last_activity: dict[str, float] = {}
         self._ws_connections: dict[str, int] = {}
-        # Pinned hosts skip idle eviction (Phase-2 socket-bound primary until
-        # path-scoped sessions track real WS refcounts in Phase 3).
+        # Pinned hosts skip idle eviction (rare; prefer WS refcounts for normal use).
         self._pinned: set[str] = set()
+        self._on_deactivated: Callable[[str], None] | None = None
         self._lock = asyncio.Lock()
         self._eviction_task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
@@ -76,6 +78,43 @@ class RepositoryManager:
             if host.repo_root.resolve(strict=False) == root:
                 return host
         return None
+
+    def resolve_root(self, repository_id: str) -> Path | None:
+        """Return the registered ``root_path`` for ``repository_id``, if any."""
+        conn = connect()
+        try:
+            init_db(conn)
+            row = conn.execute(
+                "SELECT root_path FROM repositories WHERE repository_id = ?",
+                (repository_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return Path(str(row["root_path"]))
+        finally:
+            conn.close()
+
+    async def activate_by_id(self, repository_id: str) -> RepositoryHost:
+        """Activate (or reuse) the host for a registered ``repository_id``.
+
+        Raises ``KeyError`` when the id is unknown to the shared registry.
+        """
+        existing = self.get(repository_id)
+        if existing is not None:
+            self.touch(repository_id)
+            self._bump_last_seen(existing.repo_root)
+            return existing
+        root = self.resolve_root(repository_id)
+        if root is None:
+            raise KeyError(f"unknown repository_id: {repository_id}")
+        host = await self.activate(root)
+        if host.repository_id != repository_id:
+            # Path collision / registry drift — refuse to serve the wrong partition.
+            raise RuntimeError(
+                f"repository_id mismatch: requested {repository_id}, "
+                f"activated {host.repository_id} for {root}"
+            )
+        return host
 
     def start_eviction_loop(self) -> None:
         """Begin periodic idle eviction (idempotent)."""
@@ -114,6 +153,10 @@ class RepositoryManager:
 
     def is_pinned(self, repository_id: str) -> bool:
         return repository_id in self._pinned
+
+    def set_on_deactivated(self, callback: Callable[[str], None] | None) -> None:
+        """Optional hook fired after a host is removed (session cache drop, etc.)."""
+        self._on_deactivated = callback
 
     def note_ws_connect(self, repository_id: str) -> None:
         """Increment the WebSocket refcount for idle-eviction decisions."""
@@ -182,6 +225,12 @@ class RepositoryManager:
                 return
             LOGGER.info("deactivating repository_id=%s root=%s", repository_id, host.repo_root)
             target = host
+        # Drop transport cache + clear notifier before stop so in-flight plan-seed
+        # failures cannot call into a session that no longer owns this host.
+        if self._on_deactivated is not None:
+            with contextlib.suppress(Exception):
+                self._on_deactivated(repository_id)
+        target.set_plan_seed_failure_notifier(None)
         # Stop outside the lock so concurrent activate of another repo can proceed.
         try:
             target.clear_shutdown_signal()

@@ -1,12 +1,13 @@
 """Browser entrypoint helpers.
 
-There is no web bridge process: ``ApplicationSocketServer`` serves browser
-assets and the typed WebSocket endpoint from the service process itself.
+There is no web bridge process: ``DaemonHttpServer`` serves browser assets and
+path-scoped WebSocket endpoints from the daemon process itself.
 """
 
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import urlsplit, urlunsplit
 
 import typer
 
@@ -18,13 +19,20 @@ from murder.state.storage.service_registry import list_service_sessions, project
 web_app = typer.Typer(help="Open Murder's service-owned browser endpoint.")
 
 
+def _http_base_from_websocket_url(websocket_url: str) -> str:
+    """Map ``ws(s)://host:port/api/ws[/...]`` to the browser origin URL."""
+    parts = urlsplit(websocket_url)
+    scheme = "https" if parts.scheme == "wss" else "http"
+    return urlunsplit((scheme, parts.netloc, "/", "", ""))
+
+
 def _service_url() -> str:
     repo = _repo_root()
     name = project_session_name(repo)
     session = next((item for item in list_service_sessions() if item.name == name), None)
     if session is None:
         raise typer.BadParameter("service did not publish its application endpoint")
-    return session.websocket_url.removesuffix("/api/ws")
+    return _http_base_from_websocket_url(session.websocket_url)
 
 
 @web_app.command("up")
