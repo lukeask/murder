@@ -1,6 +1,6 @@
 /**
- * Sync `settings.workspaceCount` → workspace store via `applyWorkspaceCount`, and flash the
- * stage briefly on active-index changes (CSS only — no TUI slide frames).
+ * Flash the stage briefly on active-index changes (CSS only — no TUI slide frames), and expose
+ * a Settings hook for per-repo workspace count (Phase 8 — localStorage, not settings.workspace_count).
  */
 
 import { useAppStoreApi } from '@murder/ui-core/hooks/useAppStore.js';
@@ -10,25 +10,6 @@ import { toWorkspaceStores } from './createComposerStores.js';
 import { applyWorkspaceCount } from './workspaceActions.js';
 
 const STAGE_FLASH_MS = 180;
-
-/** Bridge settings.workspace_count into the workspace store (grow/shrink + clamp hydrate). */
-export function useWorkspaceCountSync(): void {
-  const app = useAppStoreApi();
-  const stores = useComposerStores();
-
-  useEffect(() => {
-    const wsStores = toWorkspaceStores(stores, app);
-    const sync = (count: number): void => {
-      applyWorkspaceCount(wsStores, count);
-    };
-    sync(app.getState().settings.workspaceCount);
-    return app.subscribe((state, prev) => {
-      if (state.settings.workspaceCount !== prev.settings.workspaceCount) {
-        sync(state.settings.workspaceCount);
-      }
-    });
-  }, [app, stores]);
-}
 
 /**
  * True for ~{@STAGE_FLASH_MS}ms after an active-index change so the stage can CSS-flash.
@@ -54,4 +35,13 @@ export function useWorkspaceSwitchFlash(): boolean {
   }, [activeIndex]);
 
   return flashing;
+}
+
+/** Apply a Settings UI workspace-count change to the live bag + localStorage. */
+export function useApplyWorkspaceCountFromSettings(): (count: number) => void {
+  const app = useAppStoreApi();
+  const stores = useComposerStores();
+  return (count: number): void => {
+    applyWorkspaceCount(toWorkspaceStores(stores, app), count);
+  };
 }

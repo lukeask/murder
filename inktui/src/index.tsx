@@ -18,6 +18,16 @@ import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicati
 import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
 import type { PanelId } from '@murder/ui-core/input/panels.js';
+import {
+  applyWorkspaceCount,
+  parkRepositoryWorkspace,
+  resumeRepositoryWorkspace,
+  type WorkspaceStores,
+} from '@murder/ui-core/input/workspaceSwitch.js';
+import {
+  defaultWorkspaceCountStorage,
+  loadWorkspaceCount,
+} from '@murder/ui-core/input/workspaceStore.js';
 import { connectionStore } from '@murder/ui-core/store/connection/connectionStore.js';
 import { startKeyUsagePersistence } from './store/keyUsage/keyUsagePersistence.js';
 import { createAppStore } from '@murder/ui-core/store/store.js';
@@ -181,7 +191,59 @@ function ConnectedTuiSession({
           { severity: 'error', ttlMs: 12000 },
         ),
     );
+
+    // Phase 8: bind per-repo workspace bags to the shared input stores (survive remount).
+    const workspaceStores: WorkspaceStores = {
+      workspace: inputStores.workspace,
+      panels: inputStores.panels,
+      focus: inputStores.focus,
+      chatInput: inputStores.chatInput,
+      paneUi: inputStores.paneUi,
+      app: session.store,
+    };
+    const repositoryId = target.repositoryId;
+    let unsubSettingsSeed: (() => void) | undefined;
+    if (repositoryId !== undefined) {
+      const storage = defaultWorkspaceCountStorage();
+      const hadParked = inputStores.workspace.getState().getRepoBag(repositoryId) !== null;
+      const hadStoredCount = loadWorkspaceCount(repositoryId, storage) !== null;
+      resumeRepositoryWorkspace(workspaceStores, repositoryId, { storage });
+      // TUI has no localStorage: cold-open count still lives in per-repo settings. Seed once when
+      // settings.get lands (must not re-sync afterward — that would fight in-session parked bags).
+      if (!hadParked && !hadStoredCount) {
+        const seedFromSettings = (): boolean => {
+          const settings = session.store.getState().settings;
+          if (settings.status !== 'ready') {
+            return false;
+          }
+          if (inputStores.workspace.getState().repositoryId !== repositoryId) {
+            return false;
+          }
+          applyWorkspaceCount(workspaceStores, settings.workspaceCount, { storage });
+          return true;
+        };
+        if (!seedFromSettings()) {
+          unsubSettingsSeed = session.store.subscribe((state, prev) => {
+            if (
+              state.settings.status === 'ready' &&
+              (prev.settings.status !== 'ready' ||
+                state.settings.workspaceCount !== prev.settings.workspaceCount)
+            ) {
+              if (seedFromSettings()) {
+                unsubSettingsSeed?.();
+                unsubSettingsSeed = undefined;
+              }
+            }
+          });
+        }
+      }
+    }
+
     return () => {
+      unsubSettingsSeed?.();
+      if (repositoryId !== undefined) {
+        parkRepositoryWorkspace(workspaceStores, repositoryId);
+      }
       unhookConnectedStatus?.();
       unhookDisconnect?.();
       unhookPermanentError?.();
@@ -189,7 +251,7 @@ function ConnectedTuiSession({
       session.dispose();
       closeIfSupported(session.bus);
     };
-  }, [session]);
+  }, [session, inputStores, target.repositoryId]);
 
   return (
     <App

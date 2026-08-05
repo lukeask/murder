@@ -887,21 +887,10 @@ function Shell({
       const id: ThemeId = hasTheme(theme) ? theme : DEFAULT_THEME_ID;
       setTheme(id);
     };
-    const workspaceStores: WorkspaceStores = {
-      workspace,
-      panels,
-      focus,
-      chatInput,
-      paneUi,
-      app: appStore,
-    };
-    const syncWorkspaceCount = (count: number): void => {
-      applyWorkspaceCount(workspaceStores, count, { repaint: () => forceInkFullRepaint(stdout) });
-    };
     const current = appStore.getState().settings;
     syncBindings(current.modifier, current.keyOverrides as Record<string, string>);
     syncTheme(current.theme);
-    syncWorkspaceCount(current.workspaceCount);
+    // workspace_count is per-repo client state (parked bags / localStorage) — not settings.
     return appStore.subscribe((state, prev) => {
       if (
         state.settings.modifier !== prev.settings.modifier ||
@@ -918,11 +907,8 @@ function Shell({
       ) {
         syncTheme(state.settings.theme);
       }
-      if (state.settings.workspaceCount !== prev.settings.workspaceCount) {
-        syncWorkspaceCount(state.settings.workspaceCount);
-      }
     });
-  }, [appStore, bindings, workspace, panels, focus, chatInput, paneUi, stdout]);
+  }, [appStore, bindings]);
 
   // Background transparency → Kitty OSC + (via canvasBackgroundColor) root paint. Re-applies when
   // the setting, live preview, or theme canvas hex changes. Cleanup restores Kitty colors on exit.
@@ -969,6 +955,14 @@ function Shell({
     const settingsActions = appStore.getState().actions.settings;
     const storeState = appStore.getState();
     const theme: ThemeId = hasTheme(settings.theme) ? settings.theme : DEFAULT_THEME_ID;
+    const workspaceStores: WorkspaceStores = {
+      workspace,
+      panels,
+      focus,
+      chatInput,
+      paneUi,
+      app: appStore,
+    };
     modes.getState().enter(
       settingsMode(
         modes,
@@ -978,7 +972,8 @@ function Shell({
           theme,
           paneGap: settings.paneGap,
           backgroundTransparency: settings.backgroundTransparency,
-          workspaceCount: settings.workspaceCount,
+          // Per-repo live count (not the server-global settings field).
+          workspaceCount: workspace.getState().count,
           vimMode: settings.vimMode,
           barWidgets: settings.barWidgets,
           defaultChatViewMode: settings.defaultChatViewMode,
@@ -1004,7 +999,14 @@ function Shell({
             remove: (id) => storeState.actions.themes.remove(id),
           },
         },
-        { openPromptTemplates: openPromptTemplatesHandler },
+        {
+          openPromptTemplates: openPromptTemplatesHandler,
+          onWorkspaceCount: (count) => {
+            applyWorkspaceCount(workspaceStores, count, {
+              repaint: () => forceInkFullRepaint(stdout),
+            });
+          },
+        },
       ),
     );
   };

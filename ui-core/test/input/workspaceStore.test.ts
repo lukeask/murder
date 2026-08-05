@@ -41,12 +41,37 @@ function fakeSnapshot(marker: string): WorkspaceSnapshot {
 const FRAME: CapturedFrame = { text: 'frame', columns: 80, rows: 24 };
 
 describe('workspaceStore', () => {
-  it('boots inert: one workspace, index 0, one empty slot, no transition', () => {
+  it('boots inert: one workspace, index 0, one empty slot, no transition, unbound', () => {
     const store = createWorkspaceStore();
     expect(store.getState().count).toBe(1);
     expect(store.getState().activeIndex).toBe(0);
     expect(store.getState().slots).toEqual([{ snapshot: null, lastFrame: null }]);
     expect(store.getState().transition).toBeNull();
+    expect(store.getState().repositoryId).toBeNull();
+    expect(store.getState().repoBags).toEqual({});
+  });
+
+  it('saveRepoBag / getRepoBag / replaceLiveBag round-trip a parked bag', () => {
+    const store = createWorkspaceStore(1);
+    const bag = {
+      count: 3,
+      activeIndex: 2,
+      slots: [
+        { snapshot: fakeSnapshot('a'), lastFrame: null },
+        { snapshot: null, lastFrame: null },
+        { snapshot: fakeSnapshot('c'), lastFrame: FRAME },
+      ],
+    };
+    store.getState().saveRepoBag('repo-a', bag);
+    expect(store.getState().getRepoBag('repo-a')).toEqual(bag);
+    expect(store.getState().getRepoBag('missing')).toBeNull();
+
+    store.getState().replaceLiveBag(bag);
+    store.getState().setRepositoryId('repo-a');
+    expect(store.getState().count).toBe(3);
+    expect(store.getState().activeIndex).toBe(2);
+    expect(store.getState().slots[0]?.snapshot).toEqual(fakeSnapshot('a'));
+    expect(store.getState().repositoryId).toBe('repo-a');
   });
 
   it('saveSlot writes a slot; the others keep identity', () => {

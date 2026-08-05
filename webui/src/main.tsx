@@ -2,7 +2,12 @@
 
 import { AppStoreProvider } from '@murder/ui-core/hooks/useAppStore.js';
 import { createAppStore } from '@murder/ui-core/store/store.js';
-import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  parkRepositoryWorkspace,
+  resumeRepositoryWorkspace,
+  type WorkspaceStores,
+} from '@murder/ui-core/input/workspaceSwitch.js';
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { ApplicationClientProvider } from '@murder/ui-core/hooks/useApplicationClient.js';
@@ -12,6 +17,12 @@ import {
 } from './application/createBrowserApplicationClient.js';
 import { fetchRecentRepos, type RepoListEntry } from './application/reposApi.js';
 import { RepoPicker } from './components/RepoPicker.js';
+import { ComposerStoresProvider } from './composer/ComposerStoresProvider.js';
+import {
+  createComposerStores,
+  toWorkspaceStores,
+  webFreshWorkspaceSnapshot,
+} from './composer/createComposerStores.js';
 import './styles/theme.css';
 // Design-system token foundation: imported AFTER theme.css (so DS values win on overlapping names
 // like --space-*/--radius/--font-mono) and BEFORE app.css (so the existing app chrome still reads
@@ -73,10 +84,12 @@ function ConnectedSession({
   repositoryId,
   rootPath,
   onSwitchRepo,
+  composer,
 }: {
   readonly repositoryId: string;
   readonly rootPath: string | null;
   readonly onSwitchRepo: () => void;
+  readonly composer: ReturnType<typeof createComposerStores>;
 }): React.JSX.Element | null {
   const [session, setSession] = useState<Session | null>(null);
 
@@ -91,6 +104,18 @@ function ConnectedSession({
       bus.close();
     };
   }, [repositoryId]);
+
+  // Phase 8: park/resume per-repo workspace bags on the shared composer stores.
+  useEffect(() => {
+    if (session === null) return;
+    const workspaceStores: WorkspaceStores = toWorkspaceStores(composer, session.store);
+    resumeRepositoryWorkspace(workspaceStores, repositoryId, {
+      freshSnapshot: webFreshWorkspaceSnapshot(),
+    });
+    return () => {
+      parkRepositoryWorkspace(workspaceStores, repositoryId);
+    };
+  }, [session, composer, repositoryId]);
 
   useEffect(() => {
     setRepoSearchParam(repositoryId);
@@ -110,6 +135,8 @@ function ConnectedSession({
 }
 
 function Boot(): React.JSX.Element {
+  // Survive picker ↔ session remounts so per-repo workspace bags stay in memory.
+  const composer = useMemo(() => createComposerStores(), []);
   const [repositories, setRepositories] = useState<readonly RepoListEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -177,12 +204,15 @@ function Boot(): React.JSX.Element {
 
   if (selected !== null) {
     return (
-      <ConnectedSession
-        key={selected.repositoryId}
-        repositoryId={selected.repositoryId}
-        rootPath={selected.rootPath}
-        onSwitchRepo={onSwitchRepo}
-      />
+      <ComposerStoresProvider stores={composer}>
+        <ConnectedSession
+          key={selected.repositoryId}
+          repositoryId={selected.repositoryId}
+          rootPath={selected.rootPath}
+          onSwitchRepo={onSwitchRepo}
+          composer={composer}
+        />
+      </ComposerStoresProvider>
     );
   }
 

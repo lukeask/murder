@@ -46,6 +46,8 @@ import type {
   DocumentDisplayMode,
 } from '@murder/ui-core/store/settings/settingsSlice.js';
 import { useCreationDialogs } from '../../creationDialogs.js';
+import { useWorkspaceStore } from '../../composer/ComposerStoresProvider.js';
+import { useApplyWorkspaceCountFromSettings } from '../../composer/useWorkspaceBridge.js';
 import { bindingKeyLabel, validateRebindCapture } from '../../keybindCapture.js';
 import { Panel, Input, Select, Radio, Switch, Checkbox, Button, cx } from '../ds/index.js';
 import { LlmSettingsSection } from './LlmSettingsSection.js';
@@ -74,6 +76,8 @@ export function SettingsPanel(): React.JSX.Element {
   const removeTheme = useAppStore((s) => s.actions.themes.remove);
   const activeTheme = useThemeId();
   const { openPromptTemplates } = useCreationDialogs();
+  const workspaceCount = useWorkspaceStore((s) => s.count);
+  const applyWorkspaceCount = useApplyWorkspaceCountFromSettings();
   const [themeJson, setThemeJson] = useState('');
   const [themeImportError, setThemeImportError] = useState<string | null>(null);
   const [bindingNotice, setBindingNotice] = useState<string | null>(null);
@@ -459,11 +463,16 @@ export function SettingsPanel(): React.JSX.Element {
           <Select
             label="workspace count"
             options={WORKSPACE_COUNT_OPTIONS.map((n) => ({ value: String(n), label: String(n) }))}
-            value={String(settings.workspaceCount)}
-            onChange={(e) => void update({ workspace_count: Number(e.target.value) })}
+            value={String(workspaceCount)}
+            onChange={(e) => {
+              const count = Number(e.target.value);
+              applyWorkspaceCount(count);
+              void update({ workspace_count: count });
+            }}
           />
           <p className="settings__hint">
             Count 1 hides the switcher. Digits in the nav beam jump; {`<Cmd>+Shift+J/K`} cycles.
+            Remembered per repository in this browser.
           </p>
         </section>
 

@@ -152,6 +152,11 @@ export interface SettingsModeOptions {
   readonly onDismiss?: () => void;
   /** Open PromptTemplateManagerMode from the Templates category row. */
   readonly openPromptTemplates?: () => void;
+  /**
+   * Per-repo workspace count apply (Phase 8). When set, workspace count changes update the
+   * client workspace bag / localStorage instead of relying on the settings→workspace bridge.
+   */
+  readonly onWorkspaceCount?: (count: number) => void;
 }
 
 /** The stable mode id for idempotent re-enter. */
@@ -858,7 +863,7 @@ export function settingsMode(
     refresh();
   }
 
-  /** Commit the draft workspace count (optimistic update). */
+  /** Commit the draft workspace count (per-repo client state + optional settings dual-write). */
   function selectWorkspaceCount(value: number): void {
     s.workspaceCount = value;
     if (s.initialWorkspaceCount === 1 && value > 1 && s.modifier === 'ctrl') {
@@ -866,6 +871,7 @@ export function settingsMode(
     } else if (value === 1) {
       s.showKittyWorkspaceMappingWarning = false;
     }
+    opts.onWorkspaceCount?.(value);
     void actions.update({ workspace_count: value });
     s.notice = null;
     refresh();

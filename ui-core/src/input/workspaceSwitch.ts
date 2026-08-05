@@ -71,10 +71,18 @@ import type { PanelId } from '@murder/ui-core/input/panels.js';
 import type { PaneUiStoreApi } from '@murder/ui-core/input/paneUiStore.js';
 import type {
   CapturedFrame,
+  RepoWorkspaceBag,
+  WorkspaceCountStorage,
   WorkspaceDirection,
   WorkspaceSnapshot,
   WorkspaceStoreApi,
   WorkspaceTransition,
+} from './workspaceStore.js';
+import {
+  defaultWorkspaceCountStorage,
+  emptyRepoWorkspaceBag,
+  loadWorkspaceCount,
+  persistWorkspaceCount,
 } from './workspaceStore.js';
 
 /** The store handles the pipeline serializes/hydrates. The input-store fields match the
@@ -100,6 +108,32 @@ export interface WorkspaceSwitchOptions {
   /** Force a full terminal repaint after commit (the app passes
    * `() => forceInkFullRepaint(process.stdout)`; tests omit). */
   readonly repaint?: () => void;
+  /**
+   * Per-repo `workspace_count` persistence (browser localStorage by default when available).
+   * Pass an in-memory map in tests; pass `null` to disable.
+   */
+  readonly storage?: WorkspaceCountStorage | null;
+  /**
+   * Layout to hydrate when resuming a repository that has no parked bag (cold open / storage-only
+   * count seed). Default `null` = chat-only (TUI boot). Web passes a full-rails snapshot so lifting
+   * the composer above the session does not wipe `PANEL_IDS` defaults on first connect.
+   */
+  readonly freshSnapshot?: WorkspaceSnapshot | null;
+  /**
+   * Count used when there is no parked bag and no stored count (e.g. TUI seeding from per-repo
+   * settings after `settings.get`). Ignored when a bag or storage value exists.
+   */
+  readonly fallbackCount?: number;
+}
+
+/** Resolve storage: explicit option wins; otherwise browser localStorage when present. */
+function resolveCountStorage(
+  options: WorkspaceSwitchOptions,
+): WorkspaceCountStorage | null {
+  if (options.storage !== undefined) {
+    return options.storage;
+  }
+  return defaultWorkspaceCountStorage();
 }
 
 /** Serialize the live stores' workspace-scoped state into a plain-JSON snapshot. Pure read. */
@@ -271,11 +305,13 @@ export function switchWorkspace(
 }
 
 /**
- * React to a `workspace_count` settings change (step 2c calls this, not `setCount` directly).
+ * React to a per-repo `workspace_count` change (settings UI / localStorage; not `setCount` directly).
  * Growing adds never-opened slots. Shrinking drops slots above the new count; when the *active*
  * workspace is dropped, the active index clamps to the last surviving workspace and its snapshot
  * hydrates instantly (no animation, per the resolved question). The dropped live layout is NOT
  * serialized — its slot no longer exists, and domain data is global so nothing is lost.
+ *
+ * When a repository is bound, the new count is written to per-repo client storage.
  */
 export function applyWorkspaceCount(
   stores: WorkspaceStores,
@@ -285,10 +321,17 @@ export function applyWorkspaceCount(
   const ws = stores.workspace.getState();
   const next = Math.max(1, Math.floor(count));
   if (next === ws.count) {
+    // Still persist when bound so a no-op resize after bind seals the stored count.
+    if (ws.repositoryId !== null) {
+      persistWorkspaceCount(ws.repositoryId, next, resolveCountStorage(options));
+    }
     return;
   }
   const activeDropped = ws.activeIndex >= next;
   ws.setCount(next);
+  if (ws.repositoryId !== null) {
+    persistWorkspaceCount(ws.repositoryId, next, resolveCountStorage(options));
+  }
   if (!activeDropped) {
     return;
   }
@@ -298,4 +341,112 @@ export function applyWorkspaceCount(
   hydrateWorkspaceSnapshot(stores, slot?.snapshot ?? null);
   stores.workspace.getState().clearTransition();
   options.repaint?.();
+}
+
+/**
+ * Snapshot the live workspace bag for the bound repo: serialize the active slot, then return
+ * `{ count, activeIndex, slots }`. Does not park into `repoBags` (caller decides).
+ */
+export function captureRepoWorkspaceBag(
+  stores: WorkspaceStores,
+  options: WorkspaceSwitchOptions = {},
+): RepoWorkspaceBag {
+  const ws = stores.workspace.getState();
+  const fromFrame = options.captureFrame?.() ?? null;
+  ws.saveSlot(ws.activeIndex, serializeWorkspaceSnapshot(stores), fromFrame);
+  const after = stores.workspace.getState();
+  return {
+    count: after.count,
+    activeIndex: after.activeIndex,
+    slots: [...after.slots],
+  };
+}
+
+/**
+ * Park the live bag under `repositoryId` (serialize active slot first). Used when the app store is
+ * about to tear down on repo switch — pair with {@link resumeRepositoryWorkspace} after remount.
+ * Clears `repositoryId` so a subsequent resume (including React StrictMode remount) re-hydrates.
+ *
+ * No-op when the live bag is already unbound or bound to a different repository (avoids clobbering
+ * bags on StrictMode double-cleanup or stale effect teardowns).
+ */
+export function parkRepositoryWorkspace(
+  stores: WorkspaceStores,
+  repositoryId: string,
+  options: WorkspaceSwitchOptions = {},
+): void {
+  const ws = stores.workspace.getState();
+  if (ws.repositoryId !== repositoryId) {
+    return;
+  }
+  const bag = captureRepoWorkspaceBag(stores, options);
+  const after = stores.workspace.getState();
+  after.saveRepoBag(repositoryId, bag);
+  persistWorkspaceCount(repositoryId, bag.count, resolveCountStorage(options));
+  after.setRepositoryId(null);
+}
+
+/**
+ * Load the parked (or storage-backed) bag for `repositoryId` into the live workspace store and
+ * hydrate UI stores. Call after the new app store is mounted on repo switch / boot.
+ *
+ * Cold open (no parked bag): hydrates {@link WorkspaceSwitchOptions.freshSnapshot} when the active
+ * slot has never been serialized — host-specific boot layout (web full rails vs TUI chat-only).
+ */
+export function resumeRepositoryWorkspace(
+  stores: WorkspaceStores,
+  repositoryId: string,
+  options: WorkspaceSwitchOptions = {},
+): void {
+  const ws = stores.workspace.getState();
+  if (ws.repositoryId === repositoryId) {
+    return;
+  }
+  const storage = resolveCountStorage(options);
+  const parked = ws.getRepoBag(repositoryId);
+  // In-session parked bag wins; localStorage count only seeds a never-opened repo.
+  const storedCount = loadWorkspaceCount(repositoryId, storage);
+  const fallback =
+    options.fallbackCount !== undefined
+      ? Math.min(9, Math.max(1, Math.floor(options.fallbackCount)))
+      : 1;
+  const resolved =
+    parked ?? emptyRepoWorkspaceBag(storedCount ?? fallback);
+
+  ws.replaceLiveBag(resolved);
+  ws.setRepositoryId(repositoryId);
+  const active = stores.workspace.getState();
+  const slotSnapshot = active.slots[active.activeIndex]?.snapshot ?? null;
+  // Never-opened repo: use host fresh layout. Parked bag with a null active slot: chat-only.
+  const snapshot =
+    slotSnapshot ?? (parked === null ? (options.freshSnapshot ?? null) : null);
+  hydrateWorkspaceSnapshot(stores, snapshot);
+  active.clearTransition();
+  options.repaint?.();
+}
+
+/**
+ * Switch the live workspace bag from the current repository to `nextRepositoryId`.
+ *
+ * Mirrors {@link switchWorkspace}: serialize the outgoing live bag under the old repo key, replace
+ * the live bag from the incoming repo key (or an empty bag seeded by per-repo localStorage count),
+ * hydrate the incoming active slot. No-op when already bound to `nextRepositoryId`.
+ *
+ * Prefer {@link parkRepositoryWorkspace} + {@link resumeRepositoryWorkspace} when the app store is
+ * remounted across the switch (TUI/web session remount) so serialize uses the old app store and
+ * hydrate uses the new one.
+ */
+export function switchRepositoryWorkspace(
+  stores: WorkspaceStores,
+  nextRepositoryId: string,
+  options: WorkspaceSwitchOptions = {},
+): void {
+  const ws = stores.workspace.getState();
+  if (ws.repositoryId === nextRepositoryId) {
+    return;
+  }
+  if (ws.repositoryId !== null) {
+    parkRepositoryWorkspace(stores, ws.repositoryId, options);
+  }
+  resumeRepositoryWorkspace(stores, nextRepositoryId, options);
 }

@@ -65,8 +65,8 @@ export function createInputStores(
   // Per-pane UI state (scroll/cursor). One instance so a pane's position is remembered across the
   // controller unmounting/remounting (panel toggle, workspace switch).
   const paneUi = createPaneUiStore();
-  // Workspace slots. Starts at count 1 (feature inert); the settings bridge (step 2c) pushes
-  // `workspace_count` through `applyWorkspaceCount`.
+  // Workspace slots. Starts at count 1 (feature inert); per-repo count comes from
+  // resumeRepositoryWorkspace / applyWorkspaceCount (Phase 8 — not settings.workspace_count).
   const workspace = createWorkspaceStore();
   return {
     panels,

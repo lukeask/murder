@@ -5,7 +5,6 @@ import { DEFAULT_THEME_ID, hasTheme, type ThemeId } from '@murder/ui-core/theme/
 import { setTheme } from '@murder/ui-core/theme/themeStore.js';
 import { resolveBarWidgetConfig } from '@murder/ui-core/selectors/barWidgetRegistry.js';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
-import { ComposerStoresProvider } from './composer/ComposerStoresProvider.js';
 import { CreationDialogsProvider, type CreationDialogsApi } from './creationDialogs.js';
 import { useThemeCssVars } from './theme/useThemeCssVars.js';
 import { type ConnectionStatus, useConnectionStatus } from './useConnectionStatus.js';
@@ -60,7 +59,7 @@ import { UsageBarSegment } from './components/UsageBarSegment.js';
 import { desktopKeybindHints } from './commandModifierPrefix.js';
 import { useFocusedPanelId } from './panelFocus.js';
 import { SETTINGS_PANEL_HINTS, useKeybindModeHints } from './keybindModeHints.js';
-import { useWorkspaceCountSync, useWorkspaceSwitchFlash } from './composer/useWorkspaceBridge.js';
+import { useWorkspaceSwitchFlash } from './composer/useWorkspaceBridge.js';
 import { useDesktopKeybinds } from './useDesktopKeybinds.js';
 import { usePanelIsVisible } from './panelVisibility.js';
 import { resolveProjectName } from './projectName.js';
@@ -233,18 +232,16 @@ export function App({
 
   return (
     <CreationDialogsProvider value={creationApi}>
-      <ComposerStoresProvider>
-        <AppShell
-          status={status}
-          isMobile={isMobile}
-          creationApi={creationApi}
-          dialog={dialog}
-          setDialog={setDialog}
-          closeDialog={closeDialog}
-          {...(onSwitchRepo !== undefined ? { onSwitchRepo } : {})}
-          {...(repositoryHint !== undefined ? { repositoryHint } : {})}
-        />
-      </ComposerStoresProvider>
+      <AppShell
+        status={status}
+        isMobile={isMobile}
+        creationApi={creationApi}
+        dialog={dialog}
+        setDialog={setDialog}
+        closeDialog={closeDialog}
+        {...(onSwitchRepo !== undefined ? { onSwitchRepo } : {})}
+        {...(repositoryHint !== undefined ? { repositoryHint } : {})}
+      />
     </CreationDialogsProvider>
   );
 }
@@ -270,7 +267,6 @@ function AppShell({
   readonly repositoryHint?: string | null;
 }): React.JSX.Element {
   useDesktopKeybinds(!isMobile, creationApi);
-  useWorkspaceCountSync();
 
   return (
     <div className="app" data-layout={isMobile ? 'mobile' : 'desktop'}>
