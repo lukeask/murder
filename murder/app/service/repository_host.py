@@ -96,6 +96,8 @@ class RepositoryHost:
     config: Config
     repo_root: Path
     user_config: UserConfig | None = None
+    # Shared daemon registry when running under DaemonHost; else a private one.
+    harness_versions: HarnessVersionRegistry | None = None
     activity_dispatcher_factory: ActivityDispatcherFactory | None = None
     trigger_dispatcher_factory: TriggerDispatcherFactory | None = None
     read_model: ServiceReadModel | None = None
@@ -199,6 +201,22 @@ class RepositoryHost:
             raise RuntimeError("service is not started")
         return self._running.process
 
+    @property
+    def repository_id(self) -> str:
+        if self._running is None:
+            raise RuntimeError("service is not started")
+        return self._running.process.db.repository_id
+
+    def has_live_agents(self) -> bool:
+        """True when any registered agent is outside a terminal status."""
+        from murder.runtime.agents.base import TERMINAL_STATUSES
+
+        if self._running is None:
+            return False
+        return any(
+            agent.status not in TERMINAL_STATUSES for agent in self._running.agents.all()
+        )
+
     async def start(self) -> None:
         from murder.runtime.activity_dispatcher import (  # noqa: PLC0415
             build_default_activity_dispatcher,
@@ -272,7 +290,10 @@ class RepositoryHost:
 
             recovery = await run_startup_recovery(db=process.db)
 
-            harness_versions = HarnessVersionRegistry()
+            # Prefer the daemon-shared registry so HarnessVersionProbeWorker
+            # (process-scoped) broadcasts into every active host.
+            harness_versions = self.harness_versions or HarnessVersionRegistry()
+            self.harness_versions = harness_versions
             event_sink: AgentEventSink = LoggingAgentEventSink()
             structured_decisions = StructuredDecisionRouter(
                 db=process.db,
@@ -410,7 +431,6 @@ class RepositoryHost:
                 events=process.events,
                 commands=process.commands,
                 advanced_log=process.advanced_log,
-                harness_versions=harness_versions,
                 agents=agents,
                 orchestrator=orchestrator,
             )

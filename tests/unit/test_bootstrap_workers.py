@@ -1,4 +1,4 @@
-"""Bootstrap registers the codebase-map worker as the 8th worker (t062)."""
+"""Bootstrap registers the codebase-map worker last among per-repo workers."""
 
 from __future__ import annotations
 
@@ -12,7 +12,12 @@ import pytest
 import murder.app.service.bootstrap as bootstrap_mod
 from murder.llm.harnesses import usage_sampling
 from murder.runtime import workers as workers_pkg
-from murder.runtime.workers import CodebaseMapWorker, HarnessVersionProbeWorker, UsageProbeWorker
+from murder.runtime.workers import (
+    CodebaseMapWorker,
+    HarnessVersionProbeWorker,
+    ModelCatalogRefreshWorker,
+    UsageProbeWorker,
+)
 
 
 class _RecordingSupervisor:
@@ -51,14 +56,9 @@ def _stub_heavyweight_workers(monkeypatch) -> None:
         "UsageProbeWorker",
         SimpleNamespace(from_worker_ctx=lambda ctx: object()),
     )
-    monkeypatch.setattr(
-        bootstrap_mod,
-        "HarnessVersionProbeWorker",
-        lambda **kwargs: object(),
-    )
 
 
-def _bootstrap_kwargs(*, db, harness_versions, agents, orchestrator):
+def _bootstrap_kwargs(*, db, agents, orchestrator):
     return dict(
         repo_root=Path("/repo"),
         db=db,
@@ -66,7 +66,6 @@ def _bootstrap_kwargs(*, db, harness_versions, agents, orchestrator):
         events=object(),
         commands=object(),
         advanced_log=object(),
-        harness_versions=harness_versions,
         agents=agents,
         orchestrator=orchestrator,
     )
@@ -82,13 +81,11 @@ def test_codebase_map_worker_registered(monkeypatch):
     orchestrator = SimpleNamespace(
         ensure_collaborator=lambda *_a: None,
     )
-    harness_versions = SimpleNamespace(replace=lambda *_a, **_k: None)
 
     supervisor = asyncio.run(
         bootstrap_mod.start_supervisor_workers(
             **_bootstrap_kwargs(
                 db=db,
-                harness_versions=harness_versions,
                 agents=agents,
                 orchestrator=orchestrator,
             )
@@ -97,8 +94,11 @@ def test_codebase_map_worker_registered(monkeypatch):
 
     map_workers = [w for w in supervisor.started if isinstance(w, CodebaseMapWorker)]
     assert len(map_workers) == 1
-    # Registered last, after all pre-existing workers.
+    # Registered last, after all pre-existing per-repo workers.
     assert isinstance(supervisor.started[-1], CodebaseMapWorker)
+    # Daemon-scoped workers must not be started per repository.
+    assert not any(isinstance(w, ModelCatalogRefreshWorker) for w in supervisor.started)
+    assert not any(isinstance(w, HarnessVersionProbeWorker) for w in supervisor.started)
     assert not hasattr(UsageProbeWorker, "from_runtime")
     assert not hasattr(HarnessVersionProbeWorker, "from_runtime")
     assert not hasattr(usage_sampling, "sample_harness_usages_for_config")
@@ -125,14 +125,12 @@ def test_partial_worker_startup_calls_stop_all(monkeypatch):
     db = sqlite3.connect(":memory:")
     agents = SimpleNamespace(find=lambda *_a: None)
     orchestrator = SimpleNamespace(ensure_collaborator=lambda *_a: None)
-    harness_versions = SimpleNamespace(replace=lambda *_a, **_k: None)
 
     with pytest.raises(RuntimeError, match="worker start failed"):
         asyncio.run(
             bootstrap_mod.start_supervisor_workers(
                 **_bootstrap_kwargs(
                     db=db,
-                    harness_versions=harness_versions,
                     agents=agents,
                     orchestrator=orchestrator,
                 )

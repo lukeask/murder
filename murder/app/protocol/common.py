@@ -18,6 +18,12 @@ class StrEnum(str, Enum):
 # compatible with a v2 peer which could otherwise silently ignore it.
 APPLICATION_PROTOCOL_VERSION = 4
 
+# Single-daemon listener. All clients attach here; repo identity is path-scoped
+# on the WebSocket URL (Phase 3). Not ephemeral — CLI probes this port instead
+# of spawning a second process when a live daemon already holds it.
+DAEMON_WEBSOCKET_HOST = "127.0.0.1"
+DAEMON_WEBSOCKET_PORT = 62077
+
 
 class ClientKind(StrEnum):
     TUI = "tui"

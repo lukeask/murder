@@ -17,18 +17,19 @@ import typer
 
 from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
-from murder.app.service.gateway import ApplicationGateway
-from murder.app.service.repository_host import RepositoryHost
-from murder.app.service.socket_server import ApplicationSocketServer
-from murder.app.service.webui_assets import resolve_webui_assets_dir
-from murder.config import Config
+from murder.app.protocol.common import DAEMON_WEBSOCKET_PORT
+from murder.app.service.daemon_host import (
+    DaemonHost,
+    daemon_lock_path,
+    live_daemon_pid,
+    probe_daemon_listener,
+)
 from murder.state.persistence.connection import RepoDb, open_repo_db
 from murder.state.persistence.escalations import list_pending_escalations
 from murder.state.persistence.tickets import get_ticket
-from murder.state.storage.filesystem import acquire_flock, lock_is_held, read_lock_pid, release_flock
+from murder.state.storage.filesystem import read_lock_pid
 from murder.state.storage.paths import (
     agents_dir,
-    lock_path,
     logs_dir,
     notes_dir,
     plans_dir,
@@ -40,9 +41,7 @@ from murder.state.storage.service_registry import (
     project_session_name,
     remove_service_session,
     resolve_service_session_selector,
-    write_service_session,
 )
-from murder.user_config import ensure_user_themes, load_user_config
 from murder.work.plans.sync import PlanSync, content_hash
 from murder.work.tickets import lifecycle
 from murder.work.tickets.schema import ChecklistItem, Ticket
@@ -119,33 +118,34 @@ def _live_service_sessions() -> list[ServiceSession]:
 
 
 async def _supervisor_is_live(repo: Path, socket_path: Path) -> bool:
-    """Return whether the lock owner has published this repo's endpoint.
+    """Return whether the daemon has published this repo's endpoint.
 
-    Acquiring the repo lock happens near the beginning of service startup, well
+    Acquiring the daemon lock happens near the beginning of service startup, well
     before the application listener is ready.  The session registry entry is
-    written atomically only after ``ApplicationSocketServer.start`` has bound
-    its listener, so it is the readiness barrier clients need.  Merely seeing a
-    live lock owner would let a cold-starting service escape this wait and make
-    the TUI fail with "no WebSocket endpoint is published".
+    written atomically only after the listener has bound, so it is the readiness
+    barrier clients need.  Merely seeing a live daemon lock owner would let a
+    cold-starting service escape this wait and make the TUI fail with "no
+    WebSocket endpoint is published".
     """
     del socket_path  # retained in the private API while callers still pass a readiness path
-    pid = read_lock_pid(lock_path(repo))
-    if pid is None or not _pid_is_alive(pid) or not lock_is_held(lock_path(repo)):
+    pid = live_daemon_pid()
+    if pid is None:
         return False
     name = project_session_name(repo)
     return any(session.name == name and session.pid == pid for session in list_service_sessions())
 
 
 def _live_lock_owner_pid(repo: Path) -> int | None:
-    """Return the live pid recorded by the repo lock, if any.
+    """Return the live daemon pid, if any.
 
+    ``repo`` is retained for call-site compatibility; exclusivity is daemon-wide.
     A live lock owner whose socket is not answering may still be in startup (or
     briefly have a busy event loop).  It is not safe to treat that state as
     permission to launch a second supervisor: the duplicate will lose the
     flock race and exit with code 1, obscuring the healthy process that won.
     """
-    pid = read_lock_pid(lock_path(repo))
-    return pid if pid is not None and _pid_is_alive(pid) and lock_is_held(lock_path(repo)) else None
+    del repo
+    return live_daemon_pid()
 
 
 def _spawn_service_process(repo: Path) -> subprocess.Popen[bytes]:
@@ -168,13 +168,27 @@ async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
     if await _supervisor_is_live(repo, socket_path):
         return False
 
+    # Live daemon on the fixed port but this repo's session is not published yet
+    # (Phase 3/4 will activate via HTTP). Prefer waiting on the existing daemon
+    # over spawning a doomed duplicate.
+    if await probe_daemon_listener():
+        delays = (0.25, 0.5, *(1.0 for _ in range(30)))
+        for delay in delays:
+            await asyncio.sleep(delay)
+            if await _supervisor_is_live(repo, socket_path):
+                return False
+        raise RuntimeError(
+            "murder daemon is running but did not publish this repository's "
+            "WebSocket endpoint within 30s"
+        )
+
     proc: subprocess.Popen[bytes] | None = None
     # Cold boots can spend several seconds reconciling persisted harness state
     # before the application listener is bound.  Keep the quick initial probes,
     # then allow enough time for that bounded startup work to finish.
     delays = (0.25, 0.5, *(1.0 for _ in range(30)))
     for delay in delays:
-        # The repo lock is acquired before the socket opens.  Respect its live
+        # The daemon lock is acquired before the socket opens.  Respect its live
         # owner during that readiness gap instead of spawning a doomed
         # duplicate.  If an owner dies while we wait, the next iteration takes
         # over startup.
@@ -183,7 +197,7 @@ async def _ensure_supervisor_impl(repo: Path, socket_path: Path) -> bool:
 
         await asyncio.sleep(delay)
         if await _supervisor_is_live(repo, socket_path):
-            return proc is not None and read_lock_pid(lock_path(repo)) == proc.pid
+            return proc is not None and live_daemon_pid() == proc.pid
 
         # Fail fast if the child already died (e.g. crashed on import) instead
         # of polling the full window for a process that's gone.  A code-1 child
@@ -210,10 +224,11 @@ async def _ensure_supervisor_started(repo: Path, socket_path: Path) -> bool:
 
 
 def _friendly_lock_message(repo: Path) -> str:
-    pid = read_lock_pid(lock_path(repo))
+    del repo
+    pid = live_daemon_pid()
     pid_text = f" (PID {pid})" if pid is not None else ""
     return (
-        f"murder is already running in this repo{pid_text}.\n"
+        f"murder daemon is already running{pid_text}.\n"
         "Stop it with `murder down`, or run from inside the running TUI."
     )
 
@@ -235,133 +250,59 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
 
 async def _run_supervisor_only(websocket_port: int = 0) -> None:
     # Configure stderr logging immediately so early-startup records reach the
-    # child's stdout/stderr -> supervisor.ndjson. The per-run service.log file
-    # handler attaches later in ProcessScope once the run dir exists.
+    # child's stdout/stderr -> supervisor.ndjson. Per-repo run logs attach later
+    # inside each RepositoryHost / ProcessScope.
     from murder.observability.logging_setup import configure_logging, resolve_log_level
 
     configure_logging(level=resolve_log_level(), log_path=None)
     repo = _repo_root()
-    cfg = Config.load(repo)
-
-    # Phase 1 bridge: flock / user-config / socket still live in the CLI entry
-    # until DaemonHost (Phase 2) and path-scoped routing (Phase 3) land.
-    ensure_user_themes()
-    try:
-        user_cfg = load_user_config()
-    except Exception:
-        user_cfg = None
-
-    lock_fd = acquire_flock(lock_path(repo))
-    host: RepositoryHost | None = None
-    socket_server: ApplicationSocketServer | None = None
-    session_name: str | None = None
-
-    async def _ordered_shutdown(*, authoritative: bool) -> None:
-        """Mirror former ServiceHost.stop() ordering for the Phase 1 CLI bridge.
-
-        clear → background → supervisor → socket → session registry → host stack.
-        """
-        nonlocal host, socket_server, session_name
-        if host is not None and authoritative:
-            with contextlib.suppress(Exception):
-                host.clear_shutdown_signal()
-        if host is not None and host.background_tasks is not None:
-            with contextlib.suppress(Exception):
-                await host.background_tasks.stop()
-            host.background_tasks = None
-        if host is not None and host.supervisor is not None:
-            with contextlib.suppress(Exception):
-                await host.supervisor.stop_all()
-            host.supervisor = None
-        if socket_server is not None:
-            with contextlib.suppress(FileNotFoundError, OSError, Exception):
-                await socket_server.stop()
-            socket_server = None
-        if session_name is not None:
-            with contextlib.suppress(Exception):
-                remove_service_session(session_name)
-            session_name = None
-        if host is not None:
-            with contextlib.suppress(Exception):
-                await host.stop()
-            host = None
-
-    try:
-        host = RepositoryHost(cfg, repo, user_config=user_cfg)
-        await host.start()
-        assert host.application_dispatcher is not None
-        assert host.fact_log is not None
-        assert host.projection_input_log is not None
-        socket_server = ApplicationSocketServer(
-            gateway=ApplicationGateway(
-                host.application_dispatcher,
-                schedule_plan_seed=host.schedule_plan_seed,
-            ),
-            facts=host.fact_log,
-            projection_inputs=host.projection_input_log,
-            providers=host.projection_providers,
-            run_id=host.run_id,
-            terminal_capture=host.terminal_capture,
-            terminal_output_open=host.terminal_output_open,
-            terminal_input=host.terminal_input,
-            terminal_input_validator=host.terminal_input_validator,
-            assets_dir=resolve_webui_assets_dir(repo),
-        )
-        host.set_plan_seed_failure_notifier(socket_server.notify_plan_seed_failed)
-        bound = await socket_server.start(host="127.0.0.1", port=websocket_port)
-        session = write_service_session(repo, f"ws://{bound[0]}:{bound[1]}/api/ws")
-        session_name = session.name
-        logging.getLogger(__name__).info(
-            "application websocket listener on ws://%s:%d/api/ws", *bound
-        )
-        try:
-            await host.process.wait_for_signal()
-        finally:
-            # A service shutdown is authoritative (`murder down`): the backend
-            # owns agent/tmux teardown, not any connected client.
-            await _ordered_shutdown(authoritative=True)
-    finally:
-        await _ordered_shutdown(authoritative=False)
-        with contextlib.suppress(Exception):
-            release_flock(lock_fd)
-        with contextlib.suppress(FileNotFoundError, OSError):
-            lock_path(repo).unlink()
+    # ``0`` historically meant ephemeral; the single-daemon architecture binds
+    # the fixed port unless an explicit override is passed (tests).
+    port = DAEMON_WEBSOCKET_PORT if websocket_port == 0 else websocket_port
+    await DaemonHost().run(initial_repo=repo, port=port)
 
 
 def cmd_serviced(
-    websocket_port: int = typer.Option(0, "--websocket-port", help="Application WebSocket port; 0 = ephemeral."),
+    websocket_port: int = typer.Option(
+        0,
+        "--websocket-port",
+        help=(
+            f"Application WebSocket port; 0 = fixed daemon port "
+            f"({DAEMON_WEBSOCKET_PORT})."
+        ),
+    ),
 ) -> None:
     """Internal supervisor-only service entrypoint."""
     _raise_fd_soft_limit()
     _run_async_entry(_run_supervisor_only(websocket_port=websocket_port))
-
 
 _DOWN_WAIT_S = 5.0
 _DOWN_POLL_S = 0.1
 
 
 def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) -> None:
-    # Re-read the live lock pid right before signalling so we don't SIGTERM a
+    # Re-read the live daemon pid right before signalling so we don't SIGTERM a
     # recycled, unrelated process: between the session-registry read and here
     # the daemon may have exited and its pid been reused. Only signal if the
-    # repo lock still names this exact pid. Otherwise the old service is gone.
-    current = read_lock_pid(lock_path(repo))
+    # daemon lock still names this exact pid. Otherwise the old service is gone.
+    del repo  # repo path retained for call-site compatibility
+    current = live_daemon_pid()
     if current != pid:
         if current is None:
             with contextlib.suppress(FileNotFoundError):
-                lock_path(repo).unlink()
+                daemon_lock_path().unlink()
         if session_name is not None:
             remove_service_session(session_name)
-        typer.echo(f"PID {pid} no longer holds the repo lock; nothing to signal.")
+        typer.echo(f"PID {pid} no longer holds the daemon lock; nothing to signal.")
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         with contextlib.suppress(FileNotFoundError):
-            lock_path(repo).unlink()
+            daemon_lock_path().unlink()
         if session_name is not None:
             remove_service_session(session_name)
-        typer.echo(f"Removed stale lock for dead PID {pid}.")
+        typer.echo(f"Removed stale daemon lock for dead PID {pid}.")
         return
     typer.echo(f"Sent SIGTERM to pid {pid}")
 
@@ -373,7 +314,7 @@ def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) ->
             break
         time.sleep(_DOWN_POLL_S)
     else:
-        if _pid_is_alive(pid) and read_lock_pid(lock_path(repo)) == pid:
+        if _pid_is_alive(pid) and live_daemon_pid() == pid:
             try:
                 os.kill(pid, signal.SIGKILL)
                 typer.echo(f"Sent SIGKILL to pid {pid}")
@@ -386,8 +327,8 @@ def _signal_service(repo: Path, pid: int, *, session_name: str | None = None) ->
 
     if not _pid_is_alive(pid):
         with contextlib.suppress(FileNotFoundError):
-            if read_lock_pid(lock_path(repo)) in (None, pid):
-                lock_path(repo).unlink()
+            if read_lock_pid(daemon_lock_path()) in (None, pid):
+                daemon_lock_path().unlink()
         if session_name is not None:
             remove_service_session(session_name)
 
@@ -428,12 +369,11 @@ def cmd_down(
         return
 
     repo = _repo_root()
-    pid = read_lock_pid(lock_path(repo))
+    pid = live_daemon_pid()
     if pid is None:
-        typer.secho("No lock pid found (murder not running?).", err=True)
+        typer.secho("No daemon lock pid found (murder not running?).", err=True)
         raise typer.Exit(1)
     _signal_service(repo, pid, session_name=project_session_name(repo))
-
 
 def cmd_id() -> None:
     """Print the current directory's murder service session id."""

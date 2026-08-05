@@ -1,4 +1,8 @@
-"""Worker registration for the service supervisor."""
+"""Worker registration for the per-repository service supervisor.
+
+User-global workers (``ModelCatalogRefreshWorker``, ``HarnessVersionProbeWorker``)
+are owned by ``DaemonHost`` so a multi-host process does not race them.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,6 @@ from pathlib import Path
 
 from murder.app.service.command_dispatch import CommandDispatcher
 from murder.app.service.supervisor import Supervisor
-from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.advanced_log import AdvancedLogBase
 from murder.runtime.agent_runtime import AgentRuntime
 from murder.runtime.orchestration.orchestrator import Orchestrator
@@ -17,8 +20,6 @@ from murder.runtime.workers import (
     CodebaseMapWorker,
     CollaboratorWorker,
     DoneSessionSweeperWorker,
-    HarnessVersionProbeWorker,
-    ModelCatalogRefreshWorker,
     OrchestratorCommandWorker,
     PlannerSessionSweeperWorker,
     StateCommandWorker,
@@ -36,11 +37,10 @@ async def start_supervisor_workers(
     events: OrchestrationEventSink,
     commands: CommandSubmitter,
     advanced_log: AdvancedLogBase,
-    harness_versions: HarnessVersionRegistry,
     agents: AgentRuntime,
     orchestrator: Orchestrator,
 ) -> Supervisor:
-    """Start all service workers on a shared supervisor."""
+    """Start per-repository workers on a shared supervisor."""
     worker_ctx = WorkerCtx(
         repo_root=repo_root,
         db=db,
@@ -59,10 +59,6 @@ async def start_supervisor_workers(
             SchedulerWorker(command_submitter=commands, events=events)
         )
         await supervisor.start_worker(UsageProbeWorker.from_worker_ctx(worker_ctx))
-        await supervisor.start_worker(ModelCatalogRefreshWorker())
-        await supervisor.start_worker(
-            HarnessVersionProbeWorker(updater=harness_versions.replace)
-        )
         await supervisor.start_worker(DoneSessionSweeperWorker())
         await supervisor.start_worker(PlannerSessionSweeperWorker())
         await supervisor.start_worker(
