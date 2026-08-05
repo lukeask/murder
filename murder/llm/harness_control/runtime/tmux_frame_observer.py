@@ -49,6 +49,8 @@ class TmuxFrameObserver:
         )
         self._capture_sequence += 1
         return TerminalFrame(
+            # Global PK on harness_control_frames.frame_id: uuid4 keeps
+            # cross-host inserts collision-safe without a composite key.
             frame_id=FrameId(str(uuid4())),
             harness_id=self._harness_id,
             captured_at=datetime.now(timezone.utc),

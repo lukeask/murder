@@ -81,7 +81,7 @@ def test_failure_after_db_closes_db(
     monkeypatch.setattr("murder.app.service.process_scope.open_repo_db", _open)
     monkeypatch.setattr(
         "murder.app.service.process_scope.allocate_run_id",
-        lambda _root: (_ for _ in ()).throw(RuntimeError("run boom")),
+        lambda _root, **_kwargs: (_ for _ in ()).throw(RuntimeError("run boom")),
     )
 
     async def _drive() -> None:

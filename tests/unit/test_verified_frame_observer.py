@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
+from murder.llm.harness_control.model.evidence import FrameId, HarnessId, TerminalFrame
 from murder.llm.harness_control.runtime.tmux_frame_observer import TmuxFrameObserver
 from murder.runtime.terminal import tmux
+from murder.state.persistence.harness_control import persist_frame
+from tests.support.database import (
+    SECOND_TEST_REPOSITORY_ID,
+    open_test_repo_db,
+)
 
 FRAME_LINES = 300
 
@@ -38,8 +46,50 @@ def test_frame_observer_retains_ansi_and_monotonic_capture_provenance(monkeypatc
         assert (first.pane_epoch, first.capture_sequence) == (4, 1)
         assert (second.pane_epoch, second.capture_sequence) == (4, 2)
         assert first.frame_id != second.frame_id
+        # Global frame_id PK relies on UUID randomness across concurrent hosts.
+        UUID(str(first.frame_id))
+        UUID(str(second.frame_id))
 
     asyncio.run(scenario())
+
+
+def test_uuid_frame_ids_insert_across_repository_partitions(tmp_path) -> None:
+    """harness_control_frames.frame_id stays a global PK; uuid4 keeps hosts safe."""
+    db_path = tmp_path / "murder.db"
+    first = open_test_repo_db(db_path)
+    second = open_test_repo_db(db_path, repository_id=SECOND_TEST_REPOSITORY_ID)
+    now = datetime.now(timezone.utc)
+    try:
+        frame_a = TerminalFrame(
+            frame_id=FrameId(str(uuid4())),
+            harness_id=HarnessId("codex"),
+            captured_at=now,
+            width=80,
+            height=24,
+            raw_text="a",
+            ansi_preserved=False,
+            pane_epoch=0,
+            capture_sequence=1,
+        )
+        frame_b = TerminalFrame(
+            frame_id=FrameId(str(uuid4())),
+            harness_id=HarnessId("codex"),
+            captured_at=now,
+            width=80,
+            height=24,
+            raw_text="b",
+            ansi_preserved=False,
+            pane_epoch=0,
+            capture_sequence=1,
+        )
+        persist_frame(first, frame_a)
+        persist_frame(second, frame_b)
+        assert frame_a.frame_id != frame_b.frame_id
+        count = first.conn.execute("SELECT COUNT(*) AS n FROM harness_control_frames").fetchone()
+        assert int(count["n"]) == 2
+    finally:
+        first.close()
+        second.close()
 
 
 def test_pane_dimensions_rejects_invalid_tmux_response(monkeypatch) -> None:

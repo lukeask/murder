@@ -115,7 +115,7 @@ class ProcessScope:
         self._stack.callback(db.close)
         self._repository_id = db.repository_id
 
-        run_id = allocate_run_id(repo_root)
+        run_id = allocate_run_id(repo_root, repository_id=db.repository_id)
         # Per-repo file handler on the ``murder`` package logger — never on root.
         configure_repo_logging(
             repository_id=db.repository_id,

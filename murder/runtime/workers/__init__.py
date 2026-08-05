@@ -8,7 +8,6 @@ from murder.runtime.workers.orchestrator_worker import OrchestratorCommandWorker
 from murder.runtime.workers.planner_session_sweeper import PlannerSessionSweeperWorker
 from murder.runtime.workers.process_runner import SubprocessWorkerRunner
 from murder.runtime.workers.state_worker import StateCommandWorker
-from murder.runtime.workers.sync_workers import NoteSyncWorker, PlanSyncWorker
 from murder.runtime.workers.usage_probe_worker import UsageProbeWorker
 
 __all__ = [
@@ -21,8 +20,6 @@ __all__ = [
     "OrchestratorCommandWorker",
     "StateCommandWorker",
     "SubprocessWorkerRunner",
-    "PlanSyncWorker",
-    "NoteSyncWorker",
     "UsageProbeWorker",
     "ModelCatalogRefreshWorker",
     "DoneSessionSweeperWorker",
