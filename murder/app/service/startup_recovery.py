@@ -14,6 +14,7 @@ from uuid import UUID
 
 from murder.app.service.recovery import ReconcileReport, reconcile_agents_vs_tmux
 from murder.runtime.terminal import tmux
+from murder.runtime.terminal.session_names import SessionNamePolicy
 from murder.state.persistence.activities import (
     reap_expired_claims,
     reap_expired_reservations,
@@ -100,14 +101,22 @@ def _from_reconcile_report(
     )
 
 
-async def run_startup_recovery(*, db: RepoDb) -> StartupRecoveryResult:
+async def run_startup_recovery(
+    *,
+    db: RepoDb,
+    session_names: SessionNamePolicy,
+) -> StartupRecoveryResult:
     """Run the synchronous boot reconciliation path before socket bind.
 
     Current reconciliation is DB + tmux only. Surviving Crows are returned for
     post-socket reattachment — they are not reattached here.
+
+    ``tmux.list_sessions`` is filtered to this host's ``SessionNamePolicy``
+    prefix so a multi-repo daemon cannot reconcile against another repo's panes.
     """
     WorkflowRuntime(db).recover_pending_signals()
-    live_sessions = set(await tmux.list_sessions())
+    prefix = session_names.project_prefix()
+    live_sessions = set(await tmux.list_sessions(prefix=prefix))
     report = reconcile_agents_vs_tmux(db, live_sessions)
     killed: list[str] = []
     for session in report.sessions_to_kill:

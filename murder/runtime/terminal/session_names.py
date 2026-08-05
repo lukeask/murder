@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from murder.config import Config
+
+# Short, stable suffix so two repos with the same project.name cannot collide
+# under one shared tmux server (single-daemon multi-repo).
+_REPO_HASH_LEN = 8
+
+
+def short_repository_hash(repository_id: str) -> str:
+    """Return a short hex digest of ``repository_id`` for tmux prefix uniqueness."""
+    return hashlib.sha256(repository_id.encode("utf-8")).hexdigest()[:_REPO_HASH_LEN]
 
 
 @dataclass(frozen=True)
@@ -13,11 +23,23 @@ class SessionNamePolicy:
 
     project_name: str
     template: str
+    repository_id: str | None = None
 
     @classmethod
-    def from_config(cls, config: Config) -> SessionNamePolicy:
+    def from_config(
+        cls,
+        config: Config,
+        *,
+        repository_id: str | None = None,
+    ) -> SessionNamePolicy:
         proj = config.project.name.replace(" ", "_").replace("/", "_")
-        return cls(project_name=proj, template=config.runtime.session_name_template)
+        if repository_id:
+            proj = f"{proj}_{short_repository_hash(repository_id)}"
+        return cls(
+            project_name=proj,
+            template=config.runtime.session_name_template,
+            repository_id=repository_id,
+        )
 
     def format(self, role: str, suffix: str) -> str:
         return self.template.format(project=self.project_name, role=role, suffix=suffix)
@@ -45,4 +67,5 @@ __all__ = [
     "SessionNamePolicy",
     "format_session_name",
     "project_session_prefix",
+    "short_repository_hash",
 ]

@@ -273,5 +273,88 @@ def test_advanced_log_start_failure_clears_ambient(
                 pass
 
     asyncio.run(_drive())
-    # Ambient context must not leak the failed recorder.
+    # Caller ambient context must never receive the failed recorder — binding
+    # lives only inside ProcessScope.observability_context.
+    assert isinstance(current_advanced_log(), NullAdvancedLog)
+
+
+def test_observability_context_isolates_from_caller(
+    repo_root: Path,
+) -> None:
+    from murder.observability import log_context as ctx
+
+    async def _drive() -> None:
+        async with ProcessScope.open(_config(), repo_root) as scope:
+            # Caller (this task) must not see host bindings.
+            assert isinstance(current_advanced_log(), NullAdvancedLog)
+            assert ctx._run_id.get() is None
+            assert ctx.get_repository_id() is None
+
+            def _probe() -> tuple[object, str | None, str | None]:
+                return (
+                    current_advanced_log(),
+                    ctx._run_id.get(),
+                    ctx.get_repository_id(),
+                )
+
+            log, run_id, repository_id = scope.observability_context.run(_probe)
+            assert log is scope.advanced_log
+            assert run_id == scope.run_id
+            assert repository_id == scope.repository_id
+
+    asyncio.run(_drive())
+    assert isinstance(current_advanced_log(), NullAdvancedLog)
+
+
+def test_create_task_with_context_inherits_host_bindings(
+    repo_root: Path,
+) -> None:
+    from murder.observability import log_context as ctx
+    from murder.observability.log_context import create_task_with_context
+
+    async def _drive() -> None:
+        async with ProcessScope.open(_config(), repo_root) as scope:
+            seen: dict[str, object] = {}
+
+            async def _child() -> None:
+                seen["log"] = current_advanced_log()
+                seen["run_id"] = ctx._run_id.get()
+                seen["repository_id"] = ctx.get_repository_id()
+
+            await create_task_with_context(
+                _child(),
+                name="obs-probe",
+                context=scope.observability_context,
+            )
+            assert seen["log"] is scope.advanced_log
+            assert seen["run_id"] == scope.run_id
+            assert seen["repository_id"] == scope.repository_id
+            # Caller task remains unbound.
+            assert isinstance(current_advanced_log(), NullAdvancedLog)
+            assert ctx.get_repository_id() is None
+
+    asyncio.run(_drive())
+
+
+def test_adopt_observability_context_installs_into_current_task(
+    repo_root: Path,
+) -> None:
+    from murder.observability import log_context as ctx
+    from murder.observability.log_context import adopt_observability_context
+
+    async def _drive() -> None:
+        async with ProcessScope.open(_config(), repo_root) as scope:
+
+            async def _inner() -> None:
+                adopt_observability_context(scope.observability_context)
+                assert current_advanced_log() is scope.advanced_log
+                assert ctx._run_id.get() == scope.run_id
+                assert ctx.get_repository_id() == scope.repository_id
+
+            await asyncio.create_task(_inner())
+            # Adoption is scoped to the inner task's context copy.
+            assert isinstance(current_advanced_log(), NullAdvancedLog)
+            assert ctx.get_repository_id() is None
+
+    asyncio.run(_drive())
     assert isinstance(current_advanced_log(), NullAdvancedLog)

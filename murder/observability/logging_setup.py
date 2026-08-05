@@ -1,14 +1,18 @@
 """Central logging configuration (Step 1.1).
 
-Installs a structured NDJSON formatter (one JSON object per line) on the root
-logger, always keeping a stderr handler (so the service child's stdout/stderr
-``supervisor.ndjson`` keeps receiving output) and optionally adding a per-run
-``service.log`` file handler.
+The daemon owns the root logger: stderr NDJSON (so the service child's
+stdout/stderr ``daemon.ndjson`` keeps receiving output) and an optional
+daemon-level file handler.
+
+Per-repo run logs (``service.log``) attach as filtered handlers on the
+``murder`` package logger — never as additional root handlers — keyed by
+``repository_id`` via :class:`RepositoryIdFilter`. See
+:func:`configure_repo_logging`.
 
 :func:`configure_logging` is idempotent: calling it twice never double-adds the
 stderr handler, but a later call that first supplies a ``log_path`` will attach
-the file handler. Handlers are tagged with a sentinel attribute to make this
-cheap and robust.
+the (daemon) file handler. Handlers are tagged with a sentinel attribute to make
+this cheap and robust.
 """
 
 from __future__ import annotations
@@ -21,7 +25,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from murder.observability.log_context import CONTEXT_FIELDS, LogContextFilter
+from murder.observability.log_context import (
+    CONTEXT_FIELDS,
+    FixedFieldsFilter,
+    LogContextFilter,
+    RepositoryIdFilter,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -51,6 +60,9 @@ VALID_RUNGS: tuple[str, ...] = tuple(LADDER)
 # idempotent and we never collide with handlers installed elsewhere.
 _STDERR_TAG = "_murder_stderr_handler"
 _FILE_TAG = "_murder_file_path"
+_REPO_FILE_TAG = "_murder_repo_file_path"
+_REPO_ID_TAG = "_murder_repository_id"
+_REPO_LOGGER_PREFIX = "murder.repo."
 
 # Standard LogRecord attributes we never emit as structured extras.
 _RESERVED = frozenset(
@@ -107,11 +119,13 @@ def _normalize_level(level: str) -> str:
 
 
 def configure_logging(*, level: str, log_path: Path | None) -> None:
-    """Configure the root logger with NDJSON output (idempotent).
+    """Configure the daemon-owned root logger with NDJSON output (idempotent).
 
     Always ensures a stderr handler exists; if ``log_path`` is given, ensures a
-    single :class:`logging.FileHandler` for that path is attached. Sets the root
-    level from ``level`` (falling back to INFO on an invalid value).
+    single daemon :class:`logging.FileHandler` for that path is attached on the
+    **root** logger. Per-repo run logs must use :func:`configure_repo_logging`
+    instead — never pass a per-repo ``service.log`` here under a multi-host
+    daemon.
     """
     root = logging.getLogger()
     normalized = _normalize_level(level)
@@ -129,7 +143,7 @@ def configure_logging(*, level: str, log_path: Path | None) -> None:
         setattr(stderr_handler, _STDERR_TAG, True)
         root.addHandler(stderr_handler)
 
-    # Ensure at most one file handler per distinct path.
+    # Ensure at most one daemon file handler per distinct path (root only).
     if log_path is not None:
         target = str(Path(log_path))
         have_file = any(getattr(h, _FILE_TAG, None) == target for h in root.handlers)
@@ -140,6 +154,66 @@ def configure_logging(*, level: str, log_path: Path | None) -> None:
             file_handler.addFilter(context_filter)
             setattr(file_handler, _FILE_TAG, target)
             root.addHandler(file_handler)
+
+
+def repo_logger_name(repository_id: str) -> str:
+    """Return the child logger name for a repository host."""
+    return f"{_REPO_LOGGER_PREFIX}{repository_id}"
+
+
+def configure_repo_logging(
+    *,
+    repository_id: str,
+    level: str,
+    log_path: Path,
+    run_id: str | None = None,
+) -> logging.Logger:
+    """Attach a per-repo run log without adding handlers to the root logger.
+
+    The FileHandler lives on the ``murder`` package logger and is gated by
+    :class:`RepositoryIdFilter` so concurrent hosts cannot cross-write. A named
+    child logger ``murder.repo.{repository_id}`` is returned for explicit use.
+    Idempotent for the same ``(repository_id, log_path)``.
+    """
+    normalized = _normalize_level(level)
+    child = logging.getLogger(repo_logger_name(repository_id))
+    child.setLevel(normalized)
+
+    package = logging.getLogger("murder")
+    # Ensure package level is at least as verbose as the repo rung so filtered
+    # handlers still see DEBUG records when requested.
+    if package.level == logging.NOTSET or package.level > getattr(logging, normalized):
+        package.setLevel(normalized)
+
+    target = str(Path(log_path))
+    for handler in package.handlers:
+        if (
+            getattr(handler, _REPO_FILE_TAG, None) == target
+            and getattr(handler, _REPO_ID_TAG, None) == repository_id
+        ):
+            return child
+
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    file_handler = logging.FileHandler(target, encoding="utf-8")
+    file_handler.setFormatter(NdjsonFormatter())
+    file_handler.addFilter(LogContextFilter())
+    file_handler.addFilter(RepositoryIdFilter(repository_id))
+    if run_id is not None:
+        file_handler.addFilter(FixedFieldsFilter(run_id=run_id))
+    setattr(file_handler, _REPO_FILE_TAG, target)
+    setattr(file_handler, _REPO_ID_TAG, repository_id)
+    package.addHandler(file_handler)
+    return child
+
+
+def close_repo_logging(repository_id: str) -> None:
+    """Remove and close per-repo file handlers for ``repository_id``."""
+    package = logging.getLogger("murder")
+    for handler in list(package.handlers):
+        if getattr(handler, _REPO_ID_TAG, None) != repository_id:
+            continue
+        package.removeHandler(handler)
+        handler.close()
 
 
 def _normalize_rung(value: str | None) -> str | None:

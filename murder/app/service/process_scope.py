@@ -4,6 +4,12 @@ Owns RepoDb, run/log infrastructure, advanced-log, orchestration event sink,
 command submitter, recorder subscription, and external-stop signals.
 Does not own agents, sessions, sync, documents, dispatchers, or exclusivity
 locking (the daemon manager owns one host per repository_id).
+
+Observability (``run_id``, ``repository_id``, ``current_advanced_log``) is bound
+inside :attr:`observability_context` so concurrent hosts do not clobber each
+other. Callers should run host work (or ``asyncio.create_task``) with that
+context; explicit ``AdvancedLogBase`` / ``run_id`` injection remains preferred
+where a handle is already available.
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ import json
 import signal
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from contextvars import Context, copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,9 +32,10 @@ from murder.observability.advanced_log import (
     open_advanced_log,
     set_current_advanced_log,
 )
-from murder.observability.log_context import set_run_id
+from murder.observability.log_context import set_repository_id, set_run_id
 from murder.observability.logging_setup import (
-    configure_logging,
+    close_repo_logging,
+    configure_repo_logging,
     resolve_log_level,
     resolve_recorder_mode,
 )
@@ -74,6 +82,8 @@ class ProcessScope:
         self._repo_root: Path | None = None
         self._recorder_sub: SubscriptionHandle | None = None
         self._recorder_mode: str = "off"
+        self._observability_context: Context | None = None
+        self._repository_id: str | None = None
 
     @classmethod
     @asynccontextmanager
@@ -103,13 +113,18 @@ class ProcessScope:
 
         db = open_repo_db(repo_root)
         self._stack.callback(db.close)
+        self._repository_id = db.repository_id
 
         run_id = allocate_run_id(repo_root)
-        set_run_id(run_id)
-        configure_logging(
+        # Per-repo file handler on the ``murder`` package logger — never on root.
+        configure_repo_logging(
+            repository_id=db.repository_id,
             level=resolve_log_level(),
             log_path=service_log(repo_root, run_id),
+            run_id=run_id,
         )
+        self._stack.callback(close_repo_logging, db.repository_id)
+
         snap = json.dumps(config.model_dump(mode="json"), default=str)
         _db_insert_run(db, run_id, snap)
 
@@ -122,14 +137,29 @@ class ProcessScope:
         mode = resolve_recorder_mode()
         self._recorder_mode = mode
         advanced_log = open_advanced_log(repo_root, run_id, mode)
-        set_current_advanced_log(advanced_log)
+
+        # Bind ambient observability only inside a dedicated Context so the
+        # caller's (daemon/manager) context is unchanged for sibling hosts.
+        def _bind_observability() -> None:
+            set_run_id(run_id)
+            set_repository_id(db.repository_id)
+            set_current_advanced_log(advanced_log)
+
+        host_ctx = copy_context()
+        host_ctx.run(_bind_observability)
+        self._observability_context = host_ctx
 
         async def _stop_advanced_log() -> None:
             with contextlib.suppress(Exception):
                 await advanced_log.stop()
-            set_current_advanced_log(NullAdvancedLog())
 
-        # Register before start so a failed/partial start still clears ambient
+            def _clear() -> None:
+                set_current_advanced_log(NullAdvancedLog())
+
+            if self._observability_context is not None:
+                self._observability_context.run(_clear)
+
+        # Register before start so a failed/partial start still clears host
         # context and attempts stop on unwind.
         self._stack.push_async_callback(_stop_advanced_log)
         await advanced_log.start()
@@ -213,6 +243,19 @@ class ProcessScope:
     def recorder_mode(self) -> str:
         return self._recorder_mode
 
+    @property
+    def observability_context(self) -> Context:
+        """Per-host contextvars snapshot with run_id / repository_id / advanced_log."""
+        if self._observability_context is None:
+            raise RuntimeError("ProcessScope is not open")
+        return self._observability_context
+
+    @property
+    def repository_id(self) -> str:
+        if self._repository_id is None:
+            raise RuntimeError("ProcessScope is not open")
+        return self._repository_id
+
     def is_external_stop_set(self) -> bool:
         return self._external_stop.is_set()
 
@@ -246,6 +289,8 @@ class ProcessScope:
         finally:
             self._resources = None
             self._recorder_sub = None
+            self._observability_context = None
+            self._repository_id = None
 
 
 __all__ = ["ProcessResources", "ProcessScope"]

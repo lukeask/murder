@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
+from contextvars import Context
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -42,6 +43,7 @@ from murder.app.service.supervisor import Supervisor
 from murder.config import Config
 from murder.facts.log import FactLog, ProjectionInputLog
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
+from murder.observability.log_context import create_task_with_context
 from murder.roster.service import RosterService
 from murder.runtime.agent_runtime import AgentRuntime
 from murder.runtime.agents.events import AgentEventSink, LoggingAgentEventSink
@@ -207,6 +209,13 @@ class RepositoryHost:
             raise RuntimeError("service is not started")
         return self._running.process.db.repository_id
 
+    @property
+    def observability_context(self) -> Context:
+        """Per-host contextvars (run_id / repository_id / advanced_log)."""
+        if self._running is None:
+            raise RuntimeError("service is not started")
+        return self._running.process.observability_context
+
     def has_live_agents(self) -> bool:
         """True when any registered agent is outside a terminal status."""
         from murder.runtime.agents.base import TERMINAL_STATUSES
@@ -242,199 +251,19 @@ class RepositoryHost:
             process = await stack.enter_async_context(
                 ProcessScope.open(self.config, self.repo_root)
             )
-            session_names = SessionNamePolicy.from_config(self.config)
-
-            async def _sweep() -> None:
-                # Failed-start unwind must not project-sweep surviving Crow panes
-                # that startup recovery deferred for post-socket reattach (§7.2).
-                if not self._lifecycle_committed:
-                    return
-                if process.is_external_stop_set():
-                    return
-                with contextlib.suppress(Exception):
-                    await kill_project_tmux_sessions(session_names)
-
-            stack.push_async_callback(_sweep)
-
-            sessions = await stack.enter_async_context(SessionService.open(process.db))
-            roster = RosterService(process.db)
-            verified_factory = VerifiedControlFactory(db=process.db, sessions=sessions)
-            agents = await stack.enter_async_context(
-                AgentRuntime.open(
-                    db=process.db,
-                    config=self.config,
-                    repo_root=self.repo_root,
-                    roster=roster,
-                    events=process.events,
-                    run_id=process.run_id,
-                    advanced_log=process.advanced_log,
-                    preserve_tmux_on_close=process.is_external_stop_set,
-                    verified_control_factory=verified_factory,
-                    command_submitter=process.commands,
-                    sessions=sessions,
-                    lifecycle_events_enabled=(process.recorder_mode != "off"),
-                )
-            )
-
-            sync = FilesystemSyncService.attach(self.repo_root, process.db)
-            documents = DocumentService(
-                repo_root=self.repo_root,
-                db=process.db,
-                plan_sync=sync.plan_sync,
-                note_sync=sync.note_sync,
-            )
-            editors = DocumentEditorService(
-                self.repo_root, documents, sessions=sessions
-            )
-            sync.seed()
-
-            recovery = await run_startup_recovery(db=process.db)
-
-            # Prefer the daemon-shared registry so HarnessVersionProbeWorker
-            # (process-scoped) broadcasts into every active host.
-            harness_versions = self.harness_versions or HarnessVersionRegistry()
-            self.harness_versions = harness_versions
-            event_sink: AgentEventSink = LoggingAgentEventSink()
-            structured_decisions = StructuredDecisionRouter(
-                db=process.db,
-                events=process.events,
-                run_id=process.run_id,
-                get_agent=agents.find,
-            )
-            agents.structured_decisions = structured_decisions
-
-            self.read_model = ServiceReadModel(process.db, self.repo_root)
-            self.fact_log = FactLog(process.db)
-            self.projection_input_log = ProjectionInputLog(process.db)
-
-            orchestrator = Orchestrator(
-                config=self.config,
-                user_config=self.user_config,
-                repo_root=self.repo_root,
-                db=process.db,
-                run_id=process.run_id,
-                events=process.events,
-                commands=process.commands,
-                event_sink=event_sink,
-                agents=agents,
-                session_names=session_names,
-                plan_sync=sync.plan_sync,
-            )
-            agents.crow_ask_router.bind(orchestrator.route_crow_ask)
-            self.orchestrator = orchestrator
-
-            async def _send_parse_error(agent_id: str, message: str) -> None:
-                await orchestrator.send_agent_message(
-                    agent_id,
-                    message,
-                    None,
-                    spawn_if_needed=False,
-                )
-
-            sync.set_parse_error_notifier(_send_parse_error)
-            await stack.enter_async_context(sync.running())
-
-            dispatchers = await stack.enter_async_context(
-                DispatcherLoops.open(
-                    db=process.db,
-                    session_controllers=sessions.controllers,
+            # Wire the rest of the host under the ProcessScope observability
+            # context so nested create_task calls inherit run_id / repository_id
+            # / advanced_log without clobbering sibling hosts.
+            await create_task_with_context(
+                self._start_under_observability(
+                    stack=stack,
+                    process=process,
                     activity_factory=activity_factory,
                     trigger_factory=trigger_factory,
-                )
+                ),
+                name=f"repo-host-start:{process.repository_id}",
+                context=process.observability_context,
             )
-
-            running = _RunningService(
-                process=process,
-                sessions=sessions,
-                agents=agents,
-                sync=sync,
-                documents=documents,
-                editors=editors,
-                dispatchers=dispatchers,
-                orchestrator=orchestrator,
-                recovery=recovery,
-                harness_versions=harness_versions,
-                event_sink=event_sink,
-                structured_decisions=structured_decisions,
-                session_names=session_names,
-                roster=roster,
-            )
-            # Expose lifecycle state for handler registration before workers start.
-            self._running = running
-            self.register_application_handlers()
-
-            self.application_dispatcher = ApplicationDispatcher(
-                queries=self._application_queries,
-                commands=self._application_commands,
-            )
-            self.background_tasks = ServiceBackgroundTasks(
-                repo_root=self.repo_root,
-                db=process.db,
-                agents=agents,
-                orchestrator=orchestrator,
-                recovery=recovery,
-                advanced_log=process.advanced_log,
-            )
-
-            async def terminal_input(
-                session_id: UUID,
-                client_id: str,
-                lease_id: UUID,
-                fence: int,
-                data: bytes,
-            ) -> None:
-                import base64
-
-                record = sessions.store.get_session(session_id)
-                if record is None or record.harness != "document_editor":
-                    raise ValueError("terminal input target is not a document editor")
-                if record.transport is not SessionTransport.TMUX:
-                    raise ValueError("document editor does not expose a tmux terminal")
-                controller = await sessions.controllers.get_or_create(record)
-                await controller.execute(
-                    WriteTerminalInput(
-                        operation_id=uuid4(),
-                        lease_id=lease_id,
-                        fence=fence,
-                        encoding="base64",
-                        data=base64.b64encode(data).decode("ascii"),
-                    ),
-                    principal=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
-                )
-
-            async def terminal_input_validator(
-                session_id: UUID,
-                client_id: str,
-                lease_id: UUID,
-                fence: int,
-            ) -> None:
-                record = sessions.store.get_session(session_id)
-                if record is None or record.harness != "document_editor":
-                    raise ValueError("terminal input target is not a document editor")
-                sessions.store.validate_writer_lease(
-                    session_id=session_id,
-                    lease_id=lease_id,
-                    fence=fence,
-                    holder=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
-                    required_mode=WriterMode.RAW_TERMINAL,
-                )
-
-            self.terminal_capture = sessions.capture_terminal
-            self.terminal_output_open = sessions.open_terminal_output
-            self.terminal_input = terminal_input
-            self.terminal_input_validator = terminal_input_validator
-
-            self.supervisor = await start_supervisor_workers(
-                repo_root=self.repo_root,
-                db=process.db,
-                run_id=process.run_id,
-                events=process.events,
-                commands=process.commands,
-                advanced_log=process.advanced_log,
-                agents=agents,
-                orchestrator=orchestrator,
-            )
-            self.background_tasks.start()
         except BaseException:
             self._lifecycle_committed = False
             with contextlib.suppress(Exception):
@@ -443,6 +272,214 @@ class RepositoryHost:
 
         self._stack = stack
         self._lifecycle_committed = True
+
+    async def _start_under_observability(
+        self,
+        *,
+        stack: AsyncExitStack,
+        process: ProcessScope,
+        activity_factory: ActivityDispatcherFactory,
+        trigger_factory: TriggerDispatcherFactory,
+    ) -> None:
+        session_names = SessionNamePolicy.from_config(
+            self.config,
+            repository_id=process.repository_id,
+        )
+
+        async def _sweep() -> None:
+            # Failed-start unwind must not project-sweep surviving Crow panes
+            # that startup recovery deferred for post-socket reattach (§7.2).
+            if not self._lifecycle_committed:
+                return
+            if process.is_external_stop_set():
+                return
+            with contextlib.suppress(Exception):
+                await kill_project_tmux_sessions(session_names)
+
+        stack.push_async_callback(_sweep)
+
+        sessions = await stack.enter_async_context(SessionService.open(process.db))
+        roster = RosterService(process.db)
+        verified_factory = VerifiedControlFactory(db=process.db, sessions=sessions)
+        agents = await stack.enter_async_context(
+            AgentRuntime.open(
+                db=process.db,
+                config=self.config,
+                repo_root=self.repo_root,
+                roster=roster,
+                events=process.events,
+                run_id=process.run_id,
+                advanced_log=process.advanced_log,
+                preserve_tmux_on_close=process.is_external_stop_set,
+                verified_control_factory=verified_factory,
+                command_submitter=process.commands,
+                sessions=sessions,
+                lifecycle_events_enabled=(process.recorder_mode != "off"),
+            )
+        )
+
+        sync = FilesystemSyncService.attach(self.repo_root, process.db)
+        documents = DocumentService(
+            repo_root=self.repo_root,
+            db=process.db,
+            plan_sync=sync.plan_sync,
+            note_sync=sync.note_sync,
+        )
+        editors = DocumentEditorService(
+            self.repo_root, documents, sessions=sessions
+        )
+        sync.seed()
+
+        recovery = await run_startup_recovery(
+            db=process.db,
+            session_names=session_names,
+        )
+
+        # Prefer the daemon-shared registry so HarnessVersionProbeWorker
+        # (process-scoped) broadcasts into every active host.
+        harness_versions = self.harness_versions or HarnessVersionRegistry()
+        self.harness_versions = harness_versions
+        event_sink: AgentEventSink = LoggingAgentEventSink()
+        structured_decisions = StructuredDecisionRouter(
+            db=process.db,
+            events=process.events,
+            run_id=process.run_id,
+            get_agent=agents.find,
+        )
+        agents.structured_decisions = structured_decisions
+
+        self.read_model = ServiceReadModel(process.db, self.repo_root)
+        self.fact_log = FactLog(process.db)
+        self.projection_input_log = ProjectionInputLog(process.db)
+
+        orchestrator = Orchestrator(
+            config=self.config,
+            user_config=self.user_config,
+            repo_root=self.repo_root,
+            db=process.db,
+            run_id=process.run_id,
+            events=process.events,
+            commands=process.commands,
+            event_sink=event_sink,
+            agents=agents,
+            session_names=session_names,
+            plan_sync=sync.plan_sync,
+        )
+        agents.crow_ask_router.bind(orchestrator.route_crow_ask)
+        self.orchestrator = orchestrator
+
+        async def _send_parse_error(agent_id: str, message: str) -> None:
+            await orchestrator.send_agent_message(
+                agent_id,
+                message,
+                None,
+                spawn_if_needed=False,
+            )
+
+        sync.set_parse_error_notifier(_send_parse_error)
+        await stack.enter_async_context(sync.running())
+
+        dispatchers = await stack.enter_async_context(
+            DispatcherLoops.open(
+                db=process.db,
+                session_controllers=sessions.controllers,
+                activity_factory=activity_factory,
+                trigger_factory=trigger_factory,
+            )
+        )
+
+        running = _RunningService(
+            process=process,
+            sessions=sessions,
+            agents=agents,
+            sync=sync,
+            documents=documents,
+            editors=editors,
+            dispatchers=dispatchers,
+            orchestrator=orchestrator,
+            recovery=recovery,
+            harness_versions=harness_versions,
+            event_sink=event_sink,
+            structured_decisions=structured_decisions,
+            session_names=session_names,
+            roster=roster,
+        )
+        # Expose lifecycle state for handler registration before workers start.
+        self._running = running
+        self.register_application_handlers()
+
+        self.application_dispatcher = ApplicationDispatcher(
+            queries=self._application_queries,
+            commands=self._application_commands,
+        )
+        self.background_tasks = ServiceBackgroundTasks(
+            repo_root=self.repo_root,
+            db=process.db,
+            agents=agents,
+            orchestrator=orchestrator,
+            recovery=recovery,
+            advanced_log=process.advanced_log,
+        )
+
+        async def terminal_input(
+            session_id: UUID,
+            client_id: str,
+            lease_id: UUID,
+            fence: int,
+            data: bytes,
+        ) -> None:
+            import base64
+
+            record = sessions.store.get_session(session_id)
+            if record is None or record.harness != "document_editor":
+                raise ValueError("terminal input target is not a document editor")
+            if record.transport is not SessionTransport.TMUX:
+                raise ValueError("document editor does not expose a tmux terminal")
+            controller = await sessions.controllers.get_or_create(record)
+            await controller.execute(
+                WriteTerminalInput(
+                    operation_id=uuid4(),
+                    lease_id=lease_id,
+                    fence=fence,
+                    encoding="base64",
+                    data=base64.b64encode(data).decode("ascii"),
+                ),
+                principal=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
+            )
+
+        async def terminal_input_validator(
+            session_id: UUID,
+            client_id: str,
+            lease_id: UUID,
+            fence: int,
+        ) -> None:
+            record = sessions.store.get_session(session_id)
+            if record is None or record.harness != "document_editor":
+                raise ValueError("terminal input target is not a document editor")
+            sessions.store.validate_writer_lease(
+                session_id=session_id,
+                lease_id=lease_id,
+                fence=fence,
+                holder=PrincipalRef(kind=PrincipalKind.CLIENT, id=client_id),
+                required_mode=WriterMode.RAW_TERMINAL,
+            )
+
+        self.terminal_capture = sessions.capture_terminal
+        self.terminal_output_open = sessions.open_terminal_output
+        self.terminal_input = terminal_input
+        self.terminal_input_validator = terminal_input_validator
+
+        self.supervisor = await start_supervisor_workers(
+            repo_root=self.repo_root,
+            db=process.db,
+            run_id=process.run_id,
+            events=process.events,
+            commands=process.commands,
+            advanced_log=process.advanced_log,
+            agents=agents,
+            orchestrator=orchestrator,
+        )
+        self.background_tasks.start()
 
     async def _abort_partial_start(self, stack: AsyncExitStack) -> None:
         if self.background_tasks is not None:

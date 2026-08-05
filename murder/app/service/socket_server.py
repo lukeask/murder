@@ -16,6 +16,7 @@ import binascii
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
+from contextvars import Context
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +70,10 @@ from murder.app.protocol.wire import (
 from murder.app.service.gateway import ApplicationGateway
 from murder.app.service.projection_registry import ProjectionProviderRegistry
 from murder.facts.log import FactLog, ProjectionInputLog, ReplayGapError
+from murder.observability.log_context import (
+    adopt_observability_context,
+    create_task_with_context,
+)
 from murder.runtime.terminal.output import TmuxTerminalOutput
 from murder.runtime.terminal.vt import VtBufferSnapshot, VtCell, VtRendition
 
@@ -93,6 +98,8 @@ class ApplicationConnection:
     tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     terminals: dict[str, TerminalAttachMessage] = field(default_factory=dict)
     input_streams: dict[str, _TerminalInputState] = field(default_factory=dict)
+    # Per-host observability Context (run_id / repository_id / advanced_log).
+    task_context: Context | None = None
 
     async def send(self, message: object) -> None:
         await self.websocket.send_json(message.model_dump(mode="json"))
@@ -146,7 +153,11 @@ class ApplicationConnection:
                 if self.tasks.get(key) is asyncio.current_task():
                     self.tasks.pop(key, None)
 
-        task = asyncio.create_task(run_stream(), name=name)
+        task = create_task_with_context(
+            run_stream(),
+            name=name,
+            context=self.task_context,
+        )
         self.tasks[key] = task
         return task
 
@@ -545,11 +556,13 @@ class RepositorySocketSession:
         terminal_input: TerminalInput | None = None,
         terminal_input_validator: TerminalInputValidator | None = None,
         terminal_interval_s: float = 0.1,
+        task_context: Context | None = None,
     ) -> None:
         self._gateway = gateway
         self._facts = facts
         self._inputs = projection_inputs
         self._run_id = run_id
+        self._task_context = task_context
         self._subscriptions = SubscriptionCoordinator(facts, projection_inputs, providers)
         self._terminals = TerminalStreamCoordinator(
             terminal_capture,
@@ -588,6 +601,11 @@ class RepositorySocketSession:
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
         connection: ApplicationConnection | None = None
+        # aiohttp runs this handler outside the host start task — adopt host
+        # bindings so inline dispatch (and inherited child tasks) see the right
+        # run_id / repository_id / advanced_log.
+        if self._task_context is not None:
+            adopt_observability_context(self._task_context)
         try:
             first = await ws.receive()
             if first.type is not WSMsgType.TEXT:
@@ -611,7 +629,9 @@ class RepositorySocketSession:
                     ).model_dump(mode="json")
                 )
                 return ws
-            connection = ApplicationConnection(ws, hello.client.client_id)
+            connection = ApplicationConnection(
+                ws, hello.client.client_id, task_context=self._task_context
+            )
             self._connections[connection.client_id] = connection
             await connection.send(
                 ServerHello(
@@ -752,6 +772,7 @@ def session_from_host(repo_host: Any) -> RepositorySocketSession:
         terminal_output_open=repo_host.terminal_output_open,
         terminal_input=repo_host.terminal_input,
         terminal_input_validator=repo_host.terminal_input_validator,
+        task_context=repo_host.observability_context,
     )
     repo_host.set_plan_seed_failure_notifier(session.notify_plan_seed_failed)
     return session

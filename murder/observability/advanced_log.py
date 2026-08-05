@@ -27,9 +27,11 @@ Design contract:
 - :class:`NullAdvancedLog` is the same interface, every method a no-op, no DB,
   no task. When the recorder is OFF this is what flows through the code paths so
   call sites stay UNCONDITIONAL.
-- :func:`current_advanced_log` returns the writer set by ``Runtime.start`` via a
-  module ContextVar, so the non-bus boundaries that have no direct Runtime handle
-  can reach it without plumbing.
+- :func:`current_advanced_log` returns the writer bound in the current
+  :mod:`contextvars` context (set by ``ProcessScope`` inside a per-host
+  ``observability_context``). Prefer explicit ``AdvancedLogBase`` injection when
+  a handle is already available (e.g. ``AgentRuntime``, ``ServiceBackgroundTasks``);
+  the ContextVar remains a convenience for deep seams like tmux / LLM clients.
 """
 
 from __future__ import annotations
@@ -198,7 +200,11 @@ _current: ContextVar[Optional["AdvancedLogBase"]] = ContextVar("current_advanced
 
 
 def set_current_advanced_log(log: "AdvancedLogBase") -> None:
-    """Pin the process-wide advanced log (set once at ``Runtime.start``)."""
+    """Pin the advanced log in the *current* contextvars context.
+
+    Under a multi-host daemon this must be set inside each host's
+    ``observability_context`` (see ``ProcessScope``), not the daemon ambient task.
+    """
     _current.set(log)
 
 
@@ -581,7 +587,14 @@ class AdvancedLog(AdvancedLogBase):
     def _build_row(self, payload: Any, extras: tuple) -> tuple:
         from murder.observability import log_context as _lc
 
-        ids = tuple(_lc._VARS[name].get() for name in CONTEXT_FIELDS)
+        # Prefer the explicitly-constructed run_id on this recorder so concurrent
+        # hosts never stamp another host's ambient ContextVar into our rows.
+        ids: list[str | None] = []
+        for name in CONTEXT_FIELDS:
+            if name == "run_id" and self.run_id is not None:
+                ids.append(self.run_id)
+            else:
+                ids.append(_lc._VARS[name].get())
         body = payload if self.mode == "raw" else redact(payload)
         try:
             payload_json = json.dumps(body, default=str)

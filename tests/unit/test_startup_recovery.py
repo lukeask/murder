@@ -24,6 +24,29 @@ def test_startup_recovery_returns_surviving_crows_and_kills_stale(
     del fake_tmux
     db = open_repo_db(repo_root)
     killed: list[str] = []
+    listed_prefixes: list[str | None] = []
+
+    from murder.config import (
+        Config,
+        CrowHandlerConfig,
+        HarnessRoleConfig,
+        ProjectConfig,
+        RuntimeConfig,
+    )
+    from murder.runtime.terminal.session_names import SessionNamePolicy
+
+    role = HarnessRoleConfig(harness="codex")
+    session_names = SessionNamePolicy.from_config(
+        Config(
+            project=ProjectConfig(name="repo"),
+            runtime=RuntimeConfig(session_name_template="murder_{project}_{role}{suffix}"),
+            collaborator=role,
+            default_crow=role,
+            crow_handler=CrowHandlerConfig(model="test-model"),
+        ),
+        repository_id=db.repository_id,
+    )
+    expected_prefix = session_names.project_prefix()
 
     report = ReconcileReport(
         agents_marked_dead=["crow-gone"],
@@ -37,9 +60,14 @@ def test_startup_recovery_returns_surviving_crows_and_kills_stale(
         "murder.app.service.startup_recovery.reconcile_agents_vs_tmux",
         lambda *_a, **_k: report,
     )
+
+    async def _list_sessions(prefix: str | None = None) -> list[str]:
+        listed_prefixes.append(prefix)
+        return ["crow-t-live", "stale-session"]
+
     monkeypatch.setattr(
         "murder.app.service.startup_recovery.tmux.list_sessions",
-        AsyncMock(return_value=["crow-t-live", "stale-session"]),
+        _list_sessions,
     )
 
     async def _kill(name: str) -> None:
@@ -70,7 +98,7 @@ def test_startup_recovery_returns_surviving_crows_and_kills_stale(
     )
 
     async def _drive() -> StartupRecoveryResult:
-        return await run_startup_recovery(db=db)
+        return await run_startup_recovery(db=db, session_names=session_names)
 
     result = asyncio.run(_drive())
     db.close()
@@ -78,6 +106,7 @@ def test_startup_recovery_returns_surviving_crows_and_kills_stale(
     recover_signals.assert_called_once_with()
     claims.assert_called_once_with(db)
     reservations.assert_called_once_with(db)
+    assert listed_prefixes == [expected_prefix]
     assert killed == ["stale-session"]
     assert result.agents_marked_dead == ("crow-gone",)
     assert result.tickets_reset_to_failed == ("t-gone",)
@@ -96,6 +125,26 @@ def test_startup_recovery_marks_lost_sessions_from_reconcile_report(
     db = open_repo_db(repo_root)
     lost_id = uuid4()
     report = ReconcileReport(harness_sessions_marked_lost=[str(lost_id)])
+    from murder.config import (
+        Config,
+        CrowHandlerConfig,
+        HarnessRoleConfig,
+        ProjectConfig,
+        RuntimeConfig,
+    )
+    from murder.runtime.terminal.session_names import SessionNamePolicy
+
+    role = HarnessRoleConfig(harness="codex")
+    session_names = SessionNamePolicy.from_config(
+        Config(
+            project=ProjectConfig(name="repo"),
+            runtime=RuntimeConfig(session_name_template="murder_{project}_{role}{suffix}"),
+            collaborator=role,
+            default_crow=role,
+            crow_handler=CrowHandlerConfig(model="test-model"),
+        ),
+        repository_id=db.repository_id,
+    )
     monkeypatch.setattr(
         "murder.app.service.startup_recovery.reconcile_agents_vs_tmux",
         lambda *_a, **_k: report,
@@ -125,7 +174,7 @@ def test_startup_recovery_marks_lost_sessions_from_reconcile_report(
         lambda _db: MagicMock(recover_pending_signals=lambda: None),
     )
 
-    result = asyncio.run(run_startup_recovery(db=db))
+    result = asyncio.run(run_startup_recovery(db=db, session_names=session_names))
     db.close()
     assert result.harness_sessions_marked_lost == (lost_id,)
     assert result.sessions_killed == ()

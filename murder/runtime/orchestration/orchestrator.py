@@ -924,7 +924,10 @@ class Orchestrator:
 
         new_config = Config.load(self._repo_root)
         self._config = new_config
-        self._session_names = SessionNamePolicy.from_config(new_config)
+        self._session_names = SessionNamePolicy.from_config(
+            new_config,
+            repository_id=self._db.repository_id,
+        )
         current_harness = new_config.collaborator.harness
         write_harnesses_doc(self._repo_root)
         # Best-effort re-scrape: newly-enabled harnesses get discovered and

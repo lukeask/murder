@@ -70,12 +70,21 @@ def test_formatter_renders_exc_info() -> None:
 @pytest.fixture
 def clean_root():
     root = logging.getLogger()
+    package = logging.getLogger("murder")
     saved = list(root.handlers)
     saved_level = root.level
+    saved_pkg = list(package.handlers)
+    saved_pkg_level = package.level
     root.handlers = []
+    package.handlers = []
     yield root
     root.handlers = saved
     root.setLevel(saved_level)
+    for handler in list(package.handlers):
+        package.removeHandler(handler)
+        handler.close()
+    package.handlers = saved_pkg
+    package.setLevel(saved_pkg_level)
 
 
 def _stderr_handlers(root):
@@ -95,7 +104,7 @@ def test_configure_logging_attaches_file_handler_on_later_call(clean_root, tmp_p
     assert len(_stderr_handlers(clean_root)) == 1
     assert not [h for h in clean_root.handlers if isinstance(h, logging.FileHandler)]
 
-    log_path = tmp_path / "nested" / "service.log"
+    log_path = tmp_path / "nested" / "daemon.log"
     configure_logging(level="INFO", log_path=log_path)
     file_handlers = [h for h in clean_root.handlers if isinstance(h, logging.FileHandler)]
     assert len(file_handlers) == 1
@@ -105,6 +114,62 @@ def test_configure_logging_attaches_file_handler_on_later_call(clean_root, tmp_p
     configure_logging(level="INFO", log_path=log_path)
     file_handlers = [h for h in clean_root.handlers if isinstance(h, logging.FileHandler)]
     assert len(file_handlers) == 1
+
+
+def test_configure_repo_logging_does_not_touch_root(clean_root, tmp_path) -> None:
+    from murder.observability import log_context as ctx
+    from murder.observability.logging_setup import (
+        close_repo_logging,
+        configure_repo_logging,
+    )
+
+    configure_logging(level="INFO", log_path=None)
+    root_before = list(clean_root.handlers)
+    log_path = tmp_path / "runs" / "service.log"
+    rid = "repo-aaa"
+    configure_repo_logging(
+        repository_id=rid,
+        level="INFO",
+        log_path=log_path,
+        run_id="run-1",
+    )
+    assert clean_root.handlers == root_before
+
+    package = logging.getLogger("murder")
+    repo_handlers = [
+        h for h in package.handlers if getattr(h, "_murder_repository_id", None) == rid
+    ]
+    assert len(repo_handlers) == 1
+
+    # Only ambient matching repository_id reaches the file.
+    token = ctx._repository_id.set(rid)
+    try:
+        logging.getLogger("murder.app.service.host").info("hello-repo")
+    finally:
+        ctx._repository_id.reset(token)
+    logging.getLogger("murder.app.service.host").info("hello-other")
+
+    close_repo_logging(rid)
+    text = log_path.read_text(encoding="utf-8")
+    assert "hello-repo" in text
+    assert "hello-other" not in text
+    assert '"run_id": "run-1"' in text
+
+
+def test_configure_repo_logging_idempotent(clean_root, tmp_path) -> None:
+    from murder.observability.logging_setup import close_repo_logging, configure_repo_logging
+
+    configure_logging(level="INFO", log_path=None)
+    log_path = tmp_path / "service.log"
+    rid = "repo-bbb"
+    configure_repo_logging(repository_id=rid, level="DEBUG", log_path=log_path, run_id="r")
+    configure_repo_logging(repository_id=rid, level="DEBUG", log_path=log_path, run_id="r")
+    package = logging.getLogger("murder")
+    assert (
+        len([h for h in package.handlers if getattr(h, "_murder_repository_id", None) == rid])
+        == 1
+    )
+    close_repo_logging(rid)
 
 
 def test_configure_logging_sets_level(clean_root) -> None:
