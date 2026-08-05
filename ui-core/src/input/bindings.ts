@@ -51,6 +51,7 @@ export type ActionId =
   | 'global.newPlan' // alt+p — open the new-plan popup
   | 'global.workflowEditor' // alt+g — open the workflow template editor
   | 'global.settings' // alt+o / ctrl+o — open the settings modal
+  | 'global.switchRepo' // alt+e / ctrl+e — open the in-TUI repository switcher
   | 'global.quickNote' // ctrl+n — open the quick-note capture (plain, not command-modified)
   | 'global.keyHelp' // ? — open the keybinding help overlay (see the ACTIONS note on reachability)
   | 'global.cycleTargetPrev' // alt+h / ctrl+h — cycle the recipient target to the previous one (chat-focus only)
@@ -165,6 +166,13 @@ export const ACTIONS: Readonly<Record<ActionId, ActionDef>> = {
     default: command('o'),
     description: 'settings',
     rebindable: false,
+  },
+  'global.switchRepo': {
+    id: 'global.switchRepo',
+    // alt+e / ctrl+e — open the daemon repo picker (mnemonic: elsewhere / exchange repo).
+    default: command('e'),
+    description: 'switch repository',
+    rebindable: true,
   },
   'global.quickNote': {
     id: 'global.quickNote',

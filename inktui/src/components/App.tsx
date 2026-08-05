@@ -129,10 +129,12 @@ import { newReportMode } from './NewReportModal.js';
 import { newWorkMode } from './NewWorkModal.js';
 import { Overlay, presentationHidesLayout } from './Overlay.js';
 import { promptTemplateManagerMode } from './PromptTemplateManagerMode.js';
+import { repoPickerMode } from './RepoPickerModal.js';
 import { settingsMode } from './SettingsModal.js';
 import type { SpawnContext } from './SpawnWizardModal.js';
 import { spawnWizardMode } from './SpawnWizardModal.js';
 import { TopBar } from './TopBar.js';
+import type { RepoListEntry } from '../application/reposApi.js';
 import { workflowLaunchReviewMode } from './WorkflowLaunchReviewMode.js';
 import {
   WORKFLOW_TEMPLATE_EDITOR_MODE_ID,
@@ -642,11 +644,20 @@ class BodyErrorBoundary extends Component<{ readonly children: ReactNode }, { ha
 function Shell({
   project,
   terminalEvents,
+  daemonUrl,
+  activeRepositoryId,
+  onSelectRepository,
 }: {
   readonly project?: string | undefined;
   /** The kitty stdin shim's chord channel (Phase 2), passed from the live entrypoint like `bus`. The
    * root input loop subscribes to it; omitted in smoke/tests (no shim → no side-channel chords). */
   readonly terminalEvents?: TerminalEvents | undefined;
+  /** Daemon HTTP base for the in-TUI repo switcher; omit to disable `alt+e`. */
+  readonly daemonUrl?: string | undefined;
+  /** Currently connected repository id (picker highlight). */
+  readonly activeRepositoryId?: string | undefined;
+  /** Called when the user picks a different repository in the switcher. */
+  readonly onSelectRepository?: ((repo: RepoListEntry) => void) | undefined;
 }): JSX.Element {
   useKittyMurderMarker();
   const {
@@ -995,6 +1006,19 @@ function Shell({
         },
         { openPromptTemplates: openPromptTemplatesHandler },
       ),
+    );
+  };
+
+  const switchRepoHandler = (): void => {
+    if (daemonUrl === undefined || onSelectRepository === undefined) {
+      return;
+    }
+    modes.getState().enter(
+      repoPickerMode(modes, {
+        daemonUrl,
+        ...(activeRepositoryId !== undefined ? { activeRepositoryId } : {}),
+        onSelect: onSelectRepository,
+      }),
     );
   };
 
@@ -1403,6 +1427,7 @@ function Shell({
     {
       spawn: spawnHandler,
       openSettings: openSettingsHandler,
+      switchRepo: switchRepoHandler,
       newPlan: newPlanHandler,
       openWorkflowTemplateEditor: () => openWorkflowTemplateLibraryHandler(null),
       openNewWork: newWorkHandler,
@@ -1558,22 +1583,35 @@ export function App({
   bus,
   project,
   terminalEvents,
+  daemonUrl,
+  activeRepositoryId,
+  onSelectRepository,
 }: {
   readonly store: AppStoreApi;
   readonly inputStores: InputStores;
   readonly bus: ApplicationClient;
-  /** Current project/repo name for the top-bar branding; from `MURDER_PROJECT` (see index.tsx). */
+  /** Active repository name for the top-bar branding (`murder · <name>`). */
   readonly project?: string | undefined;
   /** The kitty stdin shim's chord channel (Phase 2), injected at the live entrypoint like `bus`.
    * Omitted in smoke/tests. */
   readonly terminalEvents?: TerminalEvents | undefined;
+  /** Daemon HTTP base for the in-TUI repo switcher (`MURDER_DAEMON_URL`). */
+  readonly daemonUrl?: string | undefined;
+  readonly activeRepositoryId?: string | undefined;
+  readonly onSelectRepository?: ((repo: RepoListEntry) => void) | undefined;
 }): JSX.Element {
   return (
     <MouseProvider>
       <AppStoreProvider value={store}>
         <InputStoresProvider value={inputStores}>
           <ApplicationClientProvider value={bus}>
-            <Shell project={project} terminalEvents={terminalEvents} />
+            <Shell
+              project={project}
+              terminalEvents={terminalEvents}
+              daemonUrl={daemonUrl}
+              activeRepositoryId={activeRepositoryId}
+              onSelectRepository={onSelectRepository}
+            />
           </ApplicationClientProvider>
         </InputStoresProvider>
       </AppStoreProvider>

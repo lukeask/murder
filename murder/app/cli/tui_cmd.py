@@ -21,6 +21,7 @@ from murder.app.cli.service_cmd import (
     apply_client_log_level,
     ensure_daemon_and_activate,
 )
+from murder.app.protocol.common import DAEMON_WEBSOCKET_HOST, DAEMON_WEBSOCKET_PORT
 
 # Node runtime floor (current LTS). Ink 5 needs >=18. 20 is the future-proof floor we ship against.
 MIN_NODE_MAJOR = 20
@@ -83,19 +84,29 @@ def _resolve_ink_entrypoint(repo: Path) -> tuple[list[str], Path | None]:
     return ["node", str(bundle_path)], None
 
 
-def _spawn_ink(argv: list[str], cwd: Path | None, websocket_url: str, project: str) -> int:
+def _spawn_ink(
+    argv: list[str],
+    cwd: Path | None,
+    websocket_url: str,
+    project: str,
+    *,
+    daemon_url: str,
+) -> int:
     """Spawn the resolved Ink runner against the service WebSocket, inheriting the tty, and wait.
 
     The child owns the terminal (inherited stdio) and shares our process group, so ctrl+c reaches
     it directly. We do **not** tear the daemon down on exit — the service is authoritative and keeps
     running, matching the prior in-process launch. Returns the child's exit code.
 
-    `project` is the repo directory name, passed via `MURDER_PROJECT` purely for the top-bar
-    branding (`murder · <project>`) — the TUI's own cwd is unreliable
-    (in dev it runs from `inktui/`).
+    `project` is the repo directory name, passed via `MURDER_PROJECT` as the initial top-bar
+    branding (`murder · <project>`) — the TUI's own cwd is unreliable (in dev it runs from
+    `inktui/`). After an in-TUI repo switch the active repo name replaces this seed.
+
+    `daemon_url` is the HTTP base for the in-TUI repo picker (`GET /api/repos`).
     """
     env = dict(os.environ)
     env["MURDER_APPLICATION_WS_URL"] = websocket_url
+    env["MURDER_DAEMON_URL"] = daemon_url
     env["MURDER_PROJECT"] = project
     proc = subprocess.run(argv, cwd=str(cwd) if cwd is not None else None, env=env, check=False)
     return proc.returncode
@@ -114,7 +125,13 @@ async def _launch_tui() -> None:
         raise InkLaunchError(
             "daemon activated the repository but did not return a WebSocket URL"
         )
-    _spawn_ink(argv, cwd, websocket_url, repo.name)
+    _spawn_ink(
+        argv,
+        cwd,
+        websocket_url,
+        repo.name,
+        daemon_url=f"http://{DAEMON_WEBSOCKET_HOST}:{DAEMON_WEBSOCKET_PORT}",
+    )
 
 
 def cmd_up(

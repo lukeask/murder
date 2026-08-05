@@ -1,8 +1,19 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type JSX,
+} from 'react';
 import type { ApplicationClient } from '@murder/ui-core/application/ApplicationClient.js';
 import { createTuiApplicationClient } from './application/createTuiApplicationClient.js';
+import {
+  repoDisplayName,
+  websocketUrlForRepository,
+  type RepoListEntry,
+} from './application/reposApi.js';
 import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { App } from './components/App.js';
 import { createInputStores } from './input/createInputStores.js';
@@ -15,6 +26,7 @@ import { capsStore } from './terminal/capsStore.js';
 import { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 import { createKittyDriver, type KeyProtocolDriver } from './terminal/kittyDriver.js';
 import { StdinShim } from './terminal/StdinShim.js';
+import type { TerminalEvents } from './hooks/useRootInput.js';
 
 export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
 
@@ -29,7 +41,8 @@ export { forceInkFullRepaint } from './terminal/forceInkRepaint.js';
  *    `MURDER_APPLICATION_WS_URL` supplied by the launcher. The app stays mounted: Ink keeps the process alive on stdin
  *    raw mode, slice-invalidation events from the service repaint the panels live, and the run ends
  *    only when the user exits (ctrl+c → Ink resolves `waitUntilExit`). On exit we tear down the store
- *    subscriptions and close the socket.
+ *    subscriptions and close the socket. An in-TUI repo switch remounts bus+store against the chosen
+ *    `/api/ws/{repository_id}` while the Ink instance stays up.
  *
  *  - **Smoke (`--smoke`).** A one-shot mount→unmount against a {@link FakeApplicationClient}, requiring **no**
  *    socket and **no** running service. It paints one frame and exits clean, so the CI build gate
@@ -71,10 +84,28 @@ export function resolveApplicationWebSocketUrl(env: NodeJS.ProcessEnv = process.
 }
 
 /**
- * The current project/repo name for the top-bar branding, taken from `MURDER_PROJECT` (the launcher
- * sets it to the repo directory name — the TUI's own cwd is unreliable, since in dev it runs from
- * `inktui/`). Optional and purely cosmetic: a missing var just means the bar shows the bare `murder`
- * mark with no project suffix, so this never fails the run.
+ * Daemon HTTP base for the in-TUI repo picker (`GET /api/repos`). Missing, empty, or non-HTTP
+ * values disable the switcher chord without failing the live run (WS URL is still required).
+ */
+export function resolveDaemonUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const raw = env['MURDER_DAEMON_URL'];
+  if (raw === undefined || raw.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(raw.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return undefined;
+    }
+    return raw.trim().replace(/\/+$/, '');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Initial top-bar repo name seed from `MURDER_PROJECT` (launcher sets the cwd basename). After an
+ * in-TUI switch the active session name replaces this; optional so smoke/tests can omit it.
  */
 export function resolveProject(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const project = env['MURDER_PROJECT'];
@@ -84,42 +115,155 @@ export function resolveProject(env: NodeJS.ProcessEnv = process.env): string | u
   return project.trim();
 }
 
+/** Extract `{repository_id}` from `ws://…/api/ws/{repository_id}` (or undefined if absent). */
+export function repositoryIdFromWebsocketUrl(websocketUrl: string): string | undefined {
+  try {
+    const path = new URL(websocketUrl).pathname.replace(/\/+$/, '');
+    const prefix = '/api/ws/';
+    if (!path.startsWith(prefix)) {
+      return undefined;
+    }
+    const id = decodeURIComponent(path.slice(prefix.length));
+    return id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type LiveSessionTarget = {
+  readonly websocketUrl: string;
+  readonly project: string | undefined;
+  readonly repositoryId: string | undefined;
+};
+
+/**
+ * One connected TUI session (bus + app store). Remounted (via `key`) when the user switches
+ * repositories so `ApplicationWebSocketClient` gets a fresh URL — it rejects `connect()` after
+ * `close()`. Input stores stay shared across switches (kitty/bindings + panel chrome).
+ */
+function ConnectedTuiSession({
+  target,
+  daemonUrl,
+  inputStores,
+  terminalEvents,
+  busFactory,
+  onSelectRepository,
+}: {
+  readonly target: LiveSessionTarget;
+  readonly daemonUrl: string | undefined;
+  readonly inputStores: ReturnType<typeof createInputStores>;
+  readonly terminalEvents: TerminalEvents;
+  readonly busFactory: (url: string) => ApplicationClient;
+  readonly onSelectRepository: (repo: RepoListEntry) => void;
+}): JSX.Element {
+  const session = useMemo(() => {
+    const bus = busFactory(target.websocketUrl);
+    const { store, dispose } = createAppStore(bus);
+    return { bus, store, dispose };
+  }, [target.websocketUrl, busFactory]);
+
+  useEffect(() => {
+    connectionStore.getState().setStatus('connecting');
+    const unhookConnectedStatus = onConnectIfSupported(session.bus, () =>
+      connectionStore.getState().setStatus('connected'),
+    );
+    const unhookDisconnect = onDisconnectIfSupported(session.bus, () =>
+      connectionStore.getState().setStatus('reconnecting'),
+    );
+    const unhookPermanentError = onPermanentErrorIfSupported(session.bus, () =>
+      connectionStore.getState().setStatus('version-mismatch'),
+    );
+    const unhookPlanSeedFailure = onPlanSeedFailedIfSupported(session.bus, (notification) =>
+      toastStore
+        .getState()
+        .push(
+          `plan "${notification.plan_name}" was created, but its planner could not start: ${notification.message}`,
+          { severity: 'error', ttlMs: 12000 },
+        ),
+    );
+    return () => {
+      unhookConnectedStatus?.();
+      unhookDisconnect?.();
+      unhookPermanentError?.();
+      unhookPlanSeedFailure?.();
+      session.dispose();
+      closeIfSupported(session.bus);
+    };
+  }, [session]);
+
+  return (
+    <App
+      store={session.store}
+      inputStores={inputStores}
+      bus={session.bus}
+      project={target.project}
+      terminalEvents={terminalEvents}
+      daemonUrl={daemonUrl}
+      activeRepositoryId={target.repositoryId}
+      onSelectRepository={onSelectRepository}
+    />
+  );
+}
+
+/** Outer live shell: holds the active repo target and remounts {@link ConnectedTuiSession} on switch. */
+function LiveRunner({
+  initialTarget,
+  daemonUrl,
+  inputStores,
+  terminalEvents,
+  busFactory,
+}: {
+  readonly initialTarget: LiveSessionTarget;
+  readonly daemonUrl: string | undefined;
+  readonly inputStores: ReturnType<typeof createInputStores>;
+  readonly terminalEvents: TerminalEvents;
+  readonly busFactory: (url: string) => ApplicationClient;
+}): JSX.Element {
+  const [target, setTarget] = useState<LiveSessionTarget>(initialTarget);
+
+  const onSelectRepository = (repo: RepoListEntry): void => {
+    if (daemonUrl === undefined) {
+      return;
+    }
+    setTarget({
+      websocketUrl: websocketUrlForRepository(daemonUrl, repo.repository_id),
+      project: repoDisplayName(repo.root_path),
+      repositoryId: repo.repository_id,
+    });
+  };
+
+  return (
+    <ConnectedTuiSession
+      key={target.websocketUrl}
+      target={target}
+      daemonUrl={daemonUrl}
+      inputStores={inputStores}
+      terminalEvents={terminalEvents}
+      busFactory={busFactory}
+      onSelectRepository={onSelectRepository}
+    />
+  );
+}
+
 /**
  * Mount the shell against the live application WebSocket and hold the terminal open until the user
  * exits. The store hydrates itself through the bus hydrate contract on construction: one snapshot
  * reply plus server-attached tails replaces the old startup prime RPCs and replay-gated
  * subscriptions. Returns when the app exits.
  */
-export async function runLive(busFactory: () => ApplicationClient = makeLiveBus): Promise<void> {
+export async function runLive(
+  busFactory: (url: string) => ApplicationClient = makeLiveBus,
+): Promise<void> {
   const teardownKeyUsage = startKeyUsagePersistence();
-  const bus = busFactory();
-  const { store, dispose } = createAppStore(bus);
+  const websocketUrl = resolveApplicationWebSocketUrl();
+  const daemonUrl = resolveDaemonUrl();
+  const initialTarget: LiveSessionTarget = {
+    websocketUrl,
+    project: resolveProject(),
+    repositoryId: repositoryIdFromWebsocketUrl(websocketUrl),
+  };
+  // Shared across repo switches so kitty/bindings stay wired to setupTerminal.
   const inputStores = createInputStores(STARTUP_PANELS);
-
-  // Connection-state badge wiring (mirrors the onConnect narrowing above). The transport drives the
-  // process-global connectionStore; the TopBar reads it. We set `'connecting'` explicitly before the
-  // first `connect()` (so the badge shows during the initial handshake), then let the hooks advance
-  // it: onConnect → connected, onDisconnect → reconnecting, onPermanentError → version-mismatch
-  // (the only permanent error today is a protocol-version mismatch, so it maps directly). A transport
-  // that exposes no hooks (the fake) simply leaves the store at its set value.
-  connectionStore.getState().setStatus('connecting');
-  const unhookConnectedStatus = onConnectIfSupported(bus, () =>
-    connectionStore.getState().setStatus('connected'),
-  );
-  const unhookDisconnect = onDisconnectIfSupported(bus, () =>
-    connectionStore.getState().setStatus('reconnecting'),
-  );
-  const unhookPermanentError = onPermanentErrorIfSupported(bus, () =>
-    connectionStore.getState().setStatus('version-mismatch'),
-  );
-  const unhookPlanSeedFailure = onPlanSeedFailedIfSupported(bus, (notification) =>
-    toastStore
-      .getState()
-      .push(
-        `plan "${notification.plan_name}" was created, but its planner could not start: ${notification.message}`,
-        { severity: 'error', ttlMs: 12000 },
-      ),
-  );
 
   // Phase 2 — the kitty stdin shim. Constructed in BYPASS (pure passthrough) and handed to Ink as its
   // stdin, so until the protocol is actually enabled Ink sees the identical byte stream it always did
@@ -136,12 +280,12 @@ export async function runLive(busFactory: () => ApplicationClient = makeLiveBus)
   // (and Ink also drops the trailing newline on fullscreen frames, avoiding the bottom-line scroll).
   // Ink restores the primary screen + cursor on unmount, so exit is clean.
   const instance = render(
-    <App
-      store={store}
+    <LiveRunner
+      initialTarget={initialTarget}
+      daemonUrl={daemonUrl}
       inputStores={inputStores}
-      bus={bus}
-      project={resolveProject()}
       terminalEvents={shim}
+      busFactory={busFactory}
     />,
     {
       // The shim is a `Readable` that implements the stdin surface Ink actually uses (data events,
@@ -174,12 +318,6 @@ export async function runLive(busFactory: () => ApplicationClient = makeLiveBus)
     teardownResizeClear();
     teardownTerminal();
     shim.dispose();
-    unhookConnectedStatus?.();
-    unhookDisconnect?.();
-    unhookPermanentError?.();
-    unhookPlanSeedFailure?.();
-    dispose();
-    closeIfSupported(bus);
     teardownKeyUsage();
   }
 }
@@ -397,9 +535,9 @@ function closeIfSupported(bus: ApplicationClient): void {
   maybe.close?.();
 }
 
-/** Construct the live bus client from the env-provided socket path. */
-function makeLiveBus(): ApplicationClient {
-  return createTuiApplicationClient({ url: resolveApplicationWebSocketUrl() });
+/** Construct the live bus client for a path-scoped WebSocket URL. */
+function makeLiveBus(url: string): ApplicationClient {
+  return createTuiApplicationClient({ url });
 }
 
 /**

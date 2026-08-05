@@ -36,6 +36,7 @@ interface SpyHandlers {
   >;
   readonly openNewWork: ReturnType<typeof vi.fn<GlobalHandlers['openNewWork']>>;
   readonly openSettings: ReturnType<typeof vi.fn<GlobalHandlers['openSettings']>>;
+  readonly switchRepo: ReturnType<typeof vi.fn<NonNullable<GlobalHandlers['switchRepo']>>>;
   readonly quickNote: ReturnType<typeof vi.fn<GlobalHandlers['quickNote']>>;
   readonly keyHelp: ReturnType<typeof vi.fn<GlobalHandlers['keyHelp']>>;
   readonly cycleTargetPrev: ReturnType<typeof vi.fn<GlobalHandlers['cycleTargetPrev']>>;
@@ -65,6 +66,7 @@ function handlers(): SpyHandlers {
     openWorkflowTemplateEditor: vi.fn<NonNullable<GlobalHandlers['openWorkflowTemplateEditor']>>(),
     openNewWork: vi.fn<GlobalHandlers['openNewWork']>(),
     openSettings: vi.fn<GlobalHandlers['openSettings']>(),
+    switchRepo: vi.fn<NonNullable<GlobalHandlers['switchRepo']>>(),
     quickNote: vi.fn<GlobalHandlers['quickNote']>(),
     keyHelp: vi.fn<GlobalHandlers['keyHelp']>(),
     cycleTargetPrev: vi.fn<GlobalHandlers['cycleTargetPrev']>(),
@@ -306,6 +308,13 @@ describe('layer 1 — global chords', () => {
     const h = handlers();
     const out = dispatchKey('o', makeKey({ meta: true }), ctx('plans', h));
     expect(h.openSettings).toHaveBeenCalledOnce();
+    expect(out).toMatchObject({ layer: 'global', handled: true });
+  });
+
+  it('alt+e fires switchRepo (Phase 6 repository switcher)', () => {
+    const h = handlers();
+    const out = dispatchKey('e', makeKey({ meta: true }), ctx('plans', h));
+    expect(h.switchRepo).toHaveBeenCalledOnce();
     expect(out).toMatchObject({ layer: 'global', handled: true });
   });
 
@@ -734,6 +743,7 @@ describe('GLOBAL_RULES table — precedence and decline behavior', () => {
       'global.newPlan',
       'global.workflowEditor',
       'global.settings',
+      'global.switchRepo',
     ]);
   });
 
@@ -788,6 +798,7 @@ describe('GLOBAL_RULES table — precedence and decline behavior', () => {
       'global.newPlan',
       'global.workflowEditor',
       'global.settings',
+      'global.switchRepo',
     ]);
   });
 

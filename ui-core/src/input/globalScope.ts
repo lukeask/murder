@@ -61,6 +61,7 @@ export const GLOBAL_SCOPE = {
   'global.newPlan': 'always',
   'global.workflowEditor': 'always',
   'global.settings': 'always',
+  'global.switchRepo': 'always',
   'global.quickNote': 'always',
   'global.keyHelp': 'not-chat',
   'global.cycleTargetPrev': 'chat',

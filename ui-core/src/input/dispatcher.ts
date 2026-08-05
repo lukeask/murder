@@ -104,6 +104,8 @@ export interface GlobalHandlers {
   openNewWork(): void;
   /** `alt+o` / `ctrl+o` (the `global.settings` action): open the settings modal (wired by Phase 5). */
   openSettings(): void;
+  /** `alt+e` / `ctrl+e` (`global.switchRepo`): open the in-TUI repository switcher. */
+  switchRepo?(): void;
   /** `ctrl+n` (the `global.quickNote` action): open the quick-note capture modal. Modifier-independent
    * (a `plain` chord), matched ahead of the command-modifier gate so a ctrl/both setting can't shadow it. */
   quickNote(): void;
@@ -288,6 +290,9 @@ export const MODIFIED_GLOBAL_RULES: readonly GlobalRule[] = [
   }),
   globalRule('global.settings', 'skip', (handlers) => {
     handlers.openSettings();
+  }),
+  globalRule('global.switchRepo', 'skip', (handlers) => {
+    handlers.switchRepo?.();
   }),
 ];
 

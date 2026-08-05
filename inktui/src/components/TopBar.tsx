@@ -11,8 +11,9 @@
  * Clicking a panel label toggles that pane the same way the digit shortcut does (show+focus when
  * hidden; hide when visible).
  *
- * `project` is the current project/repo name, threaded from the entrypoint (the launcher hands it
- * over via `MURDER_PROJECT`; see index.tsx). When unknown (smoke/tests) only the `murder` mark shows.
+ * `project` is the active repository name, threaded from the live session (cwd seed via
+ * `MURDER_PROJECT`, then updated on in-TUI repo switch). When unknown (smoke/tests) only the
+ * `murder` mark shows.
  */
 
 import { useOnClick } from '@ink-tools/ink-mouse';

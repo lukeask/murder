@@ -14,7 +14,7 @@ import { render, Text } from 'ink';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeApplicationClient } from '@murder/ui-core/application/FakeApplicationClient.js';
 import { App } from '../src/components/App.js';
-import { forceInkFullRepaint, installResizeClear, resolveApplicationWebSocketUrl } from '../src/index.js';
+import { forceInkFullRepaint, installResizeClear, resolveApplicationWebSocketUrl, resolveDaemonUrl, repositoryIdFromWebsocketUrl } from '../src/index.js';
 import { createInputStores } from '../src/input/createInputStores.js';
 import { createAppStore } from '@murder/ui-core/store/store.js';
 import { inkInstances } from '../src/terminal/inkInstances.js';
@@ -52,6 +52,34 @@ describe('resolveApplicationWebSocketUrl', () => {
 
   it('rejects non-WebSocket endpoint URLs', () => {
     expect(() => resolveApplicationWebSocketUrl({ MURDER_APPLICATION_WS_URL: 'http://localhost:9001' })).toThrow(/ws:\/\//);
+  });
+});
+
+describe('resolveDaemonUrl', () => {
+  it('reads MURDER_DAEMON_URL', () => {
+    expect(resolveDaemonUrl({ MURDER_DAEMON_URL: 'http://127.0.0.1:62077' })).toBe(
+      'http://127.0.0.1:62077',
+    );
+  });
+
+  it('returns undefined when unset', () => {
+    expect(resolveDaemonUrl({})).toBeUndefined();
+  });
+
+  it('treats non-HTTP URLs as unset (switcher disabled, live run continues)', () => {
+    expect(resolveDaemonUrl({ MURDER_DAEMON_URL: 'ws://127.0.0.1:62077' })).toBeUndefined();
+  });
+});
+
+describe('repositoryIdFromWebsocketUrl', () => {
+  it('extracts the path-scoped repository id', () => {
+    expect(
+      repositoryIdFromWebsocketUrl('ws://127.0.0.1:62077/api/ws/repo-abc'),
+    ).toBe('repo-abc');
+  });
+
+  it('returns undefined when the path is not path-scoped', () => {
+    expect(repositoryIdFromWebsocketUrl('ws://127.0.0.1:62077/api/ws')).toBeUndefined();
   });
 });
 

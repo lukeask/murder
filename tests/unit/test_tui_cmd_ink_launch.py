@@ -149,13 +149,17 @@ def test_spawn_sets_application_websocket_env(monkeypatch):
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(tui_cmd.subprocess, "run", _fake_run)
-    websocket_url = "ws://127.0.0.1:9001/api/ws"
-    rc = _spawn_ink(["node", "/x/index.js"], None, websocket_url, "murder")
+    websocket_url = "ws://127.0.0.1:62077/api/ws/repo-abc"
+    daemon_url = "http://127.0.0.1:62077"
+    rc = _spawn_ink(
+        ["node", "/x/index.js"], None, websocket_url, "murder", daemon_url=daemon_url
+    )
 
     assert rc == 0
     assert captured["argv"] == ["node", "/x/index.js"]
     assert captured["env"]["MURDER_APPLICATION_WS_URL"] == websocket_url
-    # The repo name rides along via MURDER_PROJECT for the top-bar branding.
+    assert captured["env"]["MURDER_DAEMON_URL"] == daemon_url
+    # Initial top-bar branding seed; in-TUI switch updates the active name.
     assert captured["env"]["MURDER_PROJECT"] == "murder"
     assert captured["cwd"] is None
 
@@ -169,6 +173,12 @@ def test_spawn_passes_cwd_for_dev(monkeypatch):
 
     monkeypatch.setattr(tui_cmd.subprocess, "run", _fake_run)
     expected_rc = 3
-    rc = _spawn_ink(["tsx", "src/index.tsx"], Path("/repo/inktui"), "ws://127.0.0.1:9001/api/ws", "murder")
+    rc = _spawn_ink(
+        ["tsx", "src/index.tsx"],
+        Path("/repo/inktui"),
+        "ws://127.0.0.1:62077/api/ws/repo-abc",
+        "murder",
+        daemon_url="http://127.0.0.1:62077",
+    )
     assert rc == expected_rc
     assert captured["cwd"] == "/repo/inktui"

@@ -68,6 +68,8 @@ export interface DeferredGlobalHandlers {
    * modal. Present now so the action's handler slot exists end-to-end (the registry already declares
    * the chord); the dispatcher does not yet route to it — it is wired when the modal lands. */
   openSettings?: () => void;
+  /** `alt+e` / `ctrl+e` (`global.switchRepo`). Default: no-op until the shell wires the repo picker. */
+  switchRepo?: () => void;
   /** `ctrl+n` (the `global.quickNote` action). Default: no-op until the shell wires the note-capture
    * modal. The chord is routed in the dispatcher ahead of the command-modifier gate, so this slot is
    * live; the shell supplies the real handler. */
@@ -282,6 +284,7 @@ export function useRootInput(
         // Phase 5: openSettings defaults to a no-op until the shell supplies the settings-modal
         // handler. The `global.settings` chord is now routed in the dispatcher, so this slot is live.
         openSettings: deferred.openSettings ?? (() => {}),
+        switchRepo: deferred.switchRepo ?? (() => {}),
         // ctrl+n: open the quick-note capture. Default no-op until the shell wires it.
         quickNote: deferred.quickNote ?? (() => {}),
         // Item 12 / item 9 super-chords: help overlay + chat-target cycling/toggle. Default to no-ops
