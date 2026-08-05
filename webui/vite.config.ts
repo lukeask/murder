@@ -8,22 +8,23 @@ const coreSrc = fileURLToPath(new URL('../ui-core/src', import.meta.url));
 
 
 /**
- * Dev proxy target for `/api/ws` → the live murder service WebSocket.
+ * Dev proxy target for `/api/*` → the live murder daemon (HTTP picker + WebSocket).
  *
- * There is no unix-socket / bus bridge. The service serves `/api/ws` itself; `murder web up`
- * prints the browser base URL (e.g. `http://127.0.0.1:NNNN`). Point the proxy at that host/port:
+ * There is no unix-socket / bus bridge. The daemon serves `/api/repos` and
+ * `/api/ws/{repository_id}` itself; `murder web up` prints the browser base URL
+ * (e.g. `http://127.0.0.1:62077`). Point the proxy at that host/port:
  *
- *   # Preferred: full application WS URL (same shape as the session registry's websocket_url)
- *   export VITE_APPLICATION_WS_URL=ws://127.0.0.1:NNNN/api/ws
+ *   # Preferred: full application WS URL (path segment optional; host/port extracted)
+ *   export VITE_APPLICATION_WS_URL=ws://127.0.0.1:62077/api/ws
  *
  *   # Or: explicit proxy origin only
- *   export VITE_APPLICATION_WS_PROXY=ws://127.0.0.1:NNNN
+ *   export VITE_APPLICATION_WS_PROXY=ws://127.0.0.1:62077
  *
  *   # Deprecated alias (still honoured): port-only override from the old bus-bridge era
  *   export VITE_BUS_PROXY_PORT=NNNN
  *
- * If none of these are set, the `/api/ws` proxy is omitted — set one from `murder web up` before
- * `npm run dev` when you need a live service. Production builds are same-origin (no proxy).
+ * If none of these are set, the `/api` proxy is omitted — set one from `murder web up` before
+ * `npm run dev` when you need a live daemon. Production builds are same-origin (no proxy).
  */
 function applicationWsProxyTarget(): string | undefined {
   const explicit = process.env['VITE_APPLICATION_WS_PROXY'];
@@ -47,12 +48,14 @@ function applicationWsProxyTarget(): string | undefined {
   return undefined;
 }
 
-function applicationWsProxy() {
+function applicationApiProxy() {
   const target = applicationWsProxyTarget();
   if (target === undefined) return {};
+  // Vite HTTP proxy wants http(s); WS upgrades still work with `ws: true`.
+  const httpTarget = target.replace(/^ws/i, 'http');
   return {
-    '/api/ws': {
-      target,
+    '/api': {
+      target: httpTarget,
       ws: true,
       changeOrigin: true,
     },
@@ -71,7 +74,7 @@ export default defineConfig({
       // Allow Vite to read the workspace core source outside the webui root.
       allow: ['..'],
     },
-    proxy: applicationWsProxy(),
+    proxy: applicationApiProxy(),
   },
   build: {
     // Shipped by the Python service as `murder/_webui/`. Keep this path stable — the packaging step

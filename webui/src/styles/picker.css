@@ -1,0 +1,82 @@
+/*
+ * picker.css — full-viewport repository picker (Phase 5 single-daemon boot).
+ * Tokens only; no thematic hex. Lives beside cockpit.css as a pre-session shell.
+ */
+
+.repo-picker {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  overflow: auto;
+  background: var(--surface-app);
+  padding: calc(var(--space-8) + var(--safe-top)) calc(var(--space-6) + var(--safe-right))
+    calc(var(--space-8) + var(--safe-bottom)) calc(var(--space-6) + var(--safe-left));
+}
+
+.repo-picker__header {
+  max-width: 40rem;
+  margin: 0 auto var(--space-6);
+  width: 100%;
+}
+
+.repo-picker__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-display, var(--font-mono));
+  font-size: var(--text-2xl, 1.75rem);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-fg);
+}
+
+.repo-picker__lede {
+  margin: var(--space-2) 0 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.repo-picker__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 40rem;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.repo-picker__body > .mds-panel {
+  min-height: 0;
+}
+
+.repo-picker__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  margin: 0;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.repo-picker__seen {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.repo-picker__init {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.repo-picker__switch {
+  display: inline-flex;
+  align-items: center;
+}

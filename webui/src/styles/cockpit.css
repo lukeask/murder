@@ -302,6 +302,17 @@
   align-items: center;
   gap: var(--space-2);
 }
+.mw-brand-sep {
+  color: var(--color-muted);
+  opacity: 0.7;
+}
+/* Active repository basename (preserve case; not the pane label). */
+.mw-project {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+  letter-spacing: var(--tracking-wide);
+}
 /* Secondary-pane label after the brand (only shown for "More" panes): lowercase, mono, quiet. */
 .mw-view {
   font-family: var(--font-mono);

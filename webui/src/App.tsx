@@ -40,7 +40,16 @@ import type { WorkflowTemplate } from '@murder/ui-core/store/workflows/workflows
 import { toastStore } from '@murder/ui-core/store/toast/toastStore.js';
 import { toWire } from '@murder/ui-core/workflowEditor/wire.js';
 import type { EditorWorkflow } from '@murder/ui-core/workflowEditor/model.js';
-import { NavBar, KeybindBar, StatusDot, type StatusDotStatus, Icon, type IconName, cx } from './components/ds/index.js';
+import {
+  NavBar,
+  KeybindBar,
+  StatusDot,
+  type StatusDotStatus,
+  Icon,
+  IconButton,
+  type IconName,
+  cx,
+} from './components/ds/index.js';
 import { PanelToggleStrip } from './components/PanelToggleStrip.js';
 import { CrowMark } from './components/CrowMark.js';
 import { CaptureSheet } from './components/mobile/CaptureSheet.js';
@@ -141,7 +150,17 @@ function editorWorkflowToTemplate(draft: EditorWorkflow): WorkflowTemplate {
   return toWire(draft);
 }
 
-export function App({ bus }: { readonly bus: ApplicationConnectionClient }): React.JSX.Element {
+export function App({
+  bus,
+  onSwitchRepo,
+  repositoryHint = null,
+}: {
+  readonly bus: ApplicationConnectionClient;
+  /** Return to the boot picker (closes this repo's WS; other repos' client_ids stay). */
+  readonly onSwitchRepo?: () => void;
+  /** Basename hint when settings.project is not yet hydrated. */
+  readonly repositoryHint?: string | null;
+}): React.JSX.Element {
   useThemeCssVars();
   const status = useConnectionStatus(bus);
   const isMobile = useMediaQuery(MOBILE_QUERY);
@@ -222,6 +241,8 @@ export function App({ bus }: { readonly bus: ApplicationConnectionClient }): Rea
           dialog={dialog}
           setDialog={setDialog}
           closeDialog={closeDialog}
+          {...(onSwitchRepo !== undefined ? { onSwitchRepo } : {})}
+          {...(repositoryHint !== undefined ? { repositoryHint } : {})}
         />
       </ComposerStoresProvider>
     </CreationDialogsProvider>
@@ -236,6 +257,8 @@ function AppShell({
   dialog,
   setDialog,
   closeDialog,
+  onSwitchRepo,
+  repositoryHint,
 }: {
   readonly status: ConnectionStatus;
   readonly isMobile: boolean;
@@ -243,6 +266,8 @@ function AppShell({
   readonly dialog: ShellDialog;
   readonly setDialog: (d: ShellDialog) => void;
   readonly closeDialog: () => void;
+  readonly onSwitchRepo?: () => void;
+  readonly repositoryHint?: string | null;
 }): React.JSX.Element {
   useDesktopKeybinds(!isMobile, creationApi);
   useWorkspaceCountSync();
@@ -250,9 +275,18 @@ function AppShell({
   return (
     <div className="app" data-layout={isMobile ? 'mobile' : 'desktop'}>
       {isMobile ? (
-        <MobileLayout status={status} creationApi={creationApi} />
+        <MobileLayout
+          status={status}
+          creationApi={creationApi}
+          {...(onSwitchRepo !== undefined ? { onSwitchRepo } : {})}
+          {...(repositoryHint !== undefined ? { repositoryHint } : {})}
+        />
       ) : (
-        <DesktopLayout status={status} />
+        <DesktopLayout
+          status={status}
+          {...(onSwitchRepo !== undefined ? { onSwitchRepo } : {})}
+          {...(repositoryHint !== undefined ? { repositoryHint } : {})}
+        />
       )}
       <ToastHost />
       <MurderConfirmDialog />
@@ -320,7 +354,15 @@ function VisiblePanel({
 }
 
 /** Desktop: NavBar / 3-rail body / KeybindBar (live bar widgets when enabled). */
-function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React.JSX.Element {
+function DesktopLayout({
+  status,
+  onSwitchRepo,
+  repositoryHint = null,
+}: {
+  readonly status: ConnectionStatus;
+  readonly onSwitchRepo?: () => void;
+  readonly repositoryHint?: string | null;
+}): React.JSX.Element {
   const modifier = useAppStore((s) => s.settings.modifier);
   const keyOverrides = useAppStore((s) => s.settings.keyOverrides);
   const barWidgets = useAppStore((s) => s.settings.barWidgets);
@@ -365,8 +407,8 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
   const stageFlash = useWorkspaceSwitchFlash();
   const storeProject = useAppStore((s) => s.settings.project);
   const project = useMemo(
-    () => resolveProjectName({ fromStore: storeProject }),
-    [storeProject],
+    () => resolveProjectName({ fromStore: storeProject }) ?? repositoryHint,
+    [storeProject, repositoryHint],
   );
   return (
     <div className="cockpit">
@@ -376,6 +418,13 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
         panels={<PanelToggleStrip />}
         trailing={
           <>
+            {onSwitchRepo !== undefined ? (
+              <span className="repo-picker__switch">
+                <IconButton label="Switch repository" onClick={onSwitchRepo}>
+                  <Icon name="git-branch" size={16} />
+                </IconButton>
+              </span>
+            ) : null}
             <UsageBarSegment placement="top" />
             {showWorkspaceTop ? <WorkspaceStrip /> : null}
             <ConnectionIndicator status={status} />
@@ -434,15 +483,24 @@ function DesktopLayout({ status }: { readonly status: ConnectionStatus }): React
 function MobileLayout({
   status,
   creationApi,
+  onSwitchRepo,
+  repositoryHint = null,
 }: {
   readonly status: ConnectionStatus;
   readonly creationApi: CreationDialogsApi;
+  readonly onSwitchRepo?: () => void;
+  readonly repositoryHint?: string | null;
 }): React.JSX.Element {
   const [pane, setPane] = useState<MobilePaneId>('chat');
   const [captureOpen, setCaptureOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const { chatInput } = useComposerStores();
   const Pane = MOBILE_PANES[pane];
+  const storeProject = useAppStore((s) => s.settings.project);
+  const project = useMemo(
+    () => resolveProjectName({ fromStore: storeProject }) ?? repositoryHint,
+    [storeProject, repositoryHint],
+  );
 
   const isPrimary = MOBILE_PRIMARY_TABS.some((t) => t.id === pane);
   const goToChat = (): void => setPane('chat');
@@ -472,9 +530,22 @@ function MobileLayout({
         <span className="mw-brand">
           <CrowMark size={20} />
           murder
+          {project !== null && project !== '' ? (
+            <>
+              <span className="mw-brand-sep" aria-hidden="true">
+                ·
+              </span>
+              <span className="mw-project">{project}</span>
+            </>
+          ) : null}
         </span>
         {!isPrimary ? <span className="mw-view">{pane}</span> : null}
         <span className="mw-spacer" />
+        {onSwitchRepo !== undefined ? (
+          <IconButton label="Switch repository" onClick={onSwitchRepo}>
+            <Icon name="git-branch" size={16} />
+          </IconButton>
+        ) : null}
         <WorkspaceStrip />
         <ConnectionIndicator status={status} />
       </header>

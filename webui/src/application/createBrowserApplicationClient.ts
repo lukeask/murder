@@ -9,11 +9,11 @@ import {
   type WebSocketLike,
 } from '@murder/ui-core/application/ApplicationWebSocketClient.js';
 
-const CLIENT_ID_STORAGE_KEY = 'murder.web.client_id';
-
 export interface BrowserLocationLike {
   readonly protocol: string;
   readonly host: string;
+  /** Query string including leading `?`, used for `/?repo={id}` deep links. */
+  readonly search?: string;
 }
 
 export interface BrowserStorageLike {
@@ -23,6 +23,8 @@ export interface BrowserStorageLike {
 
 export interface CreateBrowserApplicationClientOptions {
   url?: string;
+  /** Repository partition for `/api/ws/{repository_id}` and per-repo client_id storage. */
+  repositoryId?: string;
   clientId?: string;
   location?: BrowserLocationLike;
   storage?: BrowserStorageLike;
@@ -35,20 +37,58 @@ export interface CreateBrowserApplicationClientOptions {
   idFactory?: () => string;
 }
 
-export function defaultApplicationWebSocketUrl(location: BrowserLocationLike = globalThis.location): string {
+/** localStorage key for the stable web client_id of one repository. */
+export function clientIdStorageKey(repositoryId: string): string {
+  return `murder.web.${repositoryId}.client_id`;
+}
+
+/** Read `/?repo={id}` from `location.search` (deep-link before same-origin host default). */
+export function repositoryIdFromLocation(location: BrowserLocationLike): string | null {
+  const raw = location.search ?? '';
+  if (raw === '') return null;
+  const params = new URLSearchParams(raw.startsWith('?') ? raw.slice(1) : raw);
+  const repo = params.get('repo');
+  if (repo === null) return null;
+  const trimmed = repo.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * Same-origin application WebSocket URL for a repository.
+ *
+ * Prefer an explicit `repositoryId`; otherwise read `/?repo={id}` from `location.search`,
+ * then build `{ws|wss}://{location.host}/api/ws/{repository_id}`.
+ */
+export function defaultApplicationWebSocketUrl(
+  location: BrowserLocationLike = globalThis.location,
+  repositoryId?: string,
+): string {
+  const id = repositoryId ?? repositoryIdFromLocation(location);
+  if (id === null || id === '') {
+    throw new Error('repository_id required for application WebSocket URL (pass repositoryId or ?repo=)');
+  }
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${scheme}://${location.host}/api/ws`;
+  return `${scheme}://${location.host}/api/ws/${encodeURIComponent(id)}`;
 }
 
 export function createBrowserApplicationClient(
   options: CreateBrowserApplicationClientOptions = {},
 ): ApplicationWebSocketClient {
+  const location = options.location ?? globalThis.location;
+  const repositoryId = options.repositoryId ?? repositoryIdFromLocation(location);
   const idFactory = options.idFactory ?? browserId;
-  const clientId = options.clientId ?? stableClientId(options.storage, idFactory);
+  const clientId =
+    options.clientId ??
+    (repositoryId !== null
+      ? stableClientId(options.storage, idFactory, repositoryId)
+      : `web-${idFactory()}`);
   const makeSocket = options.webSocketFactory ?? ((url: string) =>
     new WebSocket(url) as unknown as WebSocketLike);
+  const url =
+    options.url ??
+    defaultApplicationWebSocketUrl(location, repositoryId ?? undefined);
   return new ApplicationWebSocketClient({
-    url: options.url ?? defaultApplicationWebSocketUrl(options.location),
+    url,
     clientId,
     kind: 'web',
     webSocketFactory: makeSocket,
@@ -64,13 +104,18 @@ export function createBrowserApplicationClient(
   });
 }
 
-function stableClientId(storage: BrowserStorageLike | undefined, idFactory: () => string): string {
+function stableClientId(
+  storage: BrowserStorageLike | undefined,
+  idFactory: () => string,
+  repositoryId: string,
+): string {
   try {
     const resolvedStorage = storage ?? globalThis.localStorage;
-    const stored = resolvedStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    const key = clientIdStorageKey(repositoryId);
+    const stored = resolvedStorage.getItem(key);
     if (stored !== null && stored !== '') return stored;
     const created = `web-${idFactory()}`;
-    resolvedStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+    resolvedStorage.setItem(key, created);
     return created;
   } catch {
     return `web-${idFactory()}`;
