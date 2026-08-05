@@ -53,7 +53,7 @@ import { PanelToggleStrip } from './components/PanelToggleStrip.js';
 import { CrowMark } from './components/CrowMark.js';
 import { CaptureSheet } from './components/mobile/CaptureSheet.js';
 import { MoreSheet } from './components/mobile/MoreSheet.js';
-import { useComposerStores } from './composer/ComposerStoresProvider.js';
+import { ComposerStoresBoundary, useComposerStores } from './composer/ComposerStoresProvider.js';
 import { WorkspaceStrip } from './components/WorkspaceStrip.js';
 import { UsageBarSegment } from './components/UsageBarSegment.js';
 import { desktopKeybindHints } from './commandModifierPrefix.js';
@@ -232,16 +232,18 @@ export function App({
 
   return (
     <CreationDialogsProvider value={creationApi}>
-      <AppShell
-        status={status}
-        isMobile={isMobile}
-        creationApi={creationApi}
-        dialog={dialog}
-        setDialog={setDialog}
-        closeDialog={closeDialog}
-        {...(onSwitchRepo !== undefined ? { onSwitchRepo } : {})}
-        {...(repositoryHint !== undefined ? { repositoryHint } : {})}
-      />
+      <ComposerStoresBoundary>
+        <AppShell
+          status={status}
+          isMobile={isMobile}
+          creationApi={creationApi}
+          dialog={dialog}
+          setDialog={setDialog}
+          closeDialog={closeDialog}
+          {...(onSwitchRepo !== undefined ? { onSwitchRepo } : {})}
+          {...(repositoryHint !== undefined ? { repositoryHint } : {})}
+        />
+      </ComposerStoresBoundary>
     </CreationDialogsProvider>
   );
 }

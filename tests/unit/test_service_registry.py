@@ -52,9 +52,40 @@ def test_live_daemon_record_clears_dead_pid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     write_daemon_record(port=62077, pid=2_000_000_001)
     assert live_daemon_record() is None
     assert read_daemon_record() is None
+
+
+def test_live_daemon_record_clears_when_flock_not_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alive pid without daemon.lock flock is stale registry (pid reuse)."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    write_daemon_record(port=62077, pid=os.getpid())
+    assert live_daemon_record() is None
+    assert read_daemon_record() is None
+
+
+def test_live_daemon_record_keeps_matching_flock_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from murder.state.storage.filesystem import acquire_flock, release_flock
+    from murder.user_config import config_dir
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    lock = config_dir() / "daemon.lock"
+    fd = acquire_flock(lock)
+    try:
+        record = write_daemon_record(port=62077, pid=os.getpid())
+        assert live_daemon_record() == record
+    finally:
+        release_flock(fd)
 
 
 def test_service_runtime_root_uses_explicit_xdg(

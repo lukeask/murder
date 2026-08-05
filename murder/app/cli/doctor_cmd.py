@@ -16,12 +16,12 @@ from pathlib import Path
 import typer
 
 from murder.app.cli._util import node_major_version as _node_major_version
-from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
+from murder.app.service.daemon_host import live_daemon_pid
 from murder.config import Config, HarnessRoleConfig, apply_daemon_env, load_repo_env
 from murder.llm.harnesses import REGISTRY
-from murder.state.storage.filesystem import read_lock_pid
-from murder.state.storage.paths import db_path, lock_path
+from murder.state.storage.paths import db_path
+from murder.state.storage.service_registry import read_daemon_record
 
 # Provider env vars that count as "an LLM key is configured" (Groq/Cerebras first).
 _LLM_KEY_ENV_VARS = (
@@ -152,8 +152,11 @@ def _check_api_keys(repo: Path) -> None:
     # User-global keys live in the process env after apply_daemon_env; project
     # keys are inspected from the per-repo mapping without mutating os.environ.
     present = [name for name in _LLM_KEY_ENV_VARS if os.environ.get(name)]
+    repo_env = load_repo_env(repo)
     repo_keys = [
-        name for name in _LLM_KEY_ENV_VARS if name in load_repo_env(repo) and name not in present
+        name
+        for name in _LLM_KEY_ENV_VARS
+        if (repo_env.get(name) or "").strip() and name not in present
     ]
     if present:
         _ok(f"LLM API key(s) set: {', '.join(present)}")
@@ -186,18 +189,18 @@ def _check_db(repo: Path, failures: list[str]) -> None:
     _ok("DB healthy")
 
 
-def _check_lock(repo: Path) -> None:
-    lock = lock_path(repo)
-    if not lock.exists():
+def _check_daemon() -> None:
+    """Report single-daemon lock/registry state (not the retired per-repo .lock)."""
+    pid = live_daemon_pid()
+    if pid is not None:
+        _ok(f"murder daemon running (PID {pid})")
         return
-    pid = read_lock_pid(lock)
-    if pid is None:
-        _warn(f"lock file exists but has no readable PID: {lock}")
-        return
-    if _pid_is_alive(pid):
-        _warn(f"another murder runtime is running here (PID {pid})")
-        return
-    _warn(f"stale lock file found (dead PID {pid}) — safe to delete: {lock}")
+    record = read_daemon_record()
+    if record is not None:
+        _warn(
+            f"stale daemon registry (PID {record.pid} not holding lock) — "
+            "clear with `murder down`"
+        )
 
 
 def cmd_doctor() -> None:
@@ -212,7 +215,7 @@ def cmd_doctor() -> None:
     _check_config_and_harnesses(repo, failures)
     _check_api_keys(repo)
     _check_db(repo, failures)
-    _check_lock(repo)
+    _check_daemon()
 
     typer.echo("")
     if failures:

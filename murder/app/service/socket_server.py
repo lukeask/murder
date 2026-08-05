@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from murder.app.protocol.common import APPLICATION_PROTOCOL_VERSION, ErrorBody, ErrorCode
 from murder.app.protocol.projections import validate_event, validate_snapshot
@@ -95,6 +95,7 @@ def _aiohttp() -> Any:
 class ApplicationConnection:
     websocket: Any
     client_id: str
+    connection_id: str = field(default_factory=lambda: str(uuid4()))
     tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     terminals: dict[str, TerminalAttachMessage] = field(default_factory=dict)
     input_streams: dict[str, _TerminalInputState] = field(default_factory=dict)
@@ -570,7 +571,10 @@ class RepositorySocketSession:
             interval_s=terminal_interval_s,
         )
         self._terminal_input = TerminalInputCoordinator(terminal_input, terminal_input_validator)
+        # Keyed by connection-unique id so duplicate stable client_ids (two tabs)
+        # do not overwrite each other; ``_client_index`` supports targeted notify.
         self._connections: dict[str, ApplicationConnection] = {}
+        self._client_index: dict[str, set[str]] = {}
         self._closed = False
 
     @property
@@ -585,6 +589,22 @@ class RepositorySocketSession:
     def closed(self) -> bool:
         return self._closed
 
+    def _register_connection(self, connection: ApplicationConnection) -> None:
+        self._connections[connection.connection_id] = connection
+        self._client_index.setdefault(connection.client_id, set()).add(
+            connection.connection_id
+        )
+
+    def _unregister_connection(self, connection: ApplicationConnection) -> None:
+        if self._connections.get(connection.connection_id) is connection:
+            self._connections.pop(connection.connection_id, None)
+        ids = self._client_index.get(connection.client_id)
+        if ids is None:
+            return
+        ids.discard(connection.connection_id)
+        if not ids:
+            self._client_index.pop(connection.client_id, None)
+
     async def close(self) -> None:
         """Close every active WebSocket and cancel their streams.
 
@@ -594,6 +614,7 @@ class RepositorySocketSession:
         self._closed = True
         connections = list(self._connections.values())
         self._connections.clear()
+        self._client_index.clear()
         if not connections:
             return
         await asyncio.gather(
@@ -604,18 +625,23 @@ class RepositorySocketSession:
     async def notify_plan_seed_failed(
         self, client_id: str | None, plan_name: str, message: str
     ) -> None:
-        """Deliver an ephemeral planner-seed failure only to its initiating client."""
+        """Deliver an ephemeral planner-seed failure to matching client connections."""
         if client_id is None:
             return
-        connection = self._connections.get(client_id)
-        if connection is None:
+        conn_ids = list(self._client_index.get(client_id, ()))
+        if not conn_ids:
             return
-        try:
-            await connection.send(
-                PlanSeedFailedNotification(plan_name=plan_name, message=message)
-            )
-        except Exception:
-            LOGGER.debug("failed to deliver plan seed failure to %s", client_id, exc_info=True)
+        notification = PlanSeedFailedNotification(plan_name=plan_name, message=message)
+        for conn_id in conn_ids:
+            connection = self._connections.get(conn_id)
+            if connection is None:
+                continue
+            try:
+                await connection.send(notification)
+            except Exception:
+                LOGGER.debug(
+                    "failed to deliver plan seed failure to %s", client_id, exc_info=True
+                )
 
     async def handle_websocket(self, request: Any) -> Any:
         web, WSMsgType = _aiohttp()
@@ -662,7 +688,7 @@ class RepositorySocketSession:
             if self._closed:
                 await connection.close()
                 return ws
-            self._connections[connection.client_id] = connection
+            self._register_connection(connection)
             await connection.send(
                 ServerHello(
                     server_id=self._run_id,
@@ -687,8 +713,7 @@ class RepositorySocketSession:
                     await ws.send_json(payload.model_dump(mode="json"))
         finally:
             if connection is not None:
-                if self._connections.get(connection.client_id) is connection:
-                    self._connections.pop(connection.client_id, None)
+                self._unregister_connection(connection)
                 await connection.close()
         return ws
 
@@ -837,9 +862,12 @@ class DaemonHttpServer:
         """Prevent new attaches, close active WebSockets, and drop the cache.
 
         Wired as ``RepositoryManager.on_deactivated`` so deactivate always tears
-        down transport before ``host.stop()``.
+        down transport before ``host.stop()``. Pop under ``_session_lock`` so a
+        concurrent ``ensure_session`` cannot publish into a teardown window;
+        ``session.close()`` runs outside the lock to avoid nesting awaits.
         """
-        session = self._sessions.pop(repository_id, None)
+        async with self._session_lock:
+            session = self._sessions.pop(repository_id, None)
         if session is None:
             return
         await session.close()
@@ -847,21 +875,44 @@ class DaemonHttpServer:
     async def ensure_session(self, repository_id: str) -> RepositorySocketSession:
         """Activate the host (if needed) and return a live socket session.
 
-        Serialized so two concurrent first connects cannot orphan a session
-        (split ``_connections`` / plan-seed notifier).
+        Activate runs *outside* ``_session_lock`` so deactivate's
+        ``close_session`` (same lock) cannot deadlock with a waiter blocked on
+        ``stop_future``. Under the lock we only publish when ``manager.get``
+        still returns the activated host, and we close any displaced cache entry
+        so plan-seed notifiers / connection maps are not orphaned.
         """
-        async with self._session_lock:
+        while True:
             host = await self._manager.activate_by_id(repository_id)
-            existing = self._sessions.get(repository_id)
-            if (
-                existing is not None
-                and existing.run_id == host.run_id
-                and not existing.closed
-            ):
-                return existing
-            session = session_from_host(host)
-            self._sessions[repository_id] = session
-            return session
+            to_close: list[RepositorySocketSession] = []
+            result: RepositorySocketSession | None = None
+            async with self._session_lock:
+                current = self._manager.get(repository_id)
+                if current is not None and current is host:
+                    existing = self._sessions.get(repository_id)
+                    if (
+                        existing is not None
+                        and existing.run_id == host.run_id
+                        and not existing.closed
+                    ):
+                        return existing
+                    stale = self._sessions.pop(repository_id, None)
+                    if stale is not None:
+                        to_close.append(stale)
+                    candidate = session_from_host(host)
+                    # Deactivate may have begun between activate and publish.
+                    current = self._manager.get(repository_id)
+                    if current is host:
+                        self._sessions[repository_id] = candidate
+                        result = candidate
+                    else:
+                        with contextlib.suppress(Exception):
+                            host.set_plan_seed_failure_notifier(None)
+                        to_close.append(candidate)
+            for session in to_close:
+                with contextlib.suppress(Exception):
+                    await session.close()
+            if result is not None:
+                return result
 
     async def start(self, *, host: str = "127.0.0.1", port: int = 0) -> tuple[str, int]:
         web, _ = _aiohttp()
@@ -920,11 +971,19 @@ class DaemonHttpServer:
         raw_path = body.get("path")
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise web.HTTPBadRequest(text="'path' string is required")
-        force = bool(body.get("force", False))
+        if "force" not in body:
+            force = False
+        else:
+            force_val = body["force"]
+            if not isinstance(force_val, bool):
+                raise web.HTTPBadRequest(text="'force' must be a JSON boolean")
+            force = force_val
         from murder.app.service.project_scaffold import ProjectAlreadyInitialized
 
         try:
-            entry = self._manager.initialize(Path(raw_path).expanduser(), force=force)
+            entry = await self._manager.initialize(
+                Path(raw_path).expanduser(), force=force
+            )
         except ProjectAlreadyInitialized as exc:
             raise web.HTTPConflict(text=str(exc)) from exc
         except (OSError, ValueError, RuntimeError) as exc:
@@ -1009,15 +1068,22 @@ class DaemonHttpServer:
         await self.close_session(rid)
         return web.json_response({"ok": True, "repository_id": rid, "active": False})
 
-    async def _handle_websocket(self, request: Any) -> Any:
-        web, _ = _aiohttp()
-        repository_id = request.match_info["repository_id"]
-        if self._manager.resolve_root(repository_id) is None and self._manager.get(
-            repository_id
-        ) is None:
-            raise web.HTTPNotFound(text=f"unknown repository_id: {repository_id}")
+    @contextlib.asynccontextmanager
+    async def _ws_eviction_guard(self, repository_id: str) -> Any:
+        """Hold a WS refcount so idle eviction cannot race connect/attach."""
+        self._manager.note_ws_connect(repository_id)
         try:
-            session = await self.ensure_session(repository_id)
+            yield
+        finally:
+            self._manager.note_ws_disconnect(repository_id)
+
+    async def _activate_session_for_ws(
+        self, repository_id: str
+    ) -> RepositorySocketSession:
+        """``ensure_session`` with activation failures mapped to HTTP errors."""
+        web, _ = _aiohttp()
+        try:
+            return await self.ensure_session(repository_id)
         except KeyError as exc:
             raise web.HTTPNotFound(text=str(exc)) from exc
         except Exception as exc:
@@ -1029,11 +1095,17 @@ class DaemonHttpServer:
                 raise web.HTTPNotFound(text=str(exc)) from exc
             LOGGER.exception("failed to activate repository_id=%s", repository_id)
             raise web.HTTPInternalServerError(text=str(exc)) from exc
-        self._manager.note_ws_connect(repository_id)
-        try:
+
+    async def _handle_websocket(self, request: Any) -> Any:
+        web, _ = _aiohttp()
+        repository_id = request.match_info["repository_id"]
+        if self._manager.resolve_root(repository_id) is None and self._manager.get(
+            repository_id
+        ) is None:
+            raise web.HTTPNotFound(text=f"unknown repository_id: {repository_id}")
+        async with self._ws_eviction_guard(repository_id):
+            session = await self._activate_session_for_ws(repository_id)
             return await session.handle_websocket(request)
-        finally:
-            self._manager.note_ws_disconnect(repository_id)
 
     async def _serve_asset(self, request: Any) -> Any:
         web, _ = _aiohttp()

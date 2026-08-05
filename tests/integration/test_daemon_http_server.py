@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -119,9 +120,7 @@ class _FakeManager:
         self.hosts.pop(repository_id, None)
         if self._on_deactivated is not None:
             result = self._on_deactivated(repository_id)
-            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
-                await result
-            elif hasattr(result, "__await__"):
+            if inspect.isawaitable(result):
                 await result
 
     def note_ws_connect(self, repository_id: str) -> None:
@@ -137,7 +136,7 @@ class _FakeManager:
     def list_recent(self) -> list[RecentRepository]:
         return list(self.recent)
 
-    def initialize(self, repo_root: Path, *, force: bool = False) -> RecentRepository:
+    async def initialize(self, repo_root: Path, *, force: bool = False) -> RecentRepository:
         self.inits.append((repo_root, force))
         entry = RecentRepository(
             repository_id=str(uuid4()),
@@ -219,6 +218,34 @@ async def test_picker_list_and_init(tmp_path: Path) -> None:
                 assert created["root_path"] == str(fresh.resolve())
                 assert "repository_id" in created
             assert manager.inits == [(fresh.resolve(), False)]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_init_force_requires_json_boolean(tmp_path: Path) -> None:
+    manager = _FakeManager()
+    server = DaemonHttpServer(manager=manager)
+    host, port = await server.start(host="127.0.0.1", port=0)
+    base = f"http://{host}:{port}"
+    fresh = tmp_path / "coerced"
+    fresh.mkdir()
+    try:
+        async with ClientSession() as http:
+            async with http.post(
+                f"{base}/api/repos/init",
+                json={"path": str(fresh), "force": "false"},
+            ) as resp:
+                assert resp.status == 400
+                assert "JSON boolean" in await resp.text()
+            assert manager.inits == []
+
+            async with http.post(
+                f"{base}/api/repos/init",
+                json={"path": str(fresh), "force": True},
+            ) as resp:
+                assert resp.status == 201
+            assert manager.inits == [(fresh.resolve(), True)]
     finally:
         await server.stop()
 
@@ -341,6 +368,80 @@ async def test_deactivate_closes_connected_websocket(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_deactivate_closes_duplicate_client_id_websockets(tmp_path: Path) -> None:
+    """Two sockets with the same stable client_id must both close on deactivate."""
+    db, facts, inputs = _logs(tmp_path, TEST_REPOSITORY_ID)
+    root = tmp_path / "dup-client"
+    root.mkdir()
+    host = _FakeHost(
+        repository_id=TEST_REPOSITORY_ID,
+        run_id="run-dup-client",
+        application_dispatcher=_Application(),
+        fact_log=facts,
+        projection_input_log=inputs,
+        projection_providers=ProjectionProviderRegistry(),
+        repo_root=root,
+    )
+    manager = _FakeManager(
+        hosts={TEST_REPOSITORY_ID: host},
+        roots={TEST_REPOSITORY_ID: root},
+    )
+    server = DaemonHttpServer(manager=manager)
+    manager.set_on_deactivated(server.close_session)
+    try:
+        bind_host, port = await server.start(host="127.0.0.1", port=0)
+        base = f"http://{bind_host}:{port}"
+        ws_url = f"ws://{bind_host}:{port}/api/ws/{TEST_REPOSITORY_ID}"
+        async with ClientSession() as http:
+            async with (
+                http.ws_connect(ws_url) as ws_a,
+                http.ws_connect(ws_url) as ws_b,
+            ):
+                await _hello(ws_a, client_id="stable-web-id")
+                await _hello(ws_b, client_id="stable-web-id")
+                session = server.session_for(TEST_REPOSITORY_ID)
+                assert session is not None
+                assert session.connection_count == 2
+
+                async with http.post(
+                    f"{base}/api/repos/deactivate",
+                    json={"repository_id": TEST_REPOSITORY_ID},
+                ) as resp:
+                    assert resp.status == 200
+
+                assert session.closed is True
+                assert session.connection_count == 0
+                msg_a = await ws_a.receive(timeout=2.0)
+                msg_b = await ws_b.receive(timeout=2.0)
+                assert msg_a.type.name in {"CLOSED", "CLOSE", "ERROR"}
+                assert msg_b.type.name in {"CLOSED", "CLOSE", "ERROR"}
+    finally:
+        await server.stop()
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_init_rejects_non_boolean_force(tmp_path: Path) -> None:
+    manager = _FakeManager()
+    server = DaemonHttpServer(manager=manager)
+    try:
+        bind_host, port = await server.start(host="127.0.0.1", port=0)
+        base = f"http://{bind_host}:{port}"
+        fresh = tmp_path / "force-string"
+        fresh.mkdir()
+        async with ClientSession() as http:
+            async with http.post(
+                f"{base}/api/repos/init",
+                json={"path": str(fresh), "force": "false"},
+            ) as resp:
+                assert resp.status == 400
+                assert "JSON boolean" in await resp.text()
+            assert manager.inits == []
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_path_scoped_ws_two_repos_distinct_server_ids(tmp_path: Path) -> None:
     db_a, facts_a, inputs_a = _logs(tmp_path, TEST_REPOSITORY_ID)
     db_b, facts_b, inputs_b = _logs(tmp_path, SECOND_TEST_REPOSITORY_ID)
@@ -442,6 +543,112 @@ async def test_ensure_session_serializes_concurrent_first_connect(
         assert first is second
         assert server.session_for(TEST_REPOSITORY_ID) is first
         assert host._notifier.__func__ is first.notify_plan_seed_failed.__func__
+    finally:
+        await server.stop()
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_retries_when_host_deactivates_before_publish(
+    tmp_path: Path,
+) -> None:
+    """Do not cache a session against a host that left ``manager.active`` mid-ensure."""
+    db, facts, inputs = _logs(tmp_path, TEST_REPOSITORY_ID)
+    host_v1 = _FakeHost(
+        repository_id=TEST_REPOSITORY_ID,
+        run_id="run-1",
+        application_dispatcher=_Application(),
+        fact_log=facts,
+        projection_input_log=inputs,
+        projection_providers=ProjectionProviderRegistry(),
+        repo_root=tmp_path,
+    )
+    host_v2 = _FakeHost(
+        repository_id=TEST_REPOSITORY_ID,
+        run_id="run-2",
+        application_dispatcher=_Application(),
+        fact_log=facts,
+        projection_input_log=inputs,
+        projection_providers=ProjectionProviderRegistry(),
+        repo_root=tmp_path,
+    )
+    manager = _FakeManager(
+        hosts={TEST_REPOSITORY_ID: host_v1},
+        roots={TEST_REPOSITORY_ID: tmp_path},
+    )
+    activate_calls = {"n": 0}
+    get_calls = {"n": 0}
+    original_get = manager.get
+
+    async def _activate_racing(repository_id: str) -> _FakeHost:
+        activate_calls["n"] += 1
+        if activate_calls["n"] == 1:
+            return host_v1
+        manager.hosts[repository_id] = host_v2
+        return host_v2
+
+    def _get_racing(repository_id: str) -> _FakeHost | None:
+        get_calls["n"] += 1
+        host = original_get(repository_id)
+        # After the pre-publish check succeeds, simulate deactivate before store.
+        if get_calls["n"] == 2 and host is host_v1:
+            manager.hosts.pop(repository_id, None)
+            return None
+        return host
+
+    manager.activate_by_id = _activate_racing  # type: ignore[method-assign]
+    manager.get = _get_racing  # type: ignore[method-assign]
+    server = DaemonHttpServer(manager=manager)
+    try:
+        session = await server.ensure_session(TEST_REPOSITORY_ID)
+        assert session.run_id == "run-2"
+        assert server.session_for(TEST_REPOSITORY_ID) is session
+        assert host_v1._notifier is None
+        assert host_v2._notifier is not None
+        assert activate_calls["n"] >= 2
+    finally:
+        await server.stop()
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ensure_session_closes_stale_cache_on_run_id_change(
+    tmp_path: Path,
+) -> None:
+    """A restarted host must replace (and close) the previous socket session."""
+    db, facts, inputs = _logs(tmp_path, TEST_REPOSITORY_ID)
+    host_v1 = _FakeHost(
+        repository_id=TEST_REPOSITORY_ID,
+        run_id="run-1",
+        application_dispatcher=_Application(),
+        fact_log=facts,
+        projection_input_log=inputs,
+        projection_providers=ProjectionProviderRegistry(),
+        repo_root=tmp_path,
+    )
+    host_v2 = _FakeHost(
+        repository_id=TEST_REPOSITORY_ID,
+        run_id="run-2",
+        application_dispatcher=_Application(),
+        fact_log=facts,
+        projection_input_log=inputs,
+        projection_providers=ProjectionProviderRegistry(),
+        repo_root=tmp_path,
+    )
+    manager = _FakeManager(
+        hosts={TEST_REPOSITORY_ID: host_v1},
+        roots={TEST_REPOSITORY_ID: tmp_path},
+    )
+    server = DaemonHttpServer(manager=manager)
+    try:
+        first = await server.ensure_session(TEST_REPOSITORY_ID)
+        assert first.run_id == "run-1"
+        manager.hosts[TEST_REPOSITORY_ID] = host_v2
+        second = await server.ensure_session(TEST_REPOSITORY_ID)
+        assert second is not first
+        assert second.run_id == "run-2"
+        assert first.closed
+        assert server.session_for(TEST_REPOSITORY_ID) is second
     finally:
         await server.stop()
         db.close()

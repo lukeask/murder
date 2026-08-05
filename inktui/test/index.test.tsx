@@ -78,6 +78,12 @@ describe('repositoryIdFromWebsocketUrl', () => {
     ).toBe('repo-abc');
   });
 
+  it('decodes percent-encoded repository ids', () => {
+    expect(
+      repositoryIdFromWebsocketUrl('ws://127.0.0.1:62077/api/ws/repo%2Fwith%2Fslash'),
+    ).toBe('repo/with/slash');
+  });
+
   it('returns undefined when the path is not path-scoped', () => {
     expect(repositoryIdFromWebsocketUrl('ws://127.0.0.1:62077/api/ws')).toBeUndefined();
   });

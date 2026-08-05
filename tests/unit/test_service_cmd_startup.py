@@ -80,6 +80,7 @@ def test_signal_daemon_does_not_unlink_when_lock_already_free(
     path.write_text("999\n", encoding="ascii")
     remove = Mock()
     monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: None)
+    monkeypatch.setattr(service_cmd, "read_daemon_record", lambda: None)
     monkeypatch.setattr(service_cmd, "remove_daemon_record", remove)
 
     service_cmd._signal_daemon(999)
@@ -96,6 +97,7 @@ def test_signal_daemon_does_not_unlink_on_process_lookup_error(
     path.write_text("123\n", encoding="ascii")
     remove = Mock()
     monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: 123)
+    monkeypatch.setattr(service_cmd, "read_daemon_record", lambda: None)
     monkeypatch.setattr(service_cmd, "remove_daemon_record", remove)
 
     def _kill(_pid: int, _sig: int) -> None:
@@ -117,6 +119,7 @@ def test_signal_daemon_does_not_unlink_after_clean_exit(
     path.write_text("123\n", encoding="ascii")
     remove = Mock()
     monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: 123)
+    monkeypatch.setattr(service_cmd, "read_daemon_record", lambda: None)
     monkeypatch.setattr(service_cmd, "remove_daemon_record", remove)
     monkeypatch.setattr(service_cmd.os, "kill", Mock())
     monkeypatch.setattr(service_cmd, "_pid_is_alive", lambda _pid: False)
@@ -125,6 +128,25 @@ def test_signal_daemon_does_not_unlink_after_clean_exit(
 
     assert path.is_file()
     remove.assert_called_once_with()
+
+
+def test_signal_daemon_preserves_successor_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After our target dies, do not wipe a newer daemon's daemon.json."""
+    from murder.state.storage.service_registry import DaemonRecord
+
+    remove = Mock()
+    successor = DaemonRecord(pid=777, port=62077, started_at="t")
+    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: 123)
+    monkeypatch.setattr(service_cmd, "read_daemon_record", lambda: successor)
+    monkeypatch.setattr(service_cmd, "remove_daemon_record", remove)
+    monkeypatch.setattr(service_cmd.os, "kill", Mock())
+    monkeypatch.setattr(service_cmd, "_pid_is_alive", lambda _pid: False)
+
+    service_cmd._signal_daemon(123)
+
+    remove.assert_not_called()
 
 
 async def test_daemon_ready_when_listener_probes(
@@ -227,3 +249,105 @@ async def test_ensure_daemon_and_activate_posts_after_ready(
     assert started is True
     assert info["repository_id"] == "r1"
     activate.assert_awaited_once_with(tmp_path)
+
+
+def test_cmd_down_errors_when_no_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: None)
+    monkeypatch.setattr(service_cmd, "read_daemon_record", lambda: None)
+    result = CliRunner().invoke(app, ["down"])
+    assert result.exit_code == 1
+    assert "No murder daemon running" in result.output
+
+
+def test_cmd_down_removes_stale_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    removed: list[bool] = []
+    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: None)
+    monkeypatch.setattr(service_cmd, "read_daemon_record", lambda: {"pid": 1})
+    monkeypatch.setattr(
+        service_cmd, "remove_daemon_record", lambda: removed.append(True)
+    )
+    result = CliRunner().invoke(app, ["down"])
+    assert result.exit_code == 0
+    assert removed == [True]
+    assert "Removed stale daemon registry record" in result.output
+
+
+def test_cmd_down_signals_live_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    signaled: list[int] = []
+    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: 4242)
+    monkeypatch.setattr(service_cmd, "_signal_daemon", lambda pid: signaled.append(pid))
+    result = CliRunner().invoke(app, ["down"])
+    assert result.exit_code == 0
+    assert signaled == [4242]
+
+
+def test_cmd_ls_offline_lists_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from murder.app.service.repository_manager import RecentRepository
+
+    rows = [
+        RecentRepository(
+            repository_id="repo-a",
+            root_path=tmp_path / "a",
+            created_at="t0",
+            last_seen_at="t1",
+        )
+    ]
+    monkeypatch.setattr(service_cmd, "_fetch_repo_list", AsyncMock(return_value=None))
+    monkeypatch.setattr(service_cmd, "_list_repositories_offline", lambda: rows)
+    result = CliRunner().invoke(app, ["ls"])
+    assert result.exit_code == 0
+    assert "repo-a" in result.output
+    assert "no" in result.output
+    assert str(tmp_path / "a") in result.output
+
+
+def test_cmd_ls_online_shows_active_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        service_cmd,
+        "_fetch_repo_list",
+        AsyncMock(
+            return_value=[
+                {
+                    "repository_id": "repo-a",
+                    "root_path": "/tmp/a",
+                    "active": True,
+                },
+                {
+                    "repository_id": "repo-b",
+                    "root_path": "/tmp/b",
+                    "active": False,
+                },
+            ]
+        ),
+    )
+    result = CliRunner().invoke(app, ["ls"])
+    assert result.exit_code == 0
+    assert "yes" in result.output
+    assert "repo-a" in result.output
+    assert "repo-b" in result.output
+
+
+def test_cmd_repo_stop_requires_running_daemon(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    monkeypatch.setattr(service_cmd, "_daemon_is_ready", AsyncMock(return_value=False))
+    result = CliRunner().invoke(app, ["repo", "stop", str(repo)])
+    assert result.exit_code != 0
+    assert "daemon is not running" in (result.output + str(result.exception)).lower()
+
+
+def test_cmd_repo_stop_deactivates_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    deactivate = AsyncMock()
+    monkeypatch.setattr(service_cmd, "_daemon_is_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(service_cmd, "_deactivate_repository", deactivate)
+    result = CliRunner().invoke(app, ["repo", "stop", str(repo)])
+    assert result.exit_code == 0
+    assert f"stopped {repo}" in result.output
+    deactivate.assert_awaited_once()
+    assert deactivate.await_args.args[0] == repo.resolve()

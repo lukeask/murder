@@ -273,6 +273,17 @@ _DOWN_WAIT_S = 5.0
 _DOWN_POLL_S = 0.1
 
 
+def _clear_daemon_record_for_pid(pid: int) -> None:
+    """Remove ``daemon.json`` only when it still names ``pid`` (or is absent).
+
+    Avoids wiping a successor daemon's registry if it published between our
+    SIGTERM and cleanup.
+    """
+    record = read_daemon_record()
+    if record is None or record.pid == pid:
+        remove_daemon_record()
+
+
 def _signal_daemon(pid: int) -> None:
     # Re-read the live daemon pid right before signalling so we don't SIGTERM a
     # recycled, unrelated process: between the registry/lock read and here the
@@ -286,13 +297,13 @@ def _signal_daemon(pid: int) -> None:
     current = live_daemon_pid()
     if current != pid:
         if current is None:
-            remove_daemon_record()
+            _clear_daemon_record_for_pid(pid)
         typer.echo(f"PID {pid} no longer holds the daemon lock; nothing to signal.")
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        remove_daemon_record()
+        _clear_daemon_record_for_pid(pid)
         typer.echo(f"Daemon PID {pid} is already gone; cleared registry record.")
         return
     typer.echo(f"Sent SIGTERM to pid {pid}")
@@ -317,7 +328,7 @@ def _signal_daemon(pid: int) -> None:
                 time.sleep(_DOWN_POLL_S)
 
     if not _pid_is_alive(pid):
-        remove_daemon_record()
+        _clear_daemon_record_for_pid(pid)
 
 
 def cmd_down() -> None:

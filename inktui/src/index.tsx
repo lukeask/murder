@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { render } from 'ink';
 import {
   useEffect,
-  useMemo,
   useState,
   type JSX,
 } from 'react';
@@ -146,10 +145,20 @@ type LiveSessionTarget = {
   readonly repositoryId: string | undefined;
 };
 
+type ConnectedSession = {
+  readonly bus: ApplicationClient;
+  readonly store: ReturnType<typeof createAppStore>['store'];
+  readonly dispose: () => void;
+};
+
 /**
  * One connected TUI session (bus + app store). Remounted (via `key`) when the user switches
  * repositories so `ApplicationWebSocketClient` gets a fresh URL — it rejects `connect()` after
  * `close()`. Input stores stay shared across switches (kitty/bindings + panel chrome).
+ *
+ * Bus/store are created inside the effect (web `ConnectedSession` pattern) so connection hooks
+ * register before hydrate/`connect()`, and park/resume runs before the first `<App>` paint —
+ * avoiding a one-frame flash of the outgoing repo's workspace layout.
  */
 function ConnectedTuiSession({
   target,
@@ -165,25 +174,24 @@ function ConnectedTuiSession({
   readonly terminalEvents: TerminalEvents;
   readonly busFactory: (url: string) => ApplicationClient;
   readonly onSelectRepository: (repo: RepoListEntry) => void;
-}): JSX.Element {
-  const session = useMemo(() => {
-    const bus = busFactory(target.websocketUrl);
-    const { store, dispose } = createAppStore(bus);
-    return { bus, store, dispose };
-  }, [target.websocketUrl, busFactory]);
+}): JSX.Element | null {
+  const [session, setSession] = useState<ConnectedSession | null>(null);
 
   useEffect(() => {
+    const bus = busFactory(target.websocketUrl);
+    const { store, dispose } = createAppStore(bus);
+
     connectionStore.getState().setStatus('connecting');
-    const unhookConnectedStatus = onConnectIfSupported(session.bus, () =>
+    const unhookConnectedStatus = onConnectIfSupported(bus, () =>
       connectionStore.getState().setStatus('connected'),
     );
-    const unhookDisconnect = onDisconnectIfSupported(session.bus, () =>
+    const unhookDisconnect = onDisconnectIfSupported(bus, () =>
       connectionStore.getState().setStatus('reconnecting'),
     );
-    const unhookPermanentError = onPermanentErrorIfSupported(session.bus, () =>
+    const unhookPermanentError = onPermanentErrorIfSupported(bus, () =>
       connectionStore.getState().setStatus('version-mismatch'),
     );
-    const unhookPlanSeedFailure = onPlanSeedFailedIfSupported(session.bus, (notification) =>
+    const unhookPlanSeedFailure = onPlanSeedFailedIfSupported(bus, (notification) =>
       toastStore
         .getState()
         .push(
@@ -199,7 +207,7 @@ function ConnectedTuiSession({
       focus: inputStores.focus,
       chatInput: inputStores.chatInput,
       paneUi: inputStores.paneUi,
-      app: session.store,
+      app: store,
     };
     const repositoryId = target.repositoryId;
     let unsubSettingsSeed: (() => void) | undefined;
@@ -212,7 +220,7 @@ function ConnectedTuiSession({
       // settings.get lands (must not re-sync afterward — that would fight in-session parked bags).
       if (!hadParked && !hadStoredCount) {
         const seedFromSettings = (): boolean => {
-          const settings = session.store.getState().settings;
+          const settings = store.getState().settings;
           if (settings.status !== 'ready') {
             return false;
           }
@@ -223,7 +231,7 @@ function ConnectedTuiSession({
           return true;
         };
         if (!seedFromSettings()) {
-          unsubSettingsSeed = session.store.subscribe((state, prev) => {
+          unsubSettingsSeed = store.subscribe((state, prev) => {
             if (
               state.settings.status === 'ready' &&
               (prev.settings.status !== 'ready' ||
@@ -239,6 +247,8 @@ function ConnectedTuiSession({
       }
     }
 
+    setSession({ bus, store, dispose });
+
     return () => {
       unsubSettingsSeed?.();
       if (repositoryId !== undefined) {
@@ -248,10 +258,15 @@ function ConnectedTuiSession({
       unhookDisconnect?.();
       unhookPermanentError?.();
       unhookPlanSeedFailure?.();
-      session.dispose();
-      closeIfSupported(session.bus);
+      dispose();
+      closeIfSupported(bus);
+      setSession(null);
     };
-  }, [session, inputStores, target.repositoryId]);
+  }, [target.websocketUrl, target.repositoryId, busFactory, inputStores]);
+
+  if (session === null) {
+    return null;
+  }
 
   return (
     <App

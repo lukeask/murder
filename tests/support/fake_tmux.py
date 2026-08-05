@@ -22,6 +22,8 @@ recorded on ``killed_sessions``/``renamed_sessions`` for assertions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 
 class FakeTmux:
     class TmuxError(Exception):
@@ -117,8 +119,15 @@ class FakeTmux:
         self.calls.append(("pane_dimensions", (name,), {}))
         return self.pane_size
 
-    async def create_session(self, name: str, cwd: object, cmd: list[str]) -> None:
-        self.calls.append(("create_session", (name, cwd, cmd), {}))
+    async def create_session(
+        self,
+        name: str,
+        cwd: object,
+        cmd: list[str] | None = None,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        self.calls.append(("create_session", (name, cwd, cmd), {"env": env}))
         self._sessions.add(name)
 
     async def session_exists(self, name: str) -> bool:

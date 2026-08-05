@@ -7,12 +7,14 @@ import { defineConfig } from 'vitest/config';
 const coreSrc = fileURLToPath(new URL('../ui-core/src', import.meta.url));
 
 
+/** Hard-coded single-daemon listener (`murder/app/protocol/common.py`). */
+const DEFAULT_DAEMON_WS_PROXY = 'ws://127.0.0.1:62077';
+
 /**
  * Dev proxy target for `/api/*` → the live murder daemon (HTTP picker + WebSocket).
  *
  * There is no unix-socket / bus bridge. The daemon serves `/api/repos` and
- * `/api/ws/{repository_id}` itself; `murder web up` prints the browser base URL
- * (e.g. `http://127.0.0.1:62077`). Point the proxy at that host/port:
+ * `/api/ws/{repository_id}` itself on {@link DEFAULT_DAEMON_WS_PROXY}. Overrides:
  *
  *   # Preferred: full application WS URL (path segment optional; host/port extracted)
  *   export VITE_APPLICATION_WS_URL=ws://127.0.0.1:62077/api/ws
@@ -23,10 +25,10 @@ const coreSrc = fileURLToPath(new URL('../ui-core/src', import.meta.url));
  *   # Deprecated alias (still honoured): port-only override from the old bus-bridge era
  *   export VITE_BUS_PROXY_PORT=NNNN
  *
- * If none of these are set, the `/api` proxy is omitted — set one from `murder web up` before
- * `npm run dev` when you need a live daemon. Production builds are same-origin (no proxy).
+ * When none are set, proxy defaults to `:62077` so `npm run dev` reaches the daemon.
+ * Production builds are same-origin (no proxy).
  */
-function applicationWsProxyTarget(): string | undefined {
+function applicationWsProxyTarget(): string {
   const explicit = process.env['VITE_APPLICATION_WS_PROXY'];
   if (explicit !== undefined && explicit !== '') return explicit;
 
@@ -45,12 +47,11 @@ function applicationWsProxyTarget(): string | undefined {
     return `ws://localhost:${legacyPort}`;
   }
 
-  return undefined;
+  return DEFAULT_DAEMON_WS_PROXY;
 }
 
 function applicationApiProxy() {
   const target = applicationWsProxyTarget();
-  if (target === undefined) return {};
   // Vite HTTP proxy wants http(s); WS upgrades still work with `ws: true`.
   const httpTarget = target.replace(/^ws/i, 'http');
   return {

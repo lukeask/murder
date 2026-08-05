@@ -186,12 +186,15 @@ def configure_repo_logging(
         package.setLevel(normalized)
 
     target = str(Path(log_path))
-    for handler in package.handlers:
-        if (
-            getattr(handler, _REPO_FILE_TAG, None) == target
-            and getattr(handler, _REPO_ID_TAG, None) == repository_id
-        ):
+    for handler in list(package.handlers):
+        if getattr(handler, _REPO_ID_TAG, None) != repository_id:
+            continue
+        if getattr(handler, _REPO_FILE_TAG, None) == target:
             return child
+        # Same repo, different run path (stale handler after incomplete teardown):
+        # drop it so we never dual-write across runs.
+        package.removeHandler(handler)
+        handler.close()
 
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     file_handler = logging.FileHandler(target, encoding="utf-8")

@@ -10,8 +10,11 @@ import { CHAT_FOCUS, type FocusId } from '@murder/ui-core/input/focusIds.js';
 import { PANEL_IDS, type PanelId } from '@murder/ui-core/input/panels.js';
 import {
   applyWorkspaceCount as applyWorkspaceCountCore,
+  parkRepositoryWorkspace,
+  resumeRepositoryWorkspace,
   switchWorkspace,
   type WorkspaceStores,
+  type WorkspaceSwitchOptions,
 } from '@murder/ui-core/input/workspaceSwitch.js';
 import { panelFocusStore, type FocusablePanelId } from '../panelFocus.js';
 
@@ -78,5 +81,31 @@ export function workspaceJump(stores: WorkspaceStores, index: number): void {
  */
 export function applyWorkspaceCount(stores: WorkspaceStores, count: number): void {
   applyWorkspaceCountCore(stores, count);
+  syncFocusStoreIntoPanelFocus(stores);
+}
+
+/**
+ * Park a repository bag for web session teardown: push live rail focus into the
+ * snapshot pipeline first so A→B→A restores panel highlight.
+ */
+export function parkWebRepositoryWorkspace(
+  stores: WorkspaceStores,
+  repositoryId: string,
+  options: WorkspaceSwitchOptions = {},
+): void {
+  syncPanelFocusIntoFocusStore(stores);
+  parkRepositoryWorkspace(stores, repositoryId, options);
+}
+
+/**
+ * Resume a repository bag after web session remount and sync rail focus from the
+ * hydrated `focus.intendedId`.
+ */
+export function resumeWebRepositoryWorkspace(
+  stores: WorkspaceStores,
+  repositoryId: string,
+  options: WorkspaceSwitchOptions = {},
+): void {
+  resumeRepositoryWorkspace(stores, repositoryId, options);
   syncFocusStoreIntoPanelFocus(stores);
 }

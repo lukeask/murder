@@ -143,9 +143,23 @@ def read_daemon_record() -> DaemonRecord | None:
 
 
 def live_daemon_record() -> DaemonRecord | None:
-    """Return the registry record when its pid is still alive; else clear stale."""
+    """Return the registry record when the daemon flock still names its pid.
+
+    ``os.kill(pid, 0)`` alone is not enough: a recycled pid can keep a stale
+    ``daemon.json``. Require the exclusive daemon.lock flock to name the same
+    pid (same rule as ``live_daemon_pid``), otherwise clear the registry.
+    """
     record = read_daemon_record()
     if record is None:
+        return None
+    # Inline path matches daemon_host.daemon_lock_path (avoid import cycle).
+    from murder.state.storage.filesystem import lock_is_held, read_lock_pid
+    from murder.user_config import config_dir
+
+    lock = config_dir() / "daemon.lock"
+    lock_pid = read_lock_pid(lock)
+    if lock_pid != record.pid or not lock_is_held(lock):
+        remove_daemon_record()
         return None
     try:
         os.kill(record.pid, 0)

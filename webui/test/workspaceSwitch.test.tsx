@@ -10,9 +10,12 @@ import { cleanup, fireEvent, screen } from '@testing-library/react';
 import {
   createComposerStores,
   toWorkspaceStores,
+  webFreshWorkspaceSnapshot,
 } from '../src/composer/createComposerStores.js';
 import {
   applyWorkspaceCount,
+  parkWebRepositoryWorkspace,
+  resumeWebRepositoryWorkspace,
   workspaceJump,
   workspaceNext,
   workspacePrev,
@@ -118,6 +121,38 @@ describe('workspace switch (web helpers)', () => {
     expect(composer.workspace.getState().activeIndex).toBe(0);
     expect(panelFocusStore.getState().focusedId).toBe('history');
     expect(composer.focus.getState().intendedId).toBe('history');
+  });
+
+  it('restores panelFocus across repository park/resume A→B→A', () => {
+    const { composer, stores } = makeBundle();
+    applyWorkspaceCount(stores, 1);
+    resumeWebRepositoryWorkspace(stores, 'repo-a', {
+      freshSnapshot: webFreshWorkspaceSnapshot(),
+    });
+    panelFocusStore.getState().focus('history');
+    composer.chatInput.getState().insert('draft-a');
+
+    parkWebRepositoryWorkspace(stores, 'repo-a');
+    expect(composer.workspace.getState().repositoryId).toBeNull();
+
+    // Simulate remount: new app store (session), same composer stores.
+    const nextBus = new FakeApplicationClient();
+    const { store: nextApp, dispose: disposeNext } = createAppStore(nextBus);
+    const remounted = toWorkspaceStores(composer, nextApp);
+
+    resumeWebRepositoryWorkspace(remounted, 'repo-b', {
+      freshSnapshot: webFreshWorkspaceSnapshot(),
+    });
+    expect(panelFocusStore.getState().focusedId).toBeNull();
+    expect(composer.chatInput.getState().text).toBe('');
+    panelFocusStore.getState().focus('usage');
+
+    parkWebRepositoryWorkspace(remounted, 'repo-b');
+    resumeWebRepositoryWorkspace(remounted, 'repo-a');
+    expect(composer.chatInput.getState().text).toBe('draft-a');
+    expect(panelFocusStore.getState().focusedId).toBe('history');
+    expect(composer.focus.getState().intendedId).toBe('history');
+    disposeNext();
   });
 
   it('restores doc/transcript scroll offsets across A→B→A', () => {

@@ -172,6 +172,24 @@ def test_configure_repo_logging_idempotent(clean_root, tmp_path) -> None:
     close_repo_logging(rid)
 
 
+def test_configure_repo_logging_replaces_stale_path(clean_root, tmp_path) -> None:
+    from murder.observability.logging_setup import close_repo_logging, configure_repo_logging
+
+    configure_logging(level="INFO", log_path=None)
+    rid = "repo-ccc"
+    old_path = tmp_path / "old" / "service.log"
+    new_path = tmp_path / "new" / "service.log"
+    configure_repo_logging(repository_id=rid, level="INFO", log_path=old_path, run_id="r1")
+    configure_repo_logging(repository_id=rid, level="INFO", log_path=new_path, run_id="r2")
+    package = logging.getLogger("murder")
+    repo_handlers = [
+        h for h in package.handlers if getattr(h, "_murder_repository_id", None) == rid
+    ]
+    assert len(repo_handlers) == 1
+    assert getattr(repo_handlers[0], "_murder_repo_file_path") == str(new_path)
+    close_repo_logging(rid)
+
+
 def test_configure_logging_sets_level(clean_root) -> None:
     configure_logging(level="DEBUG", log_path=None)
     assert clean_root.level == logging.DEBUG

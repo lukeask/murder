@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -8,7 +10,11 @@ import pytest
 from murder.runtime.scheduler import worker as scheduler_worker
 from murder.runtime.scheduler.worker import SchedulerWorker
 from murder.state.persistence.connection import RepoDb, connect
-from tests.support.database import TEST_REPOSITORY_ID, open_test_repo_db
+from tests.support.database import (
+    SECOND_TEST_REPOSITORY_ID,
+    TEST_REPOSITORY_ID,
+    open_test_repo_db,
+)
 
 NOW = datetime(2026, 7, 24, 18, 0, tzinfo=timezone.utc)
 
@@ -141,3 +147,87 @@ async def test_maybe_prune_logs_warning_on_failure(
 
     assert any("harness capture prune failed" in record.message for record in caplog.records)
     assert worker._prune_in_progress is False
+
+
+@pytest.mark.asyncio
+async def test_multi_host_concurrent_prune_on_shared_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two repository schedulers can prune the shared DB without cross-talk or busy failures."""
+    db_file = tmp_path / "shared.db"
+    host_a = open_test_repo_db(db_file, repository_id=TEST_REPOSITORY_ID)
+    host_b = open_test_repo_db(db_file, repository_id=SECOND_TEST_REPOSITORY_ID)
+    try:
+        for rid, prefix, db in (
+            (TEST_REPOSITORY_ID, "a", host_a),
+            (SECOND_TEST_REPOSITORY_ID, "b", host_b),
+        ):
+            del rid
+            for i in range(8):
+                _insert_frame(
+                    db,
+                    frame_id=f"{prefix}-old-{i}",
+                    captured_at=NOW - timedelta(minutes=10, microseconds=1 + i),
+                    sequence=i + 1,
+                )
+            _insert_frame(
+                db,
+                frame_id=f"{prefix}-keep",
+                captured_at=NOW - timedelta(minutes=10),
+                sequence=100,
+            )
+
+        opened: list[object] = []
+
+        def _connect_for_test() -> object:
+            conn = connect(db_file)
+            opened.append(conn)
+            return conn
+
+        monkeypatch.setattr(scheduler_worker, "connect", _connect_for_test)
+
+        worker_a = SchedulerWorker()
+        worker_b = SchedulerWorker()
+
+        # Overlap thread-pool prune work the same way multi-host ticks do.
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            await asyncio.gather(
+                loop.run_in_executor(
+                    pool,
+                    lambda: worker_a._prune_old_snapshots_in_thread(
+                        TEST_REPOSITORY_ID, now=NOW
+                    ),
+                ),
+                loop.run_in_executor(
+                    pool,
+                    lambda: worker_b._prune_old_snapshots_in_thread(
+                        SECOND_TEST_REPOSITORY_ID, now=NOW
+                    ),
+                ),
+            )
+
+        assert len(opened) == 2
+        assert opened[0] is not opened[1]
+        assert opened[0] is not host_a.conn
+        assert opened[1] is not host_b.conn
+
+        assert [
+            row["frame_id"]
+            for row in host_a.conn.execute(
+                "SELECT frame_id FROM harness_control_frames "
+                "WHERE repository_id = ? ORDER BY capture_sequence",
+                (TEST_REPOSITORY_ID,),
+            )
+        ] == ["a-keep"]
+        assert [
+            row["frame_id"]
+            for row in host_b.conn.execute(
+                "SELECT frame_id FROM harness_control_frames "
+                "WHERE repository_id = ? ORDER BY capture_sequence",
+                (SECOND_TEST_REPOSITORY_ID,),
+            )
+        ] == ["b-keep"]
+    finally:
+        host_a.close()
+        host_b.close()

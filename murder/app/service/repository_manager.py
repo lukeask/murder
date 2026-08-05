@@ -179,6 +179,20 @@ class RepositoryManager:
         finally:
             await life.lock.acquire()
 
+    async def _join_in_flight_start(self, life: _RepoLifecycle) -> None:
+        """Wait out STARTING (lock held); suppress start failures for stop/init paths."""
+        while (
+            life.phase is RepoLifecyclePhase.STARTING
+            and life.start_future is not None
+        ):
+            start_fut = life.start_future
+            life.lock.release()
+            try:
+                with contextlib.suppress(Exception):
+                    await start_fut
+            finally:
+                await life.lock.acquire()
+
     async def activate_by_id(self, repository_id: str) -> RepositoryHost:
         """Activate (or reuse) the host for a registered ``repository_id``.
 
@@ -309,6 +323,9 @@ class RepositoryManager:
     async def _activate_under_id(
         self, repository_id: str, root: Path
     ) -> RepositoryHost:
+        # Lifecycle objects stay in ``_lifecycles`` for the manager's lifetime so
+        # waiters that resume after an unlocked stop/start await always share the
+        # same lock/phase object as newly arriving activators.
         life = self._lifecycle(repository_id)
         start_future: asyncio.Future[RepositoryHost] | None = None
         while start_future is None:
@@ -327,9 +344,17 @@ class RepositoryManager:
 
                 joined = await self._await_start_if_needed(life)
                 if joined is not None:
-                    self.touch(repository_id)
-                    self._bump_last_seen(root)
-                    return joined
+                    # Start may have completed then been torn down while we
+                    # awaited ``start_future``; only reuse when still ACTIVE.
+                    if (
+                        life.phase is RepoLifecyclePhase.ACTIVE
+                        and life.host is joined
+                        and self._hosts.get(repository_id) is joined
+                    ):
+                        self.touch(repository_id)
+                        self._bump_last_seen(root)
+                        return joined
+                    continue
 
                 # Another waiter may have become the starter while we awaited stop.
                 if (
@@ -386,9 +411,6 @@ class RepositoryManager:
                 self._hosts.pop(repository_id, None)
                 if not start_future.done():
                     start_future.set_exception(exc)
-                # Drop empty lifecycle so a later activate starts clean.
-                if life.stop_future is None:
-                    self._lifecycles.pop(repository_id, None)
             raise
 
     def _bump_last_seen(self, repo_root: Path) -> None:
@@ -410,57 +432,69 @@ class RepositoryManager:
             if inspect.isawaitable(result):
                 await result
 
-    async def deactivate(self, repository_id: str) -> None:
-        """Gracefully stop one host. Tmux sweep remains per-host on ``stop()``.
+    def is_idle(self, repository_id: str) -> bool:
+        """True when the host has no WS clients and no non-terminal agents."""
+        host = self._hosts.get(repository_id)
+        if host is None:
+            return True
+        return self._is_idle_host(repository_id, host)
+
+    def _is_idle_host(self, repository_id: str, host: RepositoryHost) -> bool:
+        if repository_id in self._pinned:
+            return False
+        if self.ws_connection_count(repository_id) > 0:
+            return False
+        return not host.has_live_agents()
+
+    def _begin_host_stop(
+        self,
+        repository_id: str,
+        life: _RepoLifecycle,
+        host: RepositoryHost,
+        *,
+        reason: str,
+    ) -> asyncio.Future[None]:
+        """Mark ``stopping`` and drop shared state. Caller must hold ``life.lock``."""
+        loop = asyncio.get_running_loop()
+        stop_future: asyncio.Future[None] = loop.create_future()
+        life.phase = RepoLifecyclePhase.STOPPING
+        life.stop_future = stop_future
+        life.host = None
+        self._hosts.pop(repository_id, None)
+        self._last_activity.pop(repository_id, None)
+        self._ws_connections.pop(repository_id, None)
+        self._pinned.discard(repository_id)
+        LOGGER.info(
+            "deactivating repository_id=%s root=%s (%s)",
+            repository_id,
+            host.repo_root,
+            reason,
+        )
+        return stop_future
+
+    async def _finish_host_stop(
+        self,
+        repository_id: str,
+        life: _RepoLifecycle,
+        target: RepositoryHost,
+        stop_future: asyncio.Future[None],
+        *,
+        reason: str,
+        before_release: Callable[[], None] | None = None,
+    ) -> None:
+        """Tear down a host marked stopping by ``_begin_host_stop``.
 
         Order:
-        1. mark ``stopping`` / drop from ``active`` (blocks new connect reuse),
-        2. close repository socket session (via ``on_deactivated``),
-        3. await connection teardown inside that hook,
-        4. stop the host,
-        5. clear lifecycle state and complete the shared stop future.
+        1. close repository socket session (via ``on_deactivated``),
+        2. await connection teardown inside that hook,
+        3. stop the host,
+        4. clear phase fields and complete the shared stop future.
+
+        Session close + host stop run outside the lock so concurrent activators
+        of *this* repo await ``stop_future`` while unrelated repos proceed.
+        ``before_release`` runs last with the lock held (force-init uses it to
+        scaffold before activators can reopen the tree).
         """
-        life = self._lifecycle(repository_id)
-        async with life.lock:
-            await self._await_stop_if_needed(life)
-
-            # Wait out an in-flight start so we stop the host that finishes it.
-            while (
-                life.phase is RepoLifecyclePhase.STARTING
-                and life.start_future is not None
-            ):
-                start_fut = life.start_future
-                life.lock.release()
-                try:
-                    with contextlib.suppress(Exception):
-                        await start_fut
-                finally:
-                    await life.lock.acquire()
-
-            host = life.host or self._hosts.get(repository_id)
-            if host is None:
-                life.phase = None
-                life.start_future = None
-                life.stop_future = None
-                self._lifecycles.pop(repository_id, None)
-                return
-
-            loop = asyncio.get_running_loop()
-            stop_future: asyncio.Future[None] = loop.create_future()
-            life.phase = RepoLifecyclePhase.STOPPING
-            life.stop_future = stop_future
-            life.host = None
-            self._hosts.pop(repository_id, None)
-            self._last_activity.pop(repository_id, None)
-            self._ws_connections.pop(repository_id, None)
-            self._pinned.discard(repository_id)
-            LOGGER.info(
-                "deactivating repository_id=%s root=%s", repository_id, host.repo_root
-            )
-            target = host
-
-        # Session close + host stop outside the lock so concurrent activators of
-        # *this* repo await ``stop_future`` while unrelated repos proceed.
         try:
             await self._invoke_on_deactivated(repository_id)
             target.set_plan_seed_failure_notifier(None)
@@ -469,7 +503,9 @@ class RepositoryManager:
                 await target.stop()
             except Exception:
                 LOGGER.exception(
-                    "error while deactivating repository_id=%s", repository_id
+                    "error while deactivating repository_id=%s (%s)",
+                    repository_id,
+                    reason,
                 )
         finally:
             async with life.lock:
@@ -477,9 +513,47 @@ class RepositoryManager:
                 life.host = None
                 life.stop_future = None
                 life.start_future = None
-                self._lifecycles.pop(repository_id, None)
                 if not stop_future.done():
                     stop_future.set_result(None)
+                if before_release is not None:
+                    before_release()
+
+    async def deactivate(
+        self, repository_id: str, *, only_if_idle: bool = False
+    ) -> bool:
+        """Gracefully stop one host. Tmux sweep remains per-host on ``stop()``.
+
+        The ``_RepoLifecycle`` object itself is retained so waiters that held a
+        reference across an unlocked await still share state with new callers.
+
+        When ``only_if_idle`` is true (idle eviction), abort under the lifecycle
+        lock if a WS connect / pin / live agent appeared since victim selection.
+        Returns whether the host was stopped (or already absent).
+        """
+        life = self._lifecycle(repository_id)
+        async with life.lock:
+            await self._await_stop_if_needed(life)
+            await self._join_in_flight_start(life)
+
+            host = life.host or self._hosts.get(repository_id)
+            if host is None:
+                life.phase = None
+                life.start_future = None
+                life.stop_future = None
+                return True
+
+            if only_if_idle and not self._is_idle_host(repository_id, host):
+                self.touch(repository_id)
+                return False
+
+            stop_future = self._begin_host_stop(
+                repository_id, life, host, reason="deactivate"
+            )
+
+        await self._finish_host_stop(
+            repository_id, life, host, stop_future, reason="deactivate"
+        )
+        return True
 
     async def deactivate_all(self) -> None:
         """Stop every active host (daemon shutdown)."""
@@ -508,30 +582,74 @@ class RepositoryManager:
         finally:
             conn.close()
 
-    def initialize(self, repo_root: Path, *, force: bool = False) -> RecentRepository:
-        """Scaffold a project and return its registry row (does not start a host)."""
-        root = Path(repo_root).resolve(strict=False)
-        scaffold_project(root, force=force)
-        # scaffold_project already opened the partition (bumps last_seen_at).
+    def _recent_entry_for_root(self, root: Path) -> RecentRepository:
         for entry in self.list_recent():
             if entry.root_path.resolve(strict=False) == root:
                 return entry
         raise RuntimeError(f"scaffold completed but repository row missing for {root}")
 
-    def is_idle(self, repository_id: str) -> bool:
-        """True when the host has no WS clients and no non-terminal agents."""
-        host = self._hosts.get(repository_id)
-        if host is None:
-            return True
-        if repository_id in self._pinned:
-            return False
-        if self.ws_connection_count(repository_id) > 0:
-            return False
-        return not host.has_live_agents()
+    async def initialize(
+        self, repo_root: Path, *, force: bool = False
+    ) -> RecentRepository:
+        """Scaffold a project and return its registry row (does not start a host).
 
-    async def evict_idle(self) -> list[str]:
-        """Deactivate hosts idle longer than ``idle_timeout_s``. Returns ids stopped."""
-        now = time.monotonic()
+        Serialized with the repository lifecycle: an active (or starting) host is
+        stopped before a forced reset, and scaffolding holds the per-repo lock so
+        activate cannot open handles into a tree mid-wipe.
+        """
+        from murder.app.service.project_scaffold import ProjectAlreadyInitialized
+        from murder.state.storage.paths import agents_dir
+
+        root = Path(repo_root).resolve(strict=False)
+        repository_id = self._lookup_id_by_root(root)
+        existing = self.get_by_root(root)
+        if existing is not None:
+            repository_id = existing.repository_id
+
+        if repository_id is None:
+            # Unregistered path — no host can be keyed yet; scaffold without a lock.
+            scaffold_project(root, force=force)
+            return self._recent_entry_for_root(root)
+
+        life = self._lifecycle(repository_id)
+        async with life.lock:
+            await self._await_stop_if_needed(life)
+            await self._join_in_flight_start(life)
+
+            host = life.host or self._hosts.get(repository_id)
+            if host is None:
+                # Idle registered repo — hold the lock across scaffold so activate
+                # cannot start while force deletes the partition / .murder tree.
+                scaffold_project(root, force=force)
+                return self._recent_entry_for_root(root)
+            if not force:
+                raise ProjectAlreadyInitialized(agents_dir(root))
+            stop_future = self._begin_host_stop(
+                repository_id, life, host, reason="force init"
+            )
+
+        entry: RecentRepository | None = None
+
+        def _scaffold_before_release() -> None:
+            nonlocal entry
+            # Scaffold before releasing so a concurrent activator cannot open
+            # the old partition mid-wipe.
+            scaffold_project(root, force=force)
+            entry = self._recent_entry_for_root(root)
+
+        await self._finish_host_stop(
+            repository_id,
+            life,
+            host,
+            stop_future,
+            reason="force init",
+            before_release=_scaffold_before_release,
+        )
+        assert entry is not None
+        return entry
+
+    def _idle_victims(self, now: float) -> list[str]:
+        """Selection pass: hosts past the idle timeout with no activity."""
         victims: list[str] = []
         for repository_id in list(self._hosts):
             if not self.is_idle(repository_id):
@@ -540,9 +658,35 @@ class RepositoryManager:
             last = self._last_activity.get(repository_id, now)
             if now - last >= self._idle_timeout_s:
                 victims.append(repository_id)
-        for repository_id in victims:
-            await self.deactivate(repository_id)
         return victims
+
+    async def _evict_victim(self, repository_id: str) -> bool:
+        """Re-check one selected victim, then deactivate it if still idle.
+
+        This is the boundary between victim selection and teardown: a
+        ``note_ws_connect`` / ``touch`` / pin / agent spawn that lands here
+        wins the race and keeps the host (the final check runs under the
+        per-repo lock inside ``deactivate(only_if_idle=True)``).
+        """
+        if repository_id not in self._hosts:
+            return False
+        last = self._last_activity.get(repository_id, time.monotonic())
+        if time.monotonic() - last < self._idle_timeout_s:
+            return False
+        stopped = await self.deactivate(repository_id, only_if_idle=True)
+        return stopped and self.get(repository_id) is None
+
+    async def evict_idle(self) -> list[str]:
+        """Deactivate hosts idle longer than ``idle_timeout_s``. Returns ids stopped.
+
+        Victim selection and deactivation are intentionally split so unrelated
+        hosts can keep serving.
+        """
+        evicted: list[str] = []
+        for repository_id in self._idle_victims(time.monotonic()):
+            if await self._evict_victim(repository_id):
+                evicted.append(repository_id)
+        return evicted
 
     async def _eviction_loop(self) -> None:
         while not self._stopped.is_set():

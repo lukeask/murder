@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from murder.app.service.command_dispatch import CommandDispatcher
-from murder.config import Config, load_repo_env
+from murder.config import Config, load_repo_env, merge_subprocess_env
 from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,
     harness_kinds_to_sample,
@@ -32,9 +32,10 @@ async def _run_usage_probe_process(
     run_id: str,
 ) -> None:
     repo_root = Path(repo_root_raw)
-    # Dedicated per-repo child: overlay project env onto the inherited daemon
-    # baseline. Mutation stays local to this process.
-    os.environ.update(load_repo_env(repo_root))
+    # Dedicated per-repo child: materialize daemon baseline + repo overlay into
+    # this process environ so nested harness/CLI calls inherit project secrets.
+    # Mutation stays local to this spawned worker (never the daemon).
+    os.environ.update(merge_subprocess_env(load_repo_env(repo_root)))
     cfg = Config.load(repo_root)
     db = open_repo_db(repo_root)
     sampling = UsageSamplingContext(config=cfg, repo_root=repo_root, db=db)

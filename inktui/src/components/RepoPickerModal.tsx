@@ -194,19 +194,12 @@ export function repoPickerMode(
         { key: 'esc', description: 'cancel' },
       ];
     },
+    // Structural keys only — j/k/r and path printables ride `onUncaptured` so init-path typing
+    // is not swallowed by list navigation chords (NewPlanModal / SpawnWizardModal pattern).
     keymap: [
-      {
-        chord: [{ input: 'k' }, { key: { upArrow: true } }],
-        intent: 'up',
-        description: 'prev',
-      },
-      {
-        chord: [{ input: 'j' }, { key: { downArrow: true } }],
-        intent: 'down',
-        description: 'next',
-      },
+      { chord: { key: { upArrow: true } }, intent: 'up', description: 'prev' },
+      { chord: { key: { downArrow: true } }, intent: 'down', description: 'next' },
       { chord: { key: { return: true } }, intent: 'select', description: 'open' },
-      { chord: { input: 'r' }, intent: 'retry', description: 'retry' },
       { chord: { key: { tab: true } }, intent: 'toggleInit', description: 'toggle init' },
       { chord: { key: { backspace: true } }, intent: 'backspace', description: 'delete' },
       { chord: { key: { escape: true } }, intent: 'dismiss', description: 'cancel' },
@@ -245,14 +238,32 @@ export function repoPickerMode(
       }
     },
     onUncaptured(input, key) {
-      if (!s.initMode || s.initBusy) return false;
+      if (s.initBusy) return false;
       if (key.ctrl || key.meta || key.return || key.escape || key.tab) return false;
       if (input.length === 0) return false;
-      // Printable path characters.
-      if (/^[\x20-\x7e]+$/.test(input)) {
-        s.initPath += input;
-        s.initError = null;
-        refresh();
+
+      if (s.initMode) {
+        // Printable path characters (including j/k/r).
+        if (/^[\x20-\x7e]+$/.test(input)) {
+          s.initPath += input;
+          s.initError = null;
+          refresh();
+          return true;
+        }
+        return false;
+      }
+
+      // List mode: letter chords that must not be keymap-bound (would block init typing).
+      if (input === 'k' || input === 'K') {
+        move(-1);
+        return true;
+      }
+      if (input === 'j' || input === 'J') {
+        move(1);
+        return true;
+      }
+      if (input === 'r' || input === 'R') {
+        load();
         return true;
       }
       return false;

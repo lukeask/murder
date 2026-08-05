@@ -24,6 +24,22 @@ export function ComposerStoresProvider({
   return <ComposerStoresContext.Provider value={stores}>{children}</ComposerStoresContext.Provider>;
 }
 
+/**
+ * Prefer an ancestor {@link ComposerStoresProvider} (Boot parks/resumes that bag across repo
+ * remounts). When absent — unit tests that mount {@link App} alone — create a local bundle.
+ */
+export function ComposerStoresBoundary({
+  children,
+}: {
+  readonly children: ReactNode;
+}): React.JSX.Element {
+  const existing = useContext(ComposerStoresContext);
+  if (existing !== null) {
+    return <>{children}</>;
+  }
+  return <ComposerStoresProvider>{children}</ComposerStoresProvider>;
+}
+
 export function useComposerStores(): ComposerStores {
   const stores = useContext(ComposerStoresContext);
   if (stores === null) {

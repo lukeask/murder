@@ -59,7 +59,11 @@ class PlanningAgent(HarnessBackedAgent):
                 cwd=self._cwd,
                 startup_model=self.startup_model,
                 startup_effort=self.startup_effort,
-                env=self.runtime.subprocess_env() if self.runtime is not None else None,
+                env=(
+                    self.runtime.subprocess_env()
+                    if self.runtime is not None and hasattr(self.runtime, "subprocess_env")
+                    else None
+                ),
             )
         )
         if not start_result.ok:
