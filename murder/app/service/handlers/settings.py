@@ -51,7 +51,7 @@ def register(
         mutation = apply_settings_patch(_repository().load(), partial)
         commit_settings_mutation(mutation, _repository(), _live())
         # NOTE: llm env changes are NOT applied live. They take effect at next
-        # daemon start via apply_llm_env in Config.load.
+        # daemon start via apply_daemon_env.
         project = config.project.name if config.project is not None else None
         return {
             "ok": True,

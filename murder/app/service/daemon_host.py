@@ -27,7 +27,7 @@ from murder.app.service.repository_manager import (
 from murder.app.service.socket_server import DaemonHttpServer
 from murder.app.service.supervisor import Supervisor
 from murder.app.service.webui_assets import resolve_webui_assets_dir
-from murder.config import Config
+from murder.config import Config, apply_daemon_env
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.runtime.workers import HarnessVersionProbeWorker, ModelCatalogRefreshWorker
 from murder.runtime.workers.base import WorkerCtx
@@ -136,6 +136,8 @@ class DaemonHost:
         except Exception:
             LOGGER.debug("user config unavailable; continuing with defaults", exc_info=True)
             self._user_config = None
+        # User-global env once for the process; per-repo env stays off os.environ.
+        apply_daemon_env(self._user_config)
 
         self._lock_fd = acquire_flock(daemon_lock_path())
         self.manager = RepositoryManager(
@@ -158,8 +160,10 @@ class DaemonHost:
                 with contextlib.suppress(Exception):
                     release_flock(self._lock_fd)
                 self._lock_fd = None
-            with contextlib.suppress(FileNotFoundError, OSError):
-                daemon_lock_path().unlink()
+            # Leave daemon.lock on disk permanently. flock is inode-bound; unlinking
+            # after release lets another process lock the old inode while a third
+            # creates and locks a new path — two "owners". PID text is rewritten
+            # only by acquire_flock while holding the lock.
 
     async def _start_daemon_workers(self, *, probe_config: Config) -> None:
         """Start the two user-global workers once for the whole process."""
@@ -195,7 +199,7 @@ class DaemonHost:
             manager=self.manager,
             assets_dir=resolve_webui_assets_dir(primary.repo_root),
         )
-        self.manager.set_on_deactivated(http.drop_session)
+        self.manager.set_on_deactivated(http.close_session)
         # Warm the primary session so plan-seed notifier is wired before clients.
         await http.ensure_session(primary.repository_id)
         bound = await http.start(host=bind_host, port=port)

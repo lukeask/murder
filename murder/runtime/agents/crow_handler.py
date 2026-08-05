@@ -109,6 +109,7 @@ class CrowHandler(Daemon):
             self.session,
             self.repo_root,
             ["tail", "-f", str(self._log_path)],
+            env=self.runtime.subprocess_env(),
         )
         await self.runtime.transition(
             self,

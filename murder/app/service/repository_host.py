@@ -9,7 +9,7 @@ to attach a socket session.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from contextvars import Context
 from dataclasses import dataclass, field
@@ -40,7 +40,7 @@ from murder.app.service.socket_server import (
 )
 from murder.app.service.startup_recovery import StartupRecoveryResult, run_startup_recovery
 from murder.app.service.supervisor import Supervisor
-from murder.config import Config
+from murder.config import Config, merge_subprocess_env
 from murder.facts.log import FactLog, ProjectionInputLog
 from murder.llm.harnesses.versioning import HarnessVersionRegistry
 from murder.observability.log_context import create_task_with_context
@@ -100,6 +100,8 @@ class RepositoryHost:
     user_config: UserConfig | None = None
     # Shared daemon registry when running under DaemonHost; else a private one.
     harness_versions: HarnessVersionRegistry | None = None
+    # Per-host project env overlay (parsed at activate; never applied to os.environ).
+    repo_env: Mapping[str, str] = field(default_factory=dict)
     activity_dispatcher_factory: ActivityDispatcherFactory | None = None
     trigger_dispatcher_factory: TriggerDispatcherFactory | None = None
     read_model: ServiceReadModel | None = None
@@ -226,6 +228,10 @@ class RepositoryHost:
             agent.status not in TERMINAL_STATUSES for agent in self._running.agents.all()
         )
 
+    def subprocess_env(self) -> dict[str, str]:
+        """Explicit child env for this host: daemon baseline + repo overlay."""
+        return merge_subprocess_env(self.repo_env)
+
     async def start(self) -> None:
         from murder.runtime.activity_dispatcher import (  # noqa: PLC0415
             build_default_activity_dispatcher,
@@ -315,6 +321,7 @@ class RepositoryHost:
                 command_submitter=process.commands,
                 sessions=sessions,
                 lifecycle_events_enabled=(process.recorder_mode != "off"),
+                repo_env=self.repo_env,
             )
         )
 

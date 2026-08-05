@@ -56,6 +56,7 @@ class _FakeHost:
     terminal_output_open: Any = None
     terminal_input: Any = None
     terminal_input_validator: Any = None
+    observability_context: Any = None
     _notifier: Any = None
 
     def schedule_plan_seed(self, *args: object, **kwargs: object) -> None:
@@ -117,7 +118,11 @@ class _FakeManager:
         self.deactivated.append(repository_id)
         self.hosts.pop(repository_id, None)
         if self._on_deactivated is not None:
-            self._on_deactivated(repository_id)
+            result = self._on_deactivated(repository_id)
+            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+                await result
+            elif hasattr(result, "__await__"):
+                await result
 
     def note_ws_connect(self, repository_id: str) -> None:
         self.ws_counts[repository_id] = self.ws_counts.get(repository_id, 0) + 1
@@ -245,6 +250,7 @@ async def test_activate_and_deactivate_by_path(tmp_path: Path) -> None:
         ],
     )
     server = DaemonHttpServer(manager=manager)
+    manager.set_on_deactivated(server.close_session)
     try:
         bind_host, port = await server.start(host="127.0.0.1", port=0)
         base = f"http://{bind_host}:{port}"
@@ -274,6 +280,61 @@ async def test_activate_and_deactivate_by_path(tmp_path: Path) -> None:
             assert manager.deactivated == [TEST_REPOSITORY_ID]
             assert TEST_REPOSITORY_ID not in manager.hosts
             assert server.session_for(TEST_REPOSITORY_ID) is None
+    finally:
+        await server.stop()
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_deactivate_closes_connected_websocket(tmp_path: Path) -> None:
+    """Deactivation must close live WS clients, not leave them on a stopped host."""
+    db, facts, inputs = _logs(tmp_path, TEST_REPOSITORY_ID)
+    root = tmp_path / "ws-proj"
+    root.mkdir()
+    host = _FakeHost(
+        repository_id=TEST_REPOSITORY_ID,
+        run_id="run-ws-deactivate",
+        application_dispatcher=_Application(),
+        fact_log=facts,
+        projection_input_log=inputs,
+        projection_providers=ProjectionProviderRegistry(),
+        repo_root=root,
+    )
+    manager = _FakeManager(
+        hosts={TEST_REPOSITORY_ID: host},
+        roots={TEST_REPOSITORY_ID: root},
+    )
+    server = DaemonHttpServer(manager=manager)
+    manager.set_on_deactivated(server.close_session)
+    try:
+        bind_host, port = await server.start(host="127.0.0.1", port=0)
+        base = f"http://{bind_host}:{port}"
+        ws_url = f"ws://{bind_host}:{port}/api/ws/{TEST_REPOSITORY_ID}"
+        async with ClientSession() as http:
+            async with http.ws_connect(ws_url) as ws:
+                hello = await _hello(ws, client_id="ws-client")
+                assert hello["server_id"] == "run-ws-deactivate"
+                session = server.session_for(TEST_REPOSITORY_ID)
+                assert session is not None
+                assert session.connection_count == 1
+
+                async with http.post(
+                    f"{base}/api/repos/deactivate",
+                    json={"repository_id": TEST_REPOSITORY_ID},
+                ) as resp:
+                    assert resp.status == 200
+                    body = await resp.json()
+                    assert body["ok"] is True
+                    assert body["active"] is False
+
+                assert manager.deactivated == [TEST_REPOSITORY_ID]
+                assert server.session_for(TEST_REPOSITORY_ID) is None
+                assert session.closed is True
+                assert session.connection_count == 0
+
+                # Client observes the close (aiohttp may surface CLOSED or ERROR).
+                msg = await ws.receive(timeout=2.0)
+                assert msg.type.name in {"CLOSED", "CLOSE", "ERROR"}
     finally:
         await server.stop()
         db.close()

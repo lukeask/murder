@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -21,7 +20,6 @@ from murder.app.cli._util import repo_root as _repo_root
 from murder.app.protocol.common import DAEMON_WEBSOCKET_HOST, DAEMON_WEBSOCKET_PORT
 from murder.app.service.daemon_host import (
     DaemonHost,
-    daemon_lock_path,
     live_daemon_pid,
     probe_daemon_listener,
 )
@@ -29,7 +27,6 @@ from murder.app.service.repository_manager import RecentRepository, RepositoryMa
 from murder.state.persistence.connection import RepoDb, open_repo_db
 from murder.state.persistence.escalations import list_pending_escalations
 from murder.state.persistence.tickets import get_ticket
-from murder.state.storage.filesystem import read_lock_pid
 from murder.state.storage.paths import (
     agents_dir,
     notes_dir,
@@ -254,7 +251,7 @@ def _run_async_entry(coro) -> None:  # type: ignore[no-untyped-def]
         raise typer.Exit(1) from e
 
 
-async def _run_supervisor_only(websocket_port: int = 0) -> None:
+async def _run_supervisor_only() -> None:
     # Configure stderr logging immediately so early-startup records reach the
     # child's stdout/stderr -> daemon.ndjson. Per-repo run logs attach later
     # inside each RepositoryHost / ProcessScope.
@@ -262,25 +259,15 @@ async def _run_supervisor_only(websocket_port: int = 0) -> None:
 
     configure_logging(level=resolve_log_level(), log_path=None)
     repo = _repo_root()
-    # ``0`` historically meant ephemeral; the single-daemon architecture binds
-    # the fixed port unless an explicit override is passed (tests).
-    port = DAEMON_WEBSOCKET_PORT if websocket_port == 0 else websocket_port
-    await DaemonHost().run(initial_repo=repo, port=port)
+    # Always bind the fixed daemon port. Port overrides stay on DaemonHost.run
+    # for tests only — clients hard-code DAEMON_WEBSOCKET_PORT.
+    await DaemonHost().run(initial_repo=repo)
 
 
-def cmd_serviced(
-    websocket_port: int = typer.Option(
-        0,
-        "--websocket-port",
-        help=(
-            f"Application WebSocket port; 0 = fixed daemon port "
-            f"({DAEMON_WEBSOCKET_PORT})."
-        ),
-    ),
-) -> None:
+def cmd_serviced() -> None:
     """Internal supervisor-only service entrypoint."""
     _raise_fd_soft_limit()
-    _run_async_entry(_run_supervisor_only(websocket_port=websocket_port))
+    _run_async_entry(_run_supervisor_only())
 
 _DOWN_WAIT_S = 5.0
 _DOWN_POLL_S = 0.1
@@ -291,21 +278,22 @@ def _signal_daemon(pid: int) -> None:
     # recycled, unrelated process: between the registry/lock read and here the
     # daemon may have exited and its pid been reused. Only signal if the daemon
     # lock still names this exact pid. Otherwise the old service is gone.
+    #
+    # Never unlink daemon.lock here. flock is inode-bound; deleting the path
+    # after (or while) another process holds the old inode splits exclusivity.
+    # Stale pid text is harmless: live_daemon_pid() requires a held flock, and
+    # the next acquire_flock rewrites the pid while holding the lock.
     current = live_daemon_pid()
     if current != pid:
         if current is None:
-            with contextlib.suppress(FileNotFoundError):
-                daemon_lock_path().unlink()
             remove_daemon_record()
         typer.echo(f"PID {pid} no longer holds the daemon lock; nothing to signal.")
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        with contextlib.suppress(FileNotFoundError):
-            daemon_lock_path().unlink()
         remove_daemon_record()
-        typer.echo(f"Removed stale daemon lock for dead PID {pid}.")
+        typer.echo(f"Daemon PID {pid} is already gone; cleared registry record.")
         return
     typer.echo(f"Sent SIGTERM to pid {pid}")
 
@@ -329,9 +317,6 @@ def _signal_daemon(pid: int) -> None:
                 time.sleep(_DOWN_POLL_S)
 
     if not _pid_is_alive(pid):
-        with contextlib.suppress(FileNotFoundError):
-            if read_lock_pid(daemon_lock_path()) in (None, pid):
-                daemon_lock_path().unlink()
         remove_daemon_record()
 
 

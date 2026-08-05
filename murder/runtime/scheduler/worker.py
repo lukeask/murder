@@ -21,7 +21,7 @@ from murder.runtime.orchestration.ports import CommandSubmitter, OrchestrationEv
 from murder.runtime.orchestration.worker_names import WorkerName
 from murder.runtime.scheduler.projection import invalidate_schedule
 from murder.runtime.workers.base import Worker, WorkerCtx, WorkerSpec
-from murder.state.persistence.connection import DB_INTEGRITY_ERRORS, RepoDb
+from murder.state.persistence.connection import DB_INTEGRITY_ERRORS, RepoDb, connect
 from murder.state.persistence.harness_control import prune_harness_capture_retention
 from murder.state.persistence.tickets import compute_ready
 from murder.state.persistence.usage_status import UsageStatusSnapshot, UsageWindow
@@ -167,21 +167,34 @@ class SchedulerWorker(Worker):
             (db.repository_id,),
         )
 
-    async def _maybe_prune_old_snapshots(self, db: RepoDb) -> None:
+    def _prune_old_snapshots_in_thread(
+        self, repository_id: str, *, now: datetime | None = None
+    ) -> None:
+        """Open a thread-local connection; never reuse the host event-loop RepoDb."""
+        conn = connect()
+        try:
+            self._prune_old_snapshots(
+                RepoDb(conn=conn, repository_id=repository_id),
+                now=now,
+            )
+        finally:
+            conn.close()
+
+    async def _maybe_prune_old_snapshots(self, repository_id: str) -> None:
         if self._prune_in_progress:
             return
         self._prune_in_progress = True
         try:
-            await asyncio.to_thread(self._prune_old_snapshots, db)
+            await asyncio.to_thread(self._prune_old_snapshots_in_thread, repository_id)
         except Exception:
-            LOGGER.debug("harness capture prune failed", exc_info=True)
+            LOGGER.warning("harness capture prune failed", exc_info=True)
         finally:
             self._prune_in_progress = False
 
     async def _tick(self, ctx: WorkerCtx) -> None:
         if ctx.db is None:
             return
-        await self._maybe_prune_old_snapshots(ctx.db)
+        await self._maybe_prune_old_snapshots(ctx.db.repository_id)
         if ctx.run_id is None:
             return
         row = ctx.db.conn.execute(

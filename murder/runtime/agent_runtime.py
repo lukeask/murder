@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from murder.app.service.agent_registry import AgentRegistry
-from murder.config import Config
+from murder.config import Config, merge_subprocess_env
 from murder.observability.advanced_log import AdvancedLogBase, StateMutationRecord
 from murder.roster.service import RosterService
 from murder.runtime.agents.types import AgentStatus
@@ -74,6 +74,7 @@ class AgentRuntime:
         command_submitter: CommandSubmitter,
         sessions: SessionService,
         lifecycle_events_enabled: bool = True,
+        repo_env: Mapping[str, str] | None = None,
     ) -> None:
         self._registry = AgentRegistry()
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -87,6 +88,7 @@ class AgentRuntime:
         self._verified_control_factory = verified_control_factory
         self._preserve_tmux_on_close = preserve_tmux_on_close
         self._lifecycle_events_enabled = lifecycle_events_enabled
+        self._repo_env = dict(repo_env or {})
         # Slot is non-null from construction; RepositoryHost binds the orchestrator
         # route after Orchestrator exists (chicken-egg with agents dep).
         self.crow_ask_router = CrowAskRouterSlot()
@@ -105,6 +107,10 @@ class AgentRuntime:
         self.command_submitter = command_submitter
         self.sessions = sessions
 
+    def subprocess_env(self) -> dict[str, str]:
+        """Explicit child env for launches owned by this host's agents."""
+        return merge_subprocess_env(self._repo_env)
+
     @classmethod
     @asynccontextmanager
     async def open(
@@ -122,6 +128,7 @@ class AgentRuntime:
         command_submitter: CommandSubmitter,
         sessions: SessionService,
         lifecycle_events_enabled: bool = True,
+        repo_env: Mapping[str, str] | None = None,
     ) -> AsyncIterator[AgentRuntime]:
         runtime = cls(
             db=db,
@@ -136,6 +143,7 @@ class AgentRuntime:
             command_submitter=command_submitter,
             sessions=sessions,
             lifecycle_events_enabled=lifecycle_events_enabled,
+            repo_env=repo_env,
         )
         try:
             yield runtime

@@ -58,6 +58,7 @@ class CrowAgent(HarnessBackedAgent):
                 startup_model=self.startup_model,
                 startup_effort=self.startup_effort,
                 additional_workspace_dirs=self.additional_workspace_dirs,
+                env=self.runtime.subprocess_env() if self.runtime is not None else None,
             )
         )
         if not start_result.ok:

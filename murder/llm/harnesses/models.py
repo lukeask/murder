@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -21,6 +22,9 @@ class HarnessStartSpec:
     # the adapter's built-in default (e.g. cursor → "agent"). Sourced from the
     # ``binary`` field of the resolved HarnessRoleConfig.
     binary: str | None = None
+    # Explicit session env (daemon baseline + per-repo overlay). When set, passed
+    # to ``tmux.create_session`` so project secrets stay off process-global environ.
+    env: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)

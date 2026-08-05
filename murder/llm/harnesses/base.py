@@ -172,6 +172,7 @@ class HarnessSession:
             self.session,
             start_spec.cwd,
             startup_cmd,
+            env=dict(start_spec.env) if start_spec.env is not None else None,
         )
 
         if app_server_mode:

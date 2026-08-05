@@ -571,6 +571,7 @@ class RepositorySocketSession:
         )
         self._terminal_input = TerminalInputCoordinator(terminal_input, terminal_input_validator)
         self._connections: dict[str, ApplicationConnection] = {}
+        self._closed = False
 
     @property
     def run_id(self) -> str:
@@ -579,6 +580,26 @@ class RepositorySocketSession:
     @property
     def connection_count(self) -> int:
         return len(self._connections)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    async def close(self) -> None:
+        """Close every active WebSocket and cancel their streams.
+
+        New ``handle_websocket`` calls refuse after this; in-flight handlers exit
+        via connection teardown.
+        """
+        self._closed = True
+        connections = list(self._connections.values())
+        self._connections.clear()
+        if not connections:
+            return
+        await asyncio.gather(
+            *(connection.close() for connection in connections),
+            return_exceptions=True,
+        )
 
     async def notify_plan_seed_failed(
         self, client_id: str | None, plan_name: str, message: str
@@ -598,6 +619,8 @@ class RepositorySocketSession:
 
     async def handle_websocket(self, request: Any) -> Any:
         web, WSMsgType = _aiohttp()
+        if self._closed:
+            raise web.HTTPServiceUnavailable(text="repository session is closed")
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(request)
         connection: ApplicationConnection | None = None
@@ -607,6 +630,10 @@ class RepositorySocketSession:
         if self._task_context is not None:
             adopt_observability_context(self._task_context)
         try:
+            if self._closed:
+                with contextlib.suppress(Exception):
+                    await ws.close()
+                return ws
             first = await ws.receive()
             if first.type is not WSMsgType.TEXT:
                 return ws
@@ -632,6 +659,9 @@ class RepositorySocketSession:
             connection = ApplicationConnection(
                 ws, hello.client.client_id, task_context=self._task_context
             )
+            if self._closed:
+                await connection.close()
+                return ws
             self._connections[connection.client_id] = connection
             await connection.send(
                 ServerHello(
@@ -800,12 +830,19 @@ class DaemonHttpServer:
         return self._sessions.get(repository_id)
 
     def drop_session(self, repository_id: str) -> None:
-        """Forget a cached session after the manager deactivates its host.
-
-        The host clears its plan-seed notifier in ``deactivate`` before ``stop``;
-        this only drops the transport cache so the next connect rebuilds one.
-        """
+        """Forget a cached session without closing connections (sync helper)."""
         self._sessions.pop(repository_id, None)
+
+    async def close_session(self, repository_id: str) -> None:
+        """Prevent new attaches, close active WebSockets, and drop the cache.
+
+        Wired as ``RepositoryManager.on_deactivated`` so deactivate always tears
+        down transport before ``host.stop()``.
+        """
+        session = self._sessions.pop(repository_id, None)
+        if session is None:
+            return
+        await session.close()
 
     async def ensure_session(self, repository_id: str) -> RepositorySocketSession:
         """Activate the host (if needed) and return a live socket session.
@@ -816,7 +853,11 @@ class DaemonHttpServer:
         async with self._session_lock:
             host = await self._manager.activate_by_id(repository_id)
             existing = self._sessions.get(repository_id)
-            if existing is not None and existing.run_id == host.run_id:
+            if (
+                existing is not None
+                and existing.run_id == host.run_id
+                and not existing.closed
+            ):
                 return existing
             session = session_from_host(host)
             self._sessions[repository_id] = session
@@ -841,7 +882,13 @@ class DaemonHttpServer:
         return self.bound
 
     async def stop(self) -> None:
+        sessions = list(self._sessions.values())
         self._sessions.clear()
+        if sessions:
+            await asyncio.gather(
+                *(session.close() for session in sessions),
+                return_exceptions=True,
+            )
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
@@ -914,7 +961,9 @@ class DaemonHttpServer:
             await self.ensure_session(host.repository_id)
         except FileNotFoundError as exc:
             raise web.HTTPNotFound(text=str(exc)) from exc
-        except (OSError, ValueError, RuntimeError, KeyError) as exc:
+        except KeyError as exc:
+            raise web.HTTPNotFound(text=str(exc)) from exc
+        except (OSError, ValueError, RuntimeError) as exc:
             raise web.HTTPBadRequest(text=str(exc)) from exc
         except Exception as exc:
             LOGGER.exception("failed to activate path=%s", root)
@@ -951,13 +1000,13 @@ class DaemonHttpServer:
         else:
             raise web.HTTPBadRequest(text="'path' or 'repository_id' is required")
         if self._manager.get(rid) is None:
-            self.drop_session(rid)
+            await self.close_session(rid)
             return web.json_response({"ok": True, "active": False})
         await self._manager.deactivate(rid)
-        # Belt-and-suspenders: manager.on_deactivated usually drops this, but the
+        # Belt-and-suspenders: manager.on_deactivated usually closes this, but the
         # HTTP path owns the session cache and must not leave a stale entry if the
         # callback was never wired (tests) or failed.
-        self.drop_session(rid)
+        await self.close_session(rid)
         return web.json_response({"ok": True, "repository_id": rid, "active": False})
 
     async def _handle_websocket(self, request: Any) -> Any:
@@ -972,6 +1021,12 @@ class DaemonHttpServer:
         except KeyError as exc:
             raise web.HTTPNotFound(text=str(exc)) from exc
         except Exception as exc:
+            from murder.app.service.repository_manager import StaleRepositoryError
+
+            if isinstance(exc, StaleRepositoryError):
+                raise web.HTTPGone(text=str(exc)) from exc
+            if isinstance(exc, FileNotFoundError):
+                raise web.HTTPNotFound(text=str(exc)) from exc
             LOGGER.exception("failed to activate repository_id=%s", repository_id)
             raise web.HTTPInternalServerError(text=str(exc)) from exc
         self._manager.note_ws_connect(repository_id)

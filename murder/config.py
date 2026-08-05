@@ -6,19 +6,25 @@ import os
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+if TYPE_CHECKING:
+    from murder.user_config import UserConfig
+
 HarnessKind: TypeAlias = Literal["cursor", "claude_code", "codex", "pi", "antigravity"]
 
 try:  # python-dotenv is in dependencies but tests may stub
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
 except ImportError:  # pragma: no cover
 
     def load_dotenv(*args: Any, **kwargs: Any) -> bool:  # type: ignore[misc]
         return False
+
+    def dotenv_values(*args: Any, **kwargs: Any) -> dict[str, str | None]:  # type: ignore[misc]
+        return {}
 
 
 class ProjectConfig(BaseModel):
@@ -163,17 +169,16 @@ class Config(BaseModel):
 
     @classmethod
     def load(cls, repo_root: Path) -> Config:
-        # Load env: global first, then project-local overrides.
-        load_dotenv(env_path(), override=False)
-        load_dotenv(project_env_path(repo_root), override=True)
-        load_dotenv(repo_root / ".env", override=True)
+        """Load merged roles config for ``repo_root``.
 
+        Does **not** mutate ``os.environ``. User-global env is applied once via
+        :func:`apply_daemon_env` at daemon startup; per-repo env is parsed with
+        :func:`load_repo_env` and merged only into subprocess environments.
+        """
         bundled = _load_bundled_defaults()
-        from murder.user_config import apply_llm_env, load_user_config
+        from murder.user_config import load_user_config
 
         user_cfg = load_user_config()
-        # Apply user-scope provider credentials to the env (setdefault: env/.env win).
-        apply_llm_env(user_cfg)
 
         merged: dict[str, Any] = _deep_merge(
             dict(bundled), user_cfg.model_dump(mode="json", exclude_none=True)
@@ -205,6 +210,50 @@ def env_path() -> Path:
 def project_env_path(repo_root: Path) -> Path:
     """Project env file created by `murder init`."""
     return repo_root / ".murder" / ".env"
+
+
+def parse_dotenv_file(path: Path) -> dict[str, str]:
+    """Parse a ``.env`` file into a mapping without mutating ``os.environ``."""
+    if not path.is_file():
+        return {}
+    raw = dotenv_values(path)
+    return {str(k): str(v) for k, v in raw.items() if k and v is not None}
+
+
+def load_repo_env(repo_root: Path) -> dict[str, str]:
+    """Per-repository env overlay (``.murder/.env`` then repo ``.env``; later wins)."""
+    out = parse_dotenv_file(project_env_path(repo_root))
+    out.update(parse_dotenv_file(Path(repo_root) / ".env"))
+    return out
+
+
+def apply_daemon_env(user_cfg: UserConfig | None = None) -> None:
+    """Apply user-global env once into ``os.environ`` (daemon process baseline).
+
+    Loads ``~/.config/murder/.env`` with ``override=False``, then applies
+    config.yaml provider credentials via :func:`apply_llm_env` (setdefault).
+    Never reads project-local env files.
+    """
+    load_dotenv(env_path(), override=False)
+    from murder.user_config import apply_llm_env, load_user_config
+
+    apply_llm_env(user_cfg if user_cfg is not None else load_user_config())
+
+
+def merge_subprocess_env(
+    repo_env: Mapping[str, str] | None = None,
+    *,
+    base: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build an explicit child-process environment: ``{**daemon_env, **repo_env}``.
+
+    ``base`` defaults to the current process environment (daemon baseline after
+    :func:`apply_daemon_env`). Repo keys overlay without mutating ``os.environ``.
+    """
+    out = dict(os.environ if base is None else base)
+    if repo_env:
+        out.update({str(k): str(v) for k, v in repo_env.items()})
+    return out
 
 
 def _load_bundled_defaults() -> dict[str, Any]:

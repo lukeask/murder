@@ -68,11 +68,16 @@ class VerifiedControlFactory:
                 )
                 if cwd is None:
                     raise RuntimeError("app-server bootstrap requires a cwd")
+                child_env = None
+                runtime = getattr(agent, "runtime", None)
+                if runtime is not None and hasattr(runtime, "subprocess_env"):
+                    child_env = runtime.subprocess_env()
                 connection, _client = await start_app_server_session(
                     cwd=cwd,
                     model=getattr(agent, "startup_model", None),
                     model_provider=getattr(agent, "startup_model_provider", None),
                     effort=getattr(agent, "startup_effort", None),
+                    env=child_env,
                 )
                 agent.app_server_connection = connection
             agent.verified_harness_control = VerifiedHarnessControlSession.from_app_server(
@@ -96,11 +101,16 @@ class VerifiedControlFactory:
                 )
                 if cwd is None:
                     raise RuntimeError("ACP bootstrap requires a cwd")
+                child_env = None
+                runtime = getattr(agent, "runtime", None)
+                if runtime is not None and hasattr(runtime, "subprocess_env"):
+                    child_env = runtime.subprocess_env()
                 connection, _client = await start_acp_session(
                     agent="cursor",
                     cwd=cwd,
                     model=getattr(agent, "startup_model", None),
                     effort=getattr(agent, "startup_effort", None),
+                    env=child_env,
                 )
                 agent.acp_connection = connection
             agent.verified_harness_control = VerifiedHarnessControlSession.from_acp(
@@ -126,10 +136,15 @@ class VerifiedControlFactory:
                 )
                 if cwd is None:
                     raise RuntimeError("Agent SDK bootstrap requires a cwd")
+                child_env = None
+                runtime = getattr(agent, "runtime", None)
+                if runtime is not None and hasattr(runtime, "subprocess_env"):
+                    child_env = runtime.subprocess_env()
                 connection, _client = await start_agent_sdk_session(
                     cwd=cwd,
                     model=getattr(agent, "startup_model", None),
                     effort=getattr(agent, "startup_effort", None),
+                    env=child_env,
                 )
                 agent.agent_sdk_connection = connection
             agent.verified_harness_control = VerifiedHarnessControlSession.from_agent_sdk(

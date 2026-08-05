@@ -18,6 +18,7 @@ import os
 import shlex
 import tempfile
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,6 +97,7 @@ async def create_session(
     *,
     width: int = 220,
     height: int = 50,
+    env: Mapping[str, str] | None = None,
 ) -> None:
     """Create a detached session in `cwd`, optionally with an initial command.
 
@@ -104,6 +106,10 @@ async def create_session(
     80 columns is too narrow for some harness output — e.g. codex `/status`
     wraps the weekly ``(resets … on … May)`` onto a continuation line, which
     breaks single-line parsing — so default generously wide.
+
+    ``env``, when provided, is applied as session-scoped variables via repeated
+    ``tmux new-session -e KEY=VALUE`` so project secrets never need to live in
+    the daemon's process-global ``os.environ``.
     """
     if await session_exists(name):
         raise TmuxError(f"session already exists: {name}")
@@ -119,6 +125,9 @@ async def create_session(
         "-c",
         str(cwd),
     ]
+    if env:
+        for key, value in env.items():
+            args.extend(["-e", f"{key}={value}"])
     if cmd:
         # tmux treats remaining argv as a command to run inside the new session's pane.
         args.extend(cmd)

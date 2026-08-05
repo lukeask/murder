@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import queue
+from pathlib import Path
 from typing import Any
 
 from murder.app.service.command_dispatch import CommandDispatcher
-from murder.config import Config
+from murder.config import Config, load_repo_env
 from murder.llm.harnesses.usage_sampling import (
     UsageSamplingContext,
     harness_kinds_to_sample,
@@ -29,9 +31,10 @@ async def _run_usage_probe_process(
     repo_root_raw: str,
     run_id: str,
 ) -> None:
-    from pathlib import Path
-
     repo_root = Path(repo_root_raw)
+    # Dedicated per-repo child: overlay project env onto the inherited daemon
+    # baseline. Mutation stays local to this process.
+    os.environ.update(load_repo_env(repo_root))
     cfg = Config.load(repo_root)
     db = open_repo_db(repo_root)
     sampling = UsageSamplingContext(config=cfg, repo_root=repo_root, db=db)

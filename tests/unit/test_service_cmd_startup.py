@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from typer.testing import CliRunner
 
-from murder.app.cli import service_cmd
+from murder.app.cli import app, service_cmd
 from murder.app.service import daemon_host as daemon_host_mod
 from murder.state.storage.filesystem import acquire_flock, lock_is_held, release_flock
 
 SERVICE_PID = 123
+
+
+def test_serviced_has_no_websocket_port_option() -> None:
+    """Port overrides must not be user-facing; clients hard-code 62077."""
+    params = inspect.signature(service_cmd.cmd_serviced).parameters
+    assert "websocket_port" not in params
+
+    result = CliRunner().invoke(app, ["serviced", "--websocket-port", "9999"])
+    assert result.exit_code != 0
+    combined = result.output.lower()
+    assert "no such option" in combined or "unexpected" in combined
 
 
 def test_lock_is_held_ignores_stale_lockfile(tmp_path: Path) -> None:
@@ -29,6 +42,24 @@ def test_lock_is_held_detects_kernel_flock(tmp_path: Path) -> None:
         release_flock(fd)
 
 
+def test_release_flock_leaves_lockfile_inode_intact(tmp_path: Path) -> None:
+    """flock exclusivity is inode-bound; the path must never be unlinked/recreated."""
+    path = tmp_path / "daemon.lock"
+    fd = acquire_flock(path)
+    inode = path.stat().st_ino
+    release_flock(fd)
+
+    assert path.is_file()
+    assert path.stat().st_ino == inode
+    assert lock_is_held(path) is False
+
+    fd2 = acquire_flock(path)
+    try:
+        assert path.stat().st_ino == inode
+    finally:
+        release_flock(fd2)
+
+
 def test_live_daemon_ignores_reused_pid_in_stale_file(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -39,6 +70,61 @@ def test_live_daemon_ignores_reused_pid_in_stale_file(
     monkeypatch.setattr(daemon_host_mod.os, "kill", lambda *_a, **_k: None)
 
     assert service_cmd._live_lock_owner_pid() is None
+
+
+def test_signal_daemon_does_not_unlink_when_lock_already_free(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "daemon.lock"
+    path.write_text("999\n", encoding="ascii")
+    remove = Mock()
+    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: None)
+    monkeypatch.setattr(service_cmd, "remove_daemon_record", remove)
+
+    service_cmd._signal_daemon(999)
+
+    assert path.is_file()
+    remove.assert_called_once_with()
+
+
+def test_signal_daemon_does_not_unlink_on_process_lookup_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "daemon.lock"
+    path.write_text("123\n", encoding="ascii")
+    remove = Mock()
+    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: 123)
+    monkeypatch.setattr(service_cmd, "remove_daemon_record", remove)
+
+    def _kill(_pid: int, _sig: int) -> None:
+        raise ProcessLookupError
+
+    monkeypatch.setattr(service_cmd.os, "kill", _kill)
+
+    service_cmd._signal_daemon(123)
+
+    assert path.is_file()
+    remove.assert_called_once_with()
+
+
+def test_signal_daemon_does_not_unlink_after_clean_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "daemon.lock"
+    path.write_text("123\n", encoding="ascii")
+    remove = Mock()
+    monkeypatch.setattr(service_cmd, "live_daemon_pid", lambda: 123)
+    monkeypatch.setattr(service_cmd, "remove_daemon_record", remove)
+    monkeypatch.setattr(service_cmd.os, "kill", Mock())
+    monkeypatch.setattr(service_cmd, "_pid_is_alive", lambda _pid: False)
+
+    service_cmd._signal_daemon(123)
+
+    assert path.is_file()
+    remove.assert_called_once_with()
 
 
 async def test_daemon_ready_when_listener_probes(

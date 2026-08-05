@@ -253,8 +253,8 @@ class UserLlmProviderSettings(BaseModel):
     """User-scope API credentials/endpoint for one LLM provider.
 
     Stored in ``config.yaml`` (chmod 0600); applied to the environment via
-    ``apply_llm_env`` at daemon start with ``os.environ.setdefault`` semantics
-    so env/.env always win.
+    ``apply_llm_env`` / ``apply_daemon_env`` at daemon start with
+    ``os.environ.setdefault`` semantics so env/.env always win.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -615,7 +615,7 @@ def apply_llm_env(user_cfg: UserConfig | None) -> None:
     """Apply config.yaml provider settings to ``os.environ`` with setdefault.
 
     Only sets a var when it is not already present (env/.env always win) and the
-    config value is non-empty. Testable in isolation; call from ``Config.load``.
+    config value is non-empty. Testable in isolation; call from ``apply_daemon_env``.
     """
     if user_cfg is None or user_cfg.llm is None:
         return

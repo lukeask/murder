@@ -65,6 +65,7 @@ class CollaboratorAgent(HarnessBackedAgent):
                 startup_model=self.startup_model,
                 startup_effort=self.startup_effort,
                 ready_timeout_s=READY_TIMEOUT_S,
+                env=self.runtime.subprocess_env() if self.runtime is not None else None,
             )
         )
         if not start_result.ok:

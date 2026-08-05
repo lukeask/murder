@@ -18,7 +18,7 @@ import typer
 from murder.app.cli._util import node_major_version as _node_major_version
 from murder.app.cli._util import pid_is_alive as _pid_is_alive
 from murder.app.cli._util import repo_root as _repo_root
-from murder.config import Config, HarnessRoleConfig
+from murder.config import Config, HarnessRoleConfig, apply_daemon_env, load_repo_env
 from murder.llm.harnesses import REGISTRY
 from murder.state.storage.filesystem import read_lock_pid
 from murder.state.storage.paths import db_path, lock_path
@@ -148,11 +148,18 @@ def _check_config_and_harnesses(repo: Path, failures: list[str]) -> Config | Non
     return cfg
 
 
-def _check_api_keys() -> None:
+def _check_api_keys(repo: Path) -> None:
+    # User-global keys live in the process env after apply_daemon_env; project
+    # keys are inspected from the per-repo mapping without mutating os.environ.
     present = [name for name in _LLM_KEY_ENV_VARS if os.environ.get(name)]
+    repo_keys = [
+        name for name in _LLM_KEY_ENV_VARS if name in load_repo_env(repo) and name not in present
+    ]
     if present:
         _ok(f"LLM API key(s) set: {', '.join(present)}")
-    else:
+    if repo_keys:
+        _ok(f"LLM API key(s) in project env: {', '.join(repo_keys)}")
+    if not present and not repo_keys:
         _warn(
             "no LLM API key found (set GROQ_API_KEY, CEREBRAS_API_KEY, or another "
             "provider key before launching)"
@@ -198,11 +205,12 @@ def cmd_doctor() -> None:
     repo = _repo_root()
     failures: list[str] = []
 
+    apply_daemon_env()
     _check_tmux(failures)
     _check_node(failures)
     _check_git(repo, failures)
     _check_config_and_harnesses(repo, failures)
-    _check_api_keys()
+    _check_api_keys(repo)
     _check_db(repo, failures)
     _check_lock(repo)
 
